@@ -144,21 +144,18 @@ provider/runtime calls convert explicitly to seconds where required.
 - Default: **600,000 ms (10 minutes)**.
 - Minimum: **300,000 ms (5 minutes)**, in whole seconds.
 - An explicitly configured buffer must be smaller than an explicitly configured lifetime.
-- Newly edited timing settings also validate an omitted buffer against its inherited value or
-  `DEFAULT_FINAL_SNAPSHOT_BUFFER_MS`. Untouched legacy short lifetimes with no explicit buffer do
-  not prevent saving unrelated settings. Stored global reads retain that value, and writes allow
-  only the same previously stored lifetime without an explicit buffer; effective runtime settings
-  still undergo the existing normalization before launch.
+- Timing validation uses the inherited buffer or `DEFAULT_FINAL_SNAPSHOT_BUFFER_MS` when no buffer
+  is explicitly configured. There is no exemption for unchanged or previously stored timeouts.
+  Stored settings use the existing invalid-value normalization; writes reject invalid timing.
 - Resolve through the existing global → primary-repository → environment settings composition.
   Repository-less sessions use the existing global/environment path.
 - Child sessions inherit the parent's resolved lifetime/buffer pair rather than accidentally
   combining a parent's lifetime with a different repository's reserve.
 - Session settings are captured at launch. Editing dashboard defaults does not renew an existing
   provider lease or change a generation already being preserved.
-- Preserve read compatibility for legacy short lifetimes without an explicit buffer. Do not silently
-  shrink the safety reserve to make them fit: a new generation already inside its drain boundary
-  begins graceful shutdown without dispatching a prompt. If the remaining phase budgets do not fit,
-  surface failure. Users should select a lifetime longer than the buffer.
+- Do not silently shrink the safety reserve to fit a short lifetime: a new generation already inside
+  its drain boundary begins graceful shutdown without dispatching a prompt. If the remaining phase
+  budgets do not fit, surface failure. Users should select a lifetime longer than the buffer.
 - A provider may cap the requested lifetime. Scheduling always uses its returned effective deadline,
   not the dashboard request. This matters for Vercel's current adapter cap.
 - The setting does not create a fixed lifetime for Daytona. Its existing inactivity stop uses the
@@ -433,8 +430,8 @@ request.
 
 Automated coverage must establish:
 
-1. Settings units/defaults/minimum, scope inheritance, child lifetime/buffer inheritance, and legacy
-   omission compatibility.
+1. Settings units/defaults/minimum, scope inheritance, child lifetime/buffer inheritance, and
+   consistent validation of explicit and omitted buffers.
 2. Finite, no-deadline, and unknown lifetime handling; provider caps and resumed E2B `endAt`.
 3. Absolute admission at drain, matching generation handshake, stale-event rejection, and
    deadline-bounded preparation.

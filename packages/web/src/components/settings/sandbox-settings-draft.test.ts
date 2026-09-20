@@ -110,21 +110,18 @@ describe("resolveSandboxSettingsDraft", () => {
     ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
   });
 
-  it("allows unrelated saves for untouched legacy timeouts without an explicit buffer", () => {
+  it("rejects unrelated saves when configured timing is invalid against the default buffer", () => {
     expect(
       resolveSandboxSettingsDraft({
         isGlobal: false,
         ownSettings: { sandboxTimeoutMs: 300_000 },
         baseDefaults: { terminalEnabled: true },
         draft: { terminalEnabled: false },
-      })
-    ).toMatchObject({
-      hasChanges: true,
-      result: { settings: { sandboxTimeoutMs: 300_000, terminalEnabled: false } },
-    });
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
   });
 
-  it("rejects an edited legacy timeout against the default final snapshot buffer", () => {
+  it("rejects an edited timeout against the default final snapshot buffer", () => {
     expect(
       resolveSandboxSettingsDraft({
         isGlobal: false,
@@ -132,16 +129,6 @@ describe("resolveSandboxSettingsDraft", () => {
         draft: { sandboxTimeoutMinutes: "6" },
       }).result
     ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
-  });
-
-  it("does not treat a semantically unchanged legacy timeout as a timing edit", () => {
-    expect(
-      resolveSandboxSettingsDraft({
-        isGlobal: false,
-        ownSettings: { sandboxTimeoutMs: 300_000 },
-        draft: { sandboxTimeoutMinutes: "5.0", terminalEnabled: true },
-      }).result
-    ).toEqual({ settings: { sandboxTimeoutMs: 300_000, terminalEnabled: true } });
   });
 
   it("validates an edited timeout against an inherited explicit buffer", () => {

@@ -156,28 +156,6 @@ describe("normalizeSandboxSettings", () => {
     ).toThrow(SandboxSettingsValidationError);
   });
 
-  it("preserves only the exact legacy implicit-buffer timeout requested by the caller", () => {
-    expect(
-      normalizeSandboxSettings(
-        { sandboxTimeoutMs: 300_000, terminalEnabled: true },
-        { legacyImplicitBufferTimeoutMs: 300_000 }
-      )
-    ).toEqual({ sandboxTimeoutMs: 300_000, terminalEnabled: true });
-
-    expect(() =>
-      normalizeSandboxSettings(
-        { sandboxTimeoutMs: 360_000 },
-        { legacyImplicitBufferTimeoutMs: 300_000 }
-      )
-    ).toThrow(SandboxSettingsValidationError);
-    expect(() =>
-      normalizeSandboxSettings(
-        { sandboxTimeoutMs: 300_000, finalSnapshotBufferMs: 300_000 },
-        { legacyImplicitBufferTimeoutMs: 300_000 }
-      )
-    ).toThrow(SandboxSettingsValidationError);
-  });
-
   it.each([299_000, 300_001, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects malformed final snapshot buffer %s",
     (finalSnapshotBufferMs) => {

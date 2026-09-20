@@ -105,7 +105,7 @@ describe("Integration settings API", () => {
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
 
-    it("preserves only unchanged legacy sandbox timing across real D1 API round-trips", async () => {
+    it("does not grandfather invalid sandbox timing across real D1 API round-trips", async () => {
       const endpoint = "https://test.local/integration-settings/sandbox";
       await env.DB.prepare(
         `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
@@ -114,11 +114,12 @@ describe("Integration settings API", () => {
         .bind("sandbox", JSON.stringify({ defaults: { sandboxTimeoutMs: 300_000 } }), 1, 1)
         .run();
 
-      const getLegacy = await serviceFetch(endpoint);
-      expect(getLegacy.status).toBe(200);
-      await expect(getLegacy.json()).resolves.toMatchObject({
-        settings: { defaults: { sandboxTimeoutMs: 300_000 } },
-      });
+      const getStoredInvalid = await serviceFetch(endpoint);
+      expect(getStoredInvalid.status).toBe(200);
+      const storedBody = await getStoredInvalid.json<{
+        settings: { defaults: Record<string, unknown> };
+      }>();
+      expect(storedBody.settings.defaults).toEqual({});
 
       const unrelatedSave = await serviceFetch(endpoint, {
         method: "PUT",
@@ -126,30 +127,30 @@ describe("Integration settings API", () => {
           settings: { defaults: { sandboxTimeoutMs: 300_000, terminalEnabled: true } },
         }),
       });
-      expect(unrelatedSave.status).toBe(200);
+      expect(unrelatedSave.status).toBe(400);
       const persisted = await env.DB.prepare(
         "SELECT settings FROM integration_settings WHERE integration_id = ?"
       )
         .bind("sandbox")
         .first<{ settings: string }>();
       expect(JSON.parse(persisted!.settings)).toEqual({
-        defaults: { sandboxTimeoutMs: 300_000, terminalEnabled: true },
+        defaults: { sandboxTimeoutMs: 300_000 },
       });
 
-      const editedLegacy = await serviceFetch(endpoint, {
+      const editedTimeout = await serviceFetch(endpoint, {
         method: "PUT",
         body: JSON.stringify({ settings: { defaults: { sandboxTimeoutMs: 360_000 } } }),
       });
-      expect(editedLegacy.status).toBe(400);
+      expect(editedTimeout.status).toBe(400);
 
       await env.DB.prepare("DELETE FROM integration_settings WHERE integration_id = ?")
         .bind("sandbox")
         .run();
-      const newLegacy = await serviceFetch(endpoint, {
+      const newShortTimeout = await serviceFetch(endpoint, {
         method: "PUT",
         body: JSON.stringify({ settings: { defaults: { sandboxTimeoutMs: 300_000 } } }),
       });
-      expect(newLegacy.status).toBe(400);
+      expect(newShortTimeout.status).toBe(400);
 
       const explicitBuffer = await serviceFetch(endpoint, {
         method: "PUT",

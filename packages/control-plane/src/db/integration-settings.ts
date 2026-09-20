@@ -23,7 +23,6 @@ import {
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
-  type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
@@ -135,40 +134,10 @@ export class IntegrationSettingsStore {
       };
     }
 
-    let legacyImplicitBufferTimeoutMs: number | undefined;
-    if (integrationId === "sandbox" && settings.defaults) {
-      const incomingDefaults = settings.defaults as SandboxSettings;
-      const row = await this.db
-        .prepare("SELECT settings FROM integration_settings WHERE integration_id = ?")
-        .bind(integrationId)
-        .first<{ settings: string }>();
-      if (row) {
-        const stored = parseStoredSettings(
-          getIntegrationGlobalSettingsSchema(integrationId),
-          row.settings,
-          "Stored global integration settings"
-        );
-        const storedDefaults = stored.defaults as SandboxSettings | undefined;
-        if (
-          incomingDefaults.sandboxTimeoutMs !== undefined &&
-          incomingDefaults.sandboxTimeoutMs === storedDefaults?.sandboxTimeoutMs &&
-          incomingDefaults.finalSnapshotBufferMs === undefined &&
-          storedDefaults?.finalSnapshotBufferMs === undefined
-        ) {
-          legacyImplicitBufferTimeoutMs = incomingDefaults.sandboxTimeoutMs;
-        }
-      }
-    }
-
     if (settings.defaults) {
       settings = {
         ...settings,
-        defaults: this.validateAndNormalizeSettings(
-          integrationId,
-          settings.defaults,
-          "global",
-          legacyImplicitBufferTimeoutMs
-        ),
+        defaults: this.validateAndNormalizeSettings(integrationId, settings.defaults, "global"),
       };
     }
 
@@ -388,14 +357,9 @@ export class IntegrationSettingsStore {
     settings: IntegrationSettingsMap[K]["global"]
   ): IntegrationSettingsMap[K]["global"] {
     if (integrationId !== "sandbox" || !settings.defaults) return settings;
-    const defaults = settings.defaults as SandboxSettings;
     return {
       ...settings,
-      defaults: normalizeSandboxSettings(defaults, {
-        invalid: "omit",
-        legacyImplicitBufferTimeoutMs:
-          defaults.finalSnapshotBufferMs === undefined ? defaults.sandboxTimeoutMs : undefined,
-      }),
+      defaults: normalizeSandboxSettings(settings.defaults, { invalid: "omit" }),
     } as IntegrationSettingsMap[K]["global"];
   }
 
@@ -416,8 +380,7 @@ export class IntegrationSettingsStore {
   >(
     integrationId: K,
     settings: IntegrationSettingsAtLevel<K, L>,
-    level: L,
-    legacyImplicitBufferTimeoutMs?: number
+    level: L
   ): IntegrationSettingsAtLevel<K, L> {
     if (integrationId === "github") {
       return this.validateAndNormalizeGitHubSettings(
@@ -442,7 +405,6 @@ export class IntegrationSettingsStore {
         invalid: "throw",
         createError: (message) => new IntegrationSettingsValidationError(message),
         partial: level !== "global",
-        legacyImplicitBufferTimeoutMs,
       }) as IntegrationSettingsAtLevel<K, L>;
     }
 
