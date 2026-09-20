@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -242,6 +242,54 @@ async def test_preservation_push_refusal_keeps_invalid_request_correlation() -> 
     assert event["repoOwner"] == "acme"
     assert event["repoName"] == "api"
     assert "preservation is in progress" in event["error"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_cancels_active_push_before_acknowledging() -> None:
+    push_started = asyncio.Event()
+    push_cleaned = asyncio.Event()
+
+    class CleanupCheckingHarness(PreservationHarness):
+        async def stop_execution(self, timeout_seconds: float) -> bool:
+            assert push_cleaned.is_set()
+            return await super().stop_execution(timeout_seconds)
+
+    async def block_push(_spec):
+        push_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            push_cleaned.set()
+
+    bridge = make_bridge(CleanupCheckingHarness())
+    await establish_generation(bridge)
+    push_command = {
+        "type": "push",
+        "pushSpec": {
+            "targetBranch": "open-inspect/session-1",
+            "repoOwner": "acme",
+            "repoName": "api",
+            "refspec": "HEAD:refs/heads/open-inspect/session-1",
+            "remoteUrl": "https://token@example.com/acme/api.git",
+            "redactedRemoteUrl": "https://***@example.com/acme/api.git",
+            "force": False,
+        },
+    }
+
+    with patch("sandbox_runtime.bridge.PushOperation") as operation:
+        operation.return_value.execute = AsyncMock(side_effect=block_push)
+        await bridge._handle_command(push_command)
+        await push_started.wait()
+        await bridge._handle_command(prepare_command())
+
+    assert push_cleaned.is_set()
+    assert not bridge._push_tasks
+    events = [call.args[0] for call in bridge._send_event.await_args_list]
+    push_error = next(event for event in events if event["type"] == "push_error")
+    prepared = next(event for event in events if event["type"] == "preservation_prepared")
+    assert "preservation is in progress" in push_error["error"]
+    assert prepared["executionStopped"] is True
+    assert events.index(push_error) < events.index(prepared)
 
 
 @pytest.mark.asyncio

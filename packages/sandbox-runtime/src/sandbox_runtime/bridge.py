@@ -239,6 +239,11 @@ class AgentBridge:
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
         self._prompt_interruption_reasons: dict[asyncio.Task[None], str] = {}
+        # Pushes run outside the WebSocket receive loop so a long git process
+        # cannot prevent a deadline-bound preservation command from arriving.
+        # The lock preserves the existing one-at-a-time execution contract.
+        self._push_lock = asyncio.Lock()
+        self._push_tasks: dict[asyncio.Task[None], dict[str, Any]] = {}
         # Set only by the authenticated generation command. A reconnect does
         # not touch this state, which is essential for retained sandboxes.
         self._sandbox_generation: dict[str, Any] | None = None
@@ -400,6 +405,7 @@ class AgentBridge:
                 self._current_prompt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._current_prompt_task
+            await self._cancel_pushes(notify_preservation=False)
             # Cleanup failures are logged, never raised: an exception here
             # would replace the one that ended the run, and a deterministic
             # startup failure has to reach main() so the supervisor sees its
@@ -848,7 +854,7 @@ class AgentBridge:
             elif booting:
                 await self._refuse_push_while_booting(cmd)
             else:
-                await self._handle_push(cmd)
+                self._start_push(cmd)
         elif cmd_type == "refresh_diff":
             if self._preservation_operation_id is not None:
                 self.log.warn("bridge.command_refused_for_preservation", cmd_type=cmd_type)
@@ -1143,6 +1149,7 @@ class AgentBridge:
                 self._prompt_interruption_reasons[task] = "sandbox_lifetime_expiring"
             try:
                 async with asyncio.timeout_at(deadline):
+                    await self._cancel_pushes(notify_preservation=True)
                     harness = self._require_harness()
                     # Python task completion is not vendor-idle evidence: an
                     # earlier user stop or prompt cleanup may have cancelled
@@ -1235,6 +1242,35 @@ class AgentBridge:
                 "timestamp": time.time(),
             }
         )
+
+    def _start_push(self, cmd: dict[str, Any]) -> None:
+        task = asyncio.create_task(self._run_push(cmd))
+        self._push_tasks[task] = cmd
+
+        def finish(completed: asyncio.Task[None]) -> None:
+            self._push_tasks.pop(completed, None)
+            if not completed.cancelled() and (error := completed.exception()) is not None:
+                self.log.error("bridge.push_task_error", exc=error)
+
+        task.add_done_callback(finish)
+
+    async def _run_push(self, cmd: dict[str, Any]) -> None:
+        async with self._push_lock:
+            if self._preservation_operation_id is not None:
+                await self._refuse_push_for_preservation(cmd)
+                return
+            await self._handle_push(cmd)
+
+    async def _cancel_pushes(self, *, notify_preservation: bool) -> None:
+        pending = [(task, cmd) for task, cmd in self._push_tasks.items() if not task.done()]
+        for task, _cmd in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*(task for task, _cmd in pending), return_exceptions=True)
+        if notify_preservation:
+            for task, cmd in pending:
+                if task.cancelled():
+                    await self._refuse_push_for_preservation(cmd)
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
         """Execute locally, then emit exactly one timestamped result event."""
