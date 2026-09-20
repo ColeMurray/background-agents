@@ -92,6 +92,7 @@ import {
 } from "@open-inspect/shared/types/sandbox-execution";
 import { snapshotExecutionIssue } from "../snapshot-execution";
 import { SnapshotArtifactUnavailableError } from "../provider";
+import { SandboxExecutionAdmissionError } from "./execution-admission-error";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
@@ -518,8 +519,13 @@ export class SandboxLifecycleManager
         }
       }
     } catch (error) {
-      this.reportSandboxError(error instanceof Error ? error.message : "Invalid sandbox execution");
-      return;
+      if (!(error instanceof SandboxExecutionAdmissionError)) throw error;
+      const status = this.sessionContext.getSession()?.status;
+      if (status !== "cancelled" && status !== "archived") {
+        this.storage.updateSandboxStatus("failed");
+        this.reportSandboxError(error.message);
+      }
+      throw error;
     }
 
     // Extract circuit breaker state
@@ -614,11 +620,20 @@ export class SandboxLifecycleManager
   }
 
   private sessionExecution(): SessionSandboxExecution {
-    const execution = parseSessionSandboxExecution(
-      this.sessionContext.getSession()?.sandbox_execution
-    );
+    const rawExecution = this.sessionContext.getSession()?.sandbox_execution;
+    let execution: SessionSandboxExecution;
+    try {
+      execution = parseSessionSandboxExecution(rawExecution);
+    } catch (error) {
+      throw new SandboxExecutionAdmissionError(
+        "Invalid persisted sandbox execution metadata; operator repair is required",
+        { cause: error }
+      );
+    }
     if (execution.profile === "docker-v1" && this.provider.name !== execution.provider) {
-      throw new Error("This Docker session requires its original Modal provider");
+      throw new SandboxExecutionAdmissionError(
+        "This Docker session requires its original Modal provider"
+      );
     }
     return execution;
   }

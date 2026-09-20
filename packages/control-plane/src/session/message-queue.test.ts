@@ -23,6 +23,7 @@ import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
+import { SandboxExecutionAdmissionError } from "../sandbox/lifecycle/execution-admission-error";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -819,6 +820,56 @@ describe("SessionMessageQueue", () => {
     // The spawn failure is absorbed by the boundary, not thrown at the caller.
     expect(h.backgroundTasks.failures).toEqual([expect.any(Error)]);
   });
+
+  it("settles a pending prompt and callback after execution admission fails", async () => {
+    const h = buildQueue();
+    const message = createMessage();
+    const error = new SandboxExecutionAdmissionError(
+      "Invalid persisted sandbox execution metadata; operator repair is required"
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(message).mockReturnValue(null);
+    h.repository.getMessageById.mockReturnValue(message);
+    h.sandboxLifecycle.spawnSandbox.mockRejectedValue(error);
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: message.id, success: false, error: error.message }),
+      expect.any(Number),
+      "pending"
+    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(message.id, false, error.message);
+    expect(h.sandboxLifecycle.reportSandboxError).not.toHaveBeenCalled();
+    expect(h.backgroundTasks.failures).toEqual([]);
+  });
+
+  it.each(["cancelled", "archived"] as const)(
+    "preserves a %s verdict when execution admission fails after dispatch",
+    async (status) => {
+      const h = buildQueue();
+      const session = createSession();
+      const message = createMessage();
+      let rejectSpawn!: (error: Error) => void;
+      h.repository.getSession.mockImplementation(() => session);
+      h.repository.getNextPendingMessage.mockReturnValue(message);
+      h.repository.getMessageById.mockReturnValue(message);
+      h.sandboxLifecycle.spawnSandbox.mockReturnValue(
+        new Promise<void>((_resolve, reject) => {
+          rejectSpawn = reject;
+        })
+      );
+
+      await h.queue.processMessageQueue();
+      session.status = status;
+      rejectSpawn(new SandboxExecutionAdmissionError("invalid execution"));
+      await h.backgroundTasks.settle();
+
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+      expect(h.callbackService.notifyComplete).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.reportSandboxError).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects a prompt whose session closed while its fingerprint was being hashed", async () => {
     const h = buildQueue();

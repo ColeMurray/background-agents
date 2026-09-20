@@ -680,6 +680,62 @@ describe("SandboxLifecycleManager", () => {
         );
       return { session, sandbox, storage, provider, broadcaster, create };
     }
+    it.each([
+      ["malformed execution metadata", "{", createMockProvider()],
+      [
+        "a Docker execution bound to another provider",
+        JSON.stringify(execution),
+        createMockProvider(),
+      ],
+    ])("fails sandbox allocation admission for %s", async (_case, sandboxExecution, provider) => {
+      const sandbox = createMockSandbox({ status: "pending" });
+      const storage = createMockStorage(
+        createMockSession({ sandbox_execution: sandboxExecution }),
+        sandbox
+      );
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.spawnSandbox()).rejects.toThrow();
+
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.last_spawn_error).toBeTruthy();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    });
+    it.each(["cancelled", "archived"] as const)(
+      "does not overwrite a %s session when execution admission fails",
+      async (status) => {
+        const sandbox = createMockSandbox({ status: "stopped" });
+        const storage = createMockStorage(
+          createMockSession({ status, sandbox_execution: "{" }),
+          sandbox
+        );
+        const manager = new SandboxLifecycleManager(
+          createMockProvider(),
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await expect(manager.spawnSandbox()).rejects.toThrow();
+
+        expect(sandbox.status).toBe("stopped");
+        expect(sandbox.last_spawn_error).toBeNull();
+      }
+    );
     it.each([null, "default", "unknown"])(
       "preserves incompatible %s snapshots across manager recreation",
       async (profile) => {

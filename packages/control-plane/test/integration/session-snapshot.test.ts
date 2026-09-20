@@ -19,6 +19,52 @@ describe("session snapshot synchronization", () => {
   beforeEach(cleanD1Tables);
   afterEach(() => vi.unstubAllGlobals());
 
+  it("terminalizes queued work when persisted sandbox execution is malformed", async () => {
+    const { stub } = await initNamedSession(`invalid-execution-${Date.now()}`);
+    await waitForSandboxStatus(stub, "failed");
+    await queryDO(stub, "UPDATE session SET sandbox_execution = '{'");
+    await queryDO(
+      stub,
+      "UPDATE sandbox SET status = 'pending', last_spawn_error = NULL, last_spawn_error_at = NULL"
+    );
+
+    const response = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Resume work", authorId: "user-1", source: "web" }),
+    });
+    expect(response.status).toBe(200);
+    const { messageId } = await response.json<{ messageId: string }>();
+
+    await vi.waitFor(async () => {
+      expect(
+        await queryDO<{ status: string; error_message: string | null }>(
+          stub,
+          "SELECT status, error_message FROM messages WHERE id = ?",
+          messageId
+        )
+      ).toEqual([
+        {
+          status: "failed",
+          error_message:
+            "Invalid persisted sandbox execution metadata; operator repair is required",
+        },
+      ]);
+    });
+    expect(
+      await queryDO<{ status: string; last_spawn_error: string | null }>(
+        stub,
+        "SELECT status, last_spawn_error FROM sandbox"
+      )
+    ).toEqual([
+      {
+        status: "failed",
+        last_spawn_error:
+          "Invalid persisted sandbox execution metadata; operator repair is required",
+      },
+    ]);
+  });
+
   it("retries a Docker snapshot with fresh authority and clears recovery only on current runtime readiness", async () => {
     const name = `vm-retry-ready-${Date.now()}`;
     const { stub } = await initNamedSession(name);

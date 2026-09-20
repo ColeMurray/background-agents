@@ -41,6 +41,7 @@ import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
+import { SandboxExecutionAdmissionError } from "../sandbox/lifecycle/execution-admission-error";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
 import { resolveGitAuthorIdentity } from "./identity";
@@ -476,7 +477,14 @@ export class SessionMessageQueue {
                 await this.processMessageQueue();
               }
             })
-            .catch((error) => {
+            .catch(async (error) => {
+              if (error instanceof SandboxExecutionAdmissionError) {
+                if (this.isPromptStillDispatchable(message.id)) {
+                  await this.failPendingMessage(message.id, error.message);
+                }
+                await this.processMessageQueue();
+                return;
+              }
               // Expected provider failures report themselves inside the lifecycle
               // manager; this catch only sees throws from before those handlers.
               // Route it through the same call so the reason is persisted as well
