@@ -172,7 +172,7 @@ describe("useSessionSocket", () => {
     );
   });
 
-  it("sends a preservation recovery command after subscription", async () => {
+  it("sends a shutdown recovery command after subscription", async () => {
     const { result } = renderHook(() =>
       useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
     );
@@ -180,7 +180,7 @@ describe("useSessionSocket", () => {
     const socket = FakeWebSocket.instances[0];
 
     act(() => {
-      result.current.recoverPreservation("retry");
+      result.current.recoverShutdown("retry");
     });
     expect(socket.sentMessages).toHaveLength(0);
 
@@ -191,7 +191,7 @@ describe("useSessionSocket", () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
 
     act(() => {
-      result.current.recoverPreservation("restore_saved");
+      result.current.recoverShutdown("restore_saved");
     });
 
     expect(socket.sentMessages).toContainEqual({

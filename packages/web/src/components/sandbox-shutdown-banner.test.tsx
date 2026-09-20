@@ -12,7 +12,7 @@ afterEach(() => {
 describe("SandboxShutdownBanner", () => {
   it("renders no banner for normal execution", () => {
     const { container } = render(
-      <Banner preservation={{ phase: "running", expiresAtMs: null, drainAtMs: null }} />
+      <Banner shutdown={{ phase: "running", expiresAtMs: null, drainAtMs: null }} />
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -25,7 +25,7 @@ describe("SandboxShutdownBanner", () => {
     ["saved", "Sandbox saved and stopped"],
     ["restoring", "Restoring the saved sandbox state"],
   ] as const)("shows the %s phase", (phase, text) => {
-    render(<Banner preservation={{ phase, expiresAtMs: 2, drainAtMs: 1 }} />);
+    render(<Banner shutdown={{ phase, expiresAtMs: 2, drainAtMs: 1 }} />);
     expect(screen.getByRole("status")).toHaveTextContent(text);
   });
 
@@ -33,7 +33,7 @@ describe("SandboxShutdownBanner", () => {
     const onRecover = vi.fn();
     render(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "saved",
           expiresAtMs: 2,
           drainAtMs: 1,
@@ -60,7 +60,7 @@ describe("SandboxShutdownBanner", () => {
   it("does not offer resume when a saved shutdown did not pause continuation", () => {
     render(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "saved",
           expiresAtMs: 2,
           drainAtMs: 1,
@@ -77,7 +77,7 @@ describe("SandboxShutdownBanner", () => {
     const onRecover = vi.fn();
     const { rerender } = render(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "saved",
           expiresAtMs: 2,
           drainAtMs: 1,
@@ -91,7 +91,7 @@ describe("SandboxShutdownBanner", () => {
 
     rerender(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "restoring",
           expiresAtMs: 2,
           drainAtMs: 1,
@@ -109,7 +109,7 @@ describe("SandboxShutdownBanner", () => {
   it("shows paused-continuation information without an action when recovery is unavailable", () => {
     render(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "saved",
           expiresAtMs: 2,
           drainAtMs: 1,
@@ -126,7 +126,7 @@ describe("SandboxShutdownBanner", () => {
   it("keeps the paused-continuation warning visible without a recovery point", () => {
     render(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "saved",
           expiresAtMs: 2,
           drainAtMs: 1,
@@ -147,7 +147,7 @@ describe("SandboxShutdownBanner", () => {
     (phase) => {
       render(
         <Banner
-          preservation={{
+          shutdown={{
             phase,
             expiresAtMs: 2,
             drainAtMs: 1,
@@ -164,7 +164,7 @@ describe("SandboxShutdownBanner", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(
       <Banner
-        preservation={{
+        shutdown={{
           phase: "failed",
           expiresAtMs: 2,
           drainAtMs: 1,

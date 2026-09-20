@@ -74,7 +74,7 @@ interface UseSessionSocketReturn {
   ) => Promise<QueuePromptResult>;
   cancelPrompt: (messageId: string) => Promise<CancelPromptResult>;
   stopExecution: () => void;
-  recoverPreservation: (action: "retry" | "restore_saved") => void;
+  recoverShutdown: (action: "retry" | "restore_saved") => void;
   sendTyping: () => void;
   reconnect: () => void;
   loadOlderEvents: () => void;
@@ -370,7 +370,7 @@ export function useSessionSocket(
     send({ type: "stop" });
   }, [isOpen, send]);
 
-  const recoverPreservation = useCallback(
+  const recoverShutdown = useCallback(
     (action: "retry" | "restore_saved") => {
       if (!isOpen() || !subscribedRef.current) return;
       send({ type: "recover_preservation", action });
@@ -449,7 +449,7 @@ export function useSessionSocket(
     sendPrompt,
     cancelPrompt,
     stopExecution,
-    recoverPreservation,
+    recoverShutdown,
     sendTyping,
     reconnect,
     loadOlderEvents,

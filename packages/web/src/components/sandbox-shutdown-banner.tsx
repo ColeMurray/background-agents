@@ -13,18 +13,17 @@ const PHASE_MESSAGES: Record<Exclude<SandboxPreservationState["phase"], "running
 };
 
 interface SandboxShutdownBannerProps {
-  preservation: SandboxPreservationState | null | undefined;
+  shutdown: SandboxPreservationState | null | undefined;
   onRecover?: (action: "retry" | "restore_saved") => void;
 }
 
-export function SandboxShutdownBanner({ preservation, onRecover }: SandboxShutdownBannerProps) {
-  if (!preservation || preservation.phase === "running") return null;
+export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBannerProps) {
+  if (!shutdown || shutdown.phase === "running") return null;
 
-  const isError = preservation.phase === "failed" || preservation.phase === "unknown";
-  const isContinuationPaused =
-    preservation.phase === "saved" && preservation.continuationPaused === true;
-  const canResumeQueuedWork = isContinuationPaused && preservation.hasRecoveryPoint === true;
-  const detail = preservation.error ?? preservation.reason;
+  const isError = shutdown.phase === "failed" || shutdown.phase === "unknown";
+  const isContinuationPaused = shutdown.phase === "saved" && shutdown.continuationPaused === true;
+  const canResumeQueuedWork = isContinuationPaused && shutdown.hasRecoveryPoint === true;
+  const detail = shutdown.error ?? shutdown.reason;
 
   return (
     <div
@@ -36,7 +35,7 @@ export function SandboxShutdownBanner({ preservation, onRecover }: SandboxShutdo
           : "border-border-muted bg-muted text-foreground"
       )}
     >
-      <span className="font-medium">{PHASE_MESSAGES[preservation.phase]}</span>
+      <span className="font-medium">{PHASE_MESSAGES[shutdown.phase]}</span>
       {isContinuationPaused && (
         <span className="ml-2">
           The previous prompt was interrupted and will not replay automatically. Partial work was
@@ -44,12 +43,12 @@ export function SandboxShutdownBanner({ preservation, onRecover }: SandboxShutdo
         </span>
       )}
       {detail && <span className="ml-2">{detail}</span>}
-      {preservation.phase === "failed" && onRecover && (
+      {shutdown.phase === "failed" && onRecover && (
         <button type="button" className="ml-3 underline" onClick={() => onRecover("retry")}>
           Retry shutdown
         </button>
       )}
-      {isError && preservation.hasRecoveryPoint && onRecover && (
+      {isError && shutdown.hasRecoveryPoint && onRecover && (
         <button
           type="button"
           className="ml-3 underline"

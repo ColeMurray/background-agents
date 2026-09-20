@@ -87,7 +87,7 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
-  it("hydrates preservation from snapshots and replaces it with semantic updates", () => {
+  it("hydrates shutdown state from snapshots and replaces it with semantic updates", () => {
     const saved = {
       phase: "saved" as const,
       expiresAtMs: 20_000,

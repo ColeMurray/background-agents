@@ -9,7 +9,7 @@
 
 ## 1. Decision summary
 
-The Control Plane will schedule a **final preservation operation** before a Sandbox's actual
+The Control Plane will schedule a **checkpoint-and-shutdown operation** before a Sandbox's actual
 provider deadline. The operation closes admission to the current generation, halts an active prompt,
 preserves the filesystem through the provider's supported mechanism, durably records the recovery
 point, and retires the old running Sandbox. It is independent of browser presence and per-prompt
@@ -19,7 +19,8 @@ Users configure **Final snapshot buffer** in the existing Sandbox settings UI. T
 time reserved before expiry for stopping execution, creating or confirming the recovery point, and
 retiring the Sandbox—not just the duration of the snapshot API call.
 
-“Final snapshot” is the product label. Internally, **preservation** has two valid outcomes:
+“Final snapshot” is the product label. **Graceful shutdown** can produce two kinds of recovery
+point:
 
 - An independent filesystem snapshot/checkpoint for Modal, Vercel, and OpenComputer.
 - A verified retained, stopped/paused Sandbox for E2B and Daytona, where this is the existing
@@ -151,12 +152,12 @@ provider/runtime calls convert explicitly to seconds where required.
   provider lease or change a generation already being preserved.
 - Preserve read compatibility for legacy short lifetimes without an explicit buffer. Do not silently
   shrink the safety reserve to make them fit: a new generation already inside its drain boundary
-  begins preservation without dispatching a prompt. If the remaining phase budgets do not fit,
+  begins graceful shutdown without dispatching a prompt. If the remaining phase budgets do not fit,
   surface failure. Users should select a lifetime longer than the buffer.
 - A provider may cap the requested lifetime. Scheduling always uses its returned effective deadline,
   not the dashboard request. This matters for Vercel's current adapter cap.
 - The setting does not create a fixed lifetime for Daytona. Its existing inactivity stop uses the
-  same preservation procedure.
+  same checkpoint-and-shutdown procedure.
 
 ## 5. Deadlines and durable ownership
 
@@ -201,7 +202,7 @@ absolute deadline and an abort signal; the coordinator also bounds its wait. An 
 not proof that a remote side effect rolled back.
 
 Use the existing earliest-deadline alarm scheduler, shared by Cloudflare and Node hosts. Check
-preservation before generic execution/heartbeat cleanup and before slow index projection I/O, and
+shutdown before generic execution/heartbeat cleanup and before slow index projection I/O, and
 reassert the finite boundary on every earlier alarm. Independently check the absolute boundary in
 prompt admission, including after asynchronous credential lookup and immediately before
 claiming/sending a prompt.
@@ -281,7 +282,7 @@ external side effects, and writes after the capture point are outside the guaran
 If execution stopping cannot be confirmed, this implementation fails closed rather than taking an
 unlabelled crash-consistent snapshot. No degraded-capture subsystem is required.
 
-## 7. Preservation, retirement, and normal continuation
+## 7. Checkpoint capture, retirement, and normal continuation
 
 Select the persistence mechanism from provider capabilities:
 
@@ -295,11 +296,11 @@ Select the persistence mechanism from provider capabilities:
 Do not fabricate image IDs for retained objects. Do not select a mechanism solely from whether a
 provider has a hard deadline.
 
-After verified preservation, commit the receipt before a separately destructive retirement. For
-independent artifacts, use typed `intent: "destroy"` to retire the captured source only; for
+After verifying the recovery point, commit the receipt before a separately destructive retirement.
+For independent artifacts, use typed `intent: "destroy"` to retire the captured source only; for
 retained objects, keep the object. Reasons remain diagnostics, not the new intent contract. Vercel
-snapshots and E2B pauses end execution as part of preservation; their confirmed stop result avoids
-an unnecessary second stop.
+snapshots and E2B pauses end execution as part of capture; their confirmed stop result avoids an
+unnecessary second stop.
 
 Generation and operation checks guard late results and publication. Keep the previous receipt until
 a new one is verified. Ordinary non-destructive snapshots share the capture gate and cannot
@@ -358,7 +359,7 @@ failures must match the attempted generation before changing recovery state.
 Successful provider creation/resume must return an explicit lifetime receipt. If a trailing metadata
 read fails after ownership was established, return the successful handle with an `unknown` lifetime,
 not a failed startup that loses ownership. Unknown lifetime deliberately holds dispatch; running
-without final preservation is not a supported degraded mode.
+without confirmed checkpoint-and-shutdown support is not a supported degraded mode for new launches.
 
 The UI's recovery commands reuse authenticated Session WebSocket handling and existing lifecycle
 permission:
@@ -376,13 +377,17 @@ permission:
   remains an existing user action, not an automatic data-loss fallback.
 
 Generic stop-confirmation timeouts, execution-complete queue pumps, and lifecycle cleanup must not
-override a preservation-owned hold. Explicit session cancellation still cancels queued execution; it
-is not a new promise of backup during unexpected teardown.
+override a shutdown-owned hold. Explicit session cancellation still cancels queued execution; it is
+not a new promise of backup during unexpected teardown.
 
 ## 9. Web UI and protocol projection
 
 Add optional `sandboxPreservation` to the canonical Session snapshot and a `sandbox_preservation`
 semantic server message using the same shared schema.
+
+These deployed wire fields, the shared `sandbox-preservation` schema module, runtime protocol
+definitions, and the `sandbox_preservation` SQLite table retain their compatibility names. Internal
+control-plane modules and UI callbacks use shutdown terminology instead.
 
 The public view includes phase, reason, effective expiry/drain times, last successful save time,
 safe error text, and whether recovery is available. It excludes provider artifact IDs, tokens, and
@@ -396,16 +401,16 @@ interrupted prompt will not replay automatically, and later prompts remain held 
 
 ## 10. Implementation map
 
-| Area                | Files / responsibility                                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Policy settings     | Shared integrations types; control-plane settings normalization, resolved settings, spawn context/children; web Sandbox settings draft/editor.                      |
-| Provider boundary   | `sandbox/provider.ts`, five adapters and REST clients; actual lifetime receipts, deadline propagation, explicit stop intent, ready/retained verification.           |
-| Modal               | Authenticated explicit stop endpoint; existing filesystem snapshot API bounded by the absolute deadline. No experimental snapshot APIs.                             |
-| Coordinator         | `session/sandbox-preservation.ts` and `sandbox-preservation-repository.ts`; additive SQLite migration 54.                                                           |
-| Lifecycle           | `sandbox/lifecycle/manager.ts`; generation/lifetime publication, coordinated inactivity, snapshot ownership, final-receipt restore selection, generic-stop fencing. |
-| Session integration | Queue admission, earliest alarm handler, critical event processing, snapshot reader, existing authorized client-command route.                                      |
-| Runtime             | Bridge generation/preparation protocol, critical event forwarding, Claude/OpenCode stop confirmation.                                                               |
-| Web                 | Session socket reducer/hook and compact preservation banner with failure-only recovery actions.                                                                     |
+| Area                | Files / responsibility                                                                                                                                            |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Policy settings     | Shared integrations types; control-plane settings normalization, resolved settings, spawn context/children; web Sandbox settings draft/editor.                    |
+| Provider boundary   | `sandbox/provider.ts`, five adapters and REST clients; actual lifetime receipts, deadline propagation, explicit stop intent, ready/retained verification.         |
+| Modal               | Authenticated explicit stop endpoint; existing filesystem snapshot API bounded by the absolute deadline. No experimental snapshot APIs.                           |
+| Coordinator         | `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts`; additive SQLite migration 54.                                                                 |
+| Lifecycle           | `sandbox/lifecycle/manager.ts` and `shutdown-policy.ts`; admission, readiness, generation/lifetime publication, checkpoint ownership, recovery, watchdog fencing. |
+| Session integration | Queue admission, earliest alarm handler, critical event processing, snapshot reader, existing authorized client-command route.                                    |
+| Runtime             | Bridge generation/preparation protocol, critical event forwarding, Claude/OpenCode stop confirmation.                                                             |
+| Web                 | Session socket reducer/hook and `SandboxShutdownBanner` with failure recovery and explicit resume after interruption.                                             |
 
 The public repository worktree is the only implementation target. The production clone, deployments,
 and GitHub issue state are unchanged; changes are delivered through a public-repository pull

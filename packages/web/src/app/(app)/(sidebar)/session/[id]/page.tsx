@@ -98,7 +98,7 @@ export default function SessionPage() {
     sendPrompt,
     cancelPrompt,
     stopExecution,
-    recoverPreservation,
+    recoverShutdown,
     sendTyping,
     reconnect,
     loadOlderEvents,
@@ -452,8 +452,8 @@ export default function SessionPage() {
 
       {capabilities.read && (
         <SandboxShutdownBanner
-          preservation={sessionState?.sandboxPreservation}
-          onRecover={capabilities.lifecycle && ready ? recoverPreservation : undefined}
+          shutdown={sessionState?.sandboxPreservation}
+          onRecover={capabilities.lifecycle && ready ? recoverShutdown : undefined}
         />
       )}
 
