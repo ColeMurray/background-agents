@@ -47,13 +47,46 @@ describe("sandbox-provider", () => {
     delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
     process.env.SANDBOX_PROVIDER = "daytona";
 
-    const { getPublicSandboxProvider, supportsRepoImages } = await loadProvider();
+    const {
+      getPublicSandboxProvider,
+      supportsConfigurableSandboxResources,
+      supportsConfigurableSandboxTimeout,
+      supportsRepoImages,
+    } = await loadProvider();
 
     expect(getPublicSandboxProvider()).toBe("daytona");
     // Provider support, not deployment admission: whether this deployment
     // will start a Daytona build is the control plane's answer, served with
     // the image feed.
     expect(supportsRepoImages()).toBe(true);
+    expect(supportsConfigurableSandboxResources()).toBe(false);
+    expect(supportsConfigurableSandboxTimeout()).toBe(false);
+  });
+
+  it("exposes only the settings supported by the configured provider", async () => {
+    process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "vercel";
+
+    const { supportsConfigurableSandboxResources, supportsConfigurableSandboxTimeout } =
+      await loadProvider();
+
+    expect(supportsConfigurableSandboxResources()).toBe(true);
+    expect(supportsConfigurableSandboxTimeout()).toBe(true);
+  });
+
+  it("recognizes Sandbox0 without exposing repo images or resource overrides", async () => {
+    process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "sandbox0";
+
+    const {
+      getPublicSandboxProvider,
+      supportsConfigurableSandboxResources,
+      supportsConfigurableSandboxTimeout,
+      supportsRepoImages,
+    } = await loadProvider();
+
+    expect(getPublicSandboxProvider()).toBe("sandbox0");
+    expect(supportsRepoImages()).toBe(false);
+    expect(supportsConfigurableSandboxResources()).toBe(false);
+    expect(supportsConfigurableSandboxTimeout()).toBe(true);
   });
 
   it("supports opencomputer with repo images", async () => {

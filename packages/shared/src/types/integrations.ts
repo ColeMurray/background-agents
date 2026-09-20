@@ -271,6 +271,80 @@ export const sandboxSettingsSchema = z.strictObject({
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
+/** Every supported sandbox backend. Keep provider policy exhaustive over this union. */
+export const SANDBOX_PROVIDER_NAMES = [
+  "modal",
+  "daytona",
+  "vercel",
+  "opencomputer",
+  "e2b",
+  "sandbox0",
+] as const;
+
+export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
+
+const DEFAULT_SANDBOX_SETTING_CAPABILITIES = { resources: true, timeout: true };
+const SANDBOX_SETTING_CAPABILITIES = {
+  modal: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
+  daytona: { resources: false, timeout: false },
+  vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
+  opencomputer: { resources: false, timeout: true },
+  e2b: { resources: false, timeout: true },
+  sandbox0: { resources: false, timeout: true },
+} satisfies Record<SandboxProviderName, { resources: boolean; timeout: boolean }>;
+
+export function isSandboxProviderName(provider: string): provider is SandboxProviderName {
+  return (SANDBOX_PROVIDER_NAMES as readonly string[]).includes(provider);
+}
+
+/** Resolve setting support, explicitly treating unvalidated provider names as fully capable. */
+export function sandboxSettingCapabilities(provider: string): {
+  resources: boolean;
+  timeout: boolean;
+} {
+  const normalized = provider.trim().toLowerCase();
+  return isSandboxProviderName(normalized)
+    ? SANDBOX_SETTING_CAPABILITIES[normalized]
+    : DEFAULT_SANDBOX_SETTING_CAPABILITIES;
+}
+
+/** Whether the provider honors per-session CPU and memory settings. */
+export function supportsConfigurableSandboxResources(provider: string): boolean {
+  return sandboxSettingCapabilities(provider).resources;
+}
+
+/** Whether the provider honors a per-session sandbox lifetime. */
+export function supportsConfigurableSandboxTimeout(provider: string): boolean {
+  return sandboxSettingCapabilities(provider).timeout;
+}
+
+export type ProviderSpecificSandboxSetting = "cpuCores" | "memoryMib" | "sandboxTimeoutMs";
+
+export function unsupportedSandboxSettings(
+  settings: SandboxSettings,
+  provider: string
+): ProviderSpecificSandboxSetting[] {
+  const unsupported: ProviderSpecificSandboxSetting[] = [];
+  if (!supportsConfigurableSandboxResources(provider)) {
+    if (settings.cpuCores !== undefined) unsupported.push("cpuCores");
+    if (settings.memoryMib !== undefined) unsupported.push("memoryMib");
+  }
+  if (!supportsConfigurableSandboxTimeout(provider) && settings.sandboxTimeoutMs !== undefined) {
+    unsupported.push("sandboxTimeoutMs");
+  }
+  return unsupported;
+}
+
+/** Remove settings the selected provider cannot honor from an effective session snapshot. */
+export function omitUnsupportedSandboxSettings(
+  settings: SandboxSettings,
+  provider: string
+): SandboxSettings {
+  const supported = { ...settings };
+  for (const setting of unsupportedSandboxSettings(settings, provider)) delete supported[setting];
+  return supported;
+}
+
 /** Validate the relationship only when both child-session limits are provided. */
 export function validateSandboxChildSessionLimits(
   settings: Pick<SandboxSettings, "maxConcurrentChildSessions" | "maxTotalChildSessions">

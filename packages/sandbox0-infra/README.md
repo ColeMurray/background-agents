@@ -54,6 +54,8 @@ access.
 - The runtime TTL pauses workspaces. Hard TTL is disabled for session workspaces so idle retention
   does not silently delete user changes. Operators must manage retained workspace storage and
   cleanup according to their retention policy.
+- Per-session timeout settings are supported. CPU and memory come from the selected template; this
+  provider does not apply per-session resource overrides, so those controls are hidden.
 - Code-server and browser desktop use application-level passwords. Custom tunnel ports are public
   HTTP services: applications exposed there must implement any required authentication themselves.
   Routes do not auto-resume a paused workspace.
