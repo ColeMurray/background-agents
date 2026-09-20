@@ -1416,7 +1416,16 @@ export class SandboxLifecycleManager
       return;
     }
 
-    const execution = this.sessionExecution();
+    let execution: SessionSandboxExecution;
+    try {
+      execution = this.sessionExecution();
+    } catch (error) {
+      this.log.error("Cannot snapshot: invalid session execution", {
+        error: error instanceof Error ? error : String(error),
+        reason,
+      });
+      return;
+    }
     if (sandbox.snapshot_recovery_error_code) return;
 
     // Don't snapshot if already snapshotting
@@ -1601,7 +1610,6 @@ export class SandboxLifecycleManager
     signal?: AbortSignal,
     providerObjectId?: string
   ): Promise<void> {
-    this.sessionExecution();
     if (!this.provider.stopSandbox) {
       return;
     }
@@ -1828,9 +1836,7 @@ export class SandboxLifecycleManager
         this.wsManager.detachSandboxWebSocket(1000, "Inactivity timeout");
         this.broadcaster.broadcast({
           type: "sandbox_warning",
-          message: this.usesProviderManagedStop()
-            ? "Sandbox stopped due to inactivity"
-            : "Sandbox stopped due to inactivity, snapshot saved",
+          message: "Sandbox stopped due to inactivity",
         });
         return "sandbox_terminated";
 
