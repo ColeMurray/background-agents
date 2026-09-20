@@ -21,7 +21,7 @@ class DockerSandboxExecution(BaseModel):
 SandboxExecution = Annotated[
     DefaultSandboxExecution | DockerSandboxExecution, Field(discriminator="profile")
 ]
-_execution_adapter = TypeAdapter(SandboxExecution)
+_execution_adapter: TypeAdapter[SandboxExecution] = TypeAdapter(SandboxExecution)
 
 
 def parse_sandbox_execution(value: object) -> DefaultSandboxExecution | DockerSandboxExecution:
