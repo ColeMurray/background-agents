@@ -65,6 +65,7 @@ import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
+import { SnapshotRetryButton } from "@/components/snapshot-retry-button";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -451,30 +452,13 @@ export default function SessionPage() {
             availability. Deleted or expired artifacts may be unrecoverable.
           </p>
           {capabilities.lifecycle && (
-            <button
-              type="button"
-              className="mt-2 underline"
+            <SnapshotRetryButton
+              sessionId={sessionId}
               disabled={
                 sessionState?.sandboxStatus === "spawning" ||
                 sessionState?.sandboxStatus === "connecting"
               }
-              onClick={async () => {
-                try {
-                  const response = await browserApiFetch(
-                    `/api/sessions/${sessionId}/retry-snapshot`,
-                    { method: "POST" }
-                  );
-                  if (response.ok) return;
-                } catch {
-                  /* A lost response does not authorize another artifact or clean launch. */
-                }
-                window.alert(
-                  "Recovery remains blocked. The snapshot reference is retained; contact your operator."
-                );
-              }}
-            >
-              Retry the existing snapshot
-            </button>
+            />
           )}
           <p className="mt-2">
             <Link href="/" className="underline">
