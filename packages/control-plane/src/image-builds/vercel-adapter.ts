@@ -99,6 +99,7 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter {
       providerObjectId: input.providerSessionId,
       sessionId: input.buildId,
       reason: "environment_image_build_complete",
+      intent: "destroy",
       correlation: {
         ...input.correlation,
         sandbox_id: input.providerSessionId,

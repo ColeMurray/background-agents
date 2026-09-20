@@ -85,7 +85,11 @@ export class SandboxRuntimeEventHandler {
 
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (!this.lifecycle.onRuntimeReady(context.now, event.harness)) return;
+    if (
+      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
+    ) {
+      return;
+    }
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });

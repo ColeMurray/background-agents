@@ -39,7 +39,7 @@ export class SessionSandboxEventProcessor {
     private readonly execution: SandboxExecutionEventHandler,
     private readonly runtime: SandboxRuntimeEventHandler,
     private readonly pushService: SandboxPushService,
-    private readonly preservation?: {
+    private readonly shutdown?: {
       generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
       prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
     }
@@ -71,16 +71,16 @@ export class SessionSandboxEventProcessor {
   private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
       case "sandbox_generation_ready":
-        if (!this.preservation) {
-          throw new Error("Sandbox preservation event handlers are not configured");
+        if (!this.shutdown) {
+          throw new Error("Sandbox graceful shutdown event handlers are not configured");
         }
-        this.preservation.generationReady(event);
+        this.shutdown.generationReady(event);
         return;
       case "preservation_prepared":
-        if (!this.preservation) {
-          throw new Error("Sandbox preservation event handlers are not configured");
+        if (!this.shutdown) {
+          throw new Error("Sandbox graceful shutdown event handlers are not configured");
         }
-        this.preservation.prepared(event);
+        this.shutdown.prepared(event);
         return;
       case "heartbeat":
         this.runtime.handleHeartbeat(context);
