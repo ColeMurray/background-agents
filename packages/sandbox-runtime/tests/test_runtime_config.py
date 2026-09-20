@@ -48,6 +48,44 @@ def test_runtime_config_rejects_non_object_session_config():
 
 
 @pytest.mark.parametrize(
+    ("sandbox_execution", "expected"),
+    [
+        (None, False),
+        ({"profile": "default"}, False),
+        (
+            {
+                "profile": "docker-v1",
+                "provider": "modal",
+                "cpuCores": 2.0,
+                "memoryMib": 4096,
+            },
+            True,
+        ),
+    ],
+)
+def test_docker_enabled_uses_validated_execution_profile(sandbox_execution, expected):
+    session_config = {} if sandbox_execution is None else {"sandbox_execution": sandbox_execution}
+    config = RuntimeConfig.from_env({"SESSION_CONFIG": json.dumps(session_config)})
+
+    assert config.docker_enabled is expected
+    if expected:
+        with pytest.raises(ValueError, match="frozen"):
+            config.sandbox_execution.profile = "default"
+        assert config.docker_enabled is True
+
+
+@pytest.mark.parametrize(
+    "sandbox_execution",
+    [None, {"profile": "unknown"}, {"profile": False}],
+)
+def test_runtime_config_rejects_malformed_execution_profile(sandbox_execution):
+    with pytest.raises(ValueError):
+        RuntimeConfig.from_env(
+            {"SESSION_CONFIG": json.dumps({"sandbox_execution": sandbox_execution})}
+        )
+
+
+@pytest.mark.parametrize(
     "url", ["http://control.example", "ftp://control.example", "control.example"]
 )
 def test_runtime_config_rejects_insecure_control_plane_url(url):

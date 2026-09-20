@@ -6,12 +6,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 class DefaultSandboxExecution(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     profile: Literal["default"] = "default"
 
 
 class DockerSandboxExecution(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     profile: Literal["docker-v1"]
     provider: Literal["modal"]
     cpuCores: float = Field(gt=0, allow_inf_nan=False)

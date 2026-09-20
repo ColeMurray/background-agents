@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
-from .execution import parse_sandbox_execution
+from .execution import SandboxExecution, parse_sandbox_execution
 from .harness.base import HarnessId, parse_harness_id
 
 
@@ -38,10 +38,6 @@ def _freeze_json(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_freeze_json(item) for item in value)
     return value
-
-
-def _validate_sandbox_execution(session_config: dict[str, Any]) -> None:
-    parse_sandbox_execution(session_config.get("sandbox_execution", {"profile": "default"}))
 
 
 def _validate_control_plane_url(url: str) -> None:
@@ -113,6 +109,7 @@ class RuntimeConfig:
     repo_name: str
     vcs_host: str
     session_config: Mapping[str, Any]
+    sandbox_execution: SandboxExecution
     workspace_path: Path
     repo_path: Path
 
@@ -128,7 +125,9 @@ class RuntimeConfig:
         parsed_session_config = json.loads(environment.get("SESSION_CONFIG", "{}"))
         if not isinstance(parsed_session_config, dict):
             raise ValueError("SESSION_CONFIG must contain a JSON object")
-        _validate_sandbox_execution(parsed_session_config)
+        sandbox_execution: SandboxExecution = parse_sandbox_execution(
+            parsed_session_config.get("sandbox_execution", {"profile": "default"})
+        )
         session_config = _freeze_json(parsed_session_config)
         repo_path = workspace_path / repo_name if repo_owner and repo_name else workspace_path
         control_plane_url = environment.get("CONTROL_PLANE_URL", "")
@@ -141,6 +140,7 @@ class RuntimeConfig:
             repo_name=repo_name,
             vcs_host=environment.get("VCS_HOST", "github.com"),
             session_config=session_config,
+            sandbox_execution=sandbox_execution,
             workspace_path=workspace_path,
             repo_path=repo_path,
         )
@@ -151,8 +151,7 @@ class RuntimeConfig:
 
     @property
     def docker_enabled(self) -> bool:
-        execution = self.session_config.get("sandbox_execution", {"profile": "default"})
-        return execution["profile"] == "docker-v1"
+        return self.sandbox_execution.profile == "docker-v1"
 
     @property
     def base_branch(self) -> str:
