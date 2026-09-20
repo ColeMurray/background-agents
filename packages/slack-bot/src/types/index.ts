@@ -65,8 +65,8 @@ import type { SlackSessionTarget } from "../targets";
 /**
  * Result of target classification. Unlike the shared repo-only
  * `ClassificationResult` (still used by the Linear bot), the Slack bot
- * classifies to a {@link SlackSessionTarget} — a repository or a saved
- * environment — because routing rules can name either.
+ * classifies to a {@link SlackSessionTarget}: a repository, a saved
+ * environment, or no repository.
  */
 export interface ClassificationResult {
   target: SlackSessionTarget | null;
@@ -74,6 +74,7 @@ export interface ClassificationResult {
   reasoning: string;
   alternatives?: SlackSessionTarget[];
   needsClarification: boolean;
+  source: "routing_rule" | "channel_association" | "llm";
 }
 
 export type { SlackSessionTarget } from "../targets";
@@ -85,9 +86,9 @@ export type { SlackInteractionPayload } from "../interaction-payload";
  */
 export interface ThreadSession {
   sessionId: string;
-  /** Session-target id: the repo id ("owner/name") or environment id ("env_…"). */
+  /** Session-target id: a repo id, environment id, or the no-repository sentinel. */
   repoId: string;
-  /** Session-target display label: the repo fullName or environment name. */
+  /** Session-target display label, including `No repository` for an empty sandbox. */
   repoFullName: string;
   model: string;
   reasoningEffort?: string;

@@ -18,7 +18,8 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
 function createService() {
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
-    getSandboxSocket: vi.fn(() => sandboxWs),
+    getSandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
+    getReadySandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
     send: vi.fn(() => true),
   };
   const log = {
@@ -33,6 +34,36 @@ function createService() {
 }
 
 describe("SandboxPushService", () => {
+  it("assumes a manual push when no sandbox is attached at all", async () => {
+    const h = createService();
+    h.wsManager.getSandboxSocket.mockReturnValue(null);
+    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+
+    const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
+
+    expect(result).toEqual({ success: true });
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    expect(h.log.info).toHaveBeenCalledWith(
+      "No sandbox connected, assuming branch was pushed manually"
+    );
+  });
+
+  it("refuses, rather than fakes, a push while the attached sandbox is still booting", async () => {
+    // A bridge attached ahead of its boot has no repository to push from. The
+    // manual-push assumption would let a PR be opened on a branch that was
+    // never pushed; the caller must retry once the sandbox is ready.
+    const h = createService();
+    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+
+    const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
+
+    expect(result).toEqual({
+      success: false,
+      error: "Sandbox is still starting; retry once it is ready",
+    });
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
   it("fails a push immediately when the command cannot be delivered", async () => {
     vi.useFakeTimers();
     try {

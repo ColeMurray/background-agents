@@ -34,6 +34,10 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from ..attachment_processor import (
+    MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+    AttachmentProcessor,
+)
 from ..credentials.provider_credential_client import (
     RuntimeCredentialClient,
     RuntimeCredentialDenied,
@@ -103,6 +107,23 @@ TASK_TOOL_NAME: Final = "task"
 # emits; external servers keep theirs so the timeline can name the server.
 OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_RECONNECTS_PER_SESSION: Final = 3
+# The CLI writes one NDJSON message per stdout line, and the SDK transport
+# fails the turn when a single line outgrows its buffer, so the ceiling has to
+# cover the largest line the runtime can produce. ``_user_messages`` inlines
+# every attachment on a prompt as base64 and the CLI echoes that message back,
+# which makes the whole per-message attachment budget one line. Derive the
+# ceiling from that budget rather than pick a round number: the SDK's 1MiB
+# default breaks on an ordinary screenshot, and any fixed value silently
+# falls behind when the attachment limits move.
+# Each attachment is encoded on its own, so the padding is per attachment too.
+_ATTACHMENT_BASE64_BYTES: Final = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * (
+    (AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3 * 4
+)
+# Room for the JSON envelope, the prompt text beside the image blocks, and
+# tool-result lines that carry images the runtime never sized.
+_STDOUT_MESSAGE_HEADROOM_BYTES: Final = 16 * 1024 * 1024
+# Bounds one line; the transport only buffers what actually arrives.
+MAX_STDOUT_MESSAGE_BYTES: Final = _ATTACHMENT_BASE64_BYTES + _STDOUT_MESSAGE_HEADROOM_BYTES
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
     "Settings (or check ANTHROPIC_API_KEY) and start a new session."
@@ -405,6 +426,7 @@ class ClaudeHarness:
             "setting_sources": ["user", "project"],
             "include_partial_messages": True,
             "forward_subagent_text": False,
+            "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
@@ -474,9 +496,15 @@ class ClaudeHarness:
         # One budget covers the whole turn: connect, submit, every read and
         # every emit. The inactivity budget applies to each read alone, and
         # cleanup after either has its own budget, so a hung SDK call can
-        # never eat the snapshot reserve.
+        # never eat the snapshot reserve. A prompt that carries its own
+        # remaining budget spends that instead of the configured maximum.
+        max_duration = (
+            self.limits.prompt_max_duration_seconds
+            if prompt.max_duration_seconds is None
+            else prompt.max_duration_seconds
+        )
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.limits.prompt_max_duration_seconds
+        deadline = loop.time() + max_duration
         try:
             async with asyncio.timeout_at(deadline):
                 client = await self._ensure_client(model, prompt.reasoning_effort)
@@ -486,9 +514,7 @@ class ClaudeHarness:
             self.log.error("claude.connect_timeout", message_id=prompt.message_id)
             self._needs_reconnect = True
             await self._interrupt_within_budget()
-            return TurnOutcome.failed(
-                f"Claude agent did not start within {self.limits.prompt_max_duration_seconds:.0f}s."
-            )
+            return TurnOutcome.failed(f"Claude agent did not start within {max_duration:.0f}s.")
         except Exception as error:
             self.log.error("claude.connect_error", exc=error, message_id=prompt.message_id)
             self._needs_reconnect = True
@@ -526,14 +552,18 @@ class ClaudeHarness:
         except TimeoutError:
             await self._interrupt_within_budget()
             self._needs_reconnect = True
-            return TurnOutcome.failed(
-                f"Prompt exceeded max duration of {self.limits.prompt_max_duration_seconds:.0f}s."
-            )
+            return TurnOutcome.failed(f"Prompt exceeded max duration of {max_duration:.0f}s.")
         except _InactivityTimeout:
+            timeout_seconds = self.limits.inactivity_timeout_seconds
+            self.log.error(
+                "claude.inactivity_timeout",
+                message_id=prompt.message_id,
+                timeout_s=timeout_seconds,
+            )
             await self._interrupt_within_budget()
             self._needs_reconnect = True
             return TurnOutcome.failed(
-                f"Claude agent produced no output for {self.limits.inactivity_timeout_seconds:.0f}s."
+                f"Claude agent produced no output for {timeout_seconds:.0f}s."
             )
         except Exception as error:
             self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)

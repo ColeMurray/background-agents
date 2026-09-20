@@ -1,17 +1,18 @@
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
-import { listAutomationsResponseSchema } from "@open-inspect/shared";
+import {
+  DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
+  listAutomationsResponseSchema,
+} from "@open-inspect/shared";
 import type {
   Automation,
   ListAutomationsResponse,
   ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
 
-const AUTOMATION_LIST_PAGE_SIZE = 25;
-
 function buildAutomationListPath(nameSearch: string, cursor?: string): `/api/${string}` {
-  const searchParams = new URLSearchParams({ limit: String(AUTOMATION_LIST_PAGE_SIZE) });
+  const searchParams = new URLSearchParams({ limit: String(DEFAULT_AUTOMATION_LIST_PAGE_SIZE) });
   if (nameSearch) searchParams.set("search", nameSearch);
   if (cursor) searchParams.set("cursor", cursor);
   return `/api/automations?${searchParams.toString()}`;

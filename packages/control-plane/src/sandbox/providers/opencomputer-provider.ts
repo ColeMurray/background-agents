@@ -6,7 +6,10 @@
  * to OpenComputer rather than being driven by OpenInspect's lifecycle manager.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  supportsConfigurableSandboxTimeout,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -35,6 +38,7 @@ import {
   VCS_CLONE_TOKEN_ENV_VAR,
 } from "../sandbox-env";
 import {
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -73,7 +77,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   readonly name = "opencomputer";
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: true,
@@ -97,23 +101,36 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = config.timeoutSeconds;
-      const sandbox = config.prebuiltImageId
-        ? await this.client.forkFromCheckpoint({
+      let sandbox: OpenComputerSandboxResponse;
+      if (config.prebuiltImageId) {
+        try {
+          sandbox = await this.client.forkFromCheckpoint({
             checkpointId: config.prebuiltImageId,
             name: config.sandboxId,
             env: environment.envVars,
             labels,
             ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
             secretStore: secretStore?.name,
-          })
-        : await this.client.createSandbox({
-            name: config.sandboxId,
-            template: template ?? this.requireTemplate(),
-            env: environment.envVars,
-            labels,
-            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
-            secretStore: secretStore?.name,
           });
+        } catch (error) {
+          if (error instanceof OpenComputerNotFoundError) {
+            throw new PrebuiltImageUnavailableError(
+              "OpenComputer prebuilt checkpoint is unavailable",
+              error
+            );
+          }
+          throw error;
+        }
+      } else {
+        sandbox = await this.client.createSandbox({
+          name: config.sandboxId,
+          template: template ?? this.requireTemplate(),
+          env: environment.envVars,
+          labels,
+          ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+          secretStore: secretStore?.name,
+        });
+      }
       providerObjectId = sandbox.id;
       if (timeoutSeconds !== undefined) {
         await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
@@ -729,6 +746,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (error instanceof SandboxProviderError) return error;
     if (error instanceof OpenComputerApiError) {
       return SandboxProviderError.fromFetchError(
         `${message}: ${error.message}`,

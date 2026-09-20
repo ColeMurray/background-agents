@@ -6,7 +6,7 @@ import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
 } from "../../image-builds/model";
-import { SandboxProviderError } from "../provider";
+import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import {
   E2BNotFoundError,
   E2BConflictError,
@@ -570,6 +570,21 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
       ENTRYPOINT_COMMAND,
       expect.objectContaining({ envdAccessToken: "envd-token" })
     );
+  });
+
+  it("reports a missing prebuilt template explicitly", async () => {
+    const client = mockClient({
+      createSandbox: vi.fn(async () => {
+        throw new E2BNotFoundError("template not found");
+      }),
+    });
+
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        prebuiltImageId: "snap-missing:default",
+      })
+    ).rejects.toBeInstanceOf(PrebuiltImageUnavailableError);
   });
 
   it("kills the sandbox and fails the create when the entrypoint cannot start on a prebuilt boot", async () => {

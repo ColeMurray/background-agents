@@ -11,7 +11,11 @@ import {
   toUiSandboxEvent,
   type PendingAssistantText,
 } from "@/lib/session-socket/event-log";
-import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
+import {
+  createSessionSocketState,
+  sessionSocketReducer,
+  type SessionSocketState,
+} from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
@@ -51,6 +55,8 @@ interface UseSessionSocketReturn {
   sessionState: SessionState | null;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
+  /** The latest sandbox boot: its last phase and completed-phase timings. */
+  boot: SessionSocketState["boot"];
   messages: Message[];
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -59,8 +65,6 @@ interface UseSessionSocketReturn {
   canManageBudget: boolean;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
-  hasMoreHistory: boolean;
-  loadingHistory: boolean;
   sendPrompt: (
     content: string,
     model?: string,
@@ -424,6 +428,7 @@ export function useSessionSocket(
     connectionError: transport.connectionError,
     sessionState,
     sandboxError: state.sandboxError,
+    boot: state.boot,
     messages: NO_MESSAGES,
     events: state.events,
     participants: state.participants,
@@ -432,8 +437,6 @@ export function useSessionSocket(
     canManageBudget: state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
-    hasMoreHistory,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,

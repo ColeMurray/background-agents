@@ -11,8 +11,8 @@ from urllib.parse import quote
 
 import httpx
 
+from .boot_events import BootPhaseError
 from .constants import (
-    BOOT_WARNINGS_FILE_PATH,
     BRIDGE_FATAL_ERROR_FILE_PATH,
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
 )
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from .agent_bridge_process import AgentBridgeProcess
+    from .boot_events import BootEventLog
     from .browser_desktop import BrowserDesktop
     from .code_server import CodeServer
     from .harness.base import HarnessProcessOwner
@@ -63,9 +64,16 @@ class SandboxSupervisor:
         managed_skills: ManagedSkillsMaterializer | None,
         shutdown_event: asyncio.Event,
         log: Any,
+        *,
+        boot_events: BootEventLog | None = None,
     ) -> None:
         self.config = config
         self.repository_boot = repository_boot
+        # The boot-events channel the bridge relays; the repository boot
+        # writes its own phases and warnings through the same log.
+        self.boot_events: BootEventLog = (
+            boot_events if boot_events is not None else repository_boot.warnings
+        )
         # Supervisor half of the harness seam: staging plus any resident
         # vendor process (``opencode serve`` today; nothing for claude).
         self.harness_process = harness_process
@@ -79,9 +87,30 @@ class SandboxSupervisor:
         self.boot_mode = BootMode.FRESH
         self._desktop_restart_task: asyncio.Task[bool] | None = None
         self._repository_boot_result: RepositoryBootResult | None = None
+        # Bridge restart budget, shared by the boot-time watcher and
+        # ``monitor_processes`` so a crash loop that starts mid-boot is not
+        # given a second budget once the boot completes.
+        self._bridge_restarts = 0
+        self._bridge_watch_task: asyncio.Task[None] | None = None
+        self._bridge_exit_policy: asyncio.Future[int] | None = None
+        # Set when bridge supervision itself failed. The boot then ends as a
+        # failure rather than as a requested shutdown.
+        self._bridge_watch_failure: BaseException | None = None
 
-    async def _report_fatal_error(self, message: str) -> None:
-        self.log.error("supervisor.fatal", error_message=message)
+    async def _report_fatal_error(
+        self, message: str, failure: BootPhaseError | None = None
+    ) -> None:
+        """Report a fatal runtime failure to the control plane.
+
+        A ``BootPhaseError`` adds the phase and repository; the HTTP report is
+        the reliable carrier of those, since the bridge's copy of the
+        ``failed`` phase line may be lost when the socket closes first.
+        """
+        self.log.error(
+            "supervisor.fatal",
+            error_message=message,
+            boot_phase=failure.phase if failure is not None else None,
+        )
         if not self.config.control_plane_url or not self.config.session_id:
             return
         try:
@@ -92,7 +121,11 @@ class SandboxSupervisor:
                     try:
                         response = await client.post(
                             f"{self.config.control_plane_url.rstrip('/')}/sessions/{session_id}/sandbox-error",
-                            json={"error": reported_message, "fatal": True},
+                            json={
+                                "error": reported_message,
+                                "fatal": True,
+                                **(failure.report_fields() if failure is not None else {}),
+                            },
                             headers={
                                 "Authorization": f"Bearer {self.config.sandbox_token}",
                                 "X-Sandbox-ID": self.config.sandbox_id,
@@ -193,12 +226,13 @@ class SandboxSupervisor:
             self.shutdown_event.set()
             return restart_count
         if exit_code == DETERMINISTIC_FAILURE_EXIT_CODE:
-            # The harness could not open and told us retrying is futile
-            # (for example a denied credential); report the cause
+            # Harness-phase startup failed deterministically; report the cause
             # rather than spending the restart budget on it.
             cause = self._read_bridge_fatal_error() or "agent harness failed to start"
             self.log.error("bridge.deterministic_failure", exit_code=exit_code, cause=cause)
-            await self._report_fatal_error(cause)
+            # The bridge exits this way from its harness open, so the failure
+            # belongs to the harness phase whether or not the boot is over.
+            await self._report_fatal_error(cause, BootPhaseError(cause, phase="harness"))
             self.shutdown_event.set()
             return restart_count
 
@@ -303,10 +337,70 @@ class SandboxSupervisor:
             self.log.warn("vnc.max_restarts", restart_count=restart_count)
         return restart_count
 
+    async def _watch_bridge_during_boot(self) -> None:
+        """Apply the bridge exit policy while the repository boots.
+
+        ``monitor_processes`` only starts after boot, so without this an
+        early-connected bridge that exits mid-boot would go unobserved: a
+        graceful exit (the control plane's ``shutdown``, or a fenced token
+        refused on reconnect) must cancel the boot, and a crash must be
+        restarted before the control plane's liveness check gives up on it.
+        Cancelled before ``monitor_processes`` takes the bridge over.
+        """
+        try:
+            while not self.shutdown_event.is_set():
+                if not self.agent_bridge.started():
+                    return
+                await self.agent_bridge.wait()
+                if self.agent_bridge.exit_code() is None:
+                    # Nothing to apply the policy to; never spin on a live process.
+                    if await self._wait_for_shutdown(1.0):
+                        return
+                    continue
+                # The policy runs to completion even if the watcher is
+                # cancelled mid-way: the counter and the respawn must not be
+                # left half-applied for the process monitor to re-run.
+                self._bridge_exit_policy = asyncio.ensure_future(
+                    self._handle_bridge_exit(self._bridge_restarts)
+                )
+                self._bridge_restarts = await asyncio.shield(self._bridge_exit_policy)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # A watcher that dies leaves the boot with no bridge supervision
+            # until it completes; end the boot rather than run it blind. The
+            # boot ends as a failure: nobody asked for this shutdown.
+            self.log.error("bridge.watch_failed", exc=error)
+            self._bridge_watch_failure = error
+            self.shutdown_event.set()
+
+    async def _stop_bridge_watch(self) -> None:
+        task = self._bridge_watch_task
+        if task is None:
+            return
+        self._bridge_watch_task = None
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        # The policy future is consumed even when it is already done: a
+        # watcher cancelled between its completion and the assignment below
+        # would otherwise drop the restart it applied, and the process
+        # monitor would inherit a stale count.
+        policy = self._bridge_exit_policy
+        if policy is not None:
+            try:
+                self._bridge_restarts = await policy
+            except asyncio.CancelledError:
+                self.log.warn("bridge.exit_policy_cancelled")
+            except Exception as error:
+                self.log.error("bridge.watch_failed", exc=error)
+                self._bridge_watch_failure = error
+        self._bridge_exit_policy = None
+
     async def monitor_processes(self) -> None:
         """Monitor each concrete process owner with its explicit restart policy."""
         harness_process_restarts = 0
-        bridge_restarts = 0
+        bridge_restarts = self._bridge_restarts
         code_server_restarts = 0
         terminal_restarts = 0
         desktop_restarts = 0
@@ -346,21 +440,32 @@ class SandboxSupervisor:
             )
         return timeout_seconds
 
+    def _boot_interruption(self) -> BaseException:
+        """Why boot work is ending: an internal supervision failure, or a requested shutdown.
+
+        A failure is raised as itself so ``run`` reports it fatally; a
+        requested shutdown is a clean end to the boot.
+        """
+        failure = self._bridge_watch_failure
+        if failure is not None:
+            return failure
+        return BootExecutionCancelled()
+
     async def _run_until_shutdown(
         self, operation_factory: Callable[[], Awaitable[_ResultT]]
     ) -> _ResultT:
         if self.shutdown_event.is_set():
-            raise BootExecutionCancelled
+            raise self._boot_interruption()
         operation_task = asyncio.ensure_future(operation_factory())
         shutdown_task = asyncio.create_task(self.shutdown_event.wait())
         tasks = {operation_task, shutdown_task}
         try:
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if shutdown_task in done or self.shutdown_event.is_set():
-                raise BootExecutionCancelled
+                raise self._boot_interruption()
             if operation_task in done:
                 return operation_task.result()
-            raise BootExecutionCancelled
+            raise self._boot_interruption()
         finally:
             for task in tasks:
                 if not task.done():
@@ -380,6 +485,34 @@ class SandboxSupervisor:
             raise RuntimeError(
                 f"image build exceeded its {timeout_seconds}-second execution timeout"
             ) from error
+
+    async def _start_session_services(self, boot_result: RepositoryBootResult) -> None:
+        """Boot work after the repositories are on disk, ending with the harness.
+
+        Cancelled as a whole when the boot is interrupted, so the harness is
+        never started for a session that is already shutting down.
+        """
+        # Materialization is sandbox-boot work; OpenCode process restarts
+        # reuse this tree and must not depend on control-plane availability.
+        if self.managed_skills is not None:
+            with self.boot_events.phase_scope("skills"):
+                await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
+
+        try:
+            await self.code_server.start(boot_result.workdir)
+        except Exception as error:
+            self.log.warn("code_server.start_failed", exc=error)
+            await self.code_server.stop()
+        try:
+            await self.web_terminal.start(boot_result.workdir)
+        except Exception as error:
+            self.log.warn("web_terminal.start_failed", exc=error)
+            await self.web_terminal.stop()
+
+        # The `harness completed` line is what tells an early-connected
+        # bridge to attach its harness and report `ready`.
+        with self.boot_events.phase_scope("harness"):
+            await self.harness_process.start(boot_result.repositories, boot_result.workdir)
 
     async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
         startup_start = time.time()
@@ -407,10 +540,18 @@ class SandboxSupervisor:
             repo_image_callback = RepoImageBuildCallback.from_env(self.log)
 
         expected_tunnel_ports = self.repository_boot.prepare_tunnel_environment(self.boot_mode)
-        Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
+        # Early connect is the control plane's call (SESSION_CONFIG); an image
+        # build has no session to connect to and starts no bridge at all.
+        early_connect = self.config.bridge_early_connect and self.boot_mode is not BootMode.BUILD
 
         harness_ready = False
         try:
+            # Inside the try: a boot-events file this boot cannot own is
+            # fatal, because a bridge reading the previous boot's lines
+            # would act on them.
+            if self.boot_mode is not BootMode.BUILD:
+                self.boot_events.reset()
+
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
@@ -432,6 +573,15 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return True
 
+            if early_connect:
+                # Transport-only until the harness phase completes: the bridge
+                # reports boot phases and heartbeats so the control plane can
+                # tell a long boot from a dead one, and holds prompts until it
+                # has a harness. The watcher applies the bridge exit policy
+                # for as long as the boot runs.
+                await self.agent_bridge.start(early_connect=True)
+                self._bridge_watch_task = asyncio.create_task(self._watch_bridge_during_boot())
+
             try:
                 await self.browser_desktop.start()
             except Exception as error:
@@ -443,25 +593,13 @@ class SandboxSupervisor:
             )
             self._repository_boot_result = boot_result
 
-            # Materialization is sandbox-boot work; OpenCode process restarts
-            # reuse this tree and must not depend on control-plane availability.
-            if self.managed_skills is not None:
-                await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
-
-            try:
-                await self.code_server.start(boot_result.workdir)
-            except Exception as error:
-                self.log.warn("code_server.start_failed", exc=error)
-                await self.code_server.stop()
-            try:
-                await self.web_terminal.start(boot_result.workdir)
-            except Exception as error:
-                self.log.warn("web_terminal.start_failed", exc=error)
-                await self.web_terminal.stop()
-
-            await self.harness_process.start(boot_result.repositories, boot_result.workdir)
+            # Everything up to the harness is boot work: a bridge that exits
+            # gracefully part way through must end the boot rather than leave
+            # it starting a harness nobody is connected to.
+            await self._run_until_shutdown(lambda: self._start_session_services(boot_result))
             harness_ready = True
-            await self.agent_bridge.start()
+            if not early_connect:
+                await self.agent_bridge.start()
             self.log.info(
                 "sandbox.startup",
                 repo_owner=self.config.repo_owner,
@@ -477,6 +615,14 @@ class SandboxSupervisor:
                 duration_ms=int((time.time() - startup_start) * 1000),
                 outcome="success",
             )
+            # One owner of the bridge's exit code at a time: the boot watcher
+            # hands over to the process monitor here. A failure the watcher
+            # recorded during that handover (a bridge it could not respawn)
+            # ends the boot as a failure rather than a steady state without
+            # a bridge.
+            await self._stop_bridge_watch()
+            if self._bridge_watch_failure is not None:
+                raise self._bridge_watch_failure
             await self.monitor_processes()
         except BootExecutionCancelled:
             event = (
@@ -500,9 +646,12 @@ class SandboxSupervisor:
                 except BootExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
                     return True
-            await self._report_fatal_error(str(error))
+            await self._report_fatal_error(
+                str(error), error if isinstance(error, BootPhaseError) else None
+            )
             return False
         finally:
+            await self._stop_bridge_watch()
             await self.shutdown()
         return True
 

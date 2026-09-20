@@ -173,9 +173,19 @@ Create an R2 API Token:
    [sandbox image workflow](../packages/sandbox-images/README.md) for dependency updates and manual
    builds.
 4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
-5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
+5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`.
+   `daytona_base_snapshot_memory_gib` controls the memory inherited by sandboxes created from the
+   snapshot and defaults to `2`.
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
+
+Two optional settings:
+
+- `daytona_toolbox_api_url` overrides the per-sandbox toolbox proxy. Leave it empty on a deployment
+  whose sandboxes report their own.
+- `daytona_prebuilds_enabled` admits new Daytona prebuilt-image builds and lets fresh sessions boot
+  from one. It defaults to `false`; see [Daytona prebuilds](IMAGE_PREBUILD.md#daytona-prebuilds) for
+  the gates an operator should clear against their own organization and target before turning it on.
 
 > **Important**: the Daytona provider has no fleet-wide key of its own. Add the key for the models
 > you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
@@ -534,6 +544,7 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # daytona_api_url           = "https://app.daytona.io/api"
 # daytona_api_key           = "your-daytona-api-key"
 # daytona_base_snapshot     = "your-snapshot-name"
+# daytona_base_snapshot_memory_gib = 2
 
 # Vercel Sandboxes (only required when sandbox_provider = "vercel")
 # vercel_sandbox_token      = "your-vercel-token"
@@ -1019,7 +1030,12 @@ WEB_PLATFORM
 SANDBOX_PROVIDER
 CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_WORKER_SUBDOMAIN
+R2_MEDIA_LOCATION
+R2_MEDIA_BUCKET_NAME
+SANDBOX_INACTIVITY_TIMEOUT_MS
+SANDBOX_BOOT_TIMEOUT_MS
 ENABLE_DURABLE_OBJECT_BINDINGS
+ENABLE_SERVICE_BINDINGS
 
 # Vercel web app
 VERCEL_TEAM_ID
@@ -1046,13 +1062,17 @@ ALLOWED_USERS
 ALLOWED_EMAIL_DOMAINS
 ALLOWED_EMAILS
 ALLOWED_GITHUB_ORGS
+UNSAFE_ALLOW_ALL_USERS
 APP_NAME
 APP_ICON_URL
 
 # Daytona
 DAYTONA_API_URL
 DAYTONA_BASE_SNAPSHOT
+DAYTONA_BASE_SNAPSHOT_MEMORY_GIB
 DAYTONA_TARGET
+DAYTONA_TOOLBOX_API_URL
+DAYTONA_PREBUILDS_ENABLED
 
 # Vercel Sandbox
 VERCEL_SANDBOX_PROJECT_ID
@@ -1094,6 +1114,8 @@ Secrets for credentials:
 | `CLOUDFLARE_API_TOKEN`             | Your Cloudflare API token                                                                   |
 | `CLOUDFLARE_ACCOUNT_ID`            | Your Cloudflare account ID                                                                  |
 | `CLOUDFLARE_WORKER_SUBDOMAIN`      | Your workers.dev subdomain                                                                  |
+| `R2_MEDIA_LOCATION`                | R2 location hint for the media bucket (defaults to `ENAM`)                                  |
+| `R2_MEDIA_BUCKET_NAME`             | Optional media bucket name override for a pre-created bucket                                |
 | `DEPLOYMENT_NAME`                  | Your deployment name                                                                        |
 | `R2_ACCESS_KEY_ID`                 | R2 access key ID                                                                            |
 | `R2_SECRET_ACCESS_KEY`             | R2 secret access key                                                                        |
@@ -1107,10 +1129,15 @@ Secrets for credentials:
 | `MODAL_ENVIRONMENT`                | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`     | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
 | `SANDBOX_PROVIDER`                 | `modal`, `daytona`, or `vercel`                                                             |
+| `SANDBOX_INACTIVITY_TIMEOUT_MS`    | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)        |
+| `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
 | `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
-| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
+| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                |
+| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB` | Base snapshot memory in GiB (defaults to `2`)                                               |
 | `DAYTONA_TARGET`                   | Optional Daytona target name                                                                |
+| `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports          |
+| `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)     |
 | `VERCEL_SANDBOX_TOKEN`             | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                  |
 | `VERCEL_SANDBOX_PROJECT_ID`        | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_            |
 | `VERCEL_SANDBOX_TEAM_ID`           | Optional Vercel team/account ID for sandbox sessions                                        |
@@ -1132,6 +1159,7 @@ Secrets for credentials:
 | `LINEAR_CLIENT_ID`                 | Linear OAuth application client ID (required if Linear enabled)                             |
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
+| `LINEAR_API_KEY`                   | Optional Linear API key used as a comment-posting fallback                                  |
 | `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; required by an Anthropic classifier     |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
@@ -1146,7 +1174,9 @@ Secrets for credentials:
 | `ALLOWED_EMAIL_DOMAINS`            | Comma-separated email domains (or empty for all domains)                                    |
 | `ALLOWED_EMAILS`                   | Comma-separated exact email addresses (for individual users on shared domains)              |
 | `ALLOWED_GITHUB_ORGS`              | Comma-separated GitHub orgs whose active members can sign in                                |
+| `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)  |
 | `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                  |
+| `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                 |
 | `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                       |
 | `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                      |
 | `GH_BOT_USERNAME`                  | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)               |
@@ -1375,7 +1405,8 @@ that set no fleet-wide key in Terraform supply model credentials as secrets inst
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
 3. Add the key for your chosen provider (e.g., `ANTHROPIC_API_KEY` for Claude models or
-   `DEEPSEEK_API_KEY` for DeepSeek models, or `ZHIPU_API_KEY` for Z.AI Coding Plan models)
+   `DEEPSEEK_API_KEY` for DeepSeek models, `ZHIPU_API_KEY` for Z.AI Coding Plan models, or
+   `OPENCODE_API_KEY` for OpenCode Zen and OpenCode Go models)
 4. Click **Save**
 
 See [Secrets Management](SECRETS.md) for more on global and repository secrets.

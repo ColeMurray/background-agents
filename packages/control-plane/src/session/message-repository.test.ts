@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
@@ -8,6 +10,7 @@ import {
 } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { SessionStorageIntegrityError, type MessageRow } from "./types";
+import { initSchema } from "./schema";
 
 function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
   return {
@@ -27,6 +30,7 @@ function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
     status: "pending",
     error_message: null,
     stop_confirmation_deadline: null,
+    reported_cost_usd: 0,
     created_at: 1000,
     started_at: null,
     completed_at: null,
@@ -121,6 +125,13 @@ describe("MessageRepository", () => {
     mock.setData(pendingQuery, [{ ...messageRow(), source: "unknown" }]);
 
     expect(() => repository.getNextPendingMessage()).toThrow(SessionStorageIntegrityError);
+  });
+
+  it("reads a message by id", () => {
+    const row = messageRow();
+    mock.setData(`SELECT * FROM messages WHERE id = ? LIMIT 1`, [row]);
+    expect(repository.getMessageById("msg-1")).toEqual(row);
+    expect(mock.calls.at(-1)?.params).toEqual(["msg-1"]);
   });
 
   it("reads processing message timestamps", () => {
@@ -595,10 +606,64 @@ describe("MessageRepository", () => {
   });
 
   it("builds message list pagination filters", () => {
-    repository.listMessages({ limit: 10, status: "pending", cursor: "5000" });
+    repository.listMessages({
+      limit: 10,
+      status: "pending",
+      cursor: { createdAt: 5000, id: "msg-5" },
+    });
     expect(mock.calls[0].query).toContain("status = ?");
+    expect(mock.calls[0].query).toContain("created_at = ? AND id < ?");
+    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+    expect(mock.calls[0].params).toEqual(["pending", 5000, 5000, "msg-5", 11]);
+  });
+
+  it("retains timestamp-only filtering for legacy message cursors", () => {
+    repository.listMessages({ limit: 10, cursor: { createdAt: 5000 } });
     expect(mock.calls[0].query).toContain("created_at < ?");
-    expect(mock.calls[0].params).toEqual(["pending", 5000, 11]);
+    expect(mock.calls[0].params).toEqual([5000, 11]);
+  });
+
+  it("paginates tied message timestamps without gaps against SQLite", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createNodeSqlStorage(db).sql;
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      for (const id of ["msg-a", "msg-b", "msg-c"]) {
+        sql.exec(
+          `INSERT INTO messages (id, author_id, content, source, status, created_at)
+           VALUES (?, 'author', ?, 'web', 'completed', 5000)`,
+          id,
+          id
+        );
+      }
+      const transaction = <T>(closure: () => T) => closure();
+      const realRepository = new MessageRepository(
+        sql,
+        transaction,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transaction)
+      );
+
+      expect(
+        realRepository
+          .listMessages({ limit: 1, cursor: null, status: null })
+          .map((message) => message.id)
+      ).toEqual(["msg-c", "msg-b"]);
+      expect(
+        realRepository
+          .listMessages({
+            limit: 1,
+            cursor: { createdAt: 5000, id: "msg-c" },
+            status: null,
+          })
+          .map((message) => message.id)
+      ).toEqual(["msg-b", "msg-a"]);
+    } finally {
+      db.close();
+    }
   });
 
   it("selects the latest terminal message", () => {

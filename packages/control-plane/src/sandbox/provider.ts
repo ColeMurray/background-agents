@@ -434,6 +434,32 @@ export class SandboxProviderError extends Error {
   }
 }
 
+/** The provider confirmed that the selected prebuilt artifact cannot be restored. */
+export class PrebuiltImageUnavailableError extends SandboxProviderError {
+  constructor(message: string, cause?: Error) {
+    super(message, "permanent", cause);
+    this.name = "PrebuiltImageUnavailableError";
+  }
+}
+
+/**
+ * A prebuilt image the provider could not confirm as usable right now: it is
+ * still being brought back from cold storage, or the provider could not be
+ * reached to say.
+ *
+ * Transient, and deliberately not a `PrebuiltImageUnavailableError`: only an
+ * answer about the artifact itself — that it is missing, or in a state it
+ * never leaves — may retire an image, so a slow activation or an unreachable
+ * API does not throw away a perfectly good prebuild. The image is not proven
+ * unusable, so it stays in rotation; this spawn fails transiently.
+ */
+export class PrebuiltImageActivationPendingError extends SandboxProviderError {
+  constructor(message: string, cause?: Error) {
+    super(message, "transient", cause);
+    this.name = "PrebuiltImageActivationPendingError";
+  }
+}
+
 /**
  * Sandbox provider interface.
  *

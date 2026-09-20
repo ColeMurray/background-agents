@@ -11,10 +11,19 @@
  */
 
 import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  unsupportedSandboxSettings,
+  type McpServerConfig,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import {
+  sandboxBootPhaseSchema,
+  type SandboxBootPhase,
+} from "@open-inspect/shared/types/sandbox-events";
 import {
   sessionHasRepository,
   type SandboxAccessKind,
@@ -22,6 +31,7 @@ import {
   type SessionRow,
 } from "../../session/types";
 import {
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -34,6 +44,7 @@ import {
   evaluateInactivityTimeout,
   evaluateHeartbeatHealth,
   evaluateConnectingTimeout,
+  evaluateBootBudget,
   evaluateWarmDecision,
   isDeadSandboxStatus,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
@@ -41,11 +52,13 @@ import {
   DEFAULT_INACTIVITY_CONFIG,
   DEFAULT_HEARTBEAT_CONFIG,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_BOOT_BUDGET_CONFIG,
   type CircuitBreakerConfig,
   type SpawnConfig,
   type InactivityConfig,
   type HeartbeatConfig,
   type ConnectingTimeoutConfig,
+  type BootBudgetConfig,
 } from "./decisions";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
@@ -89,6 +102,7 @@ export interface SandboxGeneration {
 interface SandboxCircuitBreakerInfo {
   status: SandboxStatus;
   created_at: number;
+  last_heartbeat: number | null;
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
@@ -127,6 +141,11 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
+  /**
+   * Revoke the current generation's credentials and socket authority for
+   * good, so the runtime cannot reconnect and the row cannot become ready.
+   */
+  fenceSandboxGeneration(): void;
   /**
    * Move the sandbox from `from` to `to` only while the row still belongs to
    * `generation` and is still in `from`; reports whether it was. The status
@@ -243,6 +262,7 @@ export interface SandboxLifecycleConfig {
   inactivity: InactivityConfig;
   heartbeat: HeartbeatConfig;
   connectingTimeout: ConnectingTimeoutConfig;
+  bootBudget: BootBudgetConfig;
   controlPlaneUrl: string;
   /** Default model ID used when the session has no model override. */
   model: string;
@@ -270,7 +290,41 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   inactivity: DEFAULT_INACTIVITY_CONFIG,
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
   connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
 };
+
+/**
+ * The human-readable name of a boot phase for the boot-budget failure text.
+ * Names the script where there is one, since that is what the operator will
+ * go and look at.
+ */
+function describeBootPhase(bootPhaseJson: string | null): string {
+  let phase: SandboxBootPhase | null = null;
+  if (bootPhaseJson) {
+    try {
+      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(bootPhaseJson));
+      phase = parsed.success ? parsed.data : null;
+    } catch {
+      phase = null;
+    }
+  }
+  if (!phase) return "booting";
+  const repo = phase.repoOwner && phase.repoName ? ` for ${phase.repoOwner}/${phase.repoName}` : "";
+  switch (phase.phase) {
+    case "starting":
+      return "starting the runtime";
+    case "sync":
+      return `cloning${repo}`;
+    case "setup":
+      return `running setup.sh${repo}`;
+    case "start":
+      return `running start.sh${repo}`;
+    case "skills":
+      return "installing managed skills";
+    case "harness":
+      return "starting the agent";
+  }
+}
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -342,7 +396,16 @@ export type UnresponsiveSandboxTrigger =
   | "stop_alarm_failed"
   | "stop_confirmation_timeout";
 
-export type SandboxAlarmResult = "no_action" | "sandbox_failed" | "sandbox_terminated";
+/**
+ * What the lifecycle alarm did. `boot_budget_exceeded` carries the failure
+ * text because the alarm handler must fail the prompt the boot was for with
+ * the same words the user sees.
+ */
+export type SandboxAlarmResult =
+  | "no_action"
+  | "sandbox_failed"
+  | "sandbox_terminated"
+  | { kind: "boot_budget_exceeded"; reason: string };
 
 /**
  * Manages sandbox lifecycle operations.
@@ -452,6 +515,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       snapshotImageId: sandboxState?.snapshot_image_id || null,
       snapshotRuntimeVersion: sandboxState?.snapshot_runtime_version || null,
       hasActiveWebSocket: this.wsManager.getSandboxWebSocket() !== null,
+      hasConnected: sandboxState?.last_heartbeat != null,
     };
 
     const spawnDecision = evaluateSpawnDecision(
@@ -651,15 +715,24 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
-        // A provider restore failure is "no image" (design §7.3): fail the
-        // row so the cron rebuilds it and boot this session from base rather
-        // than failing the spawn. Unrelated create failures (quota, network)
-        // can false-positive here — the cost is one rebuild, and the base
-        // retry surfaces them through the normal failure path anyway.
+        if (!(error instanceof PrebuiltImageUnavailableError)) {
+          if (error instanceof SandboxProviderError && error.errorType === "transient") {
+            this.log.warn("Prebuilt-image spawn failed with a transient provider error", {
+              event: "image_build.spawn_error_transient",
+              image_build_id: selectedImage.imageBuildId,
+              error_type: error.errorType,
+              error: error.message,
+            });
+          }
+          throw error;
+        }
+        // An unavailable prebuilt artifact is "no image" (design §7.3): fail
+        // the row so the cron rebuilds it and boot this session from base.
         this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
           event: "image_build.restore_failed",
           image_build_id: selectedImage.imageBuildId,
-          error: error instanceof Error ? error.message : String(error),
+          error_type: error.errorType,
+          error: error.message,
         });
         await this.markImageBuildRestoreFailed(selectedImage, error);
         // The retry gets a fresh spawn identity: the failed attempt may have
@@ -737,7 +810,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         // problem, not evidence that the next attempt will fail too.
         if (error instanceof SandboxProviderError) {
           if (error.errorType === "permanent") {
-            this.recordSpawnFailure(Date.now());
+            this.recordSpawnFailure(Date.now(), generation?.createdAt);
             this.log.info("Circuit breaker incremented", { error_type: "permanent" });
           } else {
             this.log.info("Transient error, not incrementing circuit breaker", {
@@ -746,7 +819,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           }
         } else {
           // Unknown error type - treat as permanent
-          this.recordSpawnFailure(Date.now());
+          this.recordSpawnFailure(Date.now(), generation?.createdAt);
           this.log.info("Circuit breaker incremented", { error_type: "unknown" });
         }
       }
@@ -899,12 +972,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
-   * Count one failed attempt toward the circuit breaker. The window is
-   * measured from the latest failure, so a failure that arrives after the
-   * previous streak expired starts a new streak of one rather than extending
-   * a count the breaker would already have discarded at the next spawn.
+   * Count one failed attempt toward the circuit breaker. Whether the streak
+   * continues is judged against `attemptStartedAt`, the moment this attempt
+   * began, not against `now`: the window measures how long the system sat
+   * idle between the previous failure and the next attempt, which is what
+   * separates a user coming back later (a fresh streak) from an automatic
+   * re-drive chain (no idle time at all). Measured failure-to-failure, a
+   * boot that outlasts the window would reset the streak every time and a
+   * deterministic late failure would be re-driven forever.
    */
-  private recordSpawnFailure(now: number): void {
+  private recordSpawnFailure(now: number, attemptStartedAt: number = now): void {
     const sandbox = this.storage.getSandboxWithCircuitBreaker();
     const streak = evaluateCircuitBreaker(
       {
@@ -912,7 +989,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         lastFailureTime: sandbox?.last_spawn_failure || 0,
       },
       this.config.circuitBreaker,
-      now
+      attemptStartedAt
     );
     if (streak.shouldReset) this.storage.resetCircuitBreaker();
     this.storage.incrementCircuitBreakerFailure(now);
@@ -921,12 +998,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Record that this spawn, restore, or resume attempt failed. The status
    * write applies only while the row still shows the attempt in flight
-   * (`inFlight`): a bridge that connected during the provider call has
-   * already published `ready` and is serving the session, and an alarm that
-   * timed the attempt out has already failed it and told the user. In either
-   * case the failure is the provider's, not the sandbox's, and reporting it
-   * would persist a spawn error on a session that has none. Reports whether
-   * this call is the one that failed the row.
+   * (`inFlight`) and no bridge is attached: a bridge that connected during
+   * the provider call is booting or already serving the session, and an
+   * alarm that timed the attempt out has already failed it and told the
+   * user. In either case the failure is the provider's, not the sandbox's,
+   * and reporting it would persist a spawn error on a session that has none.
+   * Reports whether this call is the one that failed the row.
    */
   private failAttempt(
     generation: SandboxGeneration | null,
@@ -934,8 +1011,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     reason: string
   ): boolean {
     // No generation: the attempt failed before it reserved anything, so the
-    // row still describes whatever came before it and is left alone.
-    if (generation && this.storage.transitionSandboxStatus(generation, inFlight, "failed")) {
+    // row still describes whatever came before it and is left alone. A live
+    // socket: the runtime is up regardless of what the provider reported, and
+    // its own liveness, budget and fatal-report paths judge it from here.
+    const bridgeAttached = generation !== null && this.wsManager.getSandboxWebSocket() !== null;
+    if (
+      generation &&
+      !bridgeAttached &&
+      this.storage.transitionSandboxStatus(generation, inFlight, "failed")
+    ) {
       this.reportSandboxError(reason);
       return true;
     }
@@ -944,6 +1028,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       in_flight_status: inFlight,
       attempt_sandbox_id: generation?.sandboxId ?? null,
       sandbox_status: this.storage.getSandbox()?.status ?? null,
+      bridge_attached: bridgeAttached,
       error: reason,
     });
     return false;
@@ -1425,12 +1510,18 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       return "no_action";
     }
 
-    // Check connecting timeout — sandbox failed to connect within allowed time
+    // Booting means the bridge may be attached ahead of the harness; the
+    // heartbeat proves it connected. Read once so every branch below agrees.
+    const isBooting = sandbox.status === "spawning" || sandbox.status === "connecting";
+    const hasConnected = sandbox.last_heartbeat !== null;
+
+    // Check connecting timeout — the bridge never connected within allowed time
     const connectingResult = evaluateConnectingTimeout(
       sandbox.status,
       sandbox.created_at,
       this.config.connectingTimeout,
-      now
+      now,
+      hasConnected
     );
 
     if (connectingResult.isTimedOut) {
@@ -1440,9 +1531,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeout_ms: this.config.connectingTimeout.timeoutMs,
       });
       this.storage.updateSandboxStatus("failed");
-      this.recordSpawnFailure(now);
+      this.recordSpawnFailure(now, sandbox.created_at);
       this.clearSandboxAccessState();
       if (this.canStopProviderSandbox()) {
+        // Fenced before the stop: a bridge arriving while the stop is in
+        // flight is refused at the door instead of self-healing into a
+        // container being killed. Where the provider cannot be stopped the
+        // row stays unfenced, so a boot that outlives the watchdog (#1905)
+        // can still connect and serve the session.
+        this.storage.fenceSandboxGeneration();
         try {
           await this.stopProviderSandbox("connecting_timeout");
         } catch (error) {
@@ -1470,8 +1567,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         event: "sandbox.heartbeat_stale",
         last_heartbeat_ms: heartbeatHealth.ageMs || 0,
         threshold_ms: this.config.heartbeat.timeoutMs,
+        sandbox_status: sandbox.status,
       });
       this.storage.updateSandboxStatus("stale");
+      // A bridge that connected and then died mid-boot is a boot failure
+      // like any other; the termination re-drives the queue, and the breaker
+      // is what bounds a boot that dies the same way every time.
+      if (isBooting) this.recordSpawnFailure(now, sandbox.created_at);
       this.clearSandboxAccessState();
       this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
 
@@ -1482,6 +1584,21 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           this.log.warn("Provider stop failed after heartbeat timeout", {
             error: error instanceof Error ? error.message : String(error),
           });
+        }
+      } else if (isBooting) {
+        // Never snapshot a half-booted filesystem: it would be recorded as
+        // the restore point, and the next spawn would boot from it and skip
+        // the setup it never finished. No shutdown either: the row is
+        // already `stale`, which the send path refuses, and a bridge that
+        // stopped heartbeating is not there to receive it.
+        if (this.canStopProviderSandbox()) {
+          try {
+            await this.stopProviderSandbox("heartbeat_timeout");
+          } catch (error) {
+            this.log.warn("Provider stop failed after heartbeat timeout", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
       } else {
         if (this.canStopProviderSandbox()) {
@@ -1506,6 +1623,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
       return "sandbox_terminated";
+    }
+
+    // Boot budget — a connected runtime that has been booting for too long.
+    const bootBudget = evaluateBootBudget(
+      sandbox.status,
+      sandbox.created_at,
+      this.config.bootBudget,
+      now
+    );
+    if (bootBudget.isExceeded) {
+      return this.failBootBudget(sandbox, bootBudget.elapsedMs, now);
     }
 
     // Evaluate inactivity timeout
@@ -1587,6 +1715,57 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
+  /**
+   * Give up on a boot that outlived its budget. Order matters: the `shutdown`
+   * goes out first, while the socket is still adoptable (the lifecycle send
+   * path refuses a failed row); the generation is then fenced so a runtime
+   * that ignores the shutdown, or reconnects, is refused at the door and its
+   * supervisor exits — which is how a provider with no explicit stop is
+   * stopped; only then is the row failed. The failure is published and
+   * persisted before the provider stop yields, and the spawn guard is held
+   * across it, so a prompt arriving mid-stop neither waits to learn the boot
+   * died nor reserves a replacement that inherits this failure. Returns the
+   * failure text so the alarm handler can fail the pending prompt with the
+   * same words.
+   */
+  private async failBootBudget(
+    sandbox: SandboxRow,
+    elapsedMs: number,
+    now: number
+  ): Promise<SandboxAlarmResult> {
+    const budgetMinutes = Math.round(this.config.bootBudget.timeoutMs / 60_000);
+    const reason =
+      `Sandbox boot exceeded ${budgetMinutes} minutes while ${describeBootPhase(sandbox.boot_phase)}. ` +
+      "Raise SANDBOX_BOOT_TIMEOUT_MS if the boot legitimately needs longer, or make it return sooner.";
+    this.log.warn("Boot budget exceeded", {
+      event: "sandbox.boot_budget",
+      elapsed_ms: elapsedMs,
+      timeout_ms: this.config.bootBudget.timeoutMs,
+      boot_phase: sandbox.boot_phase,
+    });
+    this.wsManager.sendToSandbox({ type: "shutdown" });
+    this.storage.fenceSandboxGeneration();
+    this.storage.updateSandboxStatus("failed");
+    this.recordSpawnFailure(now, sandbox.created_at);
+    this.clearSandboxAccessState();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    this.reportSandboxError(reason);
+    this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
+    if (this.canStopProviderSandbox()) {
+      this.isTerminatingSandbox = true;
+      try {
+        await this.stopProviderSandbox("boot_budget_exceeded");
+      } catch (error) {
+        this.log.warn("Provider stop failed after boot budget", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        this.isTerminatingSandbox = false;
+      }
+    }
+    return { kind: "boot_budget_exceeded", reason };
+  }
+
   async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status)) {
@@ -1640,7 +1819,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     });
     this.isTerminatingSandbox = true;
     this.storage.updateSandboxStatus("failed");
-    this.recordSpawnFailure(Date.now());
+    this.recordSpawnFailure(Date.now(), sandbox.created_at);
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     this.clearSandboxAccessState();
@@ -1763,7 +1942,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
     try {
-      return parsePersistedSandboxSettings(session.sandbox_settings);
+      const settings = parsePersistedSandboxSettings(session.sandbox_settings);
+      const unsupported = unsupportedSandboxSettings(settings, this.provider.name);
+      if (unsupported.length > 0) {
+        this.log.warn("Ignoring persisted sandbox settings unsupported by the provider", {
+          event: "sandbox.settings_unsupported",
+          provider: this.provider.name,
+          settings: unsupported,
+        });
+      }
+      return omitUnsupportedSandboxSettings(settings, this.provider.name);
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
@@ -1864,6 +2052,37 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   onSandboxConnected(): void {
     this.isSpawningSandbox = false;
     this.storage.setLastSpawnError(null, null);
+  }
+
+  /**
+   * The bridge socket for `generation` was adopted. Its own `spawning` row
+   * advances to `connecting` here, and only that: readiness is the runtime's
+   * `ready` event to declare. The move matters for the attempt that is still
+   * inside its provider call, whose failure path only fails a row it finds
+   * in flight, and for the user, who sees the boot begin.
+   */
+  onSandboxSocketAttached(generation: SandboxGeneration): void {
+    if (this.storage.transitionSandboxStatus(generation, "spawning", "connecting")) {
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+      return;
+    }
+    // A watchdog-failed boot that finally connected (#1905). Admission let it
+    // in because `failed` is reconnectable, but the socket registry closes
+    // every sandbox socket of a `failed` row, so the row must leave `failed`
+    // here or the bridge just admitted is cut off. A fenced row stays: its
+    // credentials were revoked for good and its socket is meant to close.
+    const row = this.storage.getSandbox();
+    if (
+      row?.status === "failed" &&
+      row.fenced === 0 &&
+      this.storage.transitionSandboxStatus(generation, "failed", "connecting")
+    ) {
+      this.log.info("Failed sandbox reconnected; treating it as booting", {
+        event: "sandbox.failed_reconnected",
+        sandbox_id: generation.sandboxId,
+      });
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+    }
   }
 
   /**

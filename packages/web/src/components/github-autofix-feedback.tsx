@@ -173,7 +173,7 @@ function ReviewThreads({
       <div className="space-y-2">
         {visibleComments.map((comment, index) => (
           <ReviewThread
-            key={`${comment.url}:${index}`}
+            key={comment.url}
             comment={comment}
             expanded={expandedSections.has(`${messageId}:thread:${index}`)}
             onToggle={() => onToggleSection(`${messageId}:thread:${index}`)}

@@ -114,6 +114,38 @@ describe("SandboxHandler", () => {
     expect(processSandboxEvent).toHaveBeenCalledWith(event);
   });
 
+  it("strips a legacy output tail before processing a boot phase event", async () => {
+    const { handler, processSandboxEvent } = createHandler();
+
+    const response = await handler.sandboxEvent(
+      new Request("http://internal/internal/sandbox/event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "boot_progress",
+          bootSeq: 3,
+          phase: "setup",
+          status: "failed",
+          detail: "setup hook failed",
+          outputTail: ["legacy secret output"],
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSandboxEvent).toHaveBeenCalledWith({
+      type: "boot_progress",
+      bootSeq: 3,
+      phase: "setup",
+      status: "failed",
+      detail: "setup hook failed",
+      sandboxId: "sandbox-1",
+      timestamp: 123,
+    });
+  });
+
   it("authenticates the current sandbox generation and coordinates a fatal runtime error", async () => {
     const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
     const sandbox = {
@@ -139,6 +171,90 @@ describe("SandboxHandler", () => {
 
     expect(response.status).toBe(200);
     expect(isValidSandboxToken).toHaveBeenCalledWith("sandbox-token", sandbox);
+    expect(failSandbox).toHaveBeenCalledWith("OpenCode repeatedly crashed");
+  });
+
+  it("strips a legacy output tail before landing a fatal report as the failed phase", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent } =
+      createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+      status: "connecting",
+    } as SandboxRow);
+    isValidSandboxToken.mockResolvedValue(true);
+    const order: string[] = [];
+    processSandboxEvent.mockImplementation(async () => {
+      order.push("phase");
+    });
+    failSandbox.mockImplementation(async () => {
+      order.push("fail");
+    });
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({
+          error: "start.sh exited 1",
+          fatal: true,
+          phase: "start",
+          bootSeq: 7,
+          repoOwner: "acme",
+          repoName: "api",
+          outputTail: ["npm ERR! missing script: start"],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSandboxEvent).toHaveBeenCalledWith({
+      type: "boot_progress",
+      phase: "start",
+      status: "failed",
+      bootSeq: 7,
+      repoOwner: "acme",
+      repoName: "api",
+      detail: "start.sh exited 1",
+      sandboxId: "sandbox-1",
+      timestamp: 1.234,
+    });
+    expect(order).toEqual(["phase", "fail"]);
+    expect(failSandbox).toHaveBeenCalledWith("start.sh exited 1");
+  });
+
+  it("accepts a fatal report without phase fields from an older runtime", async () => {
+    const { handler, getSandbox, isValidSandboxToken, failSandbox, processSandboxEvent } =
+      createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      modal_sandbox_id: "sandbox-1",
+      auth_token_hash: "token-hash-1",
+      auth_token: null,
+      status: "connecting",
+    } as SandboxRow);
+    isValidSandboxToken.mockResolvedValue(true);
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: "Bearer sandbox-token",
+          "X-Sandbox-ID": "sandbox-1",
+        },
+        body: JSON.stringify({ error: "OpenCode repeatedly crashed" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSandboxEvent).not.toHaveBeenCalled();
     expect(failSandbox).toHaveBeenCalledWith("OpenCode repeatedly crashed");
   });
 

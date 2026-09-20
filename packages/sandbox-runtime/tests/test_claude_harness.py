@@ -29,6 +29,10 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from sandbox_runtime.attachment_processor import (
+    MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+    AttachmentProcessor,
+)
 from sandbox_runtime.credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
@@ -36,6 +40,7 @@ from sandbox_runtime.credentials.provider_credential_client import (
 from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartError, PromptLimits
 from sandbox_runtime.harness.claude import (
     AUTHENTICATION_FAILED_MESSAGE,
+    MAX_STDOUT_MESSAGE_BYTES,
     ClaudeHarness,
     ClaudeHarnessConfig,
     bare_model_id,
@@ -333,6 +338,7 @@ class TestOptions:
         assert options["setting_sources"] == ["user", "project"]
         assert options["include_partial_messages"] is True
         assert options["forward_subagent_text"] is False
+        assert options["max_buffer_size"] == MAX_STDOUT_MESSAGE_BYTES
         assert options["system_prompt"] == {
             "type": "preset",
             "preset": "claude_code",
@@ -347,6 +353,38 @@ class TestOptions:
         assert "mcp__linear__*" in options["allowed_tools"]
         assert "mcp__local__*" in options["allowed_tools"]
         assert "Bash" in options["allowed_tools"]
+
+    async def test_stdout_ceiling_clears_the_whole_attachment_budget(self, tmp_path: Path) -> None:
+        """One NDJSON line carries every attachment the runtime accepts.
+
+        ``_user_messages`` inlines them all into a single message the CLI
+        echoes back, so a prompt at the top of the budget -- not just one
+        large image -- has to fit under the ceiling. Measure the JSON
+        envelope from the real message instead of trusting the headroom, and
+        stand small payloads in for the images so the check stays cheap.
+        """
+        h = Harness(tmp_path)
+        await h.harness.open()
+        await h.harness.create_session()
+        attachments = [
+            {"name": f"shot-{index}.png", "mimeType": "image/png", "content": "AAAA"}
+            for index in range(MAX_SESSION_ATTACHMENTS_PER_MESSAGE)
+        ]
+        messages = [
+            message
+            async for message in h.harness._user_messages(
+                HarnessPrompt(message_id="m1", text="hi", attachments=attachments)
+            )
+        ]
+        assert len(messages) == 1
+        envelope_bytes = len(json.dumps(messages[0])) - sum(
+            len(attachment["content"]) for attachment in attachments
+        )
+        # Encoded one attachment at a time, as the processor does, so the
+        # base64 padding lands once per image rather than once per batch.
+        per_attachment = ((AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3) * 4
+        base64_bytes = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * per_attachment
+        assert base64_bytes + envelope_bytes < MAX_STDOUT_MESSAGE_BYTES
 
     def test_reasoning_controls_are_per_model(self) -> None:
         assert reasoning_options("claude-sonnet-4-5", "max") == {

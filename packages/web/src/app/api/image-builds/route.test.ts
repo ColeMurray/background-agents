@@ -182,6 +182,52 @@ describe("GET /api/image-builds feed", () => {
     });
   });
 
+  it("serves the deployment's admission state alongside the toggles", async () => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") {
+        return Response.json({
+          units: [],
+          admission: { open: false, reason: "daytona_prebuilds_disabled" },
+        });
+      }
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({ images: [] });
+    });
+
+    const response = await getFeed();
+
+    await expect(response.json()).resolves.toMatchObject({
+      admission: { open: false, reason: "daytona_prebuilds_disabled" },
+    });
+  });
+
+  it("drops rows another provider built", async () => {
+    const otherProviderRow = {
+      id: "build-old",
+      scopeKind: "repo",
+      scopeId: "acme/web",
+      provider: "daytona",
+      status: "ready",
+      repositoriesFingerprint: "fp-repo",
+      repositoryShas: [],
+      runtimeVersion: "60",
+      buildDurationSeconds: 10,
+      errorMessage: null,
+      createdAt: 1700000000000,
+    };
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") return Response.json({ units: [] });
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({ images: [otherProviderRow] });
+    });
+
+    const response = await getFeed();
+
+    // The deployment runs on modal here; a retained Daytona row is history,
+    // not a prebuild this deployment can boot.
+    await expect(response.json()).resolves.toMatchObject({ images: [] });
+  });
+
   it("filters superseded rows at the fetch boundary", async () => {
     vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
       if (path === "/image-builds/enabled") return Response.json({ units: [] });

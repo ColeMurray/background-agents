@@ -72,6 +72,9 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    boot_phase: null,
+    boot_seq: null,
+    fenced: 0,
     created_at: 1,
     ...overrides,
   };
@@ -118,6 +121,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     status: "completed",
     error_message: null,
     stop_confirmation_deadline: null,
+    reported_cost_usd: 0,
     created_at: 1,
     started_at: 2,
     completed_at: 3,
@@ -181,7 +185,12 @@ describe("ChildSummaryHandler", () => {
       nextCursor: null,
       events: [
         createEvent({ id: "e1", type: "token", data: '{"token":"x"}', created_at: 9 }),
-        createEvent({ id: "e2", type: "error", data: '{"message":"boom"}', created_at: 8 }),
+        createEvent({
+          id: "e2",
+          type: "error",
+          data: '{"message":"boom","outputTail":["legacy secret output"]}',
+          created_at: 8,
+        }),
         createEvent({ id: "e3", type: "heartbeat", data: '{"ok":true}', created_at: 7 }),
         createEvent({ id: "e4", type: "git_sync", data: '{"state":"done"}', created_at: 6 }),
         createEvent({ id: "e5", type: "push_error", data: '{"code":"denied"}', created_at: 5 }),
@@ -468,7 +477,12 @@ describe("ChildSummaryHandler", () => {
     repository.getEventTimelinePage.mockReturnValue({
       events: [
         createEvent({ id: "e1", type: "tool_call", data: '{"tool":"Read"}', created_at: 10 }),
-        createEvent({ id: "e2", type: "tool_result", data: '{"result":"ok"}', created_at: 20 }),
+        createEvent({
+          id: "e2",
+          type: "tool_result",
+          data: '{"result":"ok","outputTail":["legacy secret output"]}',
+          created_at: 20,
+        }),
       ],
       hasMore: false,
       nextCursor: null,

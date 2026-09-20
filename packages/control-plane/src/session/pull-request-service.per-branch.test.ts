@@ -111,7 +111,7 @@ function createInput(overrides: Partial<CreatePullRequestInput> = {}): CreatePul
     repoOwner: "acme",
     repoName: "web",
     promptingUserId: "user-1",
-    promptingAuth: null,
+    resolvePromptingAuth: vi.fn(async () => ({ auth: null })),
     sessionUrl: "https://app.example.com/session/session-name-1",
     ...overrides,
   };

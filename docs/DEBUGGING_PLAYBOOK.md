@@ -135,24 +135,40 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 | `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call        |
 | `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                   |
 | `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                        |
-| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox               |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox, or deferred  |
 | `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                   |
 | `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result   |
 | `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`           | Linear start-callback delivery result |
+| `sandbox.boot_progress`      | info        | `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                               | Boot phase reported by the runtime    |
+| `sandbox.ready`              | info        | `harness`                                                                                                             | Runtime harness up; sandbox is ready  |
+
+`prompt.dispatch` with `outcome="deferred"` and `reason="sandbox_booting"` means a bridge is
+attached but its boot has not reached `ready`: nothing is spawned and nothing is sent, and the
+runtime's `ready` event (`sandbox.ready`) pumps the queue. `sandbox.boot_progress` is logged once
+per `boot_seq`; the copy the bridge resends on reconnect is dropped at debug level
+(`sandbox.boot_progress_repeated`).
 
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
 Dashboards and alerts must migrate `sandbox.spawned` and `sandbox.spawn_failed` to `sandbox.spawn`
 outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
 
-| Event                     | Level       | Key Fields                                                                                                              | Description                |
-| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `sandbox.spawn`           | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed            |
-| `sandbox.restore`         | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed          |
-| `sandbox.snapshot`        | info        | `reason`, `provider_object_id`                                                                                          | Snapshot attempt started   |
-| `sandbox.snapshot_saved`  | info        | `image_id`, `reason`                                                                                                    | Snapshot saved             |
-| `sandbox.heartbeat_stale` | warn        | `last_heartbeat_ms`, `threshold_ms`                                                                                     | Heartbeat missed           |
-| `sandbox.timeout`         | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached |
+| Event                          | Level       | Key Fields                                                                                                              | Description                                                             |
+| ------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `sandbox.spawn`                | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed                                                         |
+| `sandbox.restore`              | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed                                                       |
+| `sandbox.snapshot`             | info        | `reason`, `modal_object_id`                                                                                             | Snapshot attempt started                                                |
+| `sandbox.snapshot_saved`       | info        | `image_id`, `reason`                                                                                                    | Snapshot saved                                                          |
+| `sandbox.heartbeat_stale`      | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed                                                        |
+| `sandbox.timeout`              | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached                                              |
+| `sandbox.connecting_timeout`   | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
+| `sandbox.boot_budget`          | warn        | `elapsed_ms`, `timeout_ms`, `boot_phase`                                                                                | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
+| `sandbox.fatal_runtime_error`  | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |
+| `sandbox.failed_reconnected`   | info        | `sandbox_id`                                                                                                            | Watchdog-failed boot connected late; resumed as `connecting`            |
+| `sandbox.circuit_breaker_open` | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
+
+Where `msg` is prose (`"Boot budget exceeded"`, `"Heartbeat stale"`), the stable identifier is in
+`event`.
 
 #### Provider Clients
 
@@ -182,24 +198,34 @@ outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
 
 #### Supervisor (`component: "supervisor"`)
 
-| Event              | Level | Key Fields                                                                                               | Description                    |
-| ------------------ | ----- | -------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `sandbox.startup`  | info  | `repo_owner`, `repo_name`, `restored_from_snapshot`, `git_sync_success`, `opencode_ready`, `duration_ms` | One per sandbox boot           |
-| `supervisor.start` | info  | `repo_owner`, `repo_name`                                                                                | Supervisor process started     |
-| `supervisor.error` | error | `exc`                                                                                                    | Unhandled supervisor error     |
-| `supervisor.fatal` | error | `message`                                                                                                | Fatal error, sandbox will exit |
+| Event                          | Level   | Key Fields                                                                                                                                                                                       | Description                                                       |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `sandbox.startup`              | info    | `repo_owner`, `repo_name`, `boot_mode`, `restored_from_snapshot`, `from_repo_image`, `git_sync_success`, `setup_success`, `start_success`, `harness`, `opencode_ready`, `duration_ms`, `outcome` | One per sandbox boot, once the harness is up                      |
+| `supervisor.start`             | info    | `repo_owner`, `repo_name`                                                                                                                                                                        | Supervisor process started                                        |
+| `supervisor.error`             | error   | `error_type`, `error_message`, `error_stack`                                                                                                                                                     | Unhandled supervisor error                                        |
+| `supervisor.fatal`             | error   | `error_message`, `boot_phase`                                                                                                                                                                    | Fatal error, sandbox will exit                                    |
+| `supervisor.boot_warning`      | warning | `scope`, `warning_message`, `repo_owner`, `repo_name`                                                                                                                                            | Non-fatal hook failure, relayed as a `warning` event              |
+| `supervisor.boot_cancelled`    | info    | `reason`                                                                                                                                                                                         | Boot cancelled by a `shutdown` or a fenced token                  |
+| `bridge.deterministic_failure` | error   | `exit_code`, `cause`                                                                                                                                                                             | Harness could not open; reported as a fatal `harness` phase       |
+| `bridge.crash`                 | error   | `exit_code`, `restart_count`                                                                                                                                                                     | Bridge exited abnormally; restarted with backoff, during boot too |
 
 #### Bridge (`component: "bridge"`)
 
-| Event                 | Level      | Key Fields                                                                                                                                                     | Description                                           |
-| --------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `bridge.connect`      | info       | `outcome`                                                                                                                                                      | WebSocket connected to control-plane                  |
-| `bridge.disconnect`   | info, warn | `reason`, `ws_close_code`, `connection_duration_seconds`, `total_connected_duration_seconds`, `connection_count`, `reconnect_count`, `reconnect_attempt_count` | WebSocket disconnected with lifetime aggregates       |
-| `bridge.reconnect`    | info       | `attempt`, `reconnect_attempt_count`, `delay_s`                                                                                                                | Reconnection attempt                                  |
-| `bridge.run_complete` | info       | `outcome`, `connection_count`, `reconnect_count`, `reconnect_attempt_count`, `total_connected_duration_seconds`                                                | Bridge process exited with aggregate connection stats |
-| `prompt.start`        | info       | `message_id`, `model`                                                                                                                                          | Prompt processing started                             |
-| `prompt.run`          | info       | `message_id`, `model`, `outcome`, `duration_ms`                                                                                                                | Prompt processing completed (wide)                    |
-| `prompt.error`        | error      | `message_id`, `exc`                                                                                                                                            | Prompt processing failed                              |
+`bridge.connect` fires before the repository boots: the bridge is transport-only until the `harness`
+phase completes, then attaches the harness and sends `ready`.
+
+| Event                                  | Level         | Key Fields                                                                                                                                                     | Description                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge.connect`                       | info          | `outcome`                                                                                                                                                      | WebSocket connected to control-plane                                                                                                                                                                                                                                                            |
+| `bridge.disconnect`                    | info, warning | `reason`, `ws_close_code`, `connection_duration_seconds`, `total_connected_duration_seconds`, `connection_count`, `reconnect_count`, `reconnect_attempt_count` | WebSocket disconnected with lifetime aggregates                                                                                                                                                                                                                                                 |
+| `bridge.reconnect`                     | info          | `attempt`, `reconnect_attempt_count`, `delay_s`                                                                                                                | Reconnection attempt                                                                                                                                                                                                                                                                            |
+| `bridge.run_complete`                  | info          | `outcome`, `connection_count`, `reconnect_count`, `reconnect_attempt_count`, `total_connected_duration_seconds`                                                | Bridge process exited with aggregate connection stats                                                                                                                                                                                                                                           |
+| `bridge.harness_attached`              | info          | `harness`                                                                                                                                                      | Harness attached after the `harness` phase; `ready` sent                                                                                                                                                                                                                                        |
+| `bridge.harness_attach_failed`         | error         | `error_type`, `error_message`, `error_stack`                                                                                                                   | Harness attach failed; the bridge exits and the supervisor restarts it, reporting `Bridge crashed N times` only once the restart budget is spent. A deterministic `HarnessStartError` skips the retries and is reported at once as a fatal `harness` phase — see `bridge.deterministic_failure` |
+| `bridge.command_refused_while_booting` | warning       | `cmd_type`                                                                                                                                                     | Command arrived before `ready`: `snapshot` and `refresh_diff` are dropped, `push` is answered with `push_error`                                                                                                                                                                                 |
+| `prompt.start`                         | info          | `message_id`, `model`                                                                                                                                          | Prompt processing started                                                                                                                                                                                                                                                                       |
+| `prompt.run`                           | info          | `message_id`, `model`, `outcome`, `duration_ms`                                                                                                                | Prompt processing completed (wide)                                                                                                                                                                                                                                                              |
+| `prompt.error`                         | error         | `message_id`, `error_type`, `error_message`, `error_stack`                                                                                                     | Prompt processing failed                                                                                                                                                                                                                                                                        |
 
 #### Git Operations (`component: "bridge"` / `"supervisor"`)
 
@@ -346,27 +372,72 @@ Key fields to check:
 
 ```
 # 1. Did the sandbox spawn?
-service="control-plane" msg="sandbox.spawn" session_id="<SESSION_ID>"
-service="control-plane" msg="sandbox.spawned" session_id="<SESSION_ID>"
+service="control-plane" event="sandbox.spawn" session_id="<SESSION_ID>"
 
 # 2. Did the provider create it? Modal example:
 service="modal-infra" msg="sandbox.create" sandbox_id="<SANDBOX_ID>"
 
-# 3. Did startup succeed?
-service="modal-infra" msg="sandbox.startup" sandbox_id="<SANDBOX_ID>"
-
-# 4. Did the bridge connect?
+# 3. Did the bridge connect? It connects before the repository boots, so this
+#    should follow 2 within seconds.
 service="modal-infra" msg="bridge.connect" sandbox_id="<SANDBOX_ID>"
 
-# 5. Did the control-plane accept the WebSocket?
+# 4. Did the control-plane accept the WebSocket?
 service="control-plane" msg="ws.connect" ws_type="sandbox" session_id="<SESSION_ID>"
 ```
 
 Check `outcome` and `reject_reason` on `ws.connect`. Common reasons:
 
 - `sandbox_id_mismatch` — sandbox was replaced (stale sandbox reconnecting)
-- `token_mismatch` — auth token doesn't match
+- `token_mismatch` — auth token doesn't match (a fenced generation lands here)
 - `sandbox_stopped` — session already terminated
+
+No `bridge.connect` within 240 s of creation ends in `sandbox.connecting_timeout`. Once `ws.connect`
+succeeds the sandbox is `connecting` and the boot is under way; see the next scenario.
+
+### "Why is the sandbox stuck booting?"
+
+```
+# 1. Which phase is it in? The latest line is the current phase.
+service="control-plane" event="sandbox.boot_progress" session_id="<SESSION_ID>"
+  | fields boot_seq, phase, phase_status, repo_owner, repo_name, elapsed_ms, warning
+
+# 2. Did a hook fail without ending the boot?
+service="modal-infra" event="supervisor.boot_warning" sandbox_id="<SANDBOX_ID>"
+
+# 3. Did the boot finish?
+service="modal-infra" event="sandbox.startup" sandbox_id="<SANDBOX_ID>"
+service="control-plane" event="sandbox.ready" session_id="<SESSION_ID>"
+
+# 4. Is a prompt waiting on it?
+service="control-plane" event="prompt.dispatch" outcome="deferred" reason="sandbox_booting"
+```
+
+Phases run `starting` → `sync` → `setup` (fresh boots only) → `start` → `skills` → `harness`, with
+`setup` and `start` reported once per repository. `started` means that phase's work is under way,
+which is not always a script: `sync`, `skills` and `harness` carry the same status, and `setup` and
+`start` report it even for a repository that has no such hook. Inside the sandbox the same lines are
+in `/tmp/oi-boot-events.jsonl`, whose first entry is `sync` — the bridge synthesises `starting`
+itself when its socket opens and never writes it to the file.
+
+Three things end a boot that never reaches `ready`:
+
+- `sandbox.heartbeat_stale` with `sandbox_status="connecting"`: the bridge stopped heartbeating for
+  90 s. The sandbox goes `stale`, counts as a boot failure, and is stopped without a snapshot, so a
+  half-booted filesystem never becomes the restore point.
+- `sandbox.boot_budget`: `SANDBOX_BOOT_TIMEOUT_MS` (default 30 minutes) elapsed since creation. The
+  control plane sends `shutdown`, fences the generation, fails the row, and fails the waiting prompt
+  with the phase text (`Sandbox boot exceeded 30 minutes while running setup.sh for acme/api…`).
+- `sandbox.fatal_runtime_error`: the runtime reported a fatal error (clone failed, the primary
+  repository's `start.sh` failed, the harness would not open). The report retains the phase and
+  error metadata, and repository metadata when applicable. Hook stdout and stderr are discarded
+  rather than collected or shown, including for a fatal `start.sh` failure.
+
+Fencing revokes a generation for good: the sandbox token hash is blanked, the socket id cleared, and
+`fenced=1` set on the row. The runtime's next authenticated call or reconnect is refused, the bridge
+exits cleanly, and the supervisor logs `supervisor.boot_cancelled` and stops the sandbox. A fenced
+`failed` row never becomes `ready`, even if a late `ready` arrives. A connect-watchdog failure
+fences only when the provider can stop the sandbox; otherwise the boot may still connect later,
+which is logged as `sandbox.failed_reconnected` and resumes as `connecting`.
 
 ### "Why did a sandbox spawn fail?"
 
@@ -388,11 +459,16 @@ service="control-plane" component="lifecycle-manager" msg="Circuit breaker open"
 
 The breaker counts attempts that fail before a prompt is dispatched to the sandbox: a
 `sandbox.spawn` error the provider classified as permanent (or that had no classification; transient
-errors are not counted), a `sandbox.connecting_timeout`, or a fatal runtime report
+errors are not counted), a `sandbox.connecting_timeout`, a `sandbox.boot_budget`, a
+`sandbox.heartbeat_stale` while still `spawning` or `connecting`, or a fatal runtime report
 (`sandbox.fatal_runtime_error`). Dispatching a prompt clears the count; a connected bridge on its
-own does not. The window is measured from the latest failure, so the count survives as long as each
-failure lands within five minutes of the one before it, and the breaker opens at three. Find the
-failures that tripped it by searching the session for those three events.
+own does not. A fatal runtime report is the one failure that is not confined to the pre-dispatch
+window: it is recorded unconditionally, so a sandbox that dies after its prompt was dispatched
+starts a fresh streak at one. The five-minute window is measured as the idle gap between the
+previous failure and the start of the attempt that failed (the sandbox row's `created_at`), not
+between the failures themselves: a chain of automatic re-drives has no idle gap and opens the
+breaker on the third failure however long each boot ran, while a user who returns after an hour
+starts a fresh streak. Find the failures that tripped it by searching the session for those events.
 
 ### "Why did snapshot restore fail?"
 
@@ -447,6 +523,13 @@ Or on the provider side. Modal example:
 
 ```
 service="modal-infra" msg="sandbox.create" | where duration_ms > 30000
+```
+
+Which boot phase is slow:
+
+```
+service="control-plane" event="sandbox.boot_progress" phase_status="completed"
+  | where elapsed_ms > 300000 | group by phase, repo_owner, repo_name | count
 ```
 
 ### "Prompt failures by model"

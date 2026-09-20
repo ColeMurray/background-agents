@@ -50,12 +50,18 @@ export function jobKindForQueue(queueName: string, deploymentName: string): JobK
 /** The producer side: `send` resolves once the Queue holds the payload. */
 export function createQueueJobs(bindings: JobQueueBindings): Jobs {
   return {
-    async send(job) {
+    async send(job, options) {
       const queue = bindings[JOB_QUEUE_BINDINGS[job.kind]];
       if (!queue) {
         throw new Error(`No queue is bound for ${job.kind} jobs on this deployment`);
       }
-      await queue.send(job.payload);
+      if (options?.delayMs === undefined) {
+        await queue.send(job.payload);
+        return;
+      }
+      // Queues delay in whole seconds; round up so a delay is never shorter
+      // than the caller asked for.
+      await queue.send(job.payload, { delaySeconds: Math.ceil(options.delayMs / 1000) });
     },
   };
 }

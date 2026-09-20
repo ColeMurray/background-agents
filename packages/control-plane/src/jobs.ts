@@ -109,9 +109,19 @@ export type JobPayload<K extends JobKind> = z.infer<(typeof JOB_KINDS)[K]["paylo
 /** A job as a producer sends it: its kind and the payload that kind carries. */
 export type Job = { [K in JobKind]: { kind: K; payload: JobPayload<K> } }[JobKind];
 
+/** How a producer may defer a job it is sending. */
+export interface JobSendOptions {
+  /**
+   * Hold the job for this long before its first delivery. Used to resume work
+   * the provider has not finished yet, without holding a request open or
+   * spending a delivery attempt on every poll.
+   */
+  delayMs?: number;
+}
+
 /** The port a producer holds. Resolves once the job is durable, before delivery begins. */
 export interface Jobs {
-  send(job: Job): Promise<void>;
+  send(job: Job, options?: JobSendOptions): Promise<void>;
 }
 
 /**

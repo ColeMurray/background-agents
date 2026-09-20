@@ -472,7 +472,7 @@ variable "daytona_api_key" {
 }
 
 variable "daytona_base_snapshot" {
-  description = "Named Daytona snapshot used for fresh sandbox creation"
+  description = "Name prefix for the Terraform-managed Daytona base snapshot"
   type        = string
   default     = ""
 
@@ -482,10 +482,33 @@ variable "daytona_base_snapshot" {
   }
 }
 
+variable "daytona_base_snapshot_memory_gib" {
+  description = "Memory in GiB reserved by sandboxes created from the Daytona base snapshot"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.daytona_base_snapshot_memory_gib >= 1 && var.daytona_base_snapshot_memory_gib == floor(var.daytona_base_snapshot_memory_gib)
+    error_message = "daytona_base_snapshot_memory_gib must be a positive integer."
+  }
+}
+
 variable "daytona_target" {
   description = "Optional Daytona target name"
   type        = string
   default     = ""
+}
+
+variable "daytona_toolbox_api_url" {
+  description = "Optional explicit Daytona toolbox proxy base URL. Leave empty to use the proxy each sandbox reports."
+  type        = string
+  default     = ""
+}
+
+variable "daytona_prebuilds_enabled" {
+  description = "Admit new Daytona image builds and let fresh sessions boot from one. Off by default: callbacks, finalization, status and cleanup keep working while it is, so closing it is the rollback control."
+  type        = bool
+  default     = false
 }
 
 variable "opencomputer_api_url" {
@@ -657,6 +680,17 @@ variable "sandbox_inactivity_timeout_ms" {
   description = "Milliseconds of sandbox inactivity before OpenInspect snapshots and stops the sandbox when no clients are connected."
   type        = number
   default     = 600000
+}
+
+variable "sandbox_boot_timeout_ms" {
+  description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
+  type        = number
+  default     = 1800000
+
+  validation {
+    condition     = var.sandbox_boot_timeout_ms > 240000
+    error_message = "sandbox_boot_timeout_ms must exceed the 240000 ms connect watchdog."
+  }
 }
 
 variable "web_platform" {

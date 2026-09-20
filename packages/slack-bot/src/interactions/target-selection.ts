@@ -1,43 +1,115 @@
 import {
-  escapeMrkdwnText,
   getMessageDetails,
+  postEphemeral,
   postMessage,
   updateMessage,
 } from "@open-inspect/shared/slack";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
+import { MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import { collectForwardedMessages } from "../forwarded-messages";
+import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import { createLogger } from "../logger";
 import {
-  buildWorkingMessageBlocks,
+  buildWorkingMessage,
+  formatSessionDefaultsNotice,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
 import { formatAttributedRequest } from "../messages/context";
-import { deletePendingRequest, getPendingRequest } from "../pending-requests/pending-request-store";
-import { startSessionAndSendPrompt } from "../sessions/session-launcher";
-import { resolveTargetValue } from "../target-clarification";
-import { targetLabel } from "../targets";
+import {
+  deleteLegacyPendingRequest,
+  deletePendingRequest,
+  getLegacyPendingRequest,
+  getPendingRequest,
+} from "../pending-requests/pending-request-store";
+import {
+  loadAuthoritativeSlackLaunchSettings,
+  startSessionAndSendPrompt,
+  type SlackLaunchSettings,
+} from "../sessions/session-launcher";
+import { resolveTargetValue, targetSelectedText } from "../target-clarification";
+import { targetId, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
+import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
 
 const log = createLogger("target-selection");
 
-export async function handleTargetSelection(
-  selectedValue: string,
+interface TargetSelectionRequest {
+  requestId?: string;
+  selectedValue: string;
+  channel: string;
+  messageTs: string;
+  threadTs?: string;
+  selectedBy: string;
+  selectionSource: "picker" | "quick_pick";
+}
+
+/**
+ * Replace the clarification message with a record of the chosen target so its
+ * picker and quick-pick buttons stop inviting a second selection. Passing no
+ * `blocks` is load-bearing — that is what removes them. Best effort: a failed
+ * update leaves a stale picker, which must not fail a launched session.
+ */
+async function retireTargetClarificationPrompt(
+  env: Env,
   channel: string,
   messageTs: string,
-  threadTs: string | undefined,
+  target: SlackSessionTarget,
+  traceId: string | undefined
+): Promise<void> {
+  const result = await updateMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    messageTs,
+    targetSelectedText(target)
+  );
+  if (!result.ok) {
+    log.warn("slack.target_clarification.retire_failed", {
+      trace_id: traceId,
+      channel,
+      message_ts: messageTs,
+      slack_error: result.error,
+    });
+  }
+}
+
+export async function handleTargetSelection(
+  request: TargetSelectionRequest,
   env: Env,
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
 ): Promise<void> {
+  const { requestId, selectedValue, channel, messageTs, threadTs, selectedBy, selectionSource } =
+    request;
   const threadKey = threadTs || messageTs;
-  const pendingData = await getPendingRequest(env, channel, threadKey);
+  let pendingData;
+  if (requestId) {
+    const boundPendingData = await getPendingRequest(env, requestId);
+    if (
+      boundPendingData &&
+      (boundPendingData.channel !== channel || boundPendingData.threadTs !== threadKey)
+    ) {
+      await postEphemeral(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        selectedBy,
+        "Sorry, this target selection no longer matches its original request.",
+        { thread_ts: threadKey }
+      );
+      return;
+    }
+    pendingData = boundPendingData;
+  } else {
+    pendingData = await getLegacyPendingRequest(env, channel, threadKey);
+  }
+
   if (!pendingData) {
-    await postMessage(
+    await postEphemeral(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Sorry, I couldn't find your original request. Please try again.",
+      selectedBy,
+      "Sorry, this target selection has expired. Please try your request again.",
       { thread_ts: threadKey }
     );
     return;
@@ -50,19 +122,85 @@ export async function handleTargetSelection(
     channelName,
     channelDescription,
     imageOnly,
+    messageTs: sourceMessageTs,
     sourceMessage,
+    threadContextSource,
     unattributedPrompt,
+    turnPlan,
+    launchPlan,
+    classification,
   } = pendingData;
+  if (selectedBy !== userId) {
+    await postEphemeral(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      selectedBy,
+      "Only the person who made the original request can choose its target.",
+      { thread_ts: threadKey }
+    );
+    return;
+  }
+  const legacyInlinePromptOptions =
+    !requestId && "inlinePromptOptions" in pendingData
+      ? pendingData.inlinePromptOptions
+      : undefined;
+  // `turnPlan` is the pre-`launchPlan` field, still read so a clarification
+  // stored before this deploy keeps its model choice.
+  let resolvedLaunchPlan =
+    launchPlan ?? (turnPlan ? { sessionDefaults: turnPlan.effective } : undefined);
+  let launchSettings: SlackLaunchSettings | undefined;
+  if (
+    !resolvedLaunchPlan &&
+    legacyInlinePromptOptions &&
+    hasInlinePromptOptions(legacyInlinePromptOptions)
+  ) {
+    const authoritativeLaunchSettings = await loadAuthoritativeSlackLaunchSettings(
+      env,
+      userId,
+      traceId
+    );
+    if (!authoritativeLaunchSettings) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
+        thread_ts: threadKey,
+      });
+      return;
+    }
+    launchSettings = authoritativeLaunchSettings;
+    const resolvedTurn = resolveInlinePromptOptions(
+      legacyInlinePromptOptions,
+      launchSettings.userPreferences,
+      launchSettings.enabledModels
+    );
+    if (!resolvedTurn.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, resolvedTurn.error, {
+        thread_ts: threadKey,
+      });
+      return;
+    }
+    resolvedLaunchPlan = { sessionDefaults: resolvedTurn.turnPlan.effective };
+  }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
-      "Sorry, that repository or environment is no longer available. Please try again.",
+      "Sorry, that target is no longer available. Please try again.",
       { thread_ts: threadKey }
     );
     return;
   }
+
+  const contextImages = threadContextSource
+    ? (
+        await fetchInteractiveThreadContext(
+          env,
+          channel,
+          threadContextSource.threadTs,
+          { beforeTs: threadContextSource.beforeTs, includeBotMessages: true },
+          traceId
+        )
+      )?.images
+    : undefined;
 
   // Pending requests persist only the source-message locator; re-fetch the
   // files from Slack now that the target is known.
@@ -99,11 +237,25 @@ export async function handleTargetSelection(
     }
   }
 
-  const label = escapeMrkdwnText(targetLabel(target));
-  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, `Working on *${label}*...`, {
+  log.info("target.decision", {
+    trace_id: traceId,
+    request_id: requestId,
+    channel,
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(label),
+    decision_path: "clarified",
+    classification_source: classification?.source,
+    classifier_target_id: classification?.targetId,
+    classifier_confidence: classification?.confidence,
+    selected_by: selectedBy,
+    selection_source: selectionSource,
+    target_kind: target.kind,
+    target_id: targetId(target),
+  });
+  scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
+  const ack = buildWorkingMessage();
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, ack.text, {
+    thread_ts: threadKey,
+    blocks: ack.blocks,
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
@@ -117,26 +269,41 @@ export async function handleTargetSelection(
     threadTs: threadKey,
     messageText,
     actor,
-    // The original message ts isn't persisted with the pending request, so
-    // the "Working on..." ack — or the interaction message when the ack post
-    // fails — marks where interim thread context resumes.
-    messageTs: ackTs ?? messageTs,
+    // New records preserve the original causal checkpoint. The fallback keeps
+    // pending requests written by older deployments deliverable.
+    messageTs: sourceMessageTs ?? ackTs ?? messageTs,
     previousMessages,
     channelName,
     channelDescription,
     images,
+    contextImages,
     imageOnly,
+    launchPlan: resolvedLaunchPlan,
+    launchSettings,
     traceId,
   });
+  // A failed launch leaves the pending request in place and tells the user to
+  // try again, so the picker is their retry control: only retire it once the
+  // launch has committed.
   if (!sessionResult) return;
 
-  await deletePendingRequest(env, channel, threadKey);
+  // Retire the authoritative state first. The Slack call below can burn the
+  // client's full request timeout, and a concurrent click that reads a
+  // still-live pending request would launch a second session.
+  if (requestId) {
+    await deletePendingRequest(env, requestId);
+  } else {
+    await deleteLegacyPendingRequest(env, channel, threadKey);
+  }
+  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, `Working on *${label}*...`, {
-      blocks: buildWorkingMessageBlocks(label, {
-        sessionId: sessionResult.sessionId,
-        webAppUrl: env.WEB_APP_URL,
-      }),
+    const launched = buildWorkingMessage({
+      sessionId: sessionResult.sessionId,
+      webAppUrl: env.WEB_APP_URL,
+      sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
+    });
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
+      blocks: launched.blocks,
     });
     scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }

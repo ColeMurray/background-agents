@@ -2,12 +2,7 @@
  * Utility functions for formatting display values
  */
 
-import { MODEL_OPTIONS, normalizeModelId } from "@open-inspect/shared/models";
-
-// Build a lookup map once at module level
-const MODEL_DISPLAY_NAMES = new Map<string, string>(
-  MODEL_OPTIONS.flatMap((g) => g.models.map((m) => [m.id, m.name]))
-);
+import { getModelDisplayName } from "@open-inspect/shared/models";
 
 /**
  * Format model ID to display name.
@@ -16,7 +11,7 @@ const MODEL_DISPLAY_NAMES = new Map<string, string>(
  */
 export function formatModelName(modelId: string): string {
   if (!modelId) return "Unknown Model";
-  return MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId;
+  return getModelDisplayName(modelId);
 }
 
 /**
@@ -25,7 +20,7 @@ export function formatModelName(modelId: string): string {
  */
 export function formatModelNameLower(modelId: string): string {
   if (!modelId) return "unknown model";
-  return (MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId).toLowerCase();
+  return getModelDisplayName(modelId).toLowerCase();
 }
 
 /**

@@ -1,6 +1,12 @@
-import type { ImageBuildStore, ReapableImageBuildRow } from "../db/image-builds";
+import type {
+  ImageBuildStore,
+  ReapableImageBuildRow,
+  UnboundSourceIntentRow,
+  UnresolvedProviderOperationRow,
+} from "../db/image-builds";
 import { createLogger } from "../logger";
 import { errorMessage } from "./errors";
+import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import type { ImageBuildProvider, SupersededImageBuild } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
@@ -9,6 +15,31 @@ import { runMaintenanceTasks } from "./concurrency";
 const logger = createLogger("image-builds:reaper");
 
 export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
+
+/**
+ * Age past which an outstanding obligation is worth an operator's attention.
+ * Well past the cron's own cadence and the longest source lifetime, so a
+ * warning means something is genuinely stuck rather than merely in progress.
+ */
+const IMAGE_BUILD_STUCK_OBLIGATION_ALERT_MS = 6 * 60 * 60 * 1000;
+
+/** What one unbound-source recovery pass settled. */
+export interface ImageBuildSourceRecoveryResult {
+  /** Sources found provider-side and attached to their row for teardown. */
+  recovered: number;
+  /** Intents settled because no source was ever created. */
+  cleared: number;
+  /** Intents left outstanding for the next pass. */
+  retained: number;
+}
+
+/** What one orphaned-operation pass settled. */
+export interface ImageBuildOperationReconciliationResult {
+  /** Operations whose artifact was reclaimed, or established never to exist. */
+  reconciled: number;
+  /** Operations left outstanding for the next pass. */
+  retained: number;
+}
 
 type AdapterCache = Map<ImageBuildProvider, ImageBuildAdapter | null>;
 
@@ -63,6 +94,168 @@ export class ImageBuildReaper {
     );
 
     return { deletedFailed, reapedFailed, reapedSuperseded };
+  }
+
+  /**
+   * Resolves build sources whose create response was never seen.
+   *
+   * The row carries a cleanup obligation with no id to act on, so the source
+   * is looked up by the name reserved for it. Found, it is attached to the row
+   * for cleanup only — never as a binding that could authorize a launch or a
+   * callback — and the session-cleanup pass tears it down. Not found, the
+   * intent is only settled once an in-flight create can no longer explain the
+   * absence: until the source's hard lifetime has certainly elapsed, a 404 is
+   * a timing answer, not a conclusive one.
+   *
+   * Providers whose adapter cannot find a source by name are skipped: they
+   * never record the intent in the first place.
+   */
+  async recoverUnboundSources(
+    ctx: ImageBuildWorkflowContext,
+    now: number = Date.now()
+  ): Promise<ImageBuildSourceRecoveryResult> {
+    const rows = await this.store.listUnboundSourceIntents();
+    const adapters: AdapterCache = new Map();
+    const result: ImageBuildSourceRecoveryResult = { recovered: 0, cleared: 0, retained: 0 };
+
+    await runMaintenanceTasks(rows, async (row) => {
+      const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
+      if (!adapter?.recoverUnboundSource) return;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
+      try {
+        const source = await adapter.recoverUnboundSource({
+          buildId: row.id,
+          correlation: ctx,
+          signal: controller.signal,
+        });
+        if (source) {
+          if (
+            await this.store.attachRecoveredProviderSession(
+              row.id,
+              row.provider,
+              source.providerSessionId
+            )
+          ) {
+            result.recovered += 1;
+          }
+          return;
+        }
+        if (now - row.created_at <= DEFAULT_STALE_BUILD_MAX_AGE_MS) {
+          this.retainSourceIntent(row, result, ctx, "create_may_be_in_flight");
+          return;
+        }
+        if (await this.store.clearUnboundSourceIntent(row.id)) result.cleared += 1;
+      } catch (error) {
+        this.retainSourceIntent(row, result, ctx, errorMessage(error));
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    });
+
+    return result;
+  }
+
+  /**
+   * Settles artifact operations left behind by builds that failed or were
+   * superseded before their capture produced a tracked artifact.
+   *
+   * An accepted capture can still become visible after the build that ordered
+   * it is terminal, so the reserved name is the only handle to a resource
+   * nothing else records. A pending outcome keeps the obligation rather than
+   * dropping it — an untracked billable artifact is strictly worse than a row
+   * that keeps asking. So does an absent one, until a capture can no longer
+   * be running at all: a lookup that finds nothing is a timing answer until
+   * the source the capture reads has certainly expired.
+   */
+  async reconcileUnresolvedOperations(
+    ctx: ImageBuildWorkflowContext,
+    now: number = Date.now()
+  ): Promise<ImageBuildOperationReconciliationResult> {
+    const rows = await this.store.listUnresolvedOperations();
+    const adapters: AdapterCache = new Map();
+    const result: ImageBuildOperationReconciliationResult = { reconciled: 0, retained: 0 };
+
+    await runMaintenanceTasks(rows, async (row) => {
+      const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
+      if (!adapter?.reconcileOrphanOperation) return;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
+      try {
+        const outcome = await adapter.reconcileOrphanOperation({
+          buildId: row.id,
+          operationRef: row.provider_operation_ref,
+          providerSessionId: row.provider_session_id,
+          correlation: ctx,
+          signal: controller.signal,
+        });
+        if (outcome.type === "pending") {
+          this.retainOperation(row, result, ctx, now, "operation_still_settling");
+          return;
+        }
+        // Finding nothing under the reserved name is not yet evidence that
+        // nothing was produced: the record can appear well after the capture
+        // was accepted. Only once the source it reads has certainly outlived
+        // its hard lifetime can a later artifact no longer arrive, which is
+        // the same bound an unbound create intent settles on.
+        if (outcome.type === "absent" && now - row.created_at <= DEFAULT_STALE_BUILD_MAX_AGE_MS) {
+          this.retainOperation(row, result, ctx, now, "capture_may_still_be_running");
+          return;
+        }
+        if (await this.store.clearProviderOperation(row.id, row.provider_operation_ref)) {
+          result.reconciled += 1;
+        }
+      } catch (error) {
+        this.retainOperation(row, result, ctx, now, errorMessage(error));
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    });
+
+    return result;
+  }
+
+  private retainSourceIntent(
+    row: UnboundSourceIntentRow,
+    result: ImageBuildSourceRecoveryResult,
+    ctx: ImageBuildWorkflowContext,
+    reason: string
+  ): void {
+    result.retained += 1;
+    logger.warn("image_build.source_intent_unresolved", {
+      build_id: row.id,
+      provider: row.provider,
+      created_at: row.created_at,
+      reason,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
+
+  private retainOperation(
+    row: UnresolvedProviderOperationRow,
+    result: ImageBuildOperationReconciliationResult,
+    ctx: ImageBuildWorkflowContext,
+    now: number,
+    reason: string
+  ): void {
+    result.retained += 1;
+    const context = {
+      build_id: row.id,
+      provider: row.provider,
+      provider_operation_ref: row.provider_operation_ref,
+      created_at: row.created_at,
+      reason,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    };
+    if (now - row.created_at > IMAGE_BUILD_STUCK_OBLIGATION_ALERT_MS) {
+      logger.error("image_build.operation_unresolved", context);
+      return;
+    }
+    logger.warn("image_build.operation_unresolved", context);
   }
 
   /**

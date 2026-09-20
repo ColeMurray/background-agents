@@ -247,7 +247,6 @@ any child starting/running → `starting`/`running`; all terminal → `completed
 | `sandbox_spawning` | Sandbox is being created      |
 | `sandbox_warming`  | Sandbox warming               |
 | `sandbox_status`   | Sandbox status update         |
-| `sandbox_ready`    | Sandbox ready                 |
 | `sandbox_error`    | Sandbox error occurred        |
 | `sandbox_warning`  | Sandbox warning message       |
 | `sandbox_restored` | Restored from snapshot        |
@@ -374,7 +373,7 @@ requests so the React `/login` route can render them server-side.
 Three independent key domains protect stored credentials. Rotation guidance differs — never treat
 them as interchangeable during an incident:
 
-- **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for the SCM enrichment tokens in `user_scm_tokens`:
+- **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for SCM access tokens copied into session participants:
 
   ```typescript
   import { encryptToken, decryptToken } from "./auth/crypto";
@@ -386,13 +385,14 @@ them as interchangeable during an incident:
   const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
   ```
 
-  Rotating it invalidates stored SCM tokens; affected users re-link their SCM connection.
+  Rotating it invalidates SCM credentials already copied into sessions. New sessions resolve current
+  GitHub credentials through Better Auth.
 
 - **`BROWSER_AUTH_SECRET`** — Better Auth's secret. It signs browser session cookies **and**
   encrypts the sign-in OAuth credential columns on `user_identities` (`access_token`,
   `refresh_token`, `id_token`, written at web sign-in and read via `auth.api.getAccessToken`).
   Rotating it signs every browser session out and orphans those stored credentials — they
-  re-populate at each user's next sign-in. It does not affect `user_scm_tokens`.
+  re-populate at each user's next sign-in.
 
 - **`PROVIDER_ACCOUNTS_ENCRYPTION_KEY`** — dedicated AES-256-GCM key for subscription-provider
   account credentials. Provider account mode stores only account references on sessions and brokers

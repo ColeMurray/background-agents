@@ -17,6 +17,34 @@ import { resolveSessionProviderAuth } from "./session/provider-account-resolutio
 import { ProviderAccountSelectionPolicyError } from "./model-provider-accounts/selection-policy";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "./repos/resolve";
 
+const { getAccessToken } = vi.hoisted(() => ({
+  getAccessToken: vi.fn(async () => ({
+    accessToken: "better-auth-access-token",
+    accessTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
+  })),
+}));
+
+vi.mock("./auth/user/runtime", () => ({
+  getUserAuth: vi.fn(() => ({
+    api: {
+      listUserAccounts: vi.fn(async () => []),
+      getAccessToken,
+      accountInfo: vi.fn(async () => ({
+        user: { id: "2002" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "2002",
+          login: "ada",
+          displayName: "Trusted Ada",
+          verifiedEmails: ["private@example.com"],
+          primaryEmail: "private@example.com",
+        },
+      })),
+    },
+  })),
+}));
+
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
 }));
@@ -287,6 +315,28 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).not.toHaveBeenCalled();
   });
 
+  it("does not initialize a session when GitHub credential integrity fails", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getIdentitiesForUser: async () => [
+          { provider: "github", providerUserId: "1001" },
+          { provider: "github", providerUserId: "2002" },
+        ],
+      } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+    const response = await createSessionRequest(createEnv(initFetch));
+
+    expect(response.status).toBe(500);
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed create-session JSON before resolving the repo", async () => {
     const response = await invalidCreateSessionRequest("{");
 
@@ -497,8 +547,7 @@ describe("handleCreateSession D1 ordering", () => {
     const initFetch = vi.fn(async (request: Request) => {
       const body = (await request.json()) as Record<string, unknown>;
       // Body display fields win; enrichment fills the gaps from the linked
-      // GitHub identity. Credentials would come only from the token store
-      // (none stored here), never from the body.
+      // GitHub identity and its Better Auth account, never from the body.
       expect(body).toMatchObject({
         userId: "slack:U0123",
         spawnSource: "slack-bot",
@@ -506,9 +555,8 @@ describe("handleCreateSession D1 ordering", () => {
         scmLogin: "caller-login",
         scmName: "Trusted Ada",
         scmEmail: "2002+ada@users.noreply.github.com",
-        scmTokenEncrypted: null,
-        scmRefreshTokenEncrypted: null,
       });
+      expect(body).not.toHaveProperty("scmTokenEncrypted");
       return Response.json({ status: "created" });
     });
 
@@ -520,6 +568,7 @@ describe("handleCreateSession D1 ordering", () => {
 
     expect(response.status).toBe(201);
     expect(initFetch).toHaveBeenCalledOnce();
+    expect(getAccessToken).not.toHaveBeenCalled();
   });
 
   it("resolves an unseen verified actor into a canonical user from display fields", async () => {

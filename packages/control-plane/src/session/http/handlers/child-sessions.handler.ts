@@ -102,9 +102,6 @@ export class ChildSessionsHandler {
         scmLogin: promptAuthor.scm_login,
         scmName: promptAuthor.scm_name,
         scmEmail: promptAuthor.scm_email,
-        scmAccessTokenEncrypted: promptAuthor.scm_access_token_encrypted,
-        scmRefreshTokenEncrypted: promptAuthor.scm_refresh_token_encrypted,
-        scmTokenExpiresAt: promptAuthor.scm_token_expires_at,
       },
     };
 
@@ -157,9 +154,6 @@ export class ChildSessionsHandler {
             login: parsed.data.author.scmLogin,
             name: parsed.data.author.scmName,
             email: parsed.data.author.scmEmail,
-            accessTokenEncrypted: null,
-            refreshTokenEncrypted: null,
-            tokenExpiresAt: null,
           },
         })
       );

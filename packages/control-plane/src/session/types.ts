@@ -5,6 +5,7 @@
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import {
+  messageStatusSchema,
   messageSourceSchema,
   sandboxStatusSchema,
   sessionStatusSchema,
@@ -113,8 +114,6 @@ export const participantRowSchema = z.object({
 
 export type ParticipantRow = z.infer<typeof participantRowSchema>;
 
-const messageStatusSchema = z.enum(["pending", "processing", "completed", "failed"]);
-
 export const messageRowSchema = z.object({
   id: z.string(),
   author_id: z.string(),
@@ -132,6 +131,7 @@ export const messageRowSchema = z.object({
   status: messageStatusSchema,
   error_message: z.string().nullable(),
   stop_confirmation_deadline: z.number().nullable(),
+  reported_cost_usd: z.number(),
   created_at: z.number(),
   started_at: z.number().nullable(),
   completed_at: z.number().nullable(),
@@ -202,6 +202,16 @@ export const sandboxRowSchema = z.object({
    * `''` once revoked, NULL only on rows that predate persisted identities.
    */
   active_socket_id: z.string().nullable(),
+  /** JSON `SandboxBootPhase` the runtime last reported while booting; NULL once ready. */
+  boot_phase: z.string().nullable(),
+  /** Sequence number of that report, so a resend after a reconnect is recognised. */
+  boot_seq: z.number().nullable(),
+  /**
+   * 1 once the boot budget revoked this generation's credentials for good: a
+   * fenced row can never become ready, so a runtime that outlived its budget
+   * cannot self-heal the way a watchdog-failed one may.
+   */
+  fenced: z.number(),
   created_at: z.number(),
 });
 

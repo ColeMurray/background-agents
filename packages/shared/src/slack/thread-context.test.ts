@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyThreadSpeaker, selectThreadWindow } from "./thread-context";
+import {
+  classifyThreadSpeaker,
+  compareSlackTimestamps,
+  selectThreadWindow,
+} from "./thread-context";
 import type { SlackThreadMessage } from "./client";
 
 function message(ts: string, overrides: Partial<SlackThreadMessage> = {}): SlackThreadMessage {
@@ -15,14 +19,24 @@ describe("selectThreadWindow", () => {
     expect(window.map((m) => m.ts)).toEqual(["1.000001"]);
   });
 
-  it("drops replies that landed after the trigger", () => {
+  it("enforces exact strict before and since boundaries", () => {
     // conversations.replies can return a reply posted between the trigger and
     // the fetch; showing it as prior context leaks later thread state.
     const window = selectThreadWindow(
-      [message("1.000001"), message("2.000002"), message("3.000003")],
-      { excludeTs: "2.000002", beforeTs: "2.000002", limit: 10 }
+      [
+        message("1700000000.000001"),
+        message("1700000000.000002"),
+        message("1700000000.000003"),
+        message("1700000000.000004"),
+      ],
+      {
+        sinceTs: "1700000000.000001",
+        excludeTs: "1700000000.000003",
+        beforeTs: "1700000000.000003",
+        limit: 10,
+      }
     );
-    expect(window.map((m) => m.ts)).toEqual(["1.000001"]);
+    expect(window.map((m) => m.ts)).toEqual(["1700000000.000002"]);
   });
 
   it("compares timestamps numerically, not lexically", () => {
@@ -67,6 +81,21 @@ describe("selectThreadWindow", () => {
 
   it.each([0, -1])("returns no messages for a non-positive limit (%i)", (limit) => {
     expect(selectThreadWindow([message("1.000000")], { limit })).toEqual([]);
+  });
+});
+
+describe("compareSlackTimestamps", () => {
+  it("orders distinct fractional values exactly even beyond Number precision", () => {
+    expect(
+      compareSlackTimestamps("9999999999999999.000001", "9999999999999999.000002")
+    ).toBeLessThan(0);
+    expect(
+      compareSlackTimestamps("9999999999999999.000002", "9999999999999999.000001")
+    ).toBeGreaterThan(0);
+  });
+
+  it("treats equivalent decimal representations as equal", () => {
+    expect(compareSlackTimestamps("00010.100", "10.1")).toBe(0);
   });
 });
 

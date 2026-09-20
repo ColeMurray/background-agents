@@ -58,6 +58,36 @@ const ZEN_MODELS = [
   "opencode/glm-5.2",
 ] as const;
 
+const GO_MODELS = [
+  "opencode-go/grok-4.6",
+  "opencode-go/gpt-5.6-luna",
+  "opencode-go/glm-5.3-flash",
+  "opencode-go/glm-5.3",
+  "opencode-go/glm-5.2",
+  "opencode-go/glm-5.1",
+  "opencode-go/kimi-k3",
+  "opencode-go/kimi-k2.7-code",
+  "opencode-go/kimi-k2.6",
+  "opencode-go/longcat-2.0",
+  "opencode-go/deepseek-v4.1-flash",
+  "opencode-go/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-flash",
+  "opencode-go/deepseek-v4-flash-vision-exp",
+  "opencode-go/mimo-v2.5",
+  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/minimax-m3",
+  "opencode-go/minimax-m2.7",
+  "opencode-go/muse-spark-1.3-contributor",
+  "opencode-go/muse-spark-1.2-contributor",
+  "opencode-go/qwen3.8-max",
+  "opencode-go/qwen3.8-flash",
+  "opencode-go/qwen3.7-max",
+  "opencode-go/qwen3.7-plus",
+  "opencode-go/qwen3.6-plus",
+  "opencode-go/hy4-preview",
+  "opencode-go/hy3",
+] as const;
+
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
 const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5.3"] as const;
 
@@ -108,6 +138,7 @@ describe("model utilities", () => {
       ...OPENAI_MODELS,
       ...XAI_MODELS,
       ...ZEN_MODELS,
+      ...GO_MODELS,
       ...ZAI_CODING_PLAN_MODELS,
       ...DEEPSEEK_MODELS,
     ]) {
@@ -416,6 +447,9 @@ describe("model utilities", () => {
       MODEL_OPTIONS.find((group) => group.category === "OpenCode Zen")?.models.map((m) => m.id)
     ).toEqual(ZEN_MODELS);
     expect(
+      MODEL_OPTIONS.find((group) => group.category === "OpenCode Go")?.models.map((m) => m.id)
+    ).toEqual(GO_MODELS);
+    expect(
       MODEL_OPTIONS.find((group) => group.category === "Z.AI Coding Plan")?.models.map((m) => m.id)
     ).toEqual(ZAI_CODING_PLAN_MODELS);
     expect(
@@ -426,6 +460,7 @@ describe("model utilities", () => {
     for (const optInModel of [
       ...XAI_MODELS,
       ...ZEN_MODELS,
+      ...GO_MODELS,
       ...ZAI_CODING_PLAN_MODELS,
       ...DEEPSEEK_MODELS,
     ]) {

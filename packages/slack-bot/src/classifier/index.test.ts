@@ -569,7 +569,14 @@ describe("RepoClassifier", () => {
   describe("LLM environment candidates", () => {
     function llmResponse(input: Record<string, unknown>) {
       return {
-        content: [{ type: "tool_use", id: "toolu_llm", name: "classify_target", input }],
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_llm",
+            name: "classify_target",
+            input,
+          },
+        ],
       };
     }
 
@@ -650,15 +657,22 @@ describe("RepoClassifier", () => {
       expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
-    it("keeps the single-repo shortcut when no environments exist", async () => {
+    it("classifies when only one repository is available", async () => {
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The task applies to the available repository.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("anything at all");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
-      expect(result.reasoning).toBe("Only one repository is available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockMessagesCreate).toHaveBeenCalledOnce();
     });
 
     it("resolves mixed alternatives, deduplicated and excluding the match", async () => {
@@ -700,17 +714,6 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("work on full-stack");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
-    });
-
-    it("asks for clarification when neither repos nor environments exist", async () => {
-      mockGetAvailableRepos.mockResolvedValue([]);
-
-      const classifier = new RepoClassifier(TEST_ENV);
-      const result = await classifier.classify("anything");
-
-      expect(result.target).toBeNull();
-      expect(result.reasoning).toBe("No repositories or environments are currently available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
     });
 
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {

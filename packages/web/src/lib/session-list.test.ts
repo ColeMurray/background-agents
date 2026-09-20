@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyTitleUpdate,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -8,7 +7,6 @@ import {
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
-  type SessionListResponse,
 } from "./session-list";
 import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 
@@ -170,60 +168,5 @@ describe("isArchivedSessionListKey", () => {
     expect(isArchivedSessionListKey("/api/sessions")).toBe(false);
     expect(isArchivedSessionListKey("/api/sessions?excludeStatus=archived")).toBe(false);
     expect(isArchivedSessionListKey("/api/sessions?status=active")).toBe(false);
-  });
-});
-
-describe("applyTitleUpdate", () => {
-  it("replaces only the title of the matching session", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a"), session("b"), session("c")],
-      hasMore: false,
-    };
-
-    const after = applyTitleUpdate(before, "b", "Renamed");
-
-    expect(after?.sessions).toEqual([
-      session("a"),
-      session("b", { title: "Renamed" }),
-      session("c"),
-    ]);
-  });
-
-  it("preserves hasMore and other top-level fields", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a")],
-      hasMore: true,
-    };
-
-    const after = applyTitleUpdate(before, "a", "New");
-
-    expect(after?.hasMore).toBe(true);
-  });
-
-  it("returns undefined when data is undefined (cache miss)", () => {
-    expect(applyTitleUpdate(undefined, "a", "New")).toBeUndefined();
-  });
-
-  it("leaves the list unchanged when sessionId does not match", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a"), session("b")],
-      hasMore: false,
-    };
-
-    const after = applyTitleUpdate(before, "missing", "New");
-
-    expect(after?.sessions).toEqual(before.sessions);
-  });
-
-  it("does not mutate the input object", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a")],
-      hasMore: false,
-    };
-    const beforeSnapshot = structuredClone(before);
-
-    applyTitleUpdate(before, "a", "Mutated");
-
-    expect(before).toEqual(beforeSnapshot);
   });
 });
