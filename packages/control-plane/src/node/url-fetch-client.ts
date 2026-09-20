@@ -1,18 +1,11 @@
 import type { FetchClient } from "../platform-ports";
 import type { Request as NodeRequest } from "undici-types";
 
-export const DEFAULT_BOT_REQUEST_TIMEOUT_MS = 10_000;
 const INTERNAL_ORIGIN = "https://internal";
 
 /** A binding-shaped transport to one configured origin; signing and retries stay with callers. */
-export function createUrlFetchClient(
-  baseUrl: string,
-  { timeoutMs = DEFAULT_BOT_REQUEST_TIMEOUT_MS }: { timeoutMs?: number } = {}
-): FetchClient {
+export function createUrlFetchClient(baseUrl: string): FetchClient {
   const base = botOrigin(baseUrl);
-  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2 ** 31 - 1) {
-    throw new Error("Bot request timeoutMs must be a positive signed 32-bit integer");
-  }
   return {
     async fetch(input, init) {
       const target = new URL(input instanceof Request ? input.url : input, INTERNAL_ORIGIN);
@@ -53,8 +46,6 @@ export function createUrlFetchClient(
       }
       forwarded.headers.delete("host");
       return globalThis.fetch(forwarded, {
-        // This remains active after headers arrive, bounding body consumption too.
-        signal: AbortSignal.any([forwarded.signal, AbortSignal.timeout(timeoutMs)]),
         // Never forward a signed body through a redirect, even if a caller asks.
         redirect: "error",
       });

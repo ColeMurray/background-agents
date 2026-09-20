@@ -23,10 +23,10 @@ origin; neither protocol needs a new signing scheme or key.
    fragment. HTTP is allowed only for exact loopback hosts for local verification. Reject redirects,
    including caller attempts to enable redirect following: signed bodies must not be forwarded to
    another origin.
-3. Apply a named ten-second default timeout, combined with caller cancellation. Use
-   AbortSignal.timeout so the deadline remains active during response-body consumption. No retries
-   in the transport; jobs and existing scheduler helpers retain ownership of retry policy. No new
-   HTTP framework, SDK or dependency.
+3. Keep attempt deadlines in canonical delivery callers on both hosts, using one shared ten-second
+   constant. The transport preserves caller cancellation through response-body handling and adds no
+   deadline or retries of its own. Jobs and scheduler helpers retain ownership of retry policy. No
+   new HTTP framework, SDK or dependency.
 4. Add optional `SLACK_BOT_URL` and `LINEAR_BOT_URL` to EnvConfig, the Node config inventory and
    `.env.example`. In Node boot, build configured clients before opening data files; require the
    corresponding existing service secret when a URL is supplied. Unset URLs leave optional clients

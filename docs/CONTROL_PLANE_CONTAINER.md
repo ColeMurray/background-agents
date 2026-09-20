@@ -93,9 +93,10 @@ Configured URLs without their secrets fail boot before data files are opened.
 
 Origins cannot contain credentials, a path prefix, query or fragment. Plain HTTP
 is allowed only for exact loopback hosts in local development; loopback inside
-Compose means the app container itself, not your laptop. Requests have a ten-second
-deadline (including response-body consumption), honor caller cancellation, and
-reject redirects. The adapter changes only the origin; callback body HMACs and
+Compose means the app container itself, not your laptop. Delivery callers own the
+ten-second attempt deadline on both hosts, including response-body handling.
+The adapter preserves caller cancellation and rejects redirects. It changes only
+the origin; callback body HMACs and
 the existing jobs/scheduler retry policies are unchanged. Cloudflare deployments
 continue using service bindings and ignore these URL settings.
 

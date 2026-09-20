@@ -1,6 +1,6 @@
 const CALLBACK_ATTEMPTS = 2;
 const CALLBACK_RETRY_DELAY_MS = 1000;
-const CALLBACK_ATTEMPT_TIMEOUT_MS = 10_000;
+export const CALLBACK_ATTEMPT_TIMEOUT_MS = 10_000;
 
 export type RetryAttemptResult<TValue, TFailure> =
   | { outcome: "delivered"; value: TValue }

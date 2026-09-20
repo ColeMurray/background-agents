@@ -15,6 +15,7 @@ import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import { CALLBACK_ATTEMPT_TIMEOUT_MS } from "../session/callback-delivery";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -2357,6 +2358,36 @@ describe("Scheduler", () => {
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
+      });
+
+      it("bounds the concurrency-skip notification with the caller-owned deadline", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
+        const controller = new AbortController();
+        const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+        const slackFetch = vi
+          .fn<FetchClient["fetch"]>()
+          .mockImplementation(async (_input, init) => {
+            expect(init?.signal).toBe(controller.signal);
+            controller.abort();
+            throw controller.signal.reason;
+          });
+        try {
+          const env = createEnv({
+            SLACK_BOT: { fetch: slackFetch },
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          });
+          expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+          });
+          expect(timeout).toHaveBeenCalledWith(CALLBACK_ATTEMPT_TIMEOUT_MS);
+          expect(slackFetch).toHaveBeenCalledOnce();
+        } finally {
+          timeout.mockRestore();
+        }
       });
 
       it("does not request context when the invocation is deduplicated", async () => {

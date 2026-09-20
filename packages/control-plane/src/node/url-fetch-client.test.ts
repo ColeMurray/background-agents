@@ -153,9 +153,6 @@ describe("URL-backed bot client", () => {
   ])("accepts supported origin %s", (url) => {
     expect(() => createUrlFetchClient(url)).not.toThrow();
   });
-  it.each([0, -1, 0.5, Infinity, 2 ** 32])("rejects invalid timeout %s", (timeoutMs) => {
-    expect(() => createUrlFetchClient("https://bots.example", { timeoutMs })).toThrow(/timeoutMs/);
-  });
   it("refuses foreign request origins", async () => {
     await expect(
       createUrlFetchClient("https://bots.example").fetch("https://foreign.invalid/path")
@@ -180,18 +177,20 @@ describe("URL-backed bot client", () => {
     ).rejects.toThrow();
     expect(forwarded).toBe(0);
   });
-  it("bounds waiting for headers", async () => {
+  it("honors the caller deadline while waiting for headers", async () => {
     const origin = await listen(() => {});
     await expect(
-      createUrlFetchClient(origin, { timeoutMs: 50 }).fetch("/hang")
+      createUrlFetchClient(origin).fetch("/hang", { signal: AbortSignal.timeout(50) })
     ).rejects.toMatchObject({ name: "TimeoutError" });
   });
-  it("keeps the deadline active while reading the body", async () => {
+  it("keeps the caller deadline active while reading the body", async () => {
     const origin = await listen((_req, res) => {
       res.writeHead(200);
       res.write("partial");
     });
-    const response = await createUrlFetchClient(origin, { timeoutMs: 200 }).fetch("/stream");
+    const response = await createUrlFetchClient(origin).fetch("/stream", {
+      signal: AbortSignal.timeout(200),
+    });
     await expect(response.text()).rejects.toThrow();
   });
   it("preserves caller cancellation", async () => {
