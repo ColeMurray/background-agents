@@ -1,11 +1,17 @@
 """Transport contract for local push results."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.push_operation import PushRequest, PushResult
+
+
+async def drain_pushes(bridge: AgentBridge) -> None:
+    while bridge.activity.push_tasks:
+        await asyncio.gather(*bridge.activity.push_tasks, return_exceptions=True)
 
 
 @pytest.mark.parametrize(
@@ -42,6 +48,7 @@ async def test_push_dispatch_emits_one_result(metadata, error):
     ):
         operation.return_value.execute = AsyncMock(return_value=result)
         await bridge._handle_command({"type": "push", "pushSpec": raw_spec})
+        await drain_pushes(bridge)
 
     operation.assert_called_once_with(
         repo_path=bridge.repo_path, manifest_path=bridge.repo_manifest_path, logger=bridge.log
@@ -69,5 +76,6 @@ async def test_push_passes_missing_or_invalid_spec_to_operation(cmd):
             return_value=PushResult(PushRequest("", "", "", "", "", "", False), "missing spec")
         )
         await bridge._handle_command(cmd)
+        await drain_pushes(bridge)
     operation.return_value.execute.assert_awaited_once_with(cmd.get("pushSpec"))
     bridge._send_event.assert_awaited_once()

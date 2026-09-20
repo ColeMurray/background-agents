@@ -1,6 +1,8 @@
 import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   findSandboxPortConflict,
   isValidSandboxTimeoutMs,
+  MIN_FINAL_SNAPSHOT_BUFFER_MS,
   MAX_TUNNEL_PORTS,
   validateSandboxChildSessionLimits,
   type ConfiguredSandboxPort,
@@ -12,6 +14,8 @@ type InvalidSandboxSettingsBehavior = "throw" | "omit";
 export interface NormalizeSandboxSettingsOptions {
   invalid?: InvalidSandboxSettingsBehavior;
   createError?: (message: string) => Error;
+  /** Defer cross-field defaults until repo/environment overrides are merged. */
+  partial?: boolean;
 }
 
 export class SandboxSettingsValidationError extends Error {
@@ -138,6 +142,37 @@ export function normalizeSandboxSettings(
       reject("sandboxTimeoutMs must be a positive whole number of seconds");
     } else {
       result.sandboxTimeoutMs = settings.sandboxTimeoutMs;
+    }
+  }
+
+  if (settings.finalSnapshotBufferMs !== undefined) {
+    if (
+      typeof settings.finalSnapshotBufferMs !== "number" ||
+      !Number.isSafeInteger(settings.finalSnapshotBufferMs) ||
+      settings.finalSnapshotBufferMs < MIN_FINAL_SNAPSHOT_BUFFER_MS ||
+      settings.finalSnapshotBufferMs % 1000 !== 0
+    ) {
+      reject(
+        `finalSnapshotBufferMs must be at least ${MIN_FINAL_SNAPSHOT_BUFFER_MS} and a whole number of seconds`
+      );
+    } else {
+      result.finalSnapshotBufferMs = settings.finalSnapshotBufferMs;
+    }
+  }
+
+  if (!options.partial && result.sandboxTimeoutMs !== undefined) {
+    if (
+      result.finalSnapshotBufferMs !== undefined &&
+      result.finalSnapshotBufferMs >= result.sandboxTimeoutMs
+    ) {
+      reject("finalSnapshotBufferMs must be less than sandboxTimeoutMs");
+      delete result.finalSnapshotBufferMs;
+    }
+    if (
+      (result.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS) >= result.sandboxTimeoutMs
+    ) {
+      reject("default finalSnapshotBufferMs must be less than sandboxTimeoutMs");
+      delete result.sandboxTimeoutMs;
     }
   }
 

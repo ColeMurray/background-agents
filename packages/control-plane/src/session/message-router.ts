@@ -13,6 +13,7 @@ export type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
 export type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
 export type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
 export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
+export type RecoverPreservation = Extract<ClientMessage, { type: "recover_preservation" }>;
 
 type BoundarySchema<T> = {
   safeParse(
@@ -28,6 +29,7 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
   submitPrompt: (connection: Connection, client: Client, message: ClientPrompt) => Promise<void>;
   cancelPrompt: (connection: Connection, message: ClientCancelPrompt) => Promise<void>;
   stopExecution: () => Promise<void>;
+  recoverPreservation: (action: RecoverPreservation["action"]) => Promise<void>;
   notifyTyping: () => Promise<void>;
   updatePresence: (client: Client, message: ClientPresence) => void;
   getHistoryPage: (message: {
@@ -131,6 +133,10 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         case "stop":
           if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
           await this.deps.clientCommands.stopExecution();
+          break;
+        case "recover_preservation":
+          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
+          await this.deps.clientCommands.recoverPreservation(data.action);
           break;
         case "typing":
           if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;

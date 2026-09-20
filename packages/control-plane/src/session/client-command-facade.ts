@@ -32,7 +32,8 @@ export class SessionClientCommandFacade implements SessionClientCommands<
     private readonly prompts: SessionMessageQueue,
     private readonly stop: () => Promise<void>,
     private readonly presence: PresenceService,
-    private readonly events: SessionEventStream
+    private readonly events: SessionEventStream,
+    private readonly recover?: (action: "retry" | "restore_saved") => Promise<void>
   ) {}
 
   subscribe(connection: SessionWebSocket, message: ClientSubscribe): Promise<void> {
@@ -53,6 +54,13 @@ export class SessionClientCommandFacade implements SessionClientCommands<
 
   stopExecution(): Promise<void> {
     return this.stop();
+  }
+
+  recoverPreservation(action: "retry" | "restore_saved"): Promise<void> {
+    if (!this.recover) {
+      return Promise.reject(new Error("Preservation recovery is not configured"));
+    }
+    return this.recover(action);
   }
 
   notifyTyping(): Promise<void> {

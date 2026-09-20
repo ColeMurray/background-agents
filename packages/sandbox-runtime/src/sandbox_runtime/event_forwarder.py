@@ -24,13 +24,15 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "snapshot_ready",
         "push_complete",
         "push_error",
+        "preservation_prepared",
+        "sandbox_generation_ready",
     }
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on each individual send inside recovery (bind / drain) paths. Those
-# paths hold the recovery lock, so an unbounded wedged send would turn into a
-# wedged reconnect: the next bind() could never recover.
+# Bound on a direct send and on each recovery stage. A failed direct send may
+# spend one additional budget acquiring the recovery lock and flushing after
+# a rebind, so send() takes at most two configured budgets before returning.
 SEND_TIMEOUT_SECONDS: Final = 30.0
 
 
@@ -75,32 +77,34 @@ class BufferedEventForwarder:
         # Event buffer: survives WS reconnection, flushed on reconnect.
         self._event_buffer: list[dict[str, Any]] = []
 
-        # Pending ACKs: events sent but not yet acknowledged by the control
-        # plane. Keyed by ackId, re-sent on reconnect until the DO confirms
-        # receipt.
+        # Pending ACKs: in-flight or sent events not yet acknowledged by the
+        # control plane. Keyed by ackId, re-sent on reconnect after the owning
+        # in-flight attempt settles and until the DO confirms receipt.
         self._pending_acks: dict[str, dict[str, Any]] = {}
+        # ACK-visible attempts that have not returned from ws.send yet. Bind
+        # excludes them from pending replay; their owning send reconciles the
+        # ACK and any failure before deciding whether one buffered copy remains.
+        self._in_flight_acks: dict[str, dict[str, Any]] = {}
 
     async def bind(self, ws: ClientConnection) -> None:
         """Attach a live control-plane connection and recover the backlog.
 
-        The connection is attached before the lock is acquired on purpose: a
-        drain loop currently holding the lock re-reads the bound connection
-        every iteration, so it migrates onto the new connection instead of
-        stalling recovery on the dead one.
+        Pending ackIds are captured before publishing the connection, so a
+        drain already holding the lock cannot first send a buffered critical
+        through this connection and then have this bind replay it. Publishing
+        before acquiring the lock still lets that drain migrate to the new
+        connection.
 
-        Recovery order (under the lock): snapshot the ackIds that were
-        already pending, flush the event buffer (which starts tracking any
-        criticals it sends), then re-send only the snapshotted entries that
-        are still pending. The snapshot is what keeps a critical event
-        flushed from the buffer from being sent a second time on the same
-        reconnect — and it is taken inside the lock so a drain that pends a
-        critical while we wait cannot get that event re-sent here.
+        Under the lock, flush the event buffer and then re-send only pre-bind
+        candidates that are still pending.
         """
+        pending_before_bind = [
+            ack_id for ack_id in self._pending_acks if ack_id not in self._in_flight_acks
+        ]
         self._ws = ws
         async with self._recovery_lock:
-            pending_before_flush = list(self._pending_acks)
             await self._flush_buffer()
-            await self._resend_pending(pending_before_flush)
+            await self._resend_pending(pending_before_bind)
 
     def unbind(self) -> None:
         """Detach the connection; subsequent sends buffer until the next bind."""
@@ -134,27 +138,38 @@ class BufferedEventForwarder:
                 self._log.debug("bridge.event_dropped_unbound", event_type=event_type)
             return False
 
+        ack_id = event["ackId"] if is_critical else None
+        if ack_id is not None:
+            self._pending_acks[ack_id] = event
+            self._in_flight_acks[ack_id] = event
         try:
-            await ws.send(json.dumps(event))
-            if is_critical:
-                self._pending_acks[event["ackId"]] = event
+            await asyncio.wait_for(ws.send(json.dumps(event)), timeout=self._send_timeout_seconds)
         except asyncio.CancelledError:
             # A prompt task cancelled mid-send must not strand its event:
             # re-buffer it, then let the cancellation proceed. An unbuffered
             # event is dropped here too — a replay would only be stale.
-            if buffered:
+            replayable = ack_id is None or self._pending_acks.get(ack_id) is event
+            if ack_id is not None and replayable:
+                self._pending_acks.pop(ack_id, None)
+            if buffered and replayable:
                 self._buffer_event(event)
             else:
                 self._log.debug("bridge.event_dropped_cancelled", event_type=event_type)
             raise
         except Exception as e:
             self._log.warn("bridge.send_error", event_type=event_type, exc=e)
-            if not buffered:
+            replayable = ack_id is None or self._pending_acks.get(ack_id) is event
+            if ack_id is not None and replayable:
+                self._pending_acks.pop(ack_id, None)
+            if not buffered or not replayable:
                 self._log.debug("bridge.event_dropped_send_failed", event_type=event_type)
                 return False
             self._buffer_event(event)
             await self._drain_if_rebound(failed_ws=ws)
             return False
+        finally:
+            if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
+                self._in_flight_acks.pop(ack_id, None)
         return True
 
     def acknowledge(self, ack_id: str) -> bool:
@@ -180,12 +195,21 @@ class BufferedEventForwarder:
         The event was buffered before this await, and an active recovery
         cannot pass its final empty-check and release the lock without that
         event being visible — so waiting on the lock (rather than skipping
-        when busy) guarantees the event is flushed exactly once.
+        when busy) lets this recovery flush the event exactly once when it
+        completes within budget. On timeout, the event remains buffered for
+        a later bind.
         """
         current = self._ws
         if current is not None and current is not failed_ws and current.state == State.OPEN:
-            async with self._recovery_lock:
-                await self._flush_buffer()
+            try:
+                async with asyncio.timeout(self._send_timeout_seconds):
+                    async with self._recovery_lock:
+                        await self._flush_buffer()
+            except TimeoutError as e:
+                # send() already buffered the event before recovery. Leave
+                # that single copy for a later bind rather than buffering it
+                # again when lock acquisition or flushing exhausts the stage.
+                self._log.warn("bridge.rebound_recovery_timeout", exc=e)
 
     async def _flush_buffer(self) -> None:
         """Flush buffered events over the currently bound connection.
@@ -207,13 +231,33 @@ class BufferedEventForwarder:
             ws = self._ws
             if not ws or ws.state != State.OPEN:
                 break
+            is_critical = event.get("type") in CRITICAL_EVENT_TYPES and "ackId" in event
+            ack_id = event["ackId"] if is_critical else None
+            if ack_id is not None:
+                self._pending_acks[ack_id] = event
+                self._in_flight_acks[ack_id] = event
             try:
                 await asyncio.wait_for(
                     ws.send(json.dumps(event)), timeout=self._send_timeout_seconds
                 )
+            except asyncio.CancelledError:
+                acknowledged = ack_id is not None and self._pending_acks.get(ack_id) is not event
+                if ack_id is not None and not acknowledged:
+                    self._pending_acks.pop(ack_id, None)
+                if acknowledged and self._event_buffer and self._event_buffer[0] is event:
+                    self._event_buffer.pop(0)
+                raise
             except Exception as e:
+                acknowledged = ack_id is not None and self._pending_acks.get(ack_id) is not event
+                if ack_id is not None and not acknowledged:
+                    self._pending_acks.pop(ack_id, None)
+                if acknowledged and self._event_buffer and self._event_buffer[0] is event:
+                    self._event_buffer.pop(0)
                 self._log.warn("bridge.flush_send_error", exc=e)
                 break
+            finally:
+                if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
+                    self._in_flight_acks.pop(ack_id, None)
 
             # The send succeeded, but a concurrent overflow eviction may have
             # removed our claimed head while the send was in flight — pop by
@@ -221,10 +265,6 @@ class BufferedEventForwarder:
             if self._event_buffer and self._event_buffer[0] is event:
                 self._event_buffer.pop(0)
             flushed += 1
-            # Track critical events sent from buffer as pending ACKs; the
-            # event went out even if it is no longer at the buffer head.
-            if event.get("type") in CRITICAL_EVENT_TYPES and "ackId" in event:
-                self._pending_acks[event["ackId"]] = event
 
         self._log.info(
             "bridge.flush_buffer_complete",
@@ -300,6 +340,12 @@ class BufferedEventForwarder:
         so the later one overwrites the earlier pending entry.
         """
         event_type = event.get("type", "unknown")
+        operation_id = event.get("operationId")
+        if operation_id:
+            return f"{event_type}:{operation_id}"
+        generation = event.get("generation")
+        if event_type == "sandbox_generation_ready" and isinstance(generation, dict):
+            return f"{event_type}:{generation.get('sandboxId')}:{generation.get('createdAt')}"
         message_id = event.get("messageId")
         if message_id:
             return f"{event_type}:{message_id}"

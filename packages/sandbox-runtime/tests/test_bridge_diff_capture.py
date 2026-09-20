@@ -87,6 +87,7 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
         "sandboxId": "sandbox-1",
         "opencodeSessionId": None,
         "harness": "opencode",
+        "preservationProtocolVersion": 1,
         "repositories": [
             {
                 "position": 0,
@@ -258,7 +259,11 @@ async def test_terminal_prompt_completion_schedules_refresh_without_blocking_com
     lifecycle = []
 
     async def complete_prompt(_command):
-        return None
+        return {
+            "type": "execution_complete",
+            "messageId": "message-1",
+            "success": True,
+        }
 
     bridge._handle_prompt = complete_prompt
     bridge.diff_refresh.request = lambda mid: lifecycle.append(("request", mid))
@@ -266,7 +271,7 @@ async def test_terminal_prompt_completion_schedules_refresh_without_blocking_com
     bridge.diff_refresh.prompt_finished = lambda: lifecycle.append("prompt_finished")
 
     result = await bridge._handle_command({"type": "prompt", "messageId": "message-1"})
-    task = bridge._current_prompt_task
+    task = bridge.activity.current_prompt_task
     assert result is None
     assert task is not None
     await task

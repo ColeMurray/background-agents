@@ -370,6 +370,7 @@ export class IntegrationSettingsStore {
     if (integrationId !== "sandbox") return settings;
     return normalizeSandboxSettings(settings, {
       invalid: "omit",
+      partial: true,
     }) as IntegrationSettingsMap[K]["repo"];
   }
 
@@ -403,6 +404,7 @@ export class IntegrationSettingsStore {
       return normalizeSandboxSettings(settings, {
         invalid: "throw",
         createError: (message) => new IntegrationSettingsValidationError(message),
+        partial: level !== "global",
       }) as IntegrationSettingsAtLevel<K, L>;
     }
 

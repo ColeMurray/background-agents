@@ -316,6 +316,7 @@ class ClaudeHarness:
         self.credential: ClaudeCredential | None = None
         self.wrapper_path: Path | None = None
         self._client: SdkClient | None = None
+        self._client_lifecycle_lock = asyncio.Lock()
         self._connected_model: str | None = None
         self._connected_effort: str | None = None
         self._resume_on_connect = False
@@ -437,6 +438,10 @@ class ClaudeHarness:
         return build_options(**kwargs)
 
     async def _ensure_client(self, model: str, reasoning_effort: str | None) -> SdkClient:
+        async with self._client_lifecycle_lock:
+            return await self._ensure_client_locked(model, reasoning_effort)
+
+    async def _ensure_client_locked(self, model: str, reasoning_effort: str | None) -> SdkClient:
         same_shape = (
             self._client is not None
             and self._connected_model == model
@@ -454,7 +459,8 @@ class ClaudeHarness:
                     "The Claude agent process failed repeatedly for this session; "
                     "start a new session."
                 )
-        await self._disconnect()
+        if not await self._disconnect_locked():
+            raise RuntimeError("The previous Claude agent process could not be disconnected.")
         options = self.build_options(model, reasoning_effort)
         factory = self._client_factory or _default_client_factory
         client = factory(options)
@@ -478,13 +484,21 @@ class ClaudeHarness:
         return client
 
     async def _disconnect(self) -> None:
-        client, self._client = self._client, None
+        async with self._client_lifecycle_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self) -> bool:
+        client = self._client
         if client is None:
-            return
+            return True
         try:
             await client.disconnect()
         except Exception as error:
             self.log.warn("claude.disconnect_error", exc=error)
+            return False
+        if self._client is client:
+            self._client = None
+        return True
 
     # --- prompt ------------------------------------------------------------
 
@@ -613,7 +627,6 @@ class ClaudeHarness:
                 await self._disconnect()
         except TimeoutError:
             self.log.warn("claude.disconnect_timeout", timeout_s=budget)
-            self._client = None
         return False
 
     async def _interrupt_quietly(self) -> bool:
@@ -636,6 +649,47 @@ class ClaudeHarness:
         # The bridge awaits this inline on its command loop, so a hung
         # interrupt would stall every later command; bound it like cleanup.
         return await self._interrupt_within_budget()
+
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        """Contain the SDK-owned Claude child, escalating to disconnect.
+
+        An interrupt acknowledgement is only a request, so preservation also
+        disconnects the client. The SDK transport owns and reaps the Claude
+        subprocess; unrelated sandbox services are left running.
+        """
+        self._interrupted = True
+        self._needs_reconnect = True
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout_seconds, 0.0)
+        interrupt_deadline = min(
+            deadline,
+            loop.time() + max(timeout_seconds / 2, 0.0),
+        )
+        try:
+            async with asyncio.timeout_at(deadline), self._client_lifecycle_lock:
+                client = self._client
+                if client is None:
+                    return True
+                try:
+                    async with asyncio.timeout_at(interrupt_deadline):
+                        await client.interrupt()
+                except TimeoutError:
+                    self.log.warn(
+                        "claude.preservation_interrupt_timeout",
+                        timeout_s=timeout_seconds / 2,
+                    )
+                except Exception as error:
+                    self.log.warn("claude.interrupt_error", exc=error)
+                await client.disconnect()
+                if self._client is client:
+                    self._client = None
+                return True
+        except TimeoutError:
+            self.log.warn("claude.preservation_stop_timeout", timeout_s=timeout_seconds)
+            return False
+        except Exception as error:
+            self.log.warn("claude.preservation_disconnect_error", exc=error)
+            return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]

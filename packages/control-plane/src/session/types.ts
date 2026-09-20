@@ -257,6 +257,14 @@ interface RefreshDiffCommand {
 }
 
 export type SandboxCommand =
+  | { type: "sandbox_generation"; generation: { sandboxId: string; createdAt: number } }
+  | {
+      type: "prepare_preservation";
+      operationId: string;
+      generation: { sandboxId: string; createdAt: number };
+      messageId?: string;
+      stopByMs: number;
+    }
   | PromptCommand
   | StopCommand
   | SnapshotCommand
