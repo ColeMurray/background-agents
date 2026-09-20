@@ -525,7 +525,10 @@ async def api_snapshot_sandbox(
             timeout_seconds = (deadline_at_ms / 1000) - time.time()
             if timeout_seconds <= 0:
                 raise HTTPException(status_code=408, detail="snapshot deadline expired")
-            image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
+            try:
+                image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
+            except TimeoutError as exc:
+                raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
         else:
             image_id = await manager.take_snapshot(handle)
 

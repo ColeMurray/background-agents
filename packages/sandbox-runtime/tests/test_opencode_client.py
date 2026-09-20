@@ -109,6 +109,70 @@ class TestWaitUntilSessionIdle:
 
         assert stopped is False
 
+    async def test_hung_status_request_cannot_outlive_deadline(self):
+        http_client = AsyncMock()
+        request_started = asyncio.Event()
+
+        async def hung_status(*_args, **_kwargs):
+            request_started.set()
+            await asyncio.Event().wait()
+
+        http_client.get.side_effect = hung_status
+
+        stopped = await asyncio.wait_for(
+            make_client(http_client).wait_until_session_idle(SESSION_ID, timeout_seconds=0.01),
+            timeout=0.2,
+        )
+
+        assert stopped is False
+        assert request_started.is_set()
+
+    async def test_explicit_cancellation_propagates_during_status_request(self):
+        http_client = AsyncMock()
+        request_started = asyncio.Event()
+
+        async def hung_status(*_args, **_kwargs):
+            request_started.set()
+            await asyncio.Event().wait()
+
+        http_client.get.side_effect = hung_status
+        waiting = asyncio.create_task(
+            make_client(http_client).wait_until_session_idle(SESSION_ID, timeout_seconds=1)
+        )
+        await request_started.wait()
+        waiting.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    async def test_delayed_busy_status_uses_recalculated_sleep_budget(self, monkeypatch):
+        http_client = AsyncMock()
+        real_sleep = asyncio.sleep
+        requested_sleeps = []
+
+        async def delayed_busy(*_args, **_kwargs):
+            await real_sleep(0.1)
+            return MockResponse(200, {SESSION_ID: {"type": "busy"}})
+
+        async def record_sleep(delay):
+            requested_sleeps.append(delay)
+            await real_sleep(delay)
+
+        http_client.get.side_effect = delayed_busy
+        monkeypatch.setattr("sandbox_runtime.harness.opencode_client.asyncio.sleep", record_sleep)
+        monkeypatch.setattr(
+            "sandbox_runtime.harness.opencode_client.EXECUTION_STOP_POLL_SECONDS", 1.0
+        )
+
+        stopped = await asyncio.wait_for(
+            make_client(http_client).wait_until_session_idle(SESSION_ID, timeout_seconds=0.2),
+            timeout=0.5,
+        )
+
+        assert stopped is False
+        assert len(requested_sleeps) == 1
+        assert requested_sleeps[0] < 0.15
+
     @pytest.mark.parametrize("payload", [[{"type": "idle"}], "idle", {SESSION_ID: "idle"}])
     async def test_malformed_status_payload_is_not_idle_evidence(self, payload):
         http_client = AsyncMock()
