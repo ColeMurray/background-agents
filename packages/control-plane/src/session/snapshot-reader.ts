@@ -20,7 +20,7 @@ import { resolvePublicSessionId } from "./public-session-id";
 import { safeParseTunnelUrls } from "./tunnel-urls";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxStateReader } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionEventStream } from "./event-stream";
 import type { MessageService } from "./services/message.service";
@@ -34,7 +34,7 @@ export interface SessionSnapshotEnrichment {
 
 export interface SessionSnapshotReaderDeps {
   sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
+  sandboxRepository: SandboxStateReader;
   messageRepository: MessageRepository;
   artifactRepository: ArtifactRepository;
   messageService: MessageService;

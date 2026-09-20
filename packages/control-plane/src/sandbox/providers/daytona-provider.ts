@@ -12,6 +12,7 @@
  * boots.
  */
 
+import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
 import { resolveSandboxPortPlan, type SandboxPortPlan } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -82,7 +83,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   readonly name = "daytona";
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: false,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: false,
     supportsRestore: false,
     supportsPersistentResume: true,

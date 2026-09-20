@@ -5,6 +5,20 @@ import reactHooksPlugin from "eslint-plugin-react-hooks";
 import eslintConfigPrettier from "eslint-config-prettier";
 import globals from "globals";
 
+const sandboxImplementationImports = [
+  {
+    regex: "(?:^|/)sandbox-repository(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Only session composition constructs SandboxRepository. Consumers use sandbox-ports; lifecycle effects use their storage port.",
+  },
+  {
+    regex: "(?:^|/)lifecycle/manager(?:\\.[cm]?[jt]sx?)?$",
+    importNames: ["SandboxLifecycleManager"],
+    message:
+      "Only session composition constructs the lifecycle manager. Consumers depend on focused lifecycle ports.",
+  },
+];
+
 export default tseslint.config(
   // Global ignores
   {
@@ -227,6 +241,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               // Last-segment match: covers any relative depth (./, ../, ../../)
               // and extension-bearing specifiers. The basename is unique in
@@ -265,6 +280,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               regex: "(?:^|/)components(?:\\.[cm]?[jt]sx?)?$",
               message:
@@ -287,6 +303,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               regex: "(?:^|/)durable-object(?:\\.[cm]?[jt]sx?)?$",
               message:
@@ -306,6 +323,7 @@ export default tseslint.config(
         "error",
         {
           patterns: [
+            ...sandboxImplementationImports,
             {
               // Last-segment match: covers any relative depth (./, ../, ../../)
               // and extension-bearing specifiers. The basename is unique in
@@ -326,6 +344,12 @@ export default tseslint.config(
         },
       ],
     },
+  },
+
+  // The Cloudflare host composes the session runtime, not individual implementations.
+  {
+    files: ["packages/control-plane/src/cloudflare/durable-object.ts"],
+    rules: { "no-restricted-imports": ["error", { patterns: sandboxImplementationImports }] },
   },
 
   // React-specific configuration for web package

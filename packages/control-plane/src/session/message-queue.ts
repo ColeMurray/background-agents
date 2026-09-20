@@ -413,8 +413,8 @@ export class SessionMessageQueue {
       }
       return;
     }
-    const sandboxWs = this.wsManager.getReadySandboxSocket();
-    if (!sandboxWs && this.wsManager.getSandboxSocket()) {
+    const target = this.wsManager.getSandboxCommandTarget();
+    if (target.kind === "booting") {
       // A bridge is attached ahead of its boot. Nothing to spawn and nothing
       // to send: the runtime's `ready` event pumps this queue when the
       // harness is up, and the lifecycle alarms decide if the boot died.
@@ -426,7 +426,7 @@ export class SessionMessageQueue {
       });
       return;
     }
-    if (!sandboxWs) {
+    if (target.kind === "unavailable") {
       // The provider-auth lookup above is a non-storage await. The socket
       // path re-validates through the processing claim; this path has no
       // claim, so it re-reads what it acts on: a cancel or archive that
@@ -477,6 +477,7 @@ export class SessionMessageQueue {
       return;
     }
 
+    const sandboxWs = target.socket;
     const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
       throw new Error(`Missing prompt author ${message.author_id}`);
