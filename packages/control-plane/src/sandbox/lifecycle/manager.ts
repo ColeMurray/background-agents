@@ -80,6 +80,7 @@ import type {
   SandboxAttachment,
   SandboxAlarm,
   SandboxAlarmResult,
+  SnapshotRestoreRetryAdmission,
 } from "./ports";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 import {
@@ -652,9 +653,11 @@ export class SandboxLifecycleManager
   }
 
   /** Explicit authenticated retry; never accepts a replacement artifact or profile. */
-  async retrySnapshotRestore(): Promise<boolean> {
+  retrySnapshotRestore(): SnapshotRestoreRetryAdmission {
     const session = this.sessionContext.getSession();
-    if (!session || session.status === "cancelled" || session.status === "archived") return false;
+    if (!session || session.status === "cancelled" || session.status === "archived") {
+      return { admitted: false };
+    }
     const sandbox = this.storage.getSandbox();
     if (
       !sandbox?.snapshot_recovery_error_code ||
@@ -664,10 +667,10 @@ export class SandboxLifecycleManager
       sandbox.status === "spawning" ||
       sandbox.status === "connecting"
     )
-      return false;
+      return { admitted: false };
     const execution = this.sessionExecution();
     if (!snapshotRecoveryErrorCodeSchema.safeParse(sandbox.snapshot_recovery_error_code).success)
-      return false;
+      return { admitted: false };
     const issue = snapshotExecutionIssue(
       execution,
       sandbox.snapshot_execution_profile,
@@ -675,11 +678,18 @@ export class SandboxLifecycleManager
     );
     if (issue) {
       this.blockSnapshotRecovery(issue);
-      return false;
+      return { admitted: false };
     }
-    if (!sandbox.snapshot_runtime_version || !this.provider.restoreFromSnapshot) return false;
-    await this.restoreFromSnapshot(sandbox.snapshot_image_id, sandbox.snapshot_runtime_version);
-    return true;
+    if (!sandbox.snapshot_runtime_version || !this.provider.restoreFromSnapshot) {
+      return { admitted: false };
+    }
+    return {
+      admitted: true,
+      completion: this.restoreFromSnapshot(
+        sandbox.snapshot_image_id,
+        sandbox.snapshot_runtime_version
+      ),
+    };
   }
 
   /**

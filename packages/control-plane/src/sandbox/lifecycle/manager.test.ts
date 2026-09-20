@@ -704,12 +704,27 @@ describe("SandboxLifecycleManager", () => {
     it("requires explicit retry and leaves the latch until runtime readiness", async () => {
       const { sandbox, provider, create } = setup("docker-v1");
       sandbox.snapshot_recovery_error_code = "artifact_missing";
+      let finishRestore!: () => void;
+      const restoreGate = new Promise<void>((resolve) => {
+        finishRestore = resolve;
+      });
+      vi.mocked(provider.restoreFromSnapshot!).mockImplementation(async () => {
+        await restoreGate;
+        return { success: true, sandboxId: "restored" };
+      });
       const manager = create();
       await manager.spawnSandbox();
       expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
-      expect(await manager.retrySnapshotRestore()).toBe(true);
-      expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
-      expect(await manager.retrySnapshotRestore()).toBe(false);
+      const retry = manager.retrySnapshotRestore();
+      expect(retry.admitted).toBe(true);
+      try {
+        expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
+        await vi.waitFor(() => expect(provider.restoreFromSnapshot).toHaveBeenCalledTimes(1));
+        expect(manager.retrySnapshotRestore()).toEqual({ admitted: false });
+      } finally {
+        finishRestore();
+      }
+      if (retry.admitted) await retry.completion;
       expect(provider.restoreFromSnapshot).toHaveBeenCalledTimes(1);
     });
     it.each(["cancelled", "archived"] as const)(
@@ -719,7 +734,7 @@ describe("SandboxLifecycleManager", () => {
         sandbox.snapshot_recovery_error_code = "artifact_missing";
         const manager = create();
         session.status = status;
-        expect(await manager.retrySnapshotRestore()).toBe(false);
+        expect(manager.retrySnapshotRestore()).toEqual({ admitted: false });
         expect(storage.calls).not.toContain("updateSandboxForSpawn");
         expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
         expect(sandbox.snapshot_image_id).toBe("im-preserved");
@@ -728,7 +743,7 @@ describe("SandboxLifecycleManager", () => {
     it("does not retry unrecognized persisted recovery codes", async () => {
       const { sandbox, provider, create } = setup("docker-v1");
       sandbox.snapshot_recovery_error_code = "future_code";
-      expect(await create().retrySnapshotRestore()).toBe(false);
+      expect(create().retrySnapshotRestore()).toEqual({ admitted: false });
       expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
     });
     it("latches a missing artifact but retains its identity across later automatic attempts", async () => {
@@ -753,6 +768,23 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.snapshot_image_id).toBe("im-preserved");
       expect(provider.createSandbox).not.toHaveBeenCalled();
     });
+    it("retains the recovery latch and artifact when an admitted retry fails asynchronously", async () => {
+      const { sandbox, provider, create } = setup("docker-v1");
+      sandbox.snapshot_recovery_error_code = "artifact_missing";
+      vi.mocked(provider.restoreFromSnapshot!).mockRejectedValue(
+        new Error("503 temporarily unavailable")
+      );
+
+      const retry = create().retrySnapshotRestore();
+
+      expect(retry.admitted).toBe(true);
+      if (retry.admitted) await retry.completion;
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.last_spawn_error).toBe("503 temporarily unavailable");
+      expect(sandbox.last_spawn_error_at).not.toBeNull();
+      expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
+      expect(sandbox.snapshot_image_id).toBe("im-preserved");
+    });
     it("retains cancellation's verdict when an explicit retry reports late artifact loss", async () => {
       const { session, sandbox, provider, create } = setup("docker-v1");
       sandbox.snapshot_recovery_error_code = "artifact_missing";
@@ -761,7 +793,8 @@ describe("SandboxLifecycleManager", () => {
         sandbox.status = "stopped";
         throw new SnapshotArtifactUnavailableError("missing");
       });
-      await create().retrySnapshotRestore();
+      const retry = create().retrySnapshotRestore();
+      if (retry.admitted) await retry.completion;
       expect(sandbox.status).toBe("stopped");
       expect(sandbox.snapshot_image_id).toBe("im-preserved");
       expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");

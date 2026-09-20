@@ -14,6 +14,11 @@ export interface SandboxCancellation {
   cancelSandbox(): void;
 }
 
+/** A snapshot retry is either rejected synchronously or admitted with tracked completion work. */
+export type SnapshotRestoreRetryAdmission =
+  | { admitted: false }
+  | { admitted: true; completion: Promise<void> };
+
 /** Transport attachment reports facts without granting ordinary command readiness. */
 export interface SandboxAttachment {
   scheduleDisconnectCheck(): Promise<void>;

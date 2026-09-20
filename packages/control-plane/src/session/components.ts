@@ -698,7 +698,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
     },
-    () => lifecycleManager.retrySnapshotRestore()
+    () => lifecycleManager.retrySnapshotRestore(),
+    backgroundTasks
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()

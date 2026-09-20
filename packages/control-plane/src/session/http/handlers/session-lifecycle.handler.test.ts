@@ -6,6 +6,8 @@ import type { SessionStatusService } from "../../session-status-service";
 import type { MessageRepository } from "../../message-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
+import { createTestBackgroundTasks } from "../../../background-tasks.test-support";
+import type { SnapshotRestoreRetryAdmission } from "../../../sandbox/lifecycle/ports";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -74,7 +76,9 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
   };
 }
 
-function createHandler() {
+function createHandler(
+  retrySnapshotRestore = vi.fn<() => SnapshotRestoreRetryAdmission>(() => ({ admitted: false }))
+) {
   const getSession = vi.fn<() => SessionRow | null>();
   const repository = {
     getPendingOrProcessingCount: vi.fn(() => 0),
@@ -98,6 +102,7 @@ function createHandler() {
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const cancelSession = vi.fn();
   const cancelSandbox = vi.fn();
+  const backgroundTasks = createTestBackgroundTasks();
 
   const lifecycleHandler = new SessionLifecycleHandler(
     repository as unknown as SessionCoreRepository,
@@ -108,7 +113,8 @@ function createHandler() {
     { cancelSandbox },
     "session-do-id",
     cancelSession,
-    vi.fn(async () => false)
+    retrySnapshotRestore,
+    backgroundTasks
   );
 
   const handler = {
@@ -118,6 +124,7 @@ function createHandler() {
     unarchive: (_request?: Request) => lifecycleHandler.unarchive(),
     expireDraft: () => lifecycleHandler.expireDraft(),
     cancel: () => lifecycleHandler.cancel(),
+    retrySnapshot: (request: Request) => lifecycleHandler.retrySnapshot(request),
   };
 
   return {
@@ -133,10 +140,41 @@ function createHandler() {
     applySessionTitleUpdate,
     cancelSession,
     cancelSandbox,
+    retrySnapshotRestore,
+    backgroundTasks,
   };
 }
 
 describe("SessionLifecycleHandler", () => {
+  it("returns 202 before an admitted snapshot retry completes and rejects a repeated retry", async () => {
+    let release!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const retrySnapshotRestore = vi
+      .fn<() => SnapshotRestoreRetryAdmission>()
+      .mockReturnValueOnce({ admitted: true, completion })
+      .mockReturnValue({ admitted: false });
+    const { handler, getSession, backgroundTasks } = createHandler(retrySnapshotRestore);
+    getSession.mockReturnValue(createSession());
+    const request = () =>
+      new Request("http://internal/internal/retry-snapshot", { method: "POST", body: "{}" });
+
+    const first = await handler.retrySnapshot(request());
+
+    expect(first.status).toBe(202);
+    expect(await first.json()).toEqual({ started: true });
+    expect(backgroundTasks.submissions).toHaveLength(1);
+    expect(
+      await Promise.race([completion.then(() => "completed"), Promise.resolve("pending")])
+    ).toBe("pending");
+    const second = await handler.retrySnapshot(request());
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ started: false });
+    release();
+    await backgroundTasks.settle();
+  });
+
   it("returns 404 state response when session is missing", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);

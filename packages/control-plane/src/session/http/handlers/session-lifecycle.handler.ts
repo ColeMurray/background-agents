@@ -13,6 +13,8 @@ import { resolvePublicSessionId } from "../../public-session-id";
 import { normalizeSessionTitle, type SessionTitleUpdateResult } from "../../title";
 import { z } from "zod";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
+import type { BackgroundTasks } from "../../../platform-ports";
+import type { SnapshotRestoreRetryAdmission } from "../../../sandbox/lifecycle/ports";
 
 /**
  * There is nothing to cancel once a session is no longer live work.
@@ -69,7 +71,8 @@ export class SessionLifecycleHandler {
     private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>,
-    private readonly retrySnapshotRestore: () => Promise<boolean>
+    private readonly retrySnapshotRestore: () => SnapshotRestoreRetryAdmission,
+    private readonly backgroundTasks: BackgroundTasks
   ) {}
 
   async retrySnapshot(request: Request): Promise<Response> {
@@ -85,8 +88,12 @@ export class SessionLifecycleHandler {
       return Response.json({ error: "Snapshot retry does not accept overrides" }, { status: 400 });
     }
     try {
-      const started = await this.retrySnapshotRestore();
-      return Response.json({ started }, { status: started ? 202 : 409 });
+      const admission = this.retrySnapshotRestore();
+      if (!admission.admitted) return Response.json({ started: false }, { status: 409 });
+      this.backgroundTasks.submit(() => admission.completion, {
+        name: "sandbox.snapshot_restore_retry",
+      });
+      return Response.json({ started: true }, { status: 202 });
     } catch {
       return Response.json(
         { error: "Snapshot recovery remains blocked; snapshot preserved" },

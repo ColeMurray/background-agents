@@ -60,7 +60,12 @@ describe("session snapshot synchronization", () => {
       body: "{}",
     });
     expect(retry.status).toBe(202);
-    expect(restoreRequest).toBeDefined();
+    await vi.waitFor(() => expect(restoreRequest).toBeDefined());
+    const repeated = await stub.fetch("http://internal/internal/retry-snapshot", {
+      method: "POST",
+      body: "{}",
+    });
+    expect(repeated.status).toBe(409);
     expect(
       (await (await stub.fetch("http://internal/internal/snapshot")).json<SessionSnapshot>())
         .snapshotRecoveryError
