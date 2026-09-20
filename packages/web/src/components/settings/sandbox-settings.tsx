@@ -18,7 +18,11 @@ import {
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import { MIN_FINAL_SNAPSHOT_BUFFER_MINUTES, MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
+import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MINUTES,
+  MIN_FINAL_SNAPSHOT_BUFFER_MINUTES,
+  MIN_SANDBOX_TIMEOUT_MINUTES,
+} from "./sandbox-timeout";
 import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -471,7 +475,8 @@ export function SandboxSettingsEditor({
         </label>
         <p className="text-xs text-muted-foreground mb-2">
           Time reserved before provider expiry to stop work, preserve the filesystem, and retire the
-          sandbox. Minimum {MIN_FINAL_SNAPSHOT_BUFFER_MINUTES} minutes; default 10 minutes.
+          sandbox. Minimum {MIN_FINAL_SNAPSHOT_BUFFER_MINUTES} minutes; default{" "}
+          {DEFAULT_FINAL_SNAPSHOT_BUFFER_MINUTES} minutes.
         </p>
         <div className="max-w-sm">
           <Input
@@ -482,7 +487,7 @@ export function SandboxSettingsEditor({
             inputMode="decimal"
             value={values.finalSnapshotBufferMinutes}
             onChange={(e) => updateField("finalSnapshotBufferMinutes", e.target.value)}
-            placeholder="10"
+            placeholder={String(DEFAULT_FINAL_SNAPSHOT_BUFFER_MINUTES)}
           />
         </div>
       </div>
