@@ -84,6 +84,10 @@ import type {
   SandboxAlarm,
   SandboxAlarmResult,
 } from "./ports";
+import {
+  preservationPolicyForLaunch,
+  type PreservationLifecyclePolicy,
+} from "./preservation-policy";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { ImageBuildLookup } from "./image-selection";
@@ -98,7 +102,7 @@ const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 // ==================== Dependency Interfaces ====================
 
 export interface SandboxPreservationLifecycle {
-  beginGeneration(generation: SandboxGeneration): void;
+  beginGeneration(generation: SandboxGeneration, policy: PreservationLifecyclePolicy): void;
   restoreStarting(generation: SandboxGeneration, providerObjectId?: string): void;
   started(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
   isHolding(): boolean;
@@ -524,13 +528,17 @@ export class SandboxLifecycleManager
         this.preservation!.restoreFailed("The configured sandbox provider changed");
         return;
       }
-      if (!receipt.runtimeVersion || !isSnapshotRuntimeCompatible(receipt.runtimeVersion)) {
+      if (
+        receipt.kind === "snapshot" &&
+        (!receipt.runtimeVersion || !isSnapshotRuntimeCompatible(receipt.runtimeVersion))
+      ) {
         this.preservation!.restoreFailed("The saved sandbox runtime is incompatible");
         return;
       }
-      if (receipt.kind === "retained") await this.resumeSandbox(receipt.artifactId);
+      if (receipt.kind === "retained")
+        await this.resumeSandbox(receipt.artifactId, receipt.runtimeVersion);
       else if (this.provider.restoreFromSnapshot)
-        await this.restoreFromSnapshot(receipt.artifactId, receipt.runtimeVersion);
+        await this.restoreFromSnapshot(receipt.artifactId, receipt.runtimeVersion!);
       else this.preservation!.restoreFailed("This provider cannot restore the saved snapshot");
       return;
     }
@@ -612,7 +620,10 @@ export class SandboxLifecycleManager
         this.log.info("Spawn decision: resume", {
           provider_object_id: spawnDecision.providerObjectId,
         });
-        await this.resumeSandbox(spawnDecision.providerObjectId);
+        await this.resumeSandbox(
+          spawnDecision.providerObjectId,
+          this.storage.getSandbox()?.runtime_version ?? null
+        );
         return;
 
       case "spawn":
@@ -639,11 +650,14 @@ export class SandboxLifecycleManager
    */
   private async reserveSpawnIdentity(
     generation: SandboxGeneration & { sandboxId: string },
-    opts: { preserveProviderObjectId: boolean }
+    opts: {
+      preserveProviderObjectId: boolean;
+      preservationPolicy: PreservationLifecyclePolicy;
+    }
   ): Promise<{ sandboxAuthToken: string; expectedSandboxId: string }> {
     const sandboxAuthToken = this.idGenerator.generateId();
     const { sandboxId: expectedSandboxId, createdAt } = generation;
-    await this.enterProviderStartup("spawning", createdAt, () =>
+    await this.enterProviderStartup("spawning", createdAt, opts.preservationPolicy, () =>
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt,
@@ -700,6 +714,7 @@ export class SandboxLifecycleManager
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
+        preservationPolicy: preservationPolicyForLaunch("new", null),
       });
 
       await this.stopPriorProviderSandbox();
@@ -801,6 +816,7 @@ export class SandboxLifecycleManager
         generation = retry;
         ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
           preserveProviderObjectId: false,
+          preservationPolicy: preservationPolicyForLaunch("new", null),
         }));
         result = await this.provider.createSandbox({
           ...createConfig,
@@ -1122,8 +1138,10 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
+      const preservationPolicy = preservationPolicyForLaunch("existing", snapshotRuntimeVersion);
       const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
+        preservationPolicy,
       });
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
@@ -1250,7 +1268,10 @@ export class SandboxLifecycleManager
   /**
    * Resume a provider-managed sandbox in place without rotating the logical sandbox ID.
    */
-  private async resumeSandbox(providerObjectId: string): Promise<void> {
+  private async resumeSandbox(
+    providerObjectId: string,
+    sourceRuntimeVersion: string | null
+  ): Promise<void> {
     const restoringFinal = !!this.preservation?.recoveryReceipt();
     if (!this.provider.resumeSandbox) {
       if (restoringFinal) {
@@ -1275,13 +1296,15 @@ export class SandboxLifecycleManager
 
       const now = Date.now();
       generation = { sandboxId: sandbox.modal_sandbox_id, createdAt: now };
+      const preservationPolicy = preservationPolicyForLaunch("existing", sourceRuntimeVersion);
       this.storage.setLastSpawnError(null, null);
-      await this.enterProviderStartup("connecting", now, () =>
+      await this.enterProviderStartup("connecting", now, preservationPolicy, () => {
         this.storage.updateSandboxForResume({
           status: "connecting",
           createdAt: now,
-        })
-      );
+        });
+        this.storage.updateSandboxRuntimeVersion(sourceRuntimeVersion);
+      });
 
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
@@ -2180,12 +2203,16 @@ export class SandboxLifecycleManager
   private async enterProviderStartup(
     status: "spawning" | "connecting",
     createdAt: number,
+    preservationPolicy: PreservationLifecyclePolicy,
     persist: () => void
   ): Promise<void> {
     persist();
     const row = this.storage.getSandbox();
     if (row?.modal_sandbox_id)
-      this.preservation?.beginGeneration({ sandboxId: row.modal_sandbox_id, createdAt });
+      this.preservation?.beginGeneration(
+        { sandboxId: row.modal_sandbox_id, createdAt },
+        preservationPolicy
+      );
     this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
     await this.alarmScheduler.schedule(createdAt + this.config.connectingTimeout.timeoutMs);

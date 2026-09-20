@@ -768,13 +768,63 @@ describe("final preservation lifecycle integration", () => {
       kind: "snapshot",
       provider: "mock",
       artifactId: "final-image",
-      runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+      runtimeVersion: "v62-compatible",
     });
     await f.manager.spawnSandbox();
     expect(f.provider.restoreFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ snapshotImageId: "final-image" })
     );
     expect(f.provider.resumeSandbox).not.toHaveBeenCalled();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+    expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), "legacy");
+  });
+
+  it.each([
+    ["v62-compatible", "legacy"],
+    ["v70-before-preservation", "legacy"],
+    [`v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`, "confirmed"],
+  ] as const)("restores snapshot runtime %s with %s policy", async (runtimeVersion, policy) => {
+    const f = fixture(
+      createMockProvider(),
+      createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "existing-image",
+        snapshot_runtime_version: runtimeVersion,
+      })
+    );
+
+    await f.manager.spawnSandbox();
+
+    expect(f.provider.restoreFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ snapshotImageId: "existing-image" })
+    );
+    expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), policy);
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [null, "legacy"],
+    ["v70-before-preservation", "legacy"],
+    [`v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`, "confirmed"],
+  ] as const)("resumes retained runtime %s with %s policy", async (runtimeVersion, policy) => {
+    const f = fixture(
+      createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({ success: true as const, lifetime: noLifetime() })),
+      }),
+      createMockSandbox({
+        status: "stopped",
+        modal_object_id: "retained-source",
+        runtime_version: runtimeVersion,
+      })
+    );
+
+    await f.manager.spawnSandbox();
+
+    expect(f.provider.resumeSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "retained-source" })
+    );
+    expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), policy);
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
@@ -869,9 +919,17 @@ describe("final preservation lifecycle integration", () => {
   });
 
   it.each([null, "0.0.0"])(
-    "does not resume a retained incompatible runtime %s",
+    "resumes retained legacy runtime %s without fresh fallback",
     async (runtimeVersion) => {
-      const f = fixture(createMockProvider({ resumeSandbox: vi.fn() }));
+      const f = fixture(
+        createMockProvider({
+          resumeSandbox: vi.fn(async () => ({
+            success: true as const,
+            lifetime: noLifetime(),
+          })),
+        })
+      );
+      f.storage.getSandbox()!.runtime_version = `v${MIN_PRESERVATION_RUNTIME_GENERATION}-different-row`;
       f.preservation.recoveryReceipt.mockReturnValue({
         kind: "retained",
         provider: "mock",
@@ -879,10 +937,12 @@ describe("final preservation lifecycle integration", () => {
         runtimeVersion,
       });
       await f.manager.spawnSandbox();
-      expect(f.preservation.restoreFailed).toHaveBeenCalledWith(
-        expect.stringContaining("incompatible")
+      expect(f.provider.resumeSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ providerObjectId: "retained-source" })
       );
-      expect(f.provider.resumeSandbox).not.toHaveBeenCalled();
+      expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), "legacy");
+      expect(f.storage.getSandbox()!.runtime_version).toBe(runtimeVersion);
+      expect(f.preservation.restoreFailed).not.toHaveBeenCalled();
       expect(f.provider.createSandbox).not.toHaveBeenCalled();
     }
   );

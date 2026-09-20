@@ -98,7 +98,7 @@ function fixture(providerValue = provider()) {
 }
 
 async function readyFinite(f: ReturnType<typeof fixture>, expiresAtMs = 1_300_000) {
-  f.preservation.beginGeneration(GENERATION);
+  f.preservation.beginGeneration(GENERATION, "confirmed");
   await f.preservation.started(GENERATION, {
     kind: "finite",
     expiresAtMs,
@@ -115,7 +115,7 @@ async function readyFinite(f: ReturnType<typeof fixture>, expiresAtMs = 1_300_00
 }
 
 async function readyWithoutDeadline(f: ReturnType<typeof fixture>) {
-  f.preservation.beginGeneration(GENERATION);
+  f.preservation.beginGeneration(GENERATION, "confirmed");
   await f.preservation.started(GENERATION, { kind: "none", observedAtMs: 100_000 });
   f.preservation.runtimeReady(1);
   f.preservation.generationReady({
@@ -153,6 +153,50 @@ describe("SandboxPreservation", () => {
     expect(f.store.value).toMatchObject({ phase: "running", generation: GENERATION });
   });
 
+  it("keeps a reconstructed legacy generation usable but checkpoint-gated", async () => {
+    const f = fixture();
+    f.preservation.beginGeneration(GENERATION, "legacy");
+    await f.preservation.started(GENERATION, {
+      kind: "finite",
+      expiresAtMs: 1_300_000,
+      observedAtMs: 100_000,
+      source: "provider",
+    });
+    f.preservation.runtimeReady();
+
+    const restarted = new SandboxPreservation(f.deps as never);
+    expect(restarted.mayDispatch()).toBe(true);
+    await expect(restarted.request("inactivity_timeout")).resolves.toBe("unmanaged");
+
+    expect(restarted.beginCheckpoint()).toBe(true);
+    expect(restarted.mayDispatch()).toBe(false);
+    await expect(restarted.request("inactivity_timeout")).resolves.toBe("held");
+    restarted.endCheckpoint();
+    expect(restarted.mayDispatch()).toBe(true);
+
+    const mismatched = new SandboxPreservation({
+      ...f.deps,
+      provider: provider({ name: "different-provider" }),
+    } as never);
+    expect(mismatched.mayDispatch()).toBe(false);
+    await expect(mismatched.request("inactivity_timeout")).resolves.toBe("held");
+  });
+
+  it("fails closed when a confirmed fresh runtime omits the protocol", async () => {
+    const f = fixture();
+    f.preservation.beginGeneration(GENERATION, "confirmed");
+    await f.preservation.started(GENERATION, { kind: "none", observedAtMs: 100_000 });
+
+    f.preservation.runtimeReady();
+
+    expect(f.store.value).toMatchObject({
+      phase: "failed",
+      lifecyclePolicy: "confirmed",
+      runtimeReady: true,
+    });
+    expect(f.preservation.mayDispatch()).toBe(false);
+  });
+
   it("derives one absolute stop/capture/retire budget and sends a correlated command", async () => {
     const f = fixture();
     await readyFinite(f);
@@ -180,7 +224,7 @@ describe("SandboxPreservation", () => {
 
   it("requires a matching generation acknowledgement and ignores a late generation", async () => {
     const f = fixture();
-    f.preservation.beginGeneration(GENERATION);
+    f.preservation.beginGeneration(GENERATION, "confirmed");
     await f.preservation.started(GENERATION, {
       kind: "none",
       observedAtMs: 100_000,
@@ -262,7 +306,7 @@ describe("SandboxPreservation", () => {
   it("allows a fresh-spawn retry after startup fails with a prior provider handle", () => {
     const f = fixture();
     f.sandboxRow.status = "failed";
-    f.preservation.beginGeneration(GENERATION);
+    f.preservation.beginGeneration(GENERATION, "confirmed");
 
     expect(f.store.value).toMatchObject({
       phase: "running",
@@ -552,7 +596,7 @@ describe("SandboxPreservation", () => {
     const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
     f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
     f.sandboxRow.created_at = replacement.createdAt;
-    f.preservation.beginGeneration(replacement);
+    f.preservation.beginGeneration(replacement, "confirmed");
     resolveCapture({ success: true, imageId: "late-image", sourceStopped: false });
     await advancing;
 
@@ -675,7 +719,7 @@ describe("SandboxPreservation", () => {
     });
     const next = { ...GENERATION, createdAt: GENERATION.createdAt + 1 };
     f.sandboxRow.created_at = next.createdAt;
-    f.preservation.beginGeneration(next);
+    f.preservation.beginGeneration(next, "confirmed");
     f.preservation.restoreFailed("preflight failed", next);
 
     const restarted = new SandboxPreservation(f.deps as never);
@@ -702,7 +746,7 @@ describe("SandboxPreservation", () => {
     });
     const next = { ...GENERATION, createdAt: GENERATION.createdAt + 1 };
     f.sandboxRow.created_at = next.createdAt;
-    f.preservation.beginGeneration(next);
+    f.preservation.beginGeneration(next, "confirmed");
     const state = structuredClone(f.store.value);
 
     f.preservation.restoreFailed("late provider failure", GENERATION);
@@ -712,7 +756,7 @@ describe("SandboxPreservation", () => {
 
   it("keeps provider ownership but holds dispatch for an explicit unknown lifetime", async () => {
     const f = fixture();
-    f.preservation.beginGeneration(GENERATION);
+    f.preservation.beginGeneration(GENERATION, "confirmed");
     await f.preservation.started(GENERATION, {
       kind: "unknown",
       observedAtMs: 100_000,

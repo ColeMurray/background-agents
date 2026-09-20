@@ -38,6 +38,16 @@ describe("SandboxPreservationRepository", () => {
     fixture.db.close();
   });
 
+  it("round-trips an explicit legacy generation without a drain deadline", () => {
+    const fixture = repository();
+    const legacy = record({ lifecyclePolicy: "legacy", drainAtMs: null });
+
+    fixture.repository.write(legacy);
+
+    expect(fixture.repository.read()).toEqual(legacy);
+    fixture.db.close();
+  });
+
   it("atomically replaces the singleton while preserving a verified receipt", () => {
     const fixture = repository();
     fixture.repository.write(record());

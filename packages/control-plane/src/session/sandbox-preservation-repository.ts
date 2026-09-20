@@ -23,6 +23,7 @@ const stateSchema = sandboxPreservationSchema
     protocolVersion: z.literal(1).optional(),
     generationReady: z.boolean(),
     runtimeReady: z.boolean().optional(),
+    lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
     checkpointInFlight: z.boolean().optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
@@ -34,7 +35,8 @@ const stateSchema = sandboxPreservationSchema
   .superRefine((state, context) => {
     const incomplete =
       (state.lifetimeKind === "finite" &&
-        (state.expiresAtMs === null || state.drainAtMs === null)) ||
+        (state.expiresAtMs === null ||
+          (state.lifecyclePolicy !== "legacy" && state.drainAtMs === null))) ||
       ((state.phase === "saved" || state.phase === "retiring") && !state.receipt) ||
       (["draining", "prepared", "capturing"].includes(state.phase) &&
         (!state.operationId ||

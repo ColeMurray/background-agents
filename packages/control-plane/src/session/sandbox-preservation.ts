@@ -9,6 +9,7 @@ import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxGeneration } from "../sandbox/lifecycle/ports";
+import type { PreservationLifecyclePolicy } from "../sandbox/lifecycle/preservation-policy";
 import type { SandboxPreservationStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
@@ -95,7 +96,10 @@ export class SandboxPreservation {
   }
 
   /** Called before the provider can start a bridge for this generation. */
-  beginGeneration(generation: SandboxGeneration): void {
+  beginGeneration(
+    generation: SandboxGeneration,
+    lifecyclePolicy: PreservationLifecyclePolicy
+  ): void {
     if (!generation.sandboxId) throw new Error("Missing sandbox generation");
     const previous = this.deps.store.read();
     this.publish({
@@ -108,8 +112,15 @@ export class SandboxPreservation {
       expiresAtMs: null,
       drainAtMs: null,
       generationReady: false,
+      lifecyclePolicy,
       receipt: previous?.receipt,
     });
+    if (lifecyclePolicy === "legacy") {
+      this.deps.log?.warn("Restoring existing sandbox under legacy lifecycle policy", {
+        event: "sandbox.preservation_legacy_lifecycle",
+        sandbox_id: generation.sandboxId,
+      });
+    }
   }
 
   /** Persist uncertainty before restore/resume can create or reactivate execution. */
@@ -135,15 +146,20 @@ export class SandboxPreservation {
     );
     const buffer = settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS;
     const expiresAtMs = lifetime.kind === "finite" ? lifetime.expiresAtMs : null;
+    const legacy = state.lifecyclePolicy === "legacy";
     const next: PreservationRecord = {
       ...state,
       providerObjectId: row?.modal_object_id ?? null,
       sourceRetired: false,
       lifetimeKind: lifetime.kind,
       expiresAtMs,
-      drainAtMs: expiresAtMs === null ? null : expiresAtMs - buffer,
+      drainAtMs: legacy || expiresAtMs === null ? null : expiresAtMs - buffer,
     };
     this.publish(next);
+    if (legacy) {
+      this.kickQueue();
+      return;
+    }
     if (lifetime.kind === "unknown") {
       this.fail(
         next,
@@ -166,6 +182,10 @@ export class SandboxPreservation {
     if (!state || !this.current(state)) return;
     const next = { ...state, runtimeReady: true, protocolVersion: version };
     this.publish(next);
+    if (state.lifecyclePolicy === "legacy") {
+      this.kickQueue();
+      return;
+    }
     if (version !== 1) {
       this.fail(
         next,
@@ -199,6 +219,7 @@ export class SandboxPreservation {
     if (state.phase === "saved") return true; // Existing queue drives restore, never prompt replay.
     if (state.phase !== "running" || !this.current(state)) return false;
     if (!this.providerMatches(state)) return false;
+    if (state.lifecyclePolicy === "legacy") return !state.checkpointInFlight;
     // A provider-create failure with no connected runtime/receipt still uses
     // the existing fresh-spawn retry policy. Unknown preservation never does.
     if (
@@ -311,6 +332,9 @@ export class SandboxPreservation {
     if (!state) return "unmanaged";
     if (!this.current(state) || state.phase !== "running" || !this.providerMatches(state))
       return "held";
+    if (state.lifecyclePolicy === "legacy") {
+      return state.checkpointInFlight ? "held" : "unmanaged";
+    }
     const now = this.now();
     const end = state.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS;
     // A shorter buffer reduces capture time, not the prompt-stop allowance.

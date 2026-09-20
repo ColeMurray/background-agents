@@ -27,7 +27,7 @@ import {
   type ImageBuildScope,
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
-import { MIN_PRESERVATION_RUNTIME_GENERATION } from "../runtime-manifest";
+import { supportsConfirmedPreservation } from "./preservation-policy";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -100,11 +100,12 @@ export async function evaluateImageBuildForSpawn(
   }
 
   const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  const minimumRuntimeVersion = Math.max(
-    minCompatibleRuntimeVersionFor(harness),
-    MIN_PRESERVATION_RUNTIME_GENERATION
-  );
-  if (runtimeVersion === null || runtimeVersion < minimumRuntimeVersion) {
+  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness);
+  if (
+    runtimeVersion === null ||
+    runtimeVersion < minimumRuntimeVersion ||
+    !supportsConfirmedPreservation(image.runtime_version)
+  ) {
     return { outcome: "miss", reason: "runtime_below_floor", imageBuildId: image.id };
   }
 

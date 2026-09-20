@@ -221,6 +221,65 @@ describe("sandbox preservation wiring", () => {
     ws!.close();
   });
 
+  it("dispatches restored legacy work when ready omits the preservation protocol", async () => {
+    const name = `preservation-legacy-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    await seedPreservation(stub, {
+      lifecyclePolicy: "legacy",
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+    });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "legacy-pending",
+      authorId,
+      content: "Continue existing work",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+
+    const { ws } = await openSandboxWs(name, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    const delivered = collectMessages(ws!, {
+      until: (message) => message.type === "prompt",
+      timeoutMs: 2_000,
+    });
+    ws!.send(
+      JSON.stringify({
+        type: "ready",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1000,
+      })
+    );
+
+    expect(await delivered).toContainEqual(
+      expect.objectContaining({ type: "prompt", messageId: "legacy-pending" })
+    );
+    expect(await readPreservation(stub)).toMatchObject({
+      phase: "running",
+      lifecyclePolicy: "legacy",
+      runtimeReady: true,
+    });
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "ready" },
+    ]);
+    ws!.close();
+  });
+
   it("drains once, holds pending work, and acknowledges only matching preparation state", async () => {
     const name = `preservation-drain-${Date.now()}`;
     const { stub } = await initNamedSession(name);
