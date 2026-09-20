@@ -174,11 +174,24 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
   private async submitCapture(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef> {
     // Reads the source's labels before anything destructive: ownership, and
     // the expiry that bounds how long the capture may be waited for.
-    const source = await this.resources.getBuildSandbox(
-      input.providerSessionId,
-      input.buildId,
-      input.signal
-    );
+    let source: DaytonaSandboxResponse | null;
+    try {
+      source = await this.resources.getBuildSandbox(
+        input.providerSessionId,
+        input.buildId,
+        input.signal
+      );
+    } catch (error) {
+      // This is a read before the capture is reserved or submitted. A
+      // transient failure cannot have created an artifact, so a later
+      // delivery may safely retry instead of failing and deleting the source.
+      if (!isDaytonaUnavailable(error)) throw error;
+      throw new ImageBuildFinalizationAttemptError(
+        "Daytona build sandbox is temporarily unavailable",
+        "definitely_not_created",
+        { cause: error }
+      );
+    }
     if (!source) {
       throw new Error("Daytona build sandbox no longer exists");
     }
