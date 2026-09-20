@@ -22,7 +22,7 @@ import { isSocketOpen, type AlarmScheduler, type SessionWebSocket } from "../pla
 import type { ClientInfo } from "../types";
 import type { SessionWebSocketHost } from "./platform";
 import type { ConnectionClassification } from "./ports";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxSocketStore } from "./sandbox-ports";
 import type { SandboxRow } from "./types";
 import type {
   WsClientMappingRepository,
@@ -157,10 +157,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   /** Create a WebSocket manager over the host's sockets and persisted client mappings. */
   constructor(
     private readonly host: SessionWebSocketHost,
-    private readonly sandboxRepository: Pick<
-      SandboxRepository,
-      "getSandbox" | "setActiveSocketId" | "revokeActiveSocketId"
-    >,
+    private readonly sandboxRepository: SandboxSocketStore,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly log: Logger,
@@ -301,8 +298,9 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   getSandboxCommandTarget(): SandboxCommandTarget {
     const ws = this.getSandboxSocket();
     if (!ws) return { kind: "unavailable" };
-    const status = this.sandboxRepository.getSandbox()?.status;
-    const kind = evaluateSandboxCommandAvailability(status, true);
+    const sandbox = this.sandboxRepository.getSandbox();
+    if (!sandbox) return { kind: "unavailable" };
+    const kind = evaluateSandboxCommandAvailability(sandbox.status);
     return kind === "dispatch" ? { kind, socket: ws } : { kind };
   }
 

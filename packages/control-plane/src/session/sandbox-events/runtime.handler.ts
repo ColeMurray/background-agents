@@ -1,12 +1,12 @@
 import { toSandboxBootPhase, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
-import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
+import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { SessionMessenger } from "../messenger";
-import type { SandboxRepository } from "../sandbox-repository";
+import type { SandboxRuntimeFacts } from "../sandbox-ports";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
@@ -26,13 +26,7 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
 export class SandboxRuntimeEventHandler {
   constructor(
     private readonly repository: SessionCoreRepository,
-    private readonly sandboxRepository: Pick<
-      SandboxRepository,
-      | "updateSandboxHeartbeat"
-      | "recordReportedSandboxRuntimeVersion"
-      | "recordBootProgress"
-      | "updateSandboxGitSyncStatus"
-    >,
+    private readonly sandboxRepository: SandboxRuntimeFacts,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
@@ -46,7 +40,7 @@ export class SandboxRuntimeEventHandler {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
     private readonly log: Logger,
-    private readonly lifecycle: Pick<SandboxLifecycleManager, "onRuntimeReady">
+    private readonly lifecycle: SandboxReadiness
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {

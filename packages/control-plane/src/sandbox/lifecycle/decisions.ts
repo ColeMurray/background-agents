@@ -40,14 +40,13 @@ export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean 
   return status === "stopped" || status === "stale";
 }
 
-/** Ordinary commands need readiness; lifecycle control can use an attached bridge. */
 export type SandboxCommandAvailability = "dispatch" | "booting" | "unavailable";
 
+/** Classify a known sandbox after transport has resolved its authoritative socket. */
 export function evaluateSandboxCommandAvailability(
-  status: SandboxStatus | undefined,
-  hasAuthoritativeSocket: boolean
+  status: SandboxStatus
 ): SandboxCommandAvailability {
-  if (!hasAuthoritativeSocket || (status !== undefined && isDeadSandboxStatus(status))) {
+  if (isDeadSandboxStatus(status)) {
     return "unavailable";
   }
   return status === "ready" || status === "snapshotting" ? "dispatch" : "booting";

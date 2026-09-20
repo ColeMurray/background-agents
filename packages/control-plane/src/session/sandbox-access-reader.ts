@@ -1,14 +1,14 @@
 import type { Logger } from "../logger";
 import { isSandboxAccessAvailable } from "../sandbox/lifecycle/decisions";
 import { decryptStoredAccessValue } from "./sandbox-access";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxStateReader } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import { resolveSandboxDashboardUrl, type SandboxDashboardSettings } from "./sandbox-access";
 import { safeParseTunnelUrls } from "./tunnel-urls";
 
 export interface SessionAccessReaderDeps {
   sessionCoreRepository: Pick<SessionCoreRepository, "getSession">;
-  sandboxRepository: Pick<SandboxRepository, "getSandbox">;
+  sandboxRepository: SandboxStateReader;
   repoSecretsEncryptionKey: string;
   sandboxDashboardSettings: SandboxDashboardSettings;
   log: Logger;

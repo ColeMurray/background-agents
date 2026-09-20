@@ -12,7 +12,7 @@ import {
 import { hashToken } from "../auth/crypto";
 import type { Logger } from "../logger";
 import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
-import type { SandboxLifecycleManager } from "../sandbox/lifecycle/manager";
+import type { SandboxAttachment } from "../sandbox/lifecycle/ports";
 import type { SourceControlProviderName } from "../source-control";
 import type { BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
@@ -23,7 +23,7 @@ import { getAvatarUrl, type ParticipantService } from "./participant-service";
 import type { PresenceService } from "./presence-service";
 import type { SessionMessageQueue } from "./message-queue";
 import type { SessionMessenger } from "./messenger";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxStateReader, SandboxRuntimeFacts } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
 import type { SandboxRow } from "./types";
@@ -42,8 +42,8 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 export interface SessionConnectionAuthenticatorDeps {
   wsManager: SessionWebSocketManager;
   sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
-  lifecycleManager: SandboxLifecycleManager;
+  sandboxRepository: SandboxStateReader & Pick<SandboxRuntimeFacts, "updateSandboxHeartbeat">;
+  lifecycleManager: SandboxAttachment;
   messenger: SessionMessenger;
   backgroundTasks: BackgroundTasks;
   messageQueue: Pick<SessionMessageQueue, "processMessageQueue">;

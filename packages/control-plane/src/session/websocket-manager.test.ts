@@ -677,6 +677,30 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("getSandboxCommandTarget", () => {
+    it("reports unavailable for an attached socket without a sandbox row", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      mockRepo.setSandbox(null);
+
+      expect(manager.getSandboxCommandTarget()).toEqual({ kind: "unavailable" });
+    });
+
+    it.each(["stopped", "failed", "stale"] as const)(
+      "reports unavailable for a lingering %s socket",
+      (status) => {
+        const { manager, mockRepo } = createManager();
+        const row = createSandboxRow("sb-1");
+        row.status = status;
+        mockRepo.setSandbox(row);
+        const ws = createFakeWebSocket();
+        manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+        expect(manager.getSandboxCommandTarget()).toEqual({ kind: "unavailable" });
+        expect(ws.close).toHaveBeenCalled();
+      }
+    );
+
     it.each(["ready", "snapshotting"] as const)(
       "returns the attached socket while the row is %s",
       (status) => {

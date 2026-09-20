@@ -26,16 +26,14 @@ describe("C1 lifecycle eligibility compatibility", () => {
   for (const status of Object.keys(cases) as SandboxStatus[]) {
     it(`preserves distinct dispatch/access/reconnect/cancel outcomes for ${status}`, () => {
       const [commands, access, blocksReconnect, cancel] = cases[status];
-      expect(evaluateSandboxCommandAvailability(status, true)).toBe(commands);
-      expect(evaluateSandboxCommandAvailability(status, false)).toBe("unavailable");
+      expect(evaluateSandboxCommandAvailability(status)).toBe(commands);
       expect(isSandboxAccessAvailable(status)).toBe(access);
       expect(isSandboxReconnectBlockedStatus(status)).toBe(blocksReconnect);
       expect(shouldStopSandboxOnSessionCancel(status)).toBe(cancel);
     });
   }
 
-  it("does not grant access, dispatch or cancellation without a row/socket", () => {
-    expect(evaluateSandboxCommandAvailability(undefined, false)).toBe("unavailable");
+  it("does not grant access or cancellation without a row", () => {
     expect(isSandboxAccessAvailable(undefined)).toBe(false);
     expect(shouldStopSandboxOnSessionCancel(undefined)).toBe(false);
   });

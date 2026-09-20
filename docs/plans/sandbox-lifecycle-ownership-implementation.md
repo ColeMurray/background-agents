@@ -69,7 +69,7 @@ pre-change focused baseline passed 529 tests.
 
 | Check                                                                             | Result                                                                |
 | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `npm run test -w @open-inspect/control-plane -- --silent`                         | 304 files, 4,796 tests passed                                         |
+| `npm run test -w @open-inspect/control-plane -- --silent`                         | 303 files, 4,796 tests passed                                         |
 | Full Workerd integration suite, before final added scenario                       | 109 files, 1,306 passed, 1 skipped                                    |
 | `npm run test:integration -w @open-inspect/control-plane -- --silent`             | 109 files, 1,307 passed, 1 skipped                                    |
 | Added cancellation → late-ready Workerd scenario and existing early-connect suite | 7 tests passed                                                        |
@@ -80,21 +80,23 @@ pre-change focused baseline passed 529 tests.
 
 New or strengthened checks include:
 
-- An explicit compatibility matrix for every status union member, with and without a socket;
-  separate access/reconnect/cancellation decisions.
+- An explicit compatibility matrix for every status union member; separate
+  access/reconnect/cancellation decisions. Transport tests cover missing and terminal sockets.
 - Lifecycle-owned cancellation ordering, excluded states, missing transport, unsuccessful send, and
   absence of unintended provider stop/fence/detach effects.
 - Readiness CAS/activity/publication ordering and rejected/missing-row cases.
-- Existing runtime-handler tests exercise the real lifecycle manager, including
-  duplicate/fenced/replaced readiness and fallible inactivity scheduling.
+- Runtime-handler tests exercise orchestration through a focused readiness port, including rejected
+  readiness and fallible inactivity scheduling. Manager/storage tests cover readiness guards and
+  effect ordering; Workerd tests cover the assembled wiring.
 - Access tests use real encryption and asynchronous decryption, and replace
   status/identity/provider/access fields across that await.
 - Workerd exercises actual HTTP cancellation and an authenticated bridge's late ready event. The
   test waits for event broadcast rather than using a sleep as proof of processing. It checks stopped
   sandbox, cancelled session, and the existing failed-message cancellation reason.
-- Source-level ownership tripwires reject lifecycle mutation calls outside the manager/repository
-  and selected local status comparisons. These are regression guards, not a complete architectural
-  proof or an exhaustive static analysis.
+- Explicit read/runtime/socket/initialization ports restrict consumers' repository capabilities.
+  ESLint enforces imports through ports instead of concrete repository/manager implementations;
+  `npm run test:lint-sandbox-boundaries` verifies the real ESLint configuration. No custom AST
+  scanner or single-owner-file allowlist remains.
 
 Full suites cover existing admission races, hibernation/socket recovery, boot budget, alarm
 behavior, queue claims, snapshot histories, provider adapters, and Node conformance. Automated

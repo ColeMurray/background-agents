@@ -68,6 +68,15 @@ import {
 } from "./image-selection";
 import type { AlarmScheduler, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
+import type {
+  SandboxGeneration,
+  SandboxReadiness,
+  SandboxCancellation,
+  SandboxAttachment,
+  SandboxAlarm,
+  SandboxAlarmResult,
+} from "./ports";
+export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
@@ -79,18 +88,6 @@ const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 
 // ==================== Dependency Interfaces ====================
-
-/**
- * One occupancy of the sandbox row: the logical sandbox id plus the
- * `created_at` its reservation or resume stamped. Every write an attempt
- * makes after its first await names the generation it was started for, so a
- * completion that outlives its attempt cannot land on a later one, even one
- * that reached the same status.
- */
-export interface SandboxGeneration {
-  sandboxId: string | null;
-  createdAt: number;
-}
 
 /**
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
@@ -395,17 +392,6 @@ export type UnresponsiveSandboxTrigger =
   | "stop_confirmation_timeout";
 
 /**
- * What the lifecycle alarm did. `boot_budget_exceeded` carries the failure
- * text because the alarm handler must fail the prompt the boot was for with
- * the same words the user sees.
- */
-export type SandboxAlarmResult =
-  | "no_action"
-  | "sandbox_failed"
-  | "sandbox_terminated"
-  | { kind: "boot_budget_exceeded"; reason: string };
-
-/**
  * Manages sandbox lifecycle operations.
  *
  * Uses dependency injection for all external interactions, enabling unit testing
@@ -424,7 +410,14 @@ class SpawnSupersededError extends Error {
   }
 }
 
-export class SandboxLifecycleManager implements SandboxLifecycle {
+export class SandboxLifecycleManager
+  implements
+    SandboxLifecycle,
+    SandboxReadiness,
+    SandboxCancellation,
+    SandboxAttachment,
+    SandboxAlarm
+{
   /**
    * In-memory flag to prevent concurrent spawn attempts within the same request.
    * This is NOT persisted - it protects against multiple spawns in one DO method call.
