@@ -136,13 +136,13 @@ function realLifecycleHarness(
       current: async () => null,
     },
     { generateId: () => "integration-sandbox-token" },
+    preservation,
     {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl: "https://control-plane.test",
       model: "anthropic/claude-sonnet-4-5",
     }
   );
-  manager.setPreservation(preservation);
   return {
     manager,
     preservation,
@@ -503,6 +503,17 @@ describe("sandbox preservation wiring", () => {
         },
       };
       const sandbox = componentsOf(instance).sandboxRepository;
+      const preservation = new SandboxPreservation({
+        store: new SandboxPreservationRepository(durableState.storage.sql),
+        provider,
+        sandbox,
+        background: {
+          submit: (task: () => Promise<void>) => {
+            void task();
+          },
+        },
+        processQueue: async () => undefined,
+      } as never);
       const manager = new SandboxLifecycleManager(
         provider,
         sandbox,
@@ -519,25 +530,13 @@ describe("sandbox preservation wiring", () => {
         } as never,
         { schedule: async () => undefined, cancel: async () => undefined } as never,
         { generateId: () => "generated-id" },
+        preservation,
         {
           ...DEFAULT_LIFECYCLE_CONFIG,
           controlPlaneUrl: "https://control-plane.test",
           model: "anthropic/claude-sonnet-4-5",
         }
       );
-      const preservation = new SandboxPreservation({
-        store: new SandboxPreservationRepository(durableState.storage.sql),
-        provider,
-        sandbox,
-        background: {
-          submit: (task: () => Promise<void>) => {
-            void task();
-          },
-        },
-        processQueue: async () => undefined,
-      } as never);
-      manager.setPreservation(preservation);
-
       await manager.handleAlarm();
       return calls;
     });

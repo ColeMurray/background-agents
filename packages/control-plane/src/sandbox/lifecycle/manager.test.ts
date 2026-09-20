@@ -150,6 +150,30 @@ const ACCESS_FIELDS = {
   ttyd: { url: "ttyd_url", secret: "ttyd_token" },
 } as const;
 
+function createUnmanagedPreservation(): SandboxPreservationLifecycle {
+  return {
+    beginGeneration: vi.fn(),
+    reserveGeneration: vi.fn(),
+    generationReserved: vi.fn(),
+    restoreStarting: vi.fn(),
+    started: vi.fn(async () => {}),
+    isHolding: vi.fn(() => false),
+    request: vi.fn<SandboxPreservationLifecycle["request"]>(async () => "unmanaged"),
+    beginCheckpoint: vi.fn<SandboxPreservationLifecycle["beginCheckpoint"]>((generation) => ({
+      id: "checkpoint",
+      generation,
+      deadlineAtMs: Date.now() + 300_000,
+      run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
+        outcome: "completed" as const,
+        value: await operation(new AbortController().signal),
+      }),
+      finish: vi.fn(),
+    })),
+    recoveryReceipt: vi.fn(() => undefined),
+    restoreFailed: vi.fn(),
+  };
+}
+
 function createMockStorage(
   session: SessionRow | null = createMockSession(),
   sandbox:
@@ -531,6 +555,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
     wsManager,
     alarmScheduler,
     createMockIdGenerator(),
+    createUnmanagedPreservation(),
     createTestConfig()
   );
 
@@ -575,16 +600,6 @@ describe("final preservation lifecycle integration", () => {
   ) {
     const storage = createMockStorage(createMockSession(), sandbox);
     const sockets = createMockWebSocketManager();
-    const manager = new SandboxLifecycleManager(
-      provider,
-      storage,
-      storage,
-      createMockBroadcaster(),
-      sockets,
-      createMockAlarmScheduler(),
-      createMockIdGenerator(),
-      createTestConfig()
-    );
     const beginGeneration = vi.fn();
     const preservation = {
       beginGeneration,
@@ -607,7 +622,17 @@ describe("final preservation lifecycle integration", () => {
       recoveryReceipt: vi.fn<SandboxPreservationLifecycle["recoveryReceipt"]>(() => undefined),
       restoreFailed: vi.fn(),
     };
-    manager.setPreservation(preservation);
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      createMockBroadcaster(),
+      sockets,
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      preservation,
+      createTestConfig()
+    );
     return { manager, preservation, storage, provider, sockets };
   }
 
@@ -646,7 +671,17 @@ describe("final preservation lifecycle integration", () => {
       background: { submit: vi.fn() },
       retireAccess: vi.fn(),
     } as never);
-    f.manager.setPreservation(preservation);
+    f.manager = new SandboxLifecycleManager(
+      f.provider,
+      f.storage,
+      f.storage,
+      createMockBroadcaster(),
+      f.sockets,
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      preservation,
+      createTestConfig()
+    );
     return { preservation, read: () => state };
   }
 
@@ -1023,6 +1058,7 @@ describe("lifecycle-owned runtime readiness and cancellation", () => {
       ws,
       alarms,
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
     return { manager, row, storage, broadcaster, ws, provider, alarms };
@@ -1111,6 +1147,43 @@ describe("lifecycle-owned runtime readiness and cancellation", () => {
 });
 
 describe("SandboxLifecycleManager", () => {
+  it("does not invoke collaborators during construction and honors the injected hold first", async () => {
+    const sandbox = createMockSandbox({ status: "pending" });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const provider = createMockProvider();
+    const preservation = {
+      ...createUnmanagedPreservation(),
+      isHolding: vi.fn(() => true),
+    } satisfies SandboxPreservationLifecycle;
+    const callbacks = {
+      broadcast: vi.fn(),
+      schedule: vi.fn(async () => undefined),
+    };
+
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      { broadcast: callbacks.broadcast },
+      createMockWebSocketManager(false),
+      { ...createMockAlarmScheduler(), schedule: callbacks.schedule },
+      createMockIdGenerator(),
+      preservation,
+      createTestConfig()
+    );
+
+    expect(preservation.isHolding).not.toHaveBeenCalled();
+    expect(callbacks.broadcast).not.toHaveBeenCalled();
+    expect(callbacks.schedule).not.toHaveBeenCalled();
+
+    await manager.spawnSandbox();
+
+    expect(preservation.isHolding).toHaveBeenCalledOnce();
+    expect(provider.createSandbox).not.toHaveBeenCalled();
+    expect(callbacks.broadcast).not.toHaveBeenCalled();
+    expect(callbacks.schedule).not.toHaveBeenCalled();
+  });
+
   describe("spawnSandbox", () => {
     it("spawns when all conditions pass", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -1129,6 +1202,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         idGenerator,
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1185,6 +1259,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           alarmScheduler,
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
 
@@ -1246,6 +1321,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -1300,6 +1376,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -1350,6 +1427,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1379,6 +1457,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1418,6 +1497,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1452,6 +1532,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
       const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1487,6 +1568,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -1513,6 +1595,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1538,6 +1621,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -1566,6 +1650,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         idGenerator,
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1606,6 +1691,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         {
           ...createTestConfig(),
           mcpServerLookup,
@@ -1652,6 +1738,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
       await manager.spawnSandbox();
@@ -1678,6 +1765,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1714,6 +1802,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1746,6 +1835,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1774,6 +1864,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1803,6 +1894,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1829,6 +1921,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1873,6 +1966,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -1921,6 +2015,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
       const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1965,6 +2060,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2003,6 +2099,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -2045,6 +2142,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -2088,6 +2186,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -2118,6 +2217,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2149,6 +2249,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2175,6 +2276,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2200,6 +2302,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2232,6 +2335,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2271,6 +2375,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2304,6 +2409,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2333,6 +2439,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2364,6 +2471,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2391,6 +2499,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2417,6 +2526,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2450,6 +2560,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2478,6 +2589,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2505,6 +2617,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2530,6 +2643,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2552,6 +2666,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2576,6 +2691,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2597,6 +2713,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2620,6 +2737,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(true),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
 
@@ -2641,6 +2759,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -2669,6 +2788,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
       return { storage, broadcaster, wsManager, provider, manager };
@@ -2894,6 +3014,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(true),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
 
@@ -2931,6 +3052,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(true),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
         // The user came back after the window and this attempt began then.
@@ -2962,6 +3084,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3003,6 +3126,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3031,6 +3155,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3062,6 +3187,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3096,6 +3222,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3127,6 +3254,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3144,6 +3272,11 @@ describe("SandboxLifecycleManager", () => {
         capabilities: { snapshotStopsSandbox: true },
         takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
       });
+      const preservation = new SandboxPreservation({
+        store: { read: () => null, write: vi.fn() },
+        provider,
+        sandbox: storage,
+      } as never);
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3152,14 +3285,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        preservation,
         createTestConfig()
-      );
-      manager.setPreservation(
-        new SandboxPreservation({
-          store: { read: () => null, write: vi.fn() },
-          provider,
-          sandbox: storage,
-        } as never)
       );
 
       await manager.triggerSnapshot("test");
@@ -3180,6 +3307,20 @@ describe("SandboxLifecycleManager", () => {
       });
       const takeSnapshot = vi.fn(async () => ({ success: true, imageId: "snapshot" }));
       const provider = createMockProvider({ takeSnapshot });
+      const finish = vi.fn();
+      const preservation = {
+        ...createUnmanagedPreservation(),
+        beginCheckpoint: (generation: SandboxGeneration) => ({
+          id: "lease",
+          generation,
+          deadlineAtMs: 123_456,
+          run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
+            outcome: "completed" as const,
+            value: await operation(new AbortController().signal),
+          }),
+          finish,
+        }),
+      } satisfies SandboxPreservationLifecycle;
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3188,30 +3329,9 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        preservation,
         createTestConfig()
       );
-      const finish = vi.fn();
-      manager.setPreservation({
-        beginGeneration: vi.fn(),
-        reserveGeneration: vi.fn(),
-        generationReserved: vi.fn(),
-        restoreStarting: vi.fn(),
-        started: vi.fn(async () => {}),
-        isHolding: () => false,
-        request: vi.fn(async () => "unmanaged" as const),
-        beginCheckpoint: (generation) => ({
-          id: "lease",
-          generation,
-          deadlineAtMs: 123_456,
-          run: async (operation) => ({
-            outcome: "completed",
-            value: await operation(new AbortController().signal),
-          }),
-          finish,
-        }),
-        recoveryReceipt: vi.fn(() => undefined),
-        restoreFailed: vi.fn(),
-      } satisfies SandboxPreservationLifecycle);
 
       await manager.triggerSnapshot("test");
 
@@ -3267,6 +3387,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
 
@@ -3301,6 +3422,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3335,6 +3457,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3366,6 +3489,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3400,6 +3524,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3429,6 +3554,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3460,6 +3586,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3507,6 +3634,11 @@ describe("SandboxLifecycleManager", () => {
           return { success: true };
         }),
       });
+      const preservation = new SandboxPreservation({
+        store: { read: () => null, write: vi.fn() },
+        provider,
+        sandbox: storage,
+      } as never);
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3515,14 +3647,8 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        preservation,
         createTestConfig()
-      );
-      manager.setPreservation(
-        new SandboxPreservation({
-          store: { read: () => null, write: vi.fn() },
-          provider,
-          sandbox: storage,
-        } as never)
       );
 
       await manager.handleAlarm();
@@ -3554,6 +3680,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3595,6 +3722,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3639,6 +3767,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3668,6 +3797,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3705,6 +3835,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3739,6 +3870,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3767,6 +3899,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3799,6 +3932,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3825,6 +3959,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3859,6 +3994,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
 
@@ -3889,6 +4025,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
       const terminating = manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
@@ -3932,6 +4069,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3966,6 +4104,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -3994,6 +4133,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4030,6 +4170,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4067,6 +4208,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4102,6 +4244,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
+          createUnmanagedPreservation(),
           createTestConfig()
         );
 
@@ -4133,6 +4276,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4165,6 +4309,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -4196,6 +4341,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4219,6 +4365,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4242,6 +4389,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4267,6 +4415,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -4292,6 +4441,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
 
@@ -4348,6 +4498,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig(),
         overrides?.imageBuildLookup
       );
@@ -4658,6 +4809,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         overrides?.alarmScheduler ?? createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig(),
         overrides?.environmentImageLookup
       );
@@ -4896,6 +5048,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         { ...createTestConfig(), mcpServerLookup: overrides?.mcpServerLookup },
         overrides?.imageBuildLookup
       );
@@ -5016,6 +5169,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5045,6 +5199,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5077,6 +5232,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5103,6 +5259,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5126,6 +5283,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5155,6 +5313,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5187,6 +5346,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5215,6 +5375,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5241,6 +5402,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5267,6 +5429,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5295,6 +5458,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5323,6 +5487,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5351,6 +5516,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5389,6 +5555,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5420,6 +5587,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5450,6 +5618,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5490,6 +5659,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         createTestConfig()
       );
 
@@ -5522,6 +5692,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        createUnmanagedPreservation(),
         config
       );
       return { manager, provider };
@@ -5702,6 +5873,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
     return { storage, broadcaster, manager };
@@ -5751,6 +5923,13 @@ describe("status writes after a provider await (COL-99)", () => {
           })
       );
       const stopSandbox = vi.fn(async () => ({ success: true }));
+      const beginGeneration = vi.fn();
+      const preservation = {
+        ...createUnmanagedPreservation(),
+        beginGeneration,
+        reserveGeneration: beginGeneration,
+        request: vi.fn(async () => "owned" as const),
+      } satisfies SandboxPreservationLifecycle;
       const manager = new SandboxLifecycleManager(
         createMockProvider({
           capabilities: { supportsExplicitStop: true },
@@ -5763,31 +5942,9 @@ describe("status writes after a provider await (COL-99)", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
+        preservation,
         createTestConfig()
       );
-      const beginGeneration = vi.fn();
-      const preservation = {
-        beginGeneration,
-        reserveGeneration: beginGeneration,
-        generationReserved: vi.fn(),
-        restoreStarting: vi.fn(),
-        started: vi.fn(async () => {}),
-        isHolding: vi.fn(() => false),
-        request: vi.fn(async () => "owned" as const),
-        beginCheckpoint: vi.fn((generation: SandboxGeneration) => ({
-          id: "checkpoint-1",
-          generation,
-          deadlineAtMs: Date.now() + 300_000,
-          run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
-            outcome: "completed" as const,
-            value: await operation(new AbortController().signal),
-          }),
-          finish: vi.fn(),
-        })),
-        recoveryReceipt: vi.fn(() => undefined),
-        restoreFailed: vi.fn(),
-      } satisfies SandboxPreservationLifecycle;
-      manager.setPreservation(preservation);
 
       const spawning = manager.spawnSandbox();
       await vi.waitFor(() => expect(createSandbox).toHaveBeenCalledOnce());
@@ -5877,6 +6034,7 @@ describe("status writes after a provider await (COL-99)", () => {
       wsManager,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
 
@@ -5929,6 +6087,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(false),
       alarmScheduler,
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
 
@@ -5975,6 +6134,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
 
@@ -6018,6 +6178,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
 
@@ -6055,6 +6216,7 @@ describe("SandboxLifecycleManager log context", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       { ...createTestConfig(), getSessionId: () => currentId }
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -6086,6 +6248,7 @@ describe("SandboxLifecycleManager log context", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -6116,6 +6279,7 @@ describe("spawn admission race (#1589)", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
+      createUnmanagedPreservation(),
       createTestConfig()
     );
     return { storage, manager };

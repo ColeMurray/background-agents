@@ -44,6 +44,7 @@ import {
   type ImageBuildLookup,
   type McpServerLookup,
   type SlackAgentNotifyLookup,
+  type SandboxPreservationLifecycle,
 } from "../sandbox/lifecycle/manager";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
@@ -422,20 +423,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     env,
     resolveSandboxBackendName(env.SANDBOX_PROVIDER)
   );
-  const lifecycleManager = createLifecycleManager({
-    provider: sandboxProvider,
-    env,
-    db,
-    getSessionId: getPublicSessionId,
-    storage: sandboxRepository,
-    sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
-    repoSecretsEncryptionKey,
-    messenger,
-    wsManager,
-    alarmScheduler,
-    sandboxDashboardSettings,
-  });
-
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
   const messageFailures = new MessageFailureService(
@@ -458,11 +445,26 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sockets: wsManager,
     alarm: alarmScheduler,
     background: backgroundTasks,
+    // These closures are invoked only by later lifecycle work, after this
+    // composition function has constructed and returned the complete graph.
     processQueue: () => messageQueue.processMessageQueue(),
     reconcileStatus: () => statusService.reconcileAfterExecution(false),
     retireAccess: () => lifecycleManager.retirePreservedAccess(),
   });
-  lifecycleManager.setPreservation(preservation);
+  const lifecycleManager = createLifecycleManager({
+    provider: sandboxProvider,
+    preservation,
+    env,
+    db,
+    getSessionId: getPublicSessionId,
+    storage: sandboxRepository,
+    sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
+    repoSecretsEncryptionKey,
+    messenger,
+    wsManager,
+    alarmScheduler,
+    sandboxDashboardSettings,
+  });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
     sessionCoreRepository,
@@ -985,6 +987,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 }
 
 interface LifecycleManagerDeps {
+  preservation: SandboxPreservationLifecycle;
   provider: SandboxProvider;
   env: Env;
   db: SqlDatabase;
@@ -1004,6 +1007,7 @@ interface LifecycleManagerDeps {
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
     provider,
+    preservation,
     env,
     db,
     getSessionId,
@@ -1114,6 +1118,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     lifecycleWsManager,
     alarmScheduler,
     idGenerator,
+    preservation,
     config,
     imageBuildLookup
   );
