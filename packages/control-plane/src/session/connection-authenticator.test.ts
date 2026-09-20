@@ -68,7 +68,7 @@ interface Harness {
   wsManager: {
     acceptClientSocket: ReturnType<typeof vi.fn>;
     acceptAndSetSandboxSocket: ReturnType<typeof vi.fn>;
-    getReadySandboxSocket: ReturnType<typeof vi.fn>;
+    getSandboxCommandTarget: ReturnType<typeof vi.fn>;
     enforceAuthTimeout: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   };
@@ -105,7 +105,7 @@ function createHarness(opts: {
   const wsManager = {
     acceptClientSocket: vi.fn(),
     acceptAndSetSandboxSocket: vi.fn(() => ({ replaced: false })),
-    getReadySandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxCommandTarget: vi.fn(() => ({ kind: "unavailable" })),
     enforceAuthTimeout: vi.fn(async () => undefined),
     close: vi.fn(),
   };
@@ -342,7 +342,7 @@ describe("UpgradeDecision.attach", () => {
     // being ready, so a prompt queued while the socket was down must not
     // wait for a user action. Readiness itself is still not re-published.
     const h = createHarness({ sandbox: await sandboxRow({ status: "ready" }) });
-    h.wsManager.getReadySandboxSocket.mockReturnValue(socket);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "dispatch", socket });
 
     await (await accepted(h, sandboxUpgrade())).attach(socket);
 

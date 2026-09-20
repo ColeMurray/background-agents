@@ -8,8 +8,8 @@ import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
-import type { SandboxGeneration } from "../sandbox/lifecycle/manager";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxGeneration } from "../sandbox/lifecycle/ports";
+import type { SandboxPreservationStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { MessageFailureService } from "./message-failure-service";
@@ -27,7 +27,7 @@ class PreservationDeadlineError extends Error {}
 interface PreservationDeps {
   store: PreservationStore;
   provider: SandboxProvider;
-  sandbox: SandboxRepository;
+  sandbox: SandboxPreservationStorage;
   session: SessionCoreRepository;
   messages: MessageRepository;
   failures: MessageFailureService;

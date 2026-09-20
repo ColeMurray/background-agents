@@ -17,7 +17,7 @@ import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
 import type { MessageRepository } from "../message-repository";
 import type { SessionStatusService } from "../session-status-service";
-import type { SessionWebSocketManager } from "../websocket-manager";
+import type { SandboxCommandTarget, SessionWebSocketManager } from "../websocket-manager";
 import type { SessionBudgetService } from "../budget-service";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
@@ -40,8 +40,6 @@ function createProcessor(preservation?: {
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
-    getSandbox: vi.fn(() => ({ modal_sandbox_id: "sb-1", created_at: 4000 })),
-    markSandboxReady: vi.fn(() => true),
     recordBootProgress: vi.fn(() => true),
     getSession: vi.fn(() => null),
     getProcessingMessage,
@@ -76,7 +74,11 @@ function createProcessor(preservation?: {
 
   const wsManager = {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
-    getReadySandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxCommandTarget: vi.fn(
+      (): SandboxCommandTarget => ({
+        kind: "unavailable",
+      })
+    ),
     send: vi.fn(() => true),
   };
 
@@ -161,7 +163,8 @@ function createProcessor(preservation?: {
       scheduleInactivityCheck,
       backgroundTasks,
       { processMessageQueue },
-      log
+      log,
+      { onRuntimeReady: vi.fn(() => false) }
     ),
     pushService,
     preservation
@@ -685,7 +688,7 @@ describe("SessionSandboxEventProcessor", () => {
     const h = createProcessor();
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-    h.wsManager.getReadySandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "dispatch", socket: sandboxWs });
 
     const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")

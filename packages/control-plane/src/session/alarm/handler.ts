@@ -1,6 +1,6 @@
 import type { Logger } from "../../logger";
 import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
-import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
+import type { SandboxAlarm } from "../../sandbox/lifecycle/ports";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
 import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
@@ -15,7 +15,7 @@ export interface AlarmHandlerDeps {
     ExecutionStopCoordinator,
     "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
   >;
-  lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
+  lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
