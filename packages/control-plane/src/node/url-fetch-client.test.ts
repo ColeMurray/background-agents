@@ -32,6 +32,36 @@ afterEach(async () => {
 });
 
 describe("URL-backed bot client", () => {
+  it.each(["string", "URL", "Request", "Request override"])(
+    "preserves native body-bearing keepalive semantics for %s input",
+    async (form) => {
+      const origin = await listen(async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        res.end(Buffer.concat(chunks));
+      });
+      const body = "unchanged ü body";
+      const init = { method: "POST", body, keepalive: true };
+      const nativeResponse = await fetch(`${origin}/native`, init);
+      expect(await nativeResponse.text()).toBe(body);
+      const input =
+        form === "URL"
+          ? new URL("https://internal/callback")
+          : form.startsWith("Request")
+            ? new Request("https://internal/callback", init)
+            : "https://internal/callback";
+      const response = await createUrlFetchClient(origin).fetch(
+        input,
+        form === "Request"
+          ? undefined
+          : form === "Request override"
+            ? { body: "replacement" }
+            : init
+      );
+      expect(await response.text()).toBe(form === "Request override" ? "replacement" : body);
+    }
+  );
+
   it.each(["string", "URL", "Request", "relative", "configured"])(
     "preserves method, query, headers and body for %s input",
     async (form) => {

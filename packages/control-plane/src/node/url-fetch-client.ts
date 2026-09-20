@@ -1,4 +1,5 @@
 import type { FetchClient } from "../platform-ports";
+import type { Request as NodeRequest } from "undici-types";
 
 export const DEFAULT_BOT_REQUEST_TIMEOUT_MS = 10_000;
 const INTERNAL_ORIGIN = "https://internal";
@@ -14,11 +15,7 @@ export function createUrlFetchClient(
   }
   return {
     async fetch(input, init) {
-      const request = new Request(
-        input instanceof Request ? input : new URL(input, INTERNAL_ORIGIN),
-        init
-      );
-      const target = new URL(request.url);
+      const target = new URL(input instanceof Request ? input.url : input, INTERNAL_ORIGIN);
       if (target.origin !== INTERNAL_ORIGIN && target.origin !== base.origin) {
         throw new Error("Bot requests must target the internal or configured bot origin");
       }
@@ -26,11 +23,38 @@ export function createUrlFetchClient(
       // must not turn into a different authority. Keep query ordering and bytes.
       target.protocol = base.protocol;
       target.host = base.host;
-      const forwarded = new Request(target, request);
+      let forwarded: Request;
+      if (input instanceof Request) {
+        // The combined test program also loads Worker globals; this adapter
+        // always runs against Node's native Request implementation.
+        const request = new Request(input, init) as unknown as NodeRequest;
+        // A keepalive Request has a replayable source, but its exposed body is a
+        // stream. Passing that stream as a new body is invalid for keepalive.
+        const rewrittenInit =
+          request.keepalive && request.body
+            ? {
+                method: request.method,
+                headers: request.headers,
+                body: await request.arrayBuffer(),
+                referrer: request.referrer,
+                referrerPolicy: request.referrerPolicy,
+                mode: request.mode,
+                credentials: request.credentials,
+                cache: request.cache,
+                redirect: request.redirect,
+                integrity: request.integrity,
+                keepalive: request.keepalive,
+                signal: request.signal,
+              }
+            : request;
+        forwarded = new Request(target, rewrittenInit as RequestInit);
+      } else {
+        forwarded = new Request(target, init);
+      }
       forwarded.headers.delete("host");
       return globalThis.fetch(forwarded, {
         // This remains active after headers arrive, bounding body consumption too.
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeoutMs)]),
+        signal: AbortSignal.any([forwarded.signal, AbortSignal.timeout(timeoutMs)]),
         // Never forward a signed body through a redirect, even if a caller asks.
         redirect: "error",
       });
