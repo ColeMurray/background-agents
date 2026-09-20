@@ -453,7 +453,7 @@ export default function SessionPage() {
       {capabilities.read && (
         <SandboxPreservationBanner
           preservation={sessionState?.sandboxPreservation}
-          onRecover={capabilities.lifecycle ? recoverPreservation : undefined}
+          onRecover={capabilities.lifecycle && ready ? recoverPreservation : undefined}
         />
       )}
 
