@@ -9,14 +9,18 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "../session/schema";
-import type { Env } from "../types";
+import {
+  createSessionRuntimeEnv,
+  type SessionRuntimeEnv,
+  type CallbackBindings,
+} from "../session/runtime-env";
 import { createDurableObjectSessionPlatform } from "./session-platform";
 import { createCloudflareEnv, type WorkerBindings } from "./platform";
 import { upgradeWebSocket } from "./websocket-upgrade";
 import type { SessionPlatform } from "../session/platform";
 import { createSessionRuntime, type SessionRuntime } from "../session/components";
 
-export class SessionDO extends DurableObject<WorkerBindings> {
+export class SessionDO extends DurableObject<Omit<WorkerBindings, CallbackBindings>> {
   /**
    * This object's storage, sockets, alarm, and event lifetime as the ports
    * the runtime is built over, with the deployment's global store. The
@@ -25,11 +29,12 @@ export class SessionDO extends DurableObject<WorkerBindings> {
    */
   private readonly platform: SessionPlatform;
   /** The application environment over this object's bindings. */
-  private readonly appEnv: Env;
+  private readonly appEnv: SessionRuntimeEnv;
   // The per-activation runtime; null until ensureInitialized() builds it.
   private _runtime: SessionRuntime | null = null;
 
-  constructor(ctx: DurableObjectState, env: WorkerBindings) {
+  constructor(ctx: DurableObjectState, bindings: WorkerBindings) {
+    const env = createSessionRuntimeEnv(bindings);
     super(ctx, env);
     // eslint-disable-next-line no-restricted-syntax -- composition root input: the DO's one env.DB read
     const db = env.DB;
@@ -39,7 +44,7 @@ export class SessionDO extends DurableObject<WorkerBindings> {
       );
     }
     this.platform = createDurableObjectSessionPlatform(ctx, db);
-    this.appEnv = createCloudflareEnv(env);
+    this.appEnv = createSessionRuntimeEnv(createCloudflareEnv(env));
   }
 
   /** The runtime, (re)built on first touch after construction or eviction. */

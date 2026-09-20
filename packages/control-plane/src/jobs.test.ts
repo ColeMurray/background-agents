@@ -8,10 +8,13 @@ import { IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS } from "./image-builds/finalize
 import type { Logger } from "./logger";
 import { JOB_KINDS, deliverJob, type Job, type JobDeps, type JobKind } from "./jobs";
 import type { Env } from "./types";
+import { COMPLETION_JOB } from "../test/callback-fixtures";
+import { handleSessionCallback } from "./session/callback-job-consumer";
 
 // The handler bodies are mocked; the table's schemas and retry policies stay
 // the production values so the tests below read what the hosts really use.
 vi.mock("./autofix/handler", () => ({ handleAutofixJob: vi.fn() }));
+vi.mock("./session/callback-job-consumer", () => ({ handleSessionCallback: vi.fn() }));
 vi.mock("./image-builds/finalization-consumer", () => ({ handleImageBuildFinalization: vi.fn() }));
 
 const FINALIZE_PAYLOAD = {
@@ -184,11 +187,13 @@ describe("deliverJob", () => {
     vi.mocked(handleImageBuildFinalization).mockResolvedValue("ack");
     vi.mocked(handleAutofixJob).mockResolvedValue("ack");
     const payloads: Record<JobKind, unknown> = {
+      "session.callback": COMPLETION_JOB,
       "image_build.finalize": FINALIZE_PAYLOAD,
       "github.autofix": AUTOFIX_PAYLOAD,
     };
 
     for (const kind of Object.keys(JOB_KINDS) as JobKind[]) {
+      vi.mocked(handleSessionCallback).mockResolvedValue("ack");
       expect(await deliverJob(kind, payloads[kind], 1, deps), kind).toBe("ack");
     }
   });

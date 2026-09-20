@@ -84,7 +84,7 @@ import { resolveCurrentGitHubAccessToken } from "./identity";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
-import { Scheduler } from "../scheduler/scheduler";
+import type { SessionRuntimeEnv } from "./runtime-env";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
@@ -220,7 +220,10 @@ function resolveExecutionTimeoutMs(
 }
 
 /** Build the session runtime, including authorization verification and lease expiry handling. */
-export function createSessionRuntime(platform: SessionPlatform, env: Env): SessionRuntime {
+export function createSessionRuntime(
+  platform: SessionPlatform,
+  env: SessionRuntimeEnv
+): SessionRuntime {
   const {
     id: durableObjectId,
     storage,
@@ -367,12 +370,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         : undefined,
   });
 
-  const scheduler = new Scheduler(db, env, backgroundTasks);
   const callbackService = new CallbackNotificationService({
-    repository: sessionCoreRepository,
     messageRepository,
-    env,
-    completeAutomationRun: (completion) => scheduler.runComplete(completion),
+    jobs: env.JOBS,
     log,
     getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
   });

@@ -166,6 +166,10 @@
       "import": "./dist/types/session-archive.js",
       "types": "./dist/types/session-archive.d.ts"
     },
+    "./types/session-callback-jobs": {
+      "import": "./dist/types/session-callback-jobs.js",
+      "types": "./dist/types/session-callback-jobs.d.ts"
+    },
     "./types/session-api": {
       "import": "./dist/types/session-api.js",
       "types": "./dist/types/session-api.d.ts"

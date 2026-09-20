@@ -19,18 +19,21 @@ import { deliverJob, type JobDeps, type JobKind, type Jobs } from "../jobs";
 
 /** The queue name prefix Terraform gives each kind's queue; the deployment name follows. */
 export const JOB_QUEUE_PREFIXES: Record<JobKind, string> = {
+  "session.callback": "open-inspect-session-callback",
   "image_build.finalize": "open-inspect-image-build-finalization",
   "github.autofix": "open-inspect-github-autofix",
 };
 
 /** The Worker's producer bindings, one per job kind; a kind whose queue the deployment omits is absent. */
 export interface JobQueueBindings {
+  SESSION_CALLBACK_QUEUE?: Queue<unknown>;
   IMAGE_BUILD_FINALIZATION_QUEUE: Queue<unknown>;
   AUTOFIX_QUEUE?: Queue<unknown>;
 }
 
 /** The producer binding Terraform gives the control-plane Worker for each kind's queue. */
 export const JOB_QUEUE_BINDINGS: Record<JobKind, keyof JobQueueBindings> = {
+  "session.callback": "SESSION_CALLBACK_QUEUE",
   "image_build.finalize": "IMAGE_BUILD_FINALIZATION_QUEUE",
   "github.autofix": "AUTOFIX_QUEUE",
 };

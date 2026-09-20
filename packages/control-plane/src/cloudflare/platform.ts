@@ -40,6 +40,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     IMAGE_BUILD_FINALIZATION_QUEUE,
+    SESSION_CALLBACK_QUEUE,
     ...config
   } = bindings;
   const platform: Platform = {
@@ -51,7 +52,11 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     LINEAR_BOT,
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
-    JOBS: createQueueJobs({ IMAGE_BUILD_FINALIZATION_QUEUE, AUTOFIX_QUEUE }),
+    JOBS: createQueueJobs({
+      IMAGE_BUILD_FINALIZATION_QUEUE,
+      AUTOFIX_QUEUE,
+      SESSION_CALLBACK_QUEUE,
+    }),
   };
   return { ...config, ...platform };
 }

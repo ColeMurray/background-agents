@@ -298,6 +298,7 @@ describe("consumeJobBatch", () => {
       expect.objectContaining({
         queue: "open-inspect-slack-completion-prod",
         known_queues: [
+          "open-inspect-session-callback-prod",
           "open-inspect-image-build-finalization-prod",
           "open-inspect-github-autofix-prod",
         ],

@@ -4,6 +4,7 @@ import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
+import { createSessionRuntimeEnv } from "../../src/session/runtime-env";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
@@ -28,7 +29,10 @@ describe("createSessionRuntime", () => {
 
       let error: string | null = null;
       try {
-        createSessionRuntime(createDurableObjectSessionPlatform(state, env.DB), doctored);
+        createSessionRuntime(
+          createDurableObjectSessionPlatform(state, env.DB),
+          createSessionRuntimeEnv(doctored)
+        );
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }

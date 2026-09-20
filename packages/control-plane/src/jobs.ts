@@ -22,6 +22,8 @@
 
 import { githubAutofixEnvelopeSchema, type GitHubAutofixEnvelope } from "@open-inspect/shared";
 import type { z } from "zod";
+import { sessionCallbackJobSchema } from "@open-inspect/shared/types/session-callback-jobs";
+import { handleSessionCallback } from "./session/callback-job-consumer";
 import { handleAutofixJob } from "./autofix/handler";
 import type { SqlDatabase } from "./db/sql-database";
 import { handleImageBuildFinalization } from "./image-builds/finalization-consumer";
@@ -79,6 +81,13 @@ function defineJobKind<Payload>(
 }
 
 export const JOB_KINDS = {
+  // Completion/start retry; the handler acknowledges cosmetic delivery failures.
+  // One versioned envelope keeps the callback queue and Node registry in parity.
+  "session.callback": defineJobKind({
+    payload: sessionCallbackJobSchema,
+    retry: { maxAttempts: 13, retryDelayMs: 15_000 },
+    handle: handleSessionCallback,
+  }),
   /**
    * Finalize an accepted image build: snapshot the provider session and
    * publish the ready image. Retried while the build's lease is held

@@ -57,6 +57,7 @@ import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSessionRuntimeDispatch } from "./runtime-client";
 import { createS3ObjectStorage, type S3ObjectStorageConfig } from "./s3-object-storage";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
+import { createSessionRuntimeEnv } from "../session/runtime-env";
 import { createFileSessionStoreProvider } from "./session-store";
 import { openNodeSqlDatabase } from "./sqlite-database";
 import { createSessionUpgradeHandler, MAX_MESSAGE_BYTES } from "./websocket-upgrade";
@@ -184,7 +185,7 @@ async function boot(
     storeProvider: createFileSessionStoreProvider(settings.dataDir),
     sessionIndex: new SessionIndexStore(db),
     alarmStoreFor: (sessionId) => clock.storeFor(sessionId),
-    buildRuntime: (platform) => createSessionRuntime(platform, env),
+    buildRuntime: (platform) => createSessionRuntime(platform, createSessionRuntimeEnv(env)),
     log,
   });
   const platform: Platform = {
