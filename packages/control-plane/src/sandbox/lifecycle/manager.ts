@@ -1508,6 +1508,7 @@ export class SandboxLifecycleManager
       ]);
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {
+      this.storage.updateSandboxModalObjectId(null);
       this.log.warn("Provider stop failed before sandbox replacement", {
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),

@@ -1128,6 +1128,7 @@ describe("SandboxLifecycleManager", () => {
             signal: expect.any(AbortSignal),
           })
         );
+        expect(sandbox.modal_object_id).toBeNull();
       }
     );
 
@@ -1141,14 +1142,26 @@ describe("SandboxLifecycleManager", () => {
           created_at: Date.now() - 60000,
         });
         const storage = createMockStorage(createMockSession(), sandbox);
+        let providerHandleAtStart: string | null | undefined;
         const provider = createMockProvider({
           capabilities: { supportsExplicitStop: true },
-          createSandbox: vi.fn(async (config) => ({
-            sandboxId: config.sandboxId,
-            status: "connecting",
-            createdAt: Date.now(),
-            lifetime: noLifetime(),
-          })),
+          createSandbox: vi.fn(async (config) => {
+            providerHandleAtStart = sandbox.modal_object_id;
+            return {
+              sandboxId: config.sandboxId,
+              status: "connecting",
+              createdAt: Date.now(),
+              lifetime: noLifetime(),
+            };
+          }),
+          restoreFromSnapshot: vi.fn(async (config) => {
+            providerHandleAtStart = sandbox.modal_object_id;
+            return {
+              success: true as const,
+              sandboxId: config.sandboxId,
+              lifetime: noLifetime(),
+            };
+          }),
           stopSandbox: vi.fn(async () => {
             throw new Error("provider unavailable");
           }),
@@ -1168,7 +1181,8 @@ describe("SandboxLifecycleManager", () => {
         await manager.spawnSandbox();
 
         expect(storage.updateSandboxForSpawn).toHaveBeenCalledOnce();
-        expect(sandbox.modal_object_id).toBe("modal-obj-123");
+        expect(providerHandleAtStart).toBeNull();
+        expect(sandbox.modal_object_id).toBeNull();
         expect(
           kind === "spawn" ? provider.createSandbox : provider.restoreFromSnapshot
         ).toHaveBeenCalledOnce();
@@ -1192,14 +1206,18 @@ describe("SandboxLifecycleManager", () => {
       try {
         const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
         const storage = createMockStorage(createMockSession(), sandbox);
+        let providerHandleAtCreate: string | null | undefined;
         const provider = createMockProvider({
           capabilities: { supportsExplicitStop: true },
-          createSandbox: vi.fn(async (config) => ({
-            sandboxId: config.sandboxId,
-            status: "connecting",
-            createdAt: Date.now(),
-            lifetime: noLifetime(),
-          })),
+          createSandbox: vi.fn(async (config) => {
+            providerHandleAtCreate = sandbox.modal_object_id;
+            return {
+              sandboxId: config.sandboxId,
+              status: "connecting",
+              createdAt: Date.now(),
+              lifetime: noLifetime(),
+            };
+          }),
           stopSandbox: vi.fn(() => new Promise<StopResult>(() => {})),
         });
         const manager = new SandboxLifecycleManager(
@@ -1220,12 +1238,13 @@ describe("SandboxLifecycleManager", () => {
         await spawning;
 
         expect(provider.createSandbox).toHaveBeenCalledOnce();
+        expect(providerHandleAtCreate).toBeNull();
         expect(storage.commitProviderStartup).toHaveBeenCalledWith(
           expect.objectContaining({ sandboxId: expect.any(String) }),
           null,
           false
         );
-        expect(sandbox.modal_object_id).toBe("modal-obj-123");
+        expect(sandbox.modal_object_id).toBeNull();
         expect(parseStructuredLogs(warnSpy)).toContainEqual(
           expect.objectContaining({
             msg: "Provider stop failed before sandbox replacement",
