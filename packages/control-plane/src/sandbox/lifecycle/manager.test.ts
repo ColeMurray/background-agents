@@ -198,6 +198,24 @@ function createMockStorage(
         return true;
       }
     ),
+    commitProviderStartup: vi.fn((generation, providerObjectId, allowFailedSelfHeal) => {
+      calls.push("commitProviderStartup");
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt ||
+        sandbox.fenced !== 0 ||
+        !(
+          ["spawning", "connecting", "ready"].includes(sandbox.status) ||
+          (allowFailedSelfHeal && sandbox.status === "failed")
+        )
+      ) {
+        return null;
+      }
+      if (providerObjectId !== null) sandbox.modal_object_id = providerObjectId;
+      if (sandbox.status === "spawning") sandbox.status = "connecting";
+      return sandbox.status;
+    }),
     updateSandboxForSpawn: vi.fn((data) => {
       calls.push("updateSandboxForSpawn");
       if (sandbox) {
@@ -786,7 +804,7 @@ describe("SandboxLifecycleManager", () => {
 
       expect(provider.createSandbox).toHaveBeenCalled();
       expect(storage.calls).toContain("updateSandboxForSpawn");
-      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).toContain("commitProviderStartup");
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_status")
       ).toBe(true);
@@ -893,10 +911,10 @@ describe("SandboxLifecycleManager", () => {
         expect(
           kind === "spawn" ? provider.createSandbox : provider.restoreFromSnapshot
         ).toHaveBeenCalledOnce();
-        expect(storage.transitionSandboxStatus).toHaveBeenCalledWith(
+        expect(storage.commitProviderStartup).toHaveBeenCalledWith(
           expect.objectContaining({ sandboxId: expect.any(String) }),
-          "spawning",
-          "connecting"
+          null,
+          false
         );
         expect(parseStructuredLogs(warnSpy)).toContainEqual(
           expect.objectContaining({
@@ -940,10 +958,10 @@ describe("SandboxLifecycleManager", () => {
         await spawning;
 
         expect(provider.createSandbox).toHaveBeenCalledOnce();
-        expect(storage.transitionSandboxStatus).toHaveBeenCalledWith(
+        expect(storage.commitProviderStartup).toHaveBeenCalledWith(
           expect.objectContaining({ sandboxId: expect.any(String) }),
-          "spawning",
-          "connecting"
+          null,
+          false
         );
         expect(sandbox.modal_object_id).toBe("modal-obj-123");
         expect(parseStructuredLogs(warnSpy)).toContainEqual(
@@ -1120,7 +1138,7 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(storage.calls).toContain("updateSandboxModalObjectId:provider-obj-123");
+      expect(sandbox.modal_object_id).toBe("provider-obj-123");
       expect(
         broadcaster.messages.filter(
           (m) => (m as { type: string }).type === "sandbox_access_changed"
@@ -1146,7 +1164,7 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(storage.calls).toContain("updateSandboxModalObjectId:provider-obj-123");
+      expect(sandbox.modal_object_id).toBe("provider-obj-123");
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_access_changed")
       ).toBe(false);
@@ -1597,7 +1615,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       // Verify providerObjectId was stored for future snapshots
-      expect(storage.calls).toContain("updateSandboxModalObjectId:new-modal-obj-after-restore");
+      expect(sandbox.modal_object_id).toBe("new-modal-obj-after-restore");
     });
 
     it("broadcasts sandbox_dashboard_url after restore when builder is configured", async () => {
@@ -1633,7 +1651,7 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(storage.calls).toContain("updateSandboxModalObjectId:restored-obj-456");
+      expect(sandbox.modal_object_id).toBe("restored-obj-456");
       expect(
         broadcaster.messages.filter(
           (m) => (m as { type: string }).type === "sandbox_access_changed"
@@ -1675,7 +1693,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.resumeSandbox).toHaveBeenCalled();
-      expect(storage.calls).toContain("updateSandboxModalObjectId:new-provider-obj");
+      expect(sandbox.modal_object_id).toBe("new-provider-obj");
       expect(
         broadcaster.messages.filter(
           (m) => (m as { type: string }).type === "sandbox_access_changed"
@@ -1717,7 +1735,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.resumeSandbox).toHaveBeenCalled();
-      expect(storage.calls).not.toContain("updateSandboxModalObjectId:same-provider-obj");
+      expect(sandbox.modal_object_id).toBe("same-provider-obj");
       expect(
         broadcaster.messages.filter(
           (m) => (m as { type: string }).type === "sandbox_access_changed"
@@ -1935,7 +1953,7 @@ describe("SandboxLifecycleManager", () => {
       // Should go: pending -> spawning -> connecting
       const statusCalls = storage.calls.filter((c) => c.startsWith("updateSandbox"));
       expect(statusCalls).toContain("updateSandboxForSpawn");
-      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).toContain("commitProviderStartup");
     });
 
     it("keeps earlier boot failures counted when the provider merely accepts a spawn", async () => {
@@ -4000,7 +4018,7 @@ describe("SandboxLifecycleManager", () => {
       const [firstAttempt, retryAttempt] = createSandbox.mock.calls.map(([config]) => config);
       expect(retryAttempt.sandboxAuthToken).not.toBe(firstAttempt.sandboxAuthToken);
       expect(retryAttempt.sandboxId).not.toBe(firstAttempt.sandboxId);
-      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).toContain("commitProviderStartup");
       expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
       expect(parseStructuredLogs(warnSpy)).toContainEqual(
         expect.objectContaining({
@@ -4228,7 +4246,7 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
-      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).toContain("commitProviderStartup");
     });
 
     it("boots from base when no environment image lookup is bound", async () => {
@@ -4290,7 +4308,7 @@ describe("SandboxLifecycleManager", () => {
             ([data]) => data.createdAt + DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs
           )
       );
-      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).toContain("commitProviderStartup");
       expect(storage.calls).not.toContain("transitionSandboxStatus:spawning->failed");
     });
 
@@ -4339,7 +4357,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(createSandbox).toHaveBeenCalledTimes(2);
-      expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+      expect(storage.calls).toContain("commitProviderStartup");
     });
   });
 
@@ -5150,7 +5168,7 @@ describe("status writes after a provider await (COL-99)", () => {
     return { storage, broadcaster, manager };
   }
 
-  it("does not resurrect an attempt the alarm failed while the provider call was in flight", async () => {
+  it("retains a late handle for an unfenced failed generation the provider cannot stop", async () => {
     const sandbox = createMockSandbox({ status: "failed" });
     const { storage, broadcaster, manager } = harness(sandbox, async (config) => {
       // Connecting timeout fired: the alarm failed the attempt and told the user.
@@ -5166,13 +5184,100 @@ describe("status writes after a provider await (COL-99)", () => {
     await manager.spawnSandbox();
 
     expect(sandbox.status).toBe("failed");
-    expect(storage.calls).toContain("transitionSandboxStatus:spawning->connecting");
+    expect(storage.calls).toContain("commitProviderStartup");
     expect(broadcaster.messages).not.toContainEqual({
       type: "sandbox_status",
       status: "connecting",
     });
     // The provider-side sandbox exists and a later stop needs its handle.
     expect(sandbox.modal_object_id).toBe("provider-obj-late");
+  });
+
+  it("destroys a late provider result after the watchdog fences its generation", async () => {
+    vi.useFakeTimers();
+    try {
+      const sandbox = createMockSandbox({
+        status: "pending",
+        last_heartbeat: null,
+        modal_object_id: null,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      let resolveCreate!: (result: CreateSandboxResult) => void;
+      const createSandbox = vi.fn(
+        () =>
+          new Promise<CreateSandboxResult>((resolve) => {
+            resolveCreate = resolve;
+          })
+      );
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          createSandbox,
+          stopSandbox,
+        }),
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      const preservation = {
+        beginGeneration: vi.fn(),
+        started: vi.fn(async () => {}),
+        isHolding: vi.fn(() => false),
+        request: vi.fn(async () => true),
+        beginCheckpoint: vi.fn(() => true),
+        endCheckpoint: vi.fn(),
+        recoveryReceipt: vi.fn(() => undefined),
+        restoreFailed: vi.fn(),
+      } satisfies SandboxPreservationLifecycle;
+      manager.setPreservation(preservation);
+
+      const spawning = manager.spawnSandbox();
+      await vi.waitFor(() => expect(createSandbox).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1);
+      await expect(manager.handleAlarm()).resolves.toBe("sandbox_failed");
+
+      resolveCreate({
+        sandboxId: sandbox.modal_sandbox_id!,
+        providerObjectId: "provider-obj-late",
+        createdAt: Date.now(),
+        codeServerUrl: "https://late.example",
+        codeServerPassword: "late-password",
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: Date.now() + 60_000,
+          observedAtMs: Date.now(),
+          source: "provider",
+        },
+      });
+      await spawning;
+
+      expect(sandbox.status).toBe("failed");
+      expect(sandbox.fenced).toBe(1);
+      expect(sandbox.modal_object_id).toBeNull();
+      expect(sandbox.code_server_url).toBeNull();
+      expect(preservation.started).not.toHaveBeenCalled();
+      expect(stopSandbox).toHaveBeenCalledOnce();
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "provider-obj-late",
+          reason: "startup_superseded",
+          intent: "destroy",
+          signal: expect.any(AbortSignal),
+        })
+      );
+      expect(broadcaster.messages).not.toContainEqual({
+        type: "sandbox_status",
+        status: "connecting",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("counts an attempt once when the watchdog fails it before the provider rejects it", async () => {

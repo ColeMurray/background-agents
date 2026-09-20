@@ -390,6 +390,51 @@ describe("SandboxRepository boot state (SQLite)", () => {
     return { db, sql, repository, set };
   }
 
+  describe("commitProviderStartup", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+
+    it("stores the handle and advances the owned spawning generation", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'spawning', modal_sandbox_id = 'sb-1', fenced = 0");
+
+      expect(repository.commitProviderStartup(generation, "provider-1", false)).toBe("connecting");
+      expect(repository.getSandbox()).toMatchObject({
+        status: "connecting",
+        modal_object_id: "provider-1",
+      });
+    });
+
+    it("rejects fenced and superseded generations without storing their handles", () => {
+      const fenced = createSqliteRepository();
+      fenced.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 1");
+      expect(fenced.repository.commitProviderStartup(generation, "late-provider", true)).toBeNull();
+      expect(fenced.repository.getSandbox()?.modal_object_id).toBeNull();
+
+      const replaced = createSqliteRepository();
+      replaced.set("status = 'spawning', modal_sandbox_id = 'sb-2', created_at = 2000");
+      expect(
+        replaced.repository.commitProviderStartup(generation, "old-provider", false)
+      ).toBeNull();
+      expect(replaced.repository.getSandbox()?.modal_object_id).toBeNull();
+    });
+
+    it("keeps the unfenced failed self-heal path only when explicitly allowed", () => {
+      const refused = createSqliteRepository();
+      refused.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 0");
+      expect(refused.repository.commitProviderStartup(generation, "provider-1", false)).toBeNull();
+
+      const allowed = createSqliteRepository();
+      allowed.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 0");
+      expect(allowed.repository.commitProviderStartup(generation, "provider-1", true)).toBe(
+        "failed"
+      );
+      expect(allowed.repository.getSandbox()).toMatchObject({
+        status: "failed",
+        modal_object_id: "provider-1",
+      });
+    });
+  });
+
   describe("markSandboxReady", () => {
     const generation = { sandboxId: "sb-1", createdAt: 1000 };
 
