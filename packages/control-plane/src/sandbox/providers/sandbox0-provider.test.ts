@@ -195,16 +195,90 @@ describe("Sandbox0SandboxProvider", () => {
     ).resolves.toEqual({ success: true });
     expect(request.mock.calls[1][0]).toBe("GET");
   });
-  it("honors cancellation while waiting for a checkpoint", async () => {
+  it.each([
+    ["default abort", undefined],
+    ["custom error", new Error("Stop cancelled by caller")],
+    ["primitive reason", "stop cancelled"],
+    ["null reason", null],
+  ])("preserves the caller's %s while waiting for a checkpoint", async (_label, abortReason) => {
     const { request, provider } = fixture();
     const controller = new AbortController();
     request.mockImplementation(async () => {
-      controller.abort();
+      controller.abort(abortReason);
       return { paused: false };
     });
     await expect(
       provider.stopSandbox({ ...resume, reason: "inactivity_timeout", signal: controller.signal })
-    ).rejects.toThrow();
+    ).rejects.toBe(controller.signal.reason);
+  });
+  it.each(["inactivity_timeout", "heartbeat_timeout", "respawn"])(
+    "preserves cancellation during the provider request for %s",
+    async (reason) => {
+      const { provider } = fixture();
+      const controller = new AbortController();
+      const abortReason = new Error("Caller no longer needs this stop");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (_url: string, init: RequestInit) =>
+            new Promise<Response>((_resolve, reject) => {
+              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                once: true,
+              });
+            })
+        )
+      );
+      try {
+        const assertion = expect(
+          provider.stopSandbox({ ...resume, reason, signal: controller.signal })
+        ).rejects.toBe(abortReason);
+        controller.abort(abortReason);
+        await assertion;
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+  it("cancels the polling delay without leaving timers or issuing another request", async () => {
+    vi.useFakeTimers();
+    try {
+      const { request, provider } = fixture();
+      const controller = new AbortController();
+      const abortReason = new Error("Resume superseded the idle stop");
+      request.mockResolvedValueOnce({ paused: false }).mockResolvedValue({ status: "running" });
+      const assertion = expect(
+        provider.stopSandbox({
+          ...resume,
+          reason: "inactivity_timeout",
+          signal: controller.signal,
+        })
+      ).rejects.toBe(abortReason);
+      await vi.advanceTimersByTimeAsync(SANDBOX0_PAUSE_POLL_INTERVAL_MS - 1);
+      expect(request).toHaveBeenCalledTimes(2);
+      controller.abort(abortReason);
+      await assertion;
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(SANDBOX0_PAUSE_POLL_INTERVAL_MS);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each([
+    [new Sandbox0ApiError(401, "unauthorized", "/sandbox"), "permanent"],
+    [new Sandbox0ApiError(503, "unavailable", "/sandbox"), "transient"],
+    [new TypeError("fetch failed"), "transient"],
+  ])("still classifies provider failure %s as %s", async (error, errorType) => {
+    const { request, provider } = fixture();
+    const controller = new AbortController();
+    request.mockImplementation(async () => {
+      // A late caller abort must not replace an unrelated provider failure.
+      controller.abort(new Error("Unrelated cancellation"));
+      throw error;
+    });
+    await expect(
+      provider.stopSandbox({ ...resume, reason: "inactivity_timeout", signal: controller.signal })
+    ).rejects.toMatchObject({ name: "SandboxProviderError", errorType, cause: error });
   });
   it("waits through a quiescing carrier's failed projection until pause commits", async () => {
     vi.useFakeTimers();

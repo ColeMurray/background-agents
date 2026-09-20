@@ -212,6 +212,8 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
       }
       return { success: true };
     } catch (error) {
+      // Preserve caller cancellation, but do not mask unrelated failures racing with an abort.
+      if (config.signal?.aborted && error === config.signal.reason) throw error;
       if (error instanceof Sandbox0ApiError && error.status === 404) return { success: true };
       throw this.classify(error);
     }
