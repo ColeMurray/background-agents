@@ -80,6 +80,7 @@ function renderWithSWR(fallbackData: unknown) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   reposMock.repos = [];
   reposMock.loading = false;
 });
@@ -104,6 +105,64 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     for (const name of ["Service Ports", "Tunnel Ports", "Child Sessions", "Resources"]) {
       expect(screen.getByRole("group", { name })).toBeInTheDocument();
     }
+  });
+
+  it("hides unsupported Daytona controls and removes legacy values when saving", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: {
+                defaults: {
+                  cpuCores: 2,
+                  memoryMib: 4096,
+                  sandboxTimeoutMs: 7_200_000,
+                  buildTimeoutSeconds: 2400,
+                },
+              },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    expect(screen.queryByLabelText("CPU cores")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Memory (MiB)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Session Timeout (minutes)")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(2400);
+    expect(
+      screen.getByText(/Per-session CPU and memory overrides are unavailable for daytona/)
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Web Terminal"));
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+      const body = JSON.parse(String(request?.body));
+      expect(body.settings.defaults).toMatchObject({
+        terminalEnabled: true,
+        buildTimeoutSeconds: 2400,
+      });
+      expect(body.settings.defaults).not.toHaveProperty("cpuCores");
+      expect(body.settings.defaults).not.toHaveProperty("memoryMib");
+      expect(body.settings.defaults).not.toHaveProperty("sandboxTimeoutMs");
+    });
   });
 
   it("displays session timeout in minutes and saves milliseconds", async () => {

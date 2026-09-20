@@ -271,6 +271,59 @@ export const sandboxSettingsSchema = z.strictObject({
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
+const DEFAULT_SANDBOX_SETTING_CAPABILITIES = { resources: true, timeout: true };
+const SANDBOX_SETTING_CAPABILITIES: Record<string, { resources: boolean; timeout: boolean }> = {
+  modal: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
+  daytona: { resources: false, timeout: false },
+  vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
+  opencomputer: { resources: false, timeout: true },
+  e2b: { resources: false, timeout: true },
+};
+
+function sandboxSettingCapabilities(provider: string) {
+  return (
+    SANDBOX_SETTING_CAPABILITIES[provider.trim().toLowerCase()] ??
+    DEFAULT_SANDBOX_SETTING_CAPABILITIES
+  );
+}
+
+/** Whether the provider honors per-session CPU and memory settings. */
+export function supportsConfigurableSandboxResources(provider: string): boolean {
+  return sandboxSettingCapabilities(provider).resources;
+}
+
+/** Whether the provider honors a per-session sandbox lifetime. */
+export function supportsConfigurableSandboxTimeout(provider: string): boolean {
+  return sandboxSettingCapabilities(provider).timeout;
+}
+
+export type ProviderSpecificSandboxSetting = "cpuCores" | "memoryMib" | "sandboxTimeoutMs";
+
+export function unsupportedSandboxSettings(
+  settings: SandboxSettings,
+  provider: string
+): ProviderSpecificSandboxSetting[] {
+  const unsupported: ProviderSpecificSandboxSetting[] = [];
+  if (!supportsConfigurableSandboxResources(provider)) {
+    if (settings.cpuCores !== undefined) unsupported.push("cpuCores");
+    if (settings.memoryMib !== undefined) unsupported.push("memoryMib");
+  }
+  if (!supportsConfigurableSandboxTimeout(provider) && settings.sandboxTimeoutMs !== undefined) {
+    unsupported.push("sandboxTimeoutMs");
+  }
+  return unsupported;
+}
+
+/** Remove settings the selected provider cannot honor from an effective session snapshot. */
+export function omitUnsupportedSandboxSettings(
+  settings: SandboxSettings,
+  provider: string
+): SandboxSettings {
+  const supported = { ...settings };
+  for (const setting of unsupportedSandboxSettings(settings, provider)) delete supported[setting];
+  return supported;
+}
+
 /** Validate the relationship only when both child-session limits are provided. */
 export function validateSandboxChildSessionLimits(
   settings: Pick<SandboxSettings, "maxConcurrentChildSessions" | "maxTotalChildSessions">

@@ -7,7 +7,10 @@ import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -22,6 +25,11 @@ import { MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
 import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import {
+  getPublicSandboxProvider,
+  supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxTimeout,
+} from "@/lib/sandbox-provider";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -139,6 +147,9 @@ export function SandboxSettingsEditor({
   environmentId?: string;
 }) {
   const { hasPermission } = useCurrentUserAuthorization();
+  const sandboxProvider = getPublicSandboxProvider();
+  const configurableResources = supportsConfigurableSandboxResources();
+  const configurableTimeout = supportsConfigurableSandboxTimeout();
   const isGlobal = scope === "global";
   const canManage = hasPermission(
     scope === "global"
@@ -190,16 +201,17 @@ export function SandboxSettingsEditor({
     setError(null);
     setSuccess(false);
 
-    if (result.error) {
-      setError(result.error);
+    if (result.settings === undefined) {
+      setError(result.error ?? "Invalid sandbox settings");
       return;
     }
 
     setSaving(true);
     try {
+      const supportedSettings = omitUnsupportedSandboxSettings(result.settings, sandboxProvider);
       const body = isGlobal
-        ? { settings: { defaults: result.settings, enabledRepos } }
-        : { settings: result.settings };
+        ? { settings: { defaults: supportedSettings, enabledRepos } }
+        : { settings: supportedSettings };
 
       const res = await browserApiFetch(apiUrl, {
         method: "PUT",
@@ -419,74 +431,87 @@ export function SandboxSettingsEditor({
         </div>
       </fieldset>
 
-      <fieldset className="min-w-0">
-        <legend className="block text-sm font-medium text-foreground mb-1.5">Resources</legend>
-        <p className="text-xs text-muted-foreground mb-2">
-          Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
-          reservation.
+      {configurableResources ? (
+        <fieldset className="min-w-0">
+          <legend className="block text-sm font-medium text-foreground mb-1.5">Resources</legend>
+          <p className="text-xs text-muted-foreground mb-2">
+            Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
+            reservation.
+          </p>
+          <div className="grid gap-3 max-w-sm sm:grid-cols-2">
+            <div>
+              <label
+                htmlFor="sandbox-cpu-cores"
+                className="block text-xs font-medium text-muted-foreground mb-1"
+              >
+                CPU cores
+              </label>
+              <Input
+                id="sandbox-cpu-cores"
+                type="text"
+                inputMode="decimal"
+                value={values.cpuCores}
+                onChange={(e) => updateField("cpuCores", e.target.value)}
+                placeholder="provider default"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="sandbox-memory-mib"
+                className="block text-xs font-medium text-muted-foreground mb-1"
+              >
+                Memory (MiB)
+              </label>
+              <Input
+                id="sandbox-memory-mib"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                value={values.memoryMib}
+                onChange={(e) => updateField("memoryMib", e.target.value)}
+                placeholder="provider default"
+              />
+            </div>
+          </div>
+        </fieldset>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Per-session CPU and memory overrides are unavailable for {sandboxProvider}; resources are
+          configured by the deployment.
         </p>
-        <div className="grid gap-3 max-w-sm sm:grid-cols-2">
-          <div>
-            <label
-              htmlFor="sandbox-cpu-cores"
-              className="block text-xs font-medium text-muted-foreground mb-1"
-            >
-              CPU cores
-            </label>
-            <Input
-              id="sandbox-cpu-cores"
-              type="text"
-              inputMode="decimal"
-              value={values.cpuCores}
-              onChange={(e) => updateField("cpuCores", e.target.value)}
-              placeholder="provider default"
-            />
-          </div>
-          <div>
-            <label
-              htmlFor="sandbox-memory-mib"
-              className="block text-xs font-medium text-muted-foreground mb-1"
-            >
-              Memory (MiB)
-            </label>
-            <Input
-              id="sandbox-memory-mib"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={values.memoryMib}
-              onChange={(e) => updateField("memoryMib", e.target.value)}
-              placeholder="provider default"
-            />
-          </div>
-        </div>
-      </fieldset>
+      )}
 
-      <div>
-        <label
-          htmlFor="sandbox-session-timeout"
-          className="block text-sm font-medium text-foreground mb-1.5"
-        >
-          Session Timeout (minutes)
-        </label>
-        <p className="text-xs text-muted-foreground mb-2">
-          Requested lifetime for each sandbox session, in minutes. Leave blank to inherit a parent
-          setting, or use the provider default if none is configured. Provider support and limits
-          vary.
-        </p>
-        <div className="max-w-sm">
-          <Input
-            id="sandbox-session-timeout"
-            type="number"
-            min={MIN_SANDBOX_TIMEOUT_MINUTES}
-            step={MIN_SANDBOX_TIMEOUT_MINUTES}
-            inputMode="decimal"
-            value={values.sandboxTimeoutMinutes}
-            onChange={(e) => updateField("sandboxTimeoutMinutes", e.target.value)}
-            placeholder="provider default"
-          />
+      {configurableTimeout ? (
+        <div>
+          <label
+            htmlFor="sandbox-session-timeout"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Session Timeout (minutes)
+          </label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Requested lifetime for each sandbox session, in minutes. Leave blank to inherit a parent
+            setting, or use the provider default if none is configured. Provider support and limits
+            vary.
+          </p>
+          <div className="max-w-sm">
+            <Input
+              id="sandbox-session-timeout"
+              type="number"
+              min={MIN_SANDBOX_TIMEOUT_MINUTES}
+              step={MIN_SANDBOX_TIMEOUT_MINUTES}
+              inputMode="decimal"
+              value={values.sandboxTimeoutMinutes}
+              onChange={(e) => updateField("sandboxTimeoutMinutes", e.target.value)}
+              placeholder="provider default"
+            />
+          </div>
         </div>
-      </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Per-session timeout overrides are unavailable for {sandboxProvider}.
+        </p>
+      )}
 
       <div>
         <label

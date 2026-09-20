@@ -2,6 +2,11 @@
  * Public sandbox backend helpers for the web app.
  */
 
+import {
+  supportsConfigurableSandboxResources as providerSupportsConfigurableSandboxResources,
+  supportsConfigurableSandboxTimeout as providerSupportsConfigurableSandboxTimeout,
+} from "@open-inspect/shared/types/integrations";
+
 /** Every backend the web app knows how to render. */
 const SANDBOX_PROVIDERS = ["modal", "daytona", "vercel", "opencomputer", "e2b"] as const;
 
@@ -37,6 +42,14 @@ export function getPublicSandboxProvider(): PublicSandboxProvider {
 
 export function supportsRepoImages(): boolean {
   return (REPO_IMAGE_PROVIDERS as readonly string[]).includes(getPublicSandboxProvider());
+}
+
+export function supportsConfigurableSandboxResources(): boolean {
+  return providerSupportsConfigurableSandboxResources(getPublicSandboxProvider());
+}
+
+export function supportsConfigurableSandboxTimeout(): boolean {
+  return providerSupportsConfigurableSandboxTimeout(getPublicSandboxProvider());
 }
 
 /** The providers named in the unsupported-provider copy, in display order. */

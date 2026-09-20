@@ -4401,6 +4401,39 @@ describe("SandboxLifecycleManager", () => {
       });
     });
 
+    it("ignores legacy resource and timeout settings for Daytona", async () => {
+      const session = createMockSession({
+        spawn_source: "agent",
+        sandbox_settings:
+          '{"cpuCores":2,"memoryMib":4096,"sandboxTimeoutMs":14400000,"terminalEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = {
+        ...createMockProvider({ capabilities: { supportsSandboxTimeout: false } }),
+        name: "daytona",
+      };
+      const mockStorage = createMockStorage(session, sandbox);
+      const manager = new SandboxLifecycleManager(
+        provider,
+        mockStorage,
+        mockStorage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutSeconds: undefined,
+          sandboxSettings: { terminalEnabled: true },
+        })
+      );
+    });
+
     it("uses the provider default for child sessions on unsupported providers", async () => {
       const session = createMockSession({ spawn_source: "agent", sandbox_settings: null });
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
