@@ -584,9 +584,7 @@ class SandboxManager:
         snapshot_timeout_seconds = min(int(timeout_seconds), SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
         if snapshot_timeout_seconds <= 0:
             raise TimeoutError("Insufficient time remains for a filesystem snapshot")
-        image = await handle.modal_sandbox.snapshot_filesystem.aio(
-            timeout=snapshot_timeout_seconds
-        )
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(timeout=snapshot_timeout_seconds)
 
         # The image object_id is the unique identifier for this snapshot
         # Modal automatically stores the image and it persists indefinitely
