@@ -224,11 +224,13 @@ MODAL_API_SECRET
 # Sandbox provider
 SANDBOX_PROVIDER
 SANDBOX_INACTIVITY_TIMEOUT_MS # Optional; defaults to 600000
+SANDBOX_BOOT_TIMEOUT_MS       # Optional; defaults to 1800000, must exceed 240000
 
 # Daytona (only if SANDBOX_PROVIDER=daytona)
 DAYTONA_API_URL
 DAYTONA_API_KEY
-DAYTONA_BASE_SNAPSHOT
+DAYTONA_BASE_SNAPSHOT            # Prefix for the Terraform-managed base snapshot
+DAYTONA_BASE_SNAPSHOT_MEMORY_GIB # Optional; defaults to 2
 DAYTONA_TARGET # Optional
 
 # Vercel Sandboxes (only if SANDBOX_PROVIDER=vercel)

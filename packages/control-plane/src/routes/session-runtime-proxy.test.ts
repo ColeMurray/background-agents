@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SANDBOX_ERROR_BODY_MAX_BYTES } from "@open-inspect/shared/types/sandbox-events";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "../auth/authenticate";
@@ -306,7 +307,7 @@ describe("session runtime proxy routes", () => {
       new Request("https://test.local/sessions/session-1/sandbox-error", {
         method: "POST",
         headers: SANDBOX_HEADERS,
-        body: "x".repeat(2049),
+        body: "x".repeat(SANDBOX_ERROR_BODY_MAX_BYTES + 1),
       }),
       createEnv(fetch)
     );

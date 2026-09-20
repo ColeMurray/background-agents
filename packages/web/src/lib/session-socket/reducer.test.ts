@@ -260,7 +260,6 @@ describe("sessionSocketReducer", () => {
       // linger next to a spawning or ready sandbox.
       expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).sandboxError).toBeNull();
       expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).sandboxError).toBeNull();
-      expect(reduce(failed, serverMessage({ type: "sandbox_ready" })).sandboxError).toBeNull();
       expect(
         reduce(failed, serverMessage({ type: "sandbox_status", status: "ready" })).sandboxError
       ).toBeNull();
@@ -274,6 +273,202 @@ describe("sessionSocketReducer", () => {
       );
 
       expect(failed.sandboxError).toBe("E2B quota exceeded");
+    });
+  });
+
+  describe("boot", () => {
+    const bootProgress = (
+      overrides: Partial<Extract<SandboxEvent, { type: "boot_progress" }>> = {}
+    ): Extract<SandboxEvent, { type: "boot_progress" }> => ({
+      type: "boot_progress",
+      bootSeq: 1,
+      phase: "sync",
+      status: "started",
+      sandboxId: "sb-1",
+      timestamp: 1,
+      ...overrides,
+    });
+    const booting = () =>
+      subscribedState({
+        session: createSessionState({ sandboxStatus: "connecting" }),
+        bootPhase: { phase: "sync", status: "started", bootSeq: 1, sandboxId: "sb-1" },
+      });
+
+    it("seeds the boot from the snapshot and from subscribed", () => {
+      expect(
+        createSessionSocketState(
+          createSnapshot({
+            bootPhase: { phase: "setup", status: "started", bootSeq: 3, sandboxId: "sb-1" },
+          })
+        ).boot
+      ).toEqual({
+        sandboxId: "sb-1",
+        phase: { phase: "setup", status: "started", bootSeq: 3, sandboxId: "sb-1" },
+        timings: [],
+      });
+      expect(booting().boot?.phase).toEqual({
+        phase: "sync",
+        status: "started",
+        bootSeq: 1,
+        sandboxId: "sb-1",
+      });
+      expect(subscribedState().boot).toBeNull();
+    });
+
+    it("seeds a failed boot with the metadata the snapshot carries", () => {
+      const state = subscribedState({
+        session: createSessionState({ sandboxStatus: "failed" }),
+        spawnError: "start hook failed for acme/web-app",
+        bootPhase: {
+          phase: "start",
+          status: "failed",
+          bootSeq: 6,
+          sandboxId: "sb-1",
+          repoOwner: "acme",
+          repoName: "web-app",
+          detail: "start hook failed for acme/web-app",
+        },
+      });
+
+      expect(state.boot?.phase).toEqual({
+        phase: "start",
+        status: "failed",
+        bootSeq: 6,
+        sandboxId: "sb-1",
+        repoOwner: "acme",
+        repoName: "web-app",
+        detail: "start hook failed for acme/web-app",
+      });
+      expect(state.sandboxError).toBe("start hook failed for acme/web-app");
+    });
+
+    it("advances with each live boot_progress event and keeps completed-phase timings", () => {
+      const state = reduce(booting(), {
+        type: "events_appended",
+        events: [
+          bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          bootProgress({
+            bootSeq: 3,
+            phase: "setup",
+            status: "started",
+            repoOwner: "acme",
+            repoName: "web-app",
+          }),
+        ],
+      });
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-1",
+        phase: {
+          phase: "setup",
+          status: "started",
+          bootSeq: 3,
+          sandboxId: "sb-1",
+          repoOwner: "acme",
+          repoName: "web-app",
+        },
+        timings: [{ phase: "sync", elapsedMs: 800 }],
+      });
+      expect(state.events).toHaveLength(2);
+    });
+
+    it("ends the phase once the sandbox is ready but keeps the timings", () => {
+      const state = reduce(
+        booting(),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          ],
+        },
+        serverMessage({ type: "sandbox_status", status: "ready" })
+      );
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-1",
+        phase: null,
+        timings: [{ phase: "sync", elapsedMs: 800 }],
+      });
+      expect(state.sessionState?.sandboxStatus).toBe("ready");
+    });
+
+    it("keeps the phase through connecting and into a failure so it can be named", () => {
+      const failed = reduce(
+        booting(),
+        serverMessage({ type: "sandbox_status", status: "connecting" }),
+        {
+          type: "events_appended",
+          events: [bootProgress({ bootSeq: 4, phase: "setup", status: "failed" })],
+        },
+        serverMessage({ type: "sandbox_error", error: "setup hook failed" }),
+        serverMessage({ type: "sandbox_status", status: "failed" })
+      );
+
+      expect(failed.boot?.phase).toEqual({
+        phase: "setup",
+        status: "failed",
+        bootSeq: 4,
+        sandboxId: "sb-1",
+      });
+      expect(failed.sandboxError).toBe("setup hook failed");
+    });
+
+    it("drops the whole boot when a fresh attempt starts, with nothing to show until it reports", () => {
+      const failed = reduce(booting(), {
+        type: "events_appended",
+        events: [
+          bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          bootProgress({ bootSeq: 4, phase: "setup", status: "failed" }),
+        ],
+      });
+
+      // An older runtime on the next attempt reports no phases: the previous
+      // boot's timings must not stand in for it.
+      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).boot).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).boot).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "spawning" })).boot
+      ).toBeNull();
+    });
+
+    it("ends the phase when the sandbox is gone", () => {
+      const failed = reduce(booting(), {
+        type: "events_appended",
+        events: [bootProgress({ bootSeq: 4, phase: "setup", status: "started" })],
+      });
+
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stale" })).boot?.phase
+      ).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stopped" })).boot?.phase
+      ).toBeNull();
+    });
+
+    it("starts a new boot when a different sandbox reports", () => {
+      const state = reduce(
+        booting(),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          ],
+        },
+        serverMessage({ type: "sandbox_status", status: "spawning" }),
+        {
+          type: "events_appended",
+          // Only the latest phase was relayed when the new bridge connected.
+          events: [
+            bootProgress({ sandboxId: "sb-2", bootSeq: 5, phase: "harness", status: "started" }),
+          ],
+        }
+      );
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-2",
+        phase: { phase: "harness", status: "started", bootSeq: 5, sandboxId: "sb-2" },
+        timings: [],
+      });
     });
   });
 
@@ -671,7 +866,7 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.sandboxStatus).toBe("warming");
       state = reduce(state, serverMessage({ type: "sandbox_spawning" }));
       expect(state.sessionState?.sandboxStatus).toBe("spawning");
-      state = reduce(state, serverMessage({ type: "sandbox_ready" }));
+      state = reduce(state, serverMessage({ type: "sandbox_status", status: "ready" }));
       expect(state.sessionState?.sandboxStatus).toBe("ready");
     });
   });
@@ -802,7 +997,10 @@ describe("sessionSocketReducer", () => {
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {
-      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }));
+      const state = reduce(
+        initialSessionSocketState,
+        serverMessage({ type: "sandbox_status", status: "ready" })
+      );
       expect(state.sessionState).toBeNull();
     });
   });

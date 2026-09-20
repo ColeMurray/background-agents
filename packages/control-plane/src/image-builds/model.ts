@@ -26,9 +26,19 @@ import {
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
- * OpenComputer checkpoints, E2B snapshots. Daytona has no image support.
+ * OpenComputer checkpoints, E2B snapshots, Daytona snapshots.
+ *
+ * Support is the provider's ability to build and boot an artifact. Whether a
+ * deployment may start new Daytona builds is a separate, operator-owned
+ * question — see `resolveImageBuildAdmission` in provider-policy.ts.
  */
-export const IMAGE_BUILD_PROVIDER_IDS = ["modal", "vercel", "opencomputer", "e2b"] as const;
+export const IMAGE_BUILD_PROVIDER_IDS = [
+  "modal",
+  "vercel",
+  "opencomputer",
+  "e2b",
+  "daytona",
+] as const;
 
 export const imageBuildProviderSchema = z.enum(IMAGE_BUILD_PROVIDER_IDS);
 

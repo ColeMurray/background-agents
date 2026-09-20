@@ -413,7 +413,19 @@ export class SessionMessageQueue {
       }
       return;
     }
-    const sandboxWs = this.wsManager.getSandboxSocket();
+    const sandboxWs = this.wsManager.getReadySandboxSocket();
+    if (!sandboxWs && this.wsManager.getSandboxSocket()) {
+      // A bridge is attached ahead of its boot. Nothing to spawn and nothing
+      // to send: the runtime's `ready` event pumps this queue when the
+      // harness is up, and the lifecycle alarms decide if the boot died.
+      this.log.info("prompt.dispatch", {
+        event: "prompt.dispatch",
+        message_id: message.id,
+        outcome: "deferred",
+        reason: "sandbox_booting",
+      });
+      return;
+    }
     if (!sandboxWs) {
       // The provider-auth lookup above is a non-storage await. The socket
       // path re-validates through the processing claim; this path has no
@@ -573,6 +585,23 @@ export class SessionMessageQueue {
     this.broadcastPromptQueue();
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
+  }
+
+  /**
+   * Fail one pending prompt, the one a sandbox boot that gave up was going to
+   * run. Named by id, not by queue position: the caller identified it before
+   * the lifecycle work that may have yielded, and a prompt cancelled or
+   * dispatched in the meantime is left alone. Later prompts stay pending and
+   * dispatch on the user's next spawn, the same way a failed turn leaves the
+   * queue today. Does not pump the queue — the caller has just failed the
+   * sandbox, and the next spawn is the user's to start.
+   */
+  async failPendingMessage(messageId: string, error: string): Promise<void> {
+    const message = this.messageRepository.getMessageById(messageId);
+    if (!message || message.status !== "pending") return;
+    if (!this.failMessage(message, error, Date.now(), "pending")) return;
+    this.broadcastPromptQueue();
+    await this.sessionStatus.reconcileAfterExecution(false);
   }
 
   /**

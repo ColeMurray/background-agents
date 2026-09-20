@@ -29,7 +29,7 @@ import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
-import { resolveImageBuildProvider } from "../image-builds/provider-policy";
+import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import {
@@ -42,6 +42,7 @@ import {
   type McpServerLookup,
   type SlackAgentNotifyLookup,
 } from "../sandbox/lifecycle/manager";
+import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
@@ -546,6 +547,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
+    () => lifecycleManager.scheduleInactivityCheck(),
+    backgroundTasks,
+    messageQueue,
     log
   );
   const pushService = new SandboxPushService(log, wsManager);
@@ -1012,6 +1016,23 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
           resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
       : undefined;
 
+  // A malformed budget must not take every session down at construction the
+  // way a missing provider does; it falls back to the default and says so.
+  const bootBudget = resolveBootBudgetTimeoutMs(env.SANDBOX_BOOT_TIMEOUT_MS, {
+    connectingTimeoutMs: DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs,
+    defaultTimeoutMs: DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs,
+  });
+  if (bootBudget.rejectedValue !== null) {
+    createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)).warn(
+      "Ignoring SANDBOX_BOOT_TIMEOUT_MS; using the default boot budget",
+      {
+        event: "config.invalid",
+        rejected_value: bootBudget.rejectedValue,
+        must_exceed_ms: DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs,
+        timeout_ms: bootBudget.timeoutMs,
+      }
+    );
+  }
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
@@ -1025,16 +1046,21 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
     },
+    bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
     sandboxDashboardUrlBuilder,
   };
 
-  // The image lookup exists only for providers that support prebuilt images.
-  const imageBuildProvider = resolveImageBuildProvider(sandboxBackend);
-  const imageBuildLookup: ImageBuildLookup | undefined = imageBuildProvider
-    ? createImageBuildLookup(db, imageBuildProvider)
-    : undefined;
+  // The image lookup exists only for providers that support prebuilt images,
+  // and only while the deployment admits their selection: closing admission
+  // is how a rollback stops handing sessions a prebuilt image, without
+  // touching any scope's own toggle.
+  const imageBuildAdmission = resolveImageBuildAdmission(env);
+  const imageBuildLookup: ImageBuildLookup | undefined =
+    imageBuildAdmission.admitted && imageBuildAdmission.provider
+      ? createImageBuildLookup(db, imageBuildAdmission.provider)
+      : undefined;
 
   return new SandboxLifecycleManager(
     provider,

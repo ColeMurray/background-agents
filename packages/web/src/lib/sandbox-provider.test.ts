@@ -43,14 +43,34 @@ describe("sandbox-provider", () => {
     expect(supportsRepoImages()).toBe(true);
   });
 
-  it("disables repo images for daytona", async () => {
+  it("supports daytona with repo images", async () => {
     delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
     process.env.SANDBOX_PROVIDER = "daytona";
 
-    const { getPublicSandboxProvider, supportsRepoImages } = await loadProvider();
+    const {
+      getPublicSandboxProvider,
+      supportsConfigurableSandboxResources,
+      supportsConfigurableSandboxTimeout,
+      supportsRepoImages,
+    } = await loadProvider();
 
     expect(getPublicSandboxProvider()).toBe("daytona");
-    expect(supportsRepoImages()).toBe(false);
+    // Provider support, not deployment admission: whether this deployment
+    // will start a Daytona build is the control plane's answer, served with
+    // the image feed.
+    expect(supportsRepoImages()).toBe(true);
+    expect(supportsConfigurableSandboxResources()).toBe(false);
+    expect(supportsConfigurableSandboxTimeout()).toBe(false);
+  });
+
+  it("exposes only the settings supported by the configured provider", async () => {
+    process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "vercel";
+
+    const { supportsConfigurableSandboxResources, supportsConfigurableSandboxTimeout } =
+      await loadProvider();
+
+    expect(supportsConfigurableSandboxResources()).toBe(true);
+    expect(supportsConfigurableSandboxTimeout()).toBe(true);
   });
 
   it("supports opencomputer with repo images", async () => {
@@ -79,13 +99,11 @@ describe("sandbox-provider", () => {
     // The message is the only copy of this sentence in the web app; the routes
     // import it rather than restating the provider list.
     expect(REPO_IMAGES_UNSUPPORTED_MESSAGE).toBe(
-      "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, or e2b"
+      "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, e2b, or daytona"
     );
     for (const provider of getRepoImageProviders()) {
       expect(REPO_IMAGES_UNSUPPORTED_MESSAGE).toContain(provider);
     }
-    // Daytona has no image support and must never be named.
-    expect(REPO_IMAGES_UNSUPPORTED_MESSAGE).not.toContain("daytona");
   });
 
   it("throws for unsupported providers", async () => {

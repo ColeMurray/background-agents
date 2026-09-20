@@ -86,6 +86,7 @@ export default function SessionPage() {
     connectionError,
     sessionState,
     sandboxError,
+    boot,
     events,
     participants,
     artifacts,
@@ -93,7 +94,6 @@ export default function SessionPage() {
     canManageBudget,
     isProcessing,
     promptQueue,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,
@@ -327,7 +327,6 @@ export default function SessionPage() {
               participantProfiles={profiles}
               isProcessing={isProcessing}
               promptQueue={promptQueue}
-              loadingHistory={loadingHistory}
               showSkeleton={false}
               onLoadOlder={loadOlderEvents}
               onOpenMedia={setSelectedMediaArtifactId}
@@ -408,6 +407,7 @@ export default function SessionPage() {
       <SessionHeader
         sessionState={sessionState}
         sandboxError={sandboxError}
+        bootPhase={boot?.phase ?? null}
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}

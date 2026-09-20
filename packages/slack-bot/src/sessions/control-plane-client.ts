@@ -113,6 +113,8 @@ export interface SendPromptOptions {
   sessionId: string;
   content: string;
   authorId: string;
+  model?: string;
+  reasoningEffort?: string;
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
@@ -122,7 +124,16 @@ export async function sendPrompt(
   env: ControlPlaneEnv,
   options: SendPromptOptions
 ): Promise<SendPromptResult> {
-  const { sessionId, content, authorId, callbackContext, attachments, traceId } = options;
+  const {
+    sessionId,
+    content,
+    authorId,
+    model,
+    reasoningEffort,
+    callbackContext,
+    attachments,
+    traceId,
+  } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
@@ -130,6 +141,8 @@ export async function sendPrompt(
     const body = JSON.stringify({
       content,
       source: "slack",
+      model,
+      reasoningEffort,
       callbackContext,
       ...(attachments?.length ? { attachments } : {}),
     });

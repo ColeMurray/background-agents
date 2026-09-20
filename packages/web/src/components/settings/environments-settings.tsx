@@ -10,7 +10,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, formatReadyDetails, parsePrimaryBuildSha } from "@/lib/image-builds";
+import {
+  DEFAULT_IMAGE_BUILD_ADMISSION_OPEN,
+  IMAGE_BUILDS_KEY,
+  formatReadyDetails,
+  parsePrimaryBuildSha,
+} from "@/lib/image-builds";
 import { useImageBuilds } from "@/hooks/use-image-builds";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -44,6 +49,7 @@ export function EnvironmentsSettings() {
   const { data: imageBuildsFeed, error: imageBuildsError } = useImageBuilds(
     canReadImages && environments.some((environment) => environment.prebuildEnabled)
   );
+  const admissionOpen = imageBuildsFeed?.admission?.open ?? DEFAULT_IMAGE_BUILD_ADMISSION_OPEN;
   const [view, setView] = useState<View>({ mode: "list" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -307,6 +313,13 @@ export function EnvironmentsSettings() {
           {prebuildsSupported ? " and prebuilt images" : ""}.
         </p>
 
+        {prebuildsSupported && !admissionOpen && (
+          <p className="text-sm text-muted-foreground mb-4" role="status">
+            Prebuilds are paused for this deployment. Existing images keep working; new builds start
+            once an operator enables them.
+          </p>
+        )}
+
         {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
         {loading && <p className="text-sm text-muted-foreground">Loading environments...</p>}
@@ -378,7 +391,9 @@ export function EnvironmentsSettings() {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleRebuild(environment)}
-                            disabled={!environment.prebuildEnabled || isTriggering}
+                            disabled={
+                              !environment.prebuildEnabled || !admissionOpen || isTriggering
+                            }
                             title="Rebuild image"
                           >
                             <RefreshIcon

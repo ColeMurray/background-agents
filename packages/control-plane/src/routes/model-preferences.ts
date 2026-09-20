@@ -35,15 +35,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function getModelPreferences(
-  _request: Request,
+  request: Request,
   _env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!ctx.db) {
-    return json({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
-  }
-
+  const strict = new URL(request.url).searchParams.get("strict") === "true";
   const store = new ModelPreferencesStore(ctx.db);
 
   try {
@@ -55,7 +52,9 @@ async function getModelPreferences(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return json({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
+    return strict
+      ? error("Model preferences storage unavailable", 503)
+      : json({ enabledModels: DEFAULT_ENABLED_MODELS, revision: 0 });
   }
 }
 

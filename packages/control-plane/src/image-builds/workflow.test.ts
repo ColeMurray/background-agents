@@ -47,6 +47,7 @@ function createStore() {
     acceptFailedCompletion,
     authorizeCompletionCallback,
     finalization: {
+      getBuild: vi.fn().mockResolvedValue(null),
       acceptSuccessfulCompletion,
       acceptFailedCompletion,
       authorizeCompletionCallback,
@@ -57,7 +58,13 @@ function createStore() {
     markStaleBuildsAsFailed: vi.fn().mockResolvedValue(0),
     getStatus: vi.fn().mockResolvedValue([]),
     getStatusForEnabledScopes: vi.fn().mockResolvedValue([]),
+    markSourceCreateIntent: vi.fn().mockResolvedValue(true),
   };
+}
+
+/** An adapter whose provider can find a source again by its reserved name. */
+function createRecoverableAdapter() {
+  return { ...createAdapter(), recoverUnboundSource: vi.fn().mockResolvedValue(null) };
 }
 
 function createAdapter() {
@@ -106,12 +113,12 @@ function vercelPlannedBuild(): ImageBuildPlan {
 
 function createWorkflow(options: {
   store?: ReturnType<typeof createStore>;
-  adapter?: ReturnType<typeof createAdapter>;
+  adapter?: ReturnType<typeof createAdapter> | ReturnType<typeof createRecoverableAdapter>;
   planBuild?: ReturnType<typeof vi.fn>;
   resolveTarget?: ReturnType<typeof vi.fn>;
   createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
-  provider?: "modal" | "vercel" | "opencomputer" | null;
+  provider?: "modal" | "vercel" | "opencomputer" | "daytona" | null;
 }) {
   const store = options.store ?? createStore();
   const adapter = options.adapter ?? createAdapter();
@@ -529,6 +536,64 @@ describe("ImageBuildWorkflow", () => {
         })
       );
       expect(store.markBuildFailed).toHaveBeenCalled();
+      expect(store.markBuildFailed.mock.invocationCallOrder[0]).toBeLessThan(
+        adapter.cleanupFailedBuild.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("leaves an accepted callback's source to finalization after a late trigger error", async () => {
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("session-1");
+        throw new Error("launch response lost");
+      });
+      const { workflow, store } = createWorkflow({ adapter });
+      store.markBuildFailed.mockResolvedValue(false);
+      store.finalization.getBuild.mockResolvedValue({
+        status: "building",
+        callback_token_used_at: 1,
+      });
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toMatchObject({
+        type: "triggered",
+      });
+      expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+    });
+
+    it("does not delete a source when the trigger-failure fence cannot be confirmed", async () => {
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("session-1");
+        throw new Error("launch response lost");
+      });
+      const { workflow, store } = createWorkflow({ adapter });
+      store.markBuildFailed.mockRejectedValue(new Error("D1 unavailable"));
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildTriggerFailedError
+      );
+      expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+    });
+
+    it("cleans up a rejected bind after a concurrent supersede fenced callbacks", async () => {
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("session-1");
+      });
+      const { workflow, store } = createWorkflow({ adapter });
+      store.bindProviderSession.mockResolvedValue(false);
+      store.markBuildFailed.mockResolvedValue(false);
+      store.finalization.getBuild.mockResolvedValue({
+        status: "superseded",
+        callback_token_used_at: null,
+      });
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildTriggerFailedError
+      );
+      expect(adapter.cleanupFailedBuild).toHaveBeenCalledWith(
+        expect.objectContaining({ providerSessionId: "session-1" })
+      );
     });
 
     it("tears down the created sandbox when provider-session binding is rejected", async () => {
@@ -784,5 +849,131 @@ describe("ImageBuildWorkflow", () => {
         })
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
     });
+  });
+});
+
+describe("ImageBuildWorkflow build source create intent", () => {
+  it("records the cleanup obligation before the provider can create anything", async () => {
+    const store = createStore();
+    const adapter = createRecoverableAdapter();
+    const order: string[] = [];
+    store.markSourceCreateIntent.mockImplementation(async () => {
+      order.push("intent");
+      return true;
+    });
+    adapter.startBuild.mockImplementation(async () => {
+      order.push("start");
+    });
+    const { workflow } = createWorkflow({ store, adapter });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toEqual({
+      type: "triggered",
+      buildId: expect.any(String),
+    });
+    expect(order).toEqual(["intent", "start"]);
+    expect(store.markSourceCreateIntent).toHaveBeenCalledWith(expect.any(String), "modal");
+  });
+
+  it("does not record an intent for a provider that cannot recover a source by name", async () => {
+    const store = createStore();
+    const { workflow } = createWorkflow({ store, adapter: createAdapter() });
+
+    await workflow.triggerBuild(ENV_SCOPE, ctx);
+
+    expect(store.markSourceCreateIntent).not.toHaveBeenCalled();
+  });
+
+  it("refuses to create a source it could not record", async () => {
+    const store = createStore();
+    const adapter = createRecoverableAdapter();
+    store.markSourceCreateIntent.mockResolvedValue(false);
+    const { workflow } = createWorkflow({ store, adapter });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+      ImageBuildTriggerFailedError
+    );
+    expect(adapter.startBuild).not.toHaveBeenCalled();
+    expect(store.markBuildFailed).toHaveBeenCalled();
+  });
+
+  it("keeps the intent when the start fails before any id was bound", async () => {
+    const store = createStore();
+    const adapter = createRecoverableAdapter();
+    adapter.startBuild.mockRejectedValue(new Error("create timed out"));
+    const { workflow } = createWorkflow({ store, adapter });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+      ImageBuildTriggerFailedError
+    );
+    // Nothing clears the obligation here: the source may exist under its
+    // reserved name, and maintenance is what settles that.
+    expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+    expect(store.markBuildFailed).toHaveBeenCalled();
+  });
+});
+
+describe("ImageBuildWorkflow admission", () => {
+  const daytonaEnv = (overrides: Partial<Env> = {}) =>
+    createEnv({ SANDBOX_PROVIDER: "daytona", ...overrides });
+
+  it("refuses every trigger path while the deployment is paused", async () => {
+    const store = createStore();
+    const { workflow, adapter } = createWorkflow({
+      store,
+      provider: "daytona",
+      env: daytonaEnv(),
+    });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toMatchObject({
+      code: "admission_closed",
+      reason: "daytona_prebuilds_disabled",
+    });
+    await expect(workflow.triggerBuildIfStale(ENV_SCOPE, ctx)).rejects.toMatchObject({
+      code: "admission_closed",
+    });
+
+    // Nothing is registered and nothing is created: a paused deployment has
+    // no partial build to clean up afterwards.
+    expect(store.registerBuild).not.toHaveBeenCalled();
+    expect(adapter.startBuild).not.toHaveBeenCalled();
+  });
+
+  it("triggers normally once an operator opens admission", async () => {
+    const { workflow, adapter } = createWorkflow({
+      provider: "daytona",
+      env: daytonaEnv({ DAYTONA_PREBUILDS_ENABLED: "true" }),
+    });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toMatchObject({
+      type: "triggered",
+    });
+    expect(adapter.startBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("still accepts and finalizes the callbacks of builds already in flight", async () => {
+    const store = createStore();
+    store.finalization.authorizeCompletionCallback.mockResolvedValue({
+      id: "imgb-env_1-1-abcd",
+      scope: ENV_SCOPE,
+      provider: "daytona",
+      status: "building",
+    });
+    const jobs = { send: vi.fn().mockResolvedValue(undefined) };
+    const { workflow } = createWorkflow({
+      store,
+      provider: "daytona",
+      env: daytonaEnv({ JOBS: jobs }),
+    });
+
+    await workflow.acceptBuildComplete({
+      completion: validCompletion({ providerSessionId: "daytona-session-1" }),
+      callbackToken: MODAL_CALLBACK_TOKEN,
+      context: ctx,
+    });
+
+    // Closing admission stops new work; it must never strand work that is
+    // already running, or its sandbox and snapshot would leak.
+    expect(store.finalization.acceptSuccessfulCompletion).toHaveBeenCalled();
+    expect(jobs.send).toHaveBeenCalled();
   });
 });

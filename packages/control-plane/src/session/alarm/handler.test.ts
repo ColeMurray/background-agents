@@ -8,9 +8,13 @@ import type { SandboxAlarmResult } from "../../sandbox/lifecycle/manager";
 function createHandler() {
   const repository = {
     getProcessingMessageWithStartedAt: vi.fn(),
+    getNextPendingMessage: vi.fn(() => null as { id: string } | null),
   };
   const messageQueue = {
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
+    failPendingMessage: vi
+      .fn<(messageId: string, reason: string) => Promise<void>>()
+      .mockResolvedValue(),
   };
   const executionStop = {
     recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
@@ -62,6 +66,66 @@ function createHandler() {
 }
 
 describe("createAlarmHandler", () => {
+  it("fails the prompt a boot was for when the lifecycle gives up on the boot budget", async () => {
+    const { handler, repository, messageQueue, executionStop, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    repository.getNextPendingMessage.mockReturnValue({ id: "msg-boot" });
+    lifecycleManager.handleAlarm.mockResolvedValue({
+      kind: "boot_budget_exceeded",
+      reason: "Sandbox boot exceeded 30 minutes while running setup.sh for acme/api.",
+    });
+
+    await handler.handle();
+
+    expect(messageQueue.failPendingMessage).toHaveBeenCalledWith(
+      "msg-boot",
+      "Sandbox boot exceeded 30 minutes while running setup.sh for acme/api."
+    );
+    // Not a termination: nothing re-drives the queue onto a replacement.
+    expect(executionStop.resumeAfterSandboxTermination).not.toHaveBeenCalled();
+  });
+
+  it("fails the prompt that was waiting when the alarm fired, not whichever is head afterwards", async () => {
+    // Lifecycle handling can yield on a provider stop; a cancel in that gap
+    // must not shift the failure onto the next user's prompt.
+    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    repository.getNextPendingMessage.mockReturnValue({ id: "msg-boot" });
+    lifecycleManager.handleAlarm.mockImplementation(async () => {
+      repository.getNextPendingMessage.mockReturnValue({ id: "msg-later" });
+      return { kind: "boot_budget_exceeded", reason: "budget" };
+    });
+
+    await handler.handle();
+
+    expect(messageQueue.failPendingMessage).toHaveBeenCalledWith("msg-boot", "budget");
+    expect(messageQueue.failPendingMessage).not.toHaveBeenCalledWith("msg-later", "budget");
+  });
+
+  it("fails no prompt when none was pending at the alarm", async () => {
+    const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    repository.getNextPendingMessage.mockReturnValue(null);
+    lifecycleManager.handleAlarm.mockResolvedValue({ kind: "boot_budget_exceeded", reason: "x" });
+
+    await handler.handle();
+
+    expect(messageQueue.failPendingMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not fail a pending prompt for the other lifecycle outcomes", async () => {
+    for (const result of ["no_action", "sandbox_failed", "sandbox_terminated"] as const) {
+      const { handler, repository, messageQueue, lifecycleManager } = createHandler();
+      repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+      repository.getNextPendingMessage.mockReturnValue({ id: "msg-boot" });
+      lifecycleManager.handleAlarm.mockResolvedValue(result);
+
+      await handler.handle();
+
+      expect(messageQueue.failPendingMessage).not.toHaveBeenCalled();
+    }
+  });
+
   it("delegates to lifecycle manager when no processing message exists", async () => {
     const {
       handler,
@@ -165,6 +229,7 @@ describe("createAlarmHandler", () => {
       }),
     };
     const repository = {
+      getNextPendingMessage: vi.fn(() => null),
       getProcessingMessageWithStartedAt: vi.fn(() => ({
         id: "message-1",
         started_at: 1500,
@@ -172,6 +237,9 @@ describe("createAlarmHandler", () => {
     };
     const messageQueue = {
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
+      failPendingMessage: vi
+        .fn<(messageId: string, reason: string) => Promise<void>>()
+        .mockResolvedValue(),
     };
     const executionStop = {
       recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),

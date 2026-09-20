@@ -4,7 +4,11 @@ import {
   type CreateMediaArtifactRequest,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
-import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import {
+  bootPhaseNameSchema,
+  sandboxEventSchema,
+  type SandboxEvent,
+} from "@open-inspect/shared/types/sandbox-events";
 import {
   isDeadSandboxStatus,
   isSandboxReconnectBlockedStatus,
@@ -30,8 +34,17 @@ import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
 import { z } from "zod";
 
+/**
+ * A fatal runtime report. The phase fields are what the supervisor knew
+ * when the boot died; they are optional because runtimes that predate boot
+ * phases report only the error.
+ */
 const sandboxErrorRequestSchema = z.object({
   error: z.string().trim().min(1).max(1000),
+  phase: bootPhaseNameSchema.optional(),
+  bootSeq: z.number().int().optional(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
 });
 
 /**
@@ -138,6 +151,25 @@ export class SandboxHandler {
       return Response.json({ status: "ignored" });
     }
 
+    // The HTTP report is the reliable carrier of the failed phase: the
+    // bridge's own phase line over the socket is best-effort and may be lost
+    // when the socket closes first. Landing it here puts the phase and the
+    // failure metadata on the timeline for the failure the user sees; the
+    // sequence number de-duplicates it against the socket copy.
+    const { phase, bootSeq, repoOwner, repoName } = result.data;
+    if (phase !== undefined) {
+      await this.sandboxEventProcessor.processSandboxEvent({
+        type: "boot_progress",
+        phase,
+        status: "failed",
+        bootSeq: bootSeq ?? Number.MAX_SAFE_INTEGER,
+        ...(repoOwner !== undefined ? { repoOwner } : {}),
+        ...(repoName !== undefined ? { repoName } : {}),
+        detail: result.data.error,
+        sandboxId: currentSandbox.modal_sandbox_id ?? currentSandbox.id,
+        timestamp: this.now() / 1000,
+      });
+    }
     await this.failSandbox(result.data.error);
     return Response.json({ status: "ok" });
   }

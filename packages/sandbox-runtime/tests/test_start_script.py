@@ -110,7 +110,7 @@ class TestStartScriptSuccess:
         assert call_args[0][0] == "bash"
         assert call_args[0][1] == str(script)
         assert call_args[1]["cwd"] == sup.repo_path
-        assert call_args[1]["stdout"] == asyncio.subprocess.PIPE
+        assert call_args[1]["stdout"] == asyncio.subprocess.DEVNULL
         assert call_args[1]["stderr"] == asyncio.subprocess.STDOUT
         fake_proc.wait.assert_awaited_once()
         fake_proc.communicate.assert_not_awaited()

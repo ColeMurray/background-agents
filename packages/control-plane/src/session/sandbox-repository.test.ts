@@ -1,5 +1,8 @@
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
+import { initSchema } from "./schema";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { decryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
@@ -362,5 +365,204 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("last_spawn_failure");
       expect(mock.calls[0].params).toEqual([7000]);
     });
+  });
+});
+
+/**
+ * Boot-phase, readiness and fencing writes are guarded UPDATEs whose whole
+ * meaning is in their WHERE clause, so they run against a real SQLite schema
+ * rather than a query-string mock.
+ */
+describe("SandboxRepository boot state (SQLite)", () => {
+  function createSqliteRepository() {
+    const db = new DatabaseSync(":memory:");
+    const { sql } = createNodeSqlStorage(db);
+    initSchema(sql);
+    const repository = new SandboxRepository(sql, createLog(), TEST_ENCRYPTION_KEY);
+    repository.createSandbox({
+      id: "row-1",
+      status: "pending",
+      gitSyncStatus: "pending",
+      createdAt: 1000,
+    });
+    const set = (assignments: string, ...params: unknown[]) =>
+      sql.exec(`UPDATE sandbox SET ${assignments}`, ...params);
+    return { db, sql, repository, set };
+  }
+
+  describe("markSandboxReady", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+
+    it.each(["spawning", "connecting", "snapshotting", "warming"] as const)(
+      "moves a %s row to ready, clears its boot phase, and reports the transition",
+      (status) => {
+        const { repository, set } = createSqliteRepository();
+        set(
+          "status = ?, modal_sandbox_id = 'sb-1', boot_phase = ?, boot_seq = ?",
+          status,
+          '{"phase":"setup"}',
+          4
+        );
+
+        expect(repository.markSandboxReady(generation)).toBe(true);
+
+        const row = repository.getSandbox();
+        expect(row?.status).toBe("ready");
+        expect(row?.boot_phase).toBeNull();
+        expect(row?.boot_seq).toBeNull();
+      }
+    );
+
+    it("is transition-only: a ready row reports no change", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'ready', modal_sandbox_id = 'sb-1'");
+
+      expect(repository.markSandboxReady(generation)).toBe(false);
+    });
+
+    it.each(["stopped", "stale"] as const)("leaves a %s row alone", (status) => {
+      const { repository, set } = createSqliteRepository();
+      set("status = ?, modal_sandbox_id = 'sb-1'", status);
+
+      expect(repository.markSandboxReady(generation)).toBe(false);
+      expect(repository.getSandbox()?.status).toBe(status);
+    });
+
+    it("lets an unfenced failed row self-heal but refuses a fenced one", () => {
+      const healed = createSqliteRepository();
+      healed.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 0");
+      expect(healed.repository.markSandboxReady(generation)).toBe(true);
+      expect(healed.repository.getSandbox()?.status).toBe("ready");
+
+      const fenced = createSqliteRepository();
+      fenced.set("status = 'failed', modal_sandbox_id = 'sb-1', fenced = 1");
+      expect(fenced.repository.markSandboxReady(generation)).toBe(false);
+      expect(fenced.repository.getSandbox()?.status).toBe("failed");
+    });
+
+    it("refuses a ready that belongs to a generation the row no longer holds", () => {
+      // A replacement reserved the row while the old runtime's ready was in
+      // flight: the replacement's own ready, not this one, may move it.
+      const { repository, set } = createSqliteRepository();
+      set("status = 'spawning', modal_sandbox_id = 'sb-2', created_at = 2000");
+
+      expect(repository.markSandboxReady(generation)).toBe(false);
+      expect(repository.markSandboxReady({ sandboxId: "sb-1", createdAt: 2000 })).toBe(false);
+      expect(repository.getSandbox()?.status).toBe("spawning");
+
+      expect(repository.markSandboxReady({ sandboxId: "sb-2", createdAt: 2000 })).toBe(true);
+    });
+
+    it("matches a generation that has no sandbox id yet", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'connecting', modal_sandbox_id = NULL");
+
+      expect(repository.markSandboxReady({ sandboxId: null, createdAt: 1000 })).toBe(true);
+    });
+  });
+
+  describe("recordBootProgress", () => {
+    const phase = {
+      phase: "setup",
+      status: "started",
+      repoOwner: "acme",
+      repoName: "api",
+    } as const;
+
+    it("stores the phase with its sequence the first time it is seen", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'connecting'");
+
+      expect(repository.recordBootProgress(phase, 3)).toBe(true);
+
+      const row = repository.getSandbox();
+      expect(row?.boot_seq).toBe(3);
+      expect(JSON.parse(row!.boot_phase!)).toEqual(phase);
+    });
+
+    it.each(["ready", "snapshotting", "stopped", "stale"] as const)(
+      "ignores a phase resent to a %s row: the boot it describes is over",
+      (status) => {
+        const { repository, set } = createSqliteRepository();
+        set("status = ?", status);
+
+        expect(repository.recordBootProgress(phase, 3)).toBe(false);
+
+        const row = repository.getSandbox();
+        expect(row?.boot_phase).toBeNull();
+        expect(row?.boot_seq).toBeNull();
+      }
+    );
+
+    it("still records phases for an unfenced failed row whose boot outlived the watchdog", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'failed', fenced = 0");
+
+      expect(repository.recordBootProgress(phase, 3)).toBe(true);
+    });
+
+    it("ignores a repeated or older sequence and accepts a newer one", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'connecting'");
+      repository.recordBootProgress(phase, 3);
+
+      expect(repository.recordBootProgress(phase, 3)).toBe(false);
+      expect(repository.recordBootProgress(phase, 2)).toBe(false);
+      expect(
+        repository.recordBootProgress({ ...phase, phase: "start", status: "started" }, 4)
+      ).toBe(true);
+      expect(repository.getSandbox()?.boot_seq).toBe(4);
+    });
+  });
+
+  describe("fenceSandboxGeneration", () => {
+    it("revokes the token hash and socket authority and marks the row fenced", () => {
+      const { repository, set } = createSqliteRepository();
+      set(
+        "status = 'connecting', auth_token_hash = 'hash', auth_token = 'tok', active_socket_id = 'sbws-1'"
+      );
+
+      repository.fenceSandboxGeneration();
+
+      const row = repository.getSandbox();
+      expect(row?.auth_token_hash).toBe("");
+      expect(row?.auth_token).toBeNull();
+      expect(row?.active_socket_id).toBe("");
+      expect(row?.fenced).toBe(1);
+    });
+  });
+
+  describe("reservation clears boot state", () => {
+    it("updateSandboxForSpawn resets the boot phase, sequence and fence", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'failed', boot_phase = '{}', boot_seq = 9, fenced = 1");
+
+      repository.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: 2000,
+        modalSandboxId: "sb-2",
+      });
+
+      const row = repository.getSandbox();
+      expect(row?.boot_phase).toBeNull();
+      expect(row?.boot_seq).toBeNull();
+      expect(row?.fenced).toBe(0);
+    });
+
+    it("updateSandboxForResume resets the fence as well", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'stopped', fenced = 1");
+
+      repository.updateSandboxForResume({ status: "connecting", createdAt: 2000 });
+
+      expect(repository.getSandbox()?.fenced).toBe(0);
+    });
+  });
+
+  it("exposes last_heartbeat to the spawn decision", () => {
+    const { repository, set } = createSqliteRepository();
+    set("status = 'connecting', last_heartbeat = 4242");
+
+    expect(repository.getSandboxWithCircuitBreaker()?.last_heartbeat).toBe(4242);
   });
 });

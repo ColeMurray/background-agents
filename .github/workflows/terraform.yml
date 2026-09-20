@@ -65,7 +65,18 @@ jobs:
       - name: Check if secrets are configured
         id: check
         run: |
-          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && [ -n "${{ secrets.R2_ACCESS_KEY_ID }}" ]; then
+          # Gate on every credential the plan and apply jobs consume to reach a
+          # backend, not just two of them. A partial configuration used to report
+          # has-secrets=true and then fail inside `terraform init` with an empty
+          # access/secret key or an endpoint URL of "https://.r2.cloudflarestorage.com",
+          # instead of skipping with the notice below. CLOUDFLARE_ACCOUNT_ID is read
+          # with the same `vars || secrets` precedence the init steps use, so a
+          # variable-configured deployment is not mistaken for an unconfigured one.
+          account_id="${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}"
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] &&
+            [ -n "${{ secrets.R2_ACCESS_KEY_ID }}" ] &&
+            [ -n "${{ secrets.R2_SECRET_ACCESS_KEY }}" ] &&
+            [ -n "$account_id" ]; then
             echo "has-secrets=true" >> $GITHUB_OUTPUT
           else
             echo "has-secrets=false" >> $GITHUB_OUTPUT
@@ -268,10 +279,14 @@ jobs:
           TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"
           TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
+          TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
           TF_VAR_daytona_base_snapshot: ${{ vars.DAYTONA_BASE_SNAPSHOT || secrets.DAYTONA_BASE_SNAPSHOT }}
+          TF_VAR_daytona_base_snapshot_memory_gib: "${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}"
           TF_VAR_daytona_target: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
+          TF_VAR_daytona_toolbox_api_url: ${{ vars.DAYTONA_TOOLBOX_API_URL || secrets.DAYTONA_TOOLBOX_API_URL }}
+          TF_VAR_daytona_prebuilds_enabled: "${{ vars.DAYTONA_PREBUILDS_ENABLED || secrets.DAYTONA_PREBUILDS_ENABLED || 'false' }}"
           TF_VAR_vercel_sandbox_token: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
           TF_VAR_vercel_sandbox_project_id: ${{ vars.VERCEL_SANDBOX_PROJECT_ID || secrets.VERCEL_SANDBOX_PROJECT_ID }}
           TF_VAR_vercel_sandbox_team_id: ${{ vars.VERCEL_SANDBOX_TEAM_ID || secrets.VERCEL_SANDBOX_TEAM_ID }}
@@ -454,10 +469,14 @@ jobs:
           TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"
           TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
+          TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
           TF_VAR_daytona_base_snapshot: ${{ vars.DAYTONA_BASE_SNAPSHOT || secrets.DAYTONA_BASE_SNAPSHOT }}
+          TF_VAR_daytona_base_snapshot_memory_gib: "${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}"
           TF_VAR_daytona_target: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
+          TF_VAR_daytona_toolbox_api_url: ${{ vars.DAYTONA_TOOLBOX_API_URL || secrets.DAYTONA_TOOLBOX_API_URL }}
+          TF_VAR_daytona_prebuilds_enabled: "${{ vars.DAYTONA_PREBUILDS_ENABLED || secrets.DAYTONA_PREBUILDS_ENABLED || 'false' }}"
           TF_VAR_vercel_sandbox_token: ${{ secrets.VERCEL_SANDBOX_TOKEN }}
           TF_VAR_vercel_sandbox_project_id: ${{ vars.VERCEL_SANDBOX_PROJECT_ID || secrets.VERCEL_SANDBOX_PROJECT_ID }}
           TF_VAR_vercel_sandbox_team_id: ${{ vars.VERCEL_SANDBOX_TEAM_ID || secrets.VERCEL_SANDBOX_TEAM_ID }}

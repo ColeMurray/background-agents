@@ -31,4 +31,13 @@ describe("slackInteractionPayloadSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("preserves an action block id", () => {
+    const result = slackInteractionPayloadSchema.parse({
+      type: "block_actions",
+      actions: [{ action_id: "select_repo", block_id: "target_picker:request-id" }],
+    });
+
+    expect(result.actions?.[0].block_id).toBe("target_picker:request-id");
+  });
 });

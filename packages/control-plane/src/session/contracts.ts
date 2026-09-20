@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { sessionMessageSchema } from "@open-inspect/shared/types/sessions";
 
 /** SCM display fields forwarded from the authenticated route to the Session runtime. */
 export const sessionScmDisplayFieldsSchema = z.object({
@@ -11,6 +12,20 @@ export const sessionScmDisplayFieldsSchema = z.object({
   scmName: z.string().nullable().optional(),
   scmEmail: z.string().nullable().optional(),
 });
+
+export const sessionMessagePageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    messages: z.array(sessionMessageSchema),
+    hasMore: z.literal(true),
+    cursor: z.string().min(1),
+  }),
+  z.object({
+    messages: z.array(sessionMessageSchema),
+    hasMore: z.literal(false),
+    cursor: z.string().min(1).optional(),
+  }),
+]);
+export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 
 export const SessionInternalPaths = {
   init: "/internal/init",

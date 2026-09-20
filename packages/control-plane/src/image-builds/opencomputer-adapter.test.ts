@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
 import { OpenComputerImageBuildAdapter } from "./opencomputer-adapter";
 import type { ImageBuildPlan } from "./types";
+import { immediateFinalizationInput } from "./test-helpers";
 
 function createProvider(): OpenComputerSandboxProvider {
   return {
@@ -69,11 +70,13 @@ describe("OpenComputerImageBuildAdapter", () => {
     const adapter = new OpenComputerImageBuildAdapter(provider);
     const correlation = { request_id: "request-1", trace_id: "trace-1" };
 
-    const result = await adapter.finalizeSuccessfulBuild({
-      buildId: "build-1",
-      providerSessionId: "oc-session-1",
-      correlation,
-    });
+    const result = await adapter.finalizeSuccessfulBuild(
+      immediateFinalizationInput({
+        buildId: "build-1",
+        providerSessionId: "oc-session-1",
+        correlation,
+      })
+    );
 
     expect(result).toEqual({
       providerImageId: "oc-checkpoint-1",

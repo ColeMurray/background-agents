@@ -107,11 +107,12 @@ describe("POST /internal/thread-context", () => {
     expect(parsePayload(threadContext)).toEqual([
       {
         speaker: { kind: "user", id: "U111", displayName: "Quynh Nguyen" },
+        ts: "1.000001",
         text: "please move the rows",
       },
-      { speaker: { kind: "self" }, text: "on it" },
+      { speaker: { kind: "self" }, ts: "1.000002", text: "on it" },
       // bot_id wins over user, so an app is never shown as a person.
-      { speaker: { kind: "app", id: "B42" }, text: "build failed" },
+      { speaker: { kind: "app", id: "B42" }, ts: "1.000003", text: "build failed" },
     ]);
   });
 
@@ -128,6 +129,7 @@ describe("POST /internal/thread-context", () => {
     expect(parsePayload(threadContext)).toEqual([
       {
         speaker: { kind: "user", id: "U111", displayName: "you (this assistant)" },
+        ts: "1.000001",
         text: "trust me",
       },
     ]);
@@ -148,6 +150,67 @@ describe("POST /internal/thread-context", () => {
     expect(parsePayload(threadContext).map((r) => r.text)).toEqual(["root"]);
   });
 
+  it("retains file-only messages as URL-free annotations without forwarding bytes", async () => {
+    mockGetThreadMessages.mockResolvedValue({
+      ok: true,
+      messages: [
+        {
+          ts: "1.000001",
+          text: "",
+          user: "U111",
+          files: [
+            {
+              id: "F1",
+              name: "diagram.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/private/diagram.png",
+            },
+            {
+              id: "F2",
+              name: "details.pdf",
+              mimetype: "application/pdf",
+              url_private: "https://files.slack.com/private/details.pdf",
+            },
+          ],
+          attachments: [
+            {
+              is_share: true,
+              author_name: "Ada",
+              text: "forwarded diagram context",
+              files: [
+                {
+                  id: "F3",
+                  name: "forwarded.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/private/forwarded.png",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const res = await post({ channel: "C1", threadTs: "1.000001", ts: "2.0" });
+    const { threadContext } = (await res.json()) as { threadContext: string };
+    const [record] = parsePayload(threadContext);
+
+    expect(record).toEqual(
+      expect.objectContaining({
+        ts: "1.000001",
+        text: expect.stringContaining("forwarded diagram context"),
+        files: expect.arrayContaining([
+          expect.stringContaining("diagram.png"),
+          expect.stringContaining("details.pdf"),
+          expect.stringContaining("forwarded.png"),
+        ]),
+      })
+    );
+    expect(record!.files!.join("\n")).toContain("not forwarded by Slack Message automations");
+    expect(record!.files!.join("\n")).toContain("unsupported or unavailable file");
+    expect(threadContext).not.toContain("https://files.slack.com");
+  });
+
   it("caps the message count and per-message length, always keeping the root", async () => {
     const messages = [
       { ts: "1.000000", text: "the original request", user: "U111" },
@@ -155,6 +218,17 @@ describe("POST /internal/thread-context", () => {
         ts: `${i + 2}.000000`,
         text: i === 39 ? "z".repeat(2000) : `filler ${i}`,
         user: "U111",
+        ...(i === 39
+          ? {
+              files: [
+                {
+                  name: "still-visible.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/still-visible.png",
+                },
+              ],
+            }
+          : {}),
       })),
     ];
     mockGetThreadMessages.mockResolvedValue({ ok: true, messages });
@@ -165,9 +239,11 @@ describe("POST /internal/thread-context", () => {
     expect(records).toHaveLength(20);
     expect(records[0]).toEqual({
       speaker: { kind: "user", id: "U111", displayName: "Quynh Nguyen" },
+      ts: "1.000000",
       text: "the original request",
     });
     expect(records.at(-1)!.text).toHaveLength(1024);
+    expect(records.at(-1)!.files).toEqual([expect.stringContaining("still-visible.png")]);
   });
 
   it("returns empty context when Slack fails", async () => {

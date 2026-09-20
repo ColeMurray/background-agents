@@ -3,12 +3,18 @@
 
 import { createRef, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import type { SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
 import { SessionHeader as SessionHeaderComponent } from "./session-header";
 import type { SessionActionProps } from "./session-actions";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+
+type ConnectionProps = Pick<
+  ComponentProps<typeof SessionHeaderComponent>,
+  "connected" | "connecting" | "reconnecting"
+>;
 
 expect.extend(matchers);
 
@@ -62,6 +68,20 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
     messageCount: 0,
     createdAt: 1,
     ...overrides,
+  };
+}
+
+function member(repoOwner: string, repoName: string, position: number) {
+  return {
+    position,
+    repoOwner,
+    repoName,
+    repoId: position + 1,
+    baseBranch: "main",
+    branchName: null,
+    baseSha: null,
+    currentSha: null,
+    prUrl: null,
   };
 }
 
@@ -302,6 +322,202 @@ describe("SessionHeader", () => {
     expect(screen.getByText(/Timeout cannot be greater than 1 hours/)).toBeInTheDocument();
   });
 
+  it("names the boot phase in progress instead of a generic connecting label", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "connecting" })}
+        bootPhase={{ phase: "setup", status: "started", repoOwner: "acme", repoName: "web" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Running setup.sh" }));
+
+    // Scoped to the popover: the mobile strip reports the same status too.
+    const popover = within(await screen.findByRole("dialog"));
+    expect(popover.getByText("Sandbox Running setup.sh")).toBeInTheDocument();
+    // One repository: naming it adds nothing.
+    expect(popover.getByText("Running setup.sh.")).toBeInTheDocument();
+    expect(screen.queryByText("Sandbox status: Connecting...")).not.toBeInTheDocument();
+  });
+
+  it("names the repository a phase runs against in a multi-repository session", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "spawning",
+          repositories: [member("acme", "web", 0), member("acme", "api", 1)],
+        })}
+        bootPhase={{ phase: "start", status: "started", repoOwner: "acme", repoName: "api" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Starting services" }));
+
+    expect(await screen.findByText("Running start.sh for acme/api.")).toBeInTheDocument();
+  });
+
+  it("keeps the status label for a completed phase and says what finished", async () => {
+    // The runtime reports a tolerated non-zero exit on the completed phase.
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "connecting",
+          repositories: [member("acme", "web", 0), member("acme", "api", 1)],
+        })}
+        bootPhase={{
+          phase: "setup",
+          status: "completed",
+          warning: true,
+          repoOwner: "acme",
+          repoName: "api",
+          elapsedMs: 91_200,
+        }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Booting" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    // Nothing is running between steps, so the pill does not claim it is.
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Connecting..." }));
+
+    // Scoped to the popover: the mobile strip reports the same status too.
+    const popover = within(await screen.findByRole("dialog"));
+    expect(popover.getByText("Sandbox Connecting...")).toBeInTheDocument();
+    expect(
+      popover.getByText(
+        "Finished setup.sh for acme/api. This step exited with an error and the boot continued."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Running setup.sh/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the status label once the sandbox is past booting", () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "ready" })}
+        bootPhase={{ phase: "harness", status: "completed" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Ready" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
+  });
+
+  it("shows the failed phase metadata without a boot output region", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "failed" })}
+        sandboxError="start hook failed for acme/web"
+        bootPhase={{
+          phase: "start",
+          status: "failed",
+          repoOwner: "acme",
+          repoName: "web",
+          detail: "start hook failed for acme/web",
+        }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed boot" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Failed" }));
+
+    expect(await screen.findByText("Failed while starting services.")).toBeInTheDocument();
+    expect(screen.getByText("start hook failed for acme/web")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Boot output" })).not.toBeInTheDocument();
+  });
+
+  it("does not attribute a failure to a phase that had not failed", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "failed" })}
+        sandboxError="Sandbox did not become ready within the boot budget"
+        bootPhase={{ phase: "setup", status: "started" }}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Failed boot" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sandbox status: Failed" }));
+
+    expect(
+      await screen.findByText("Sandbox did not become ready within the boot budget")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Failed while/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Boot output")).not.toBeInTheDocument();
+  });
+
   it("omits the error block when the control plane reported no reason", async () => {
     render(
       <SessionHeader
@@ -428,10 +644,247 @@ describe("SessionHeader", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(trigger);
 
-    expect(screen.getByText("Sandbox Failed")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
+    // Scoped to the popover: the mobile attention strip names the same status,
+    // and only this popover carries the dashboard link.
+    const popover = within(screen.getByRole("dialog"));
+    expect(popover.getByText("Sandbox Failed")).toBeInTheDocument();
+    expect(popover.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
       "href",
       "https://modal.com/apps/acme/main/sandbox"
     );
+  });
+});
+
+describe("SessionHeader mobile presentation", () => {
+  function renderMobileHeader(
+    sessionState: SessionState,
+    connection: Partial<ConnectionProps> = {},
+    sandboxError?: string,
+    capabilities?: SessionCapabilities,
+    bootPhase?: SandboxBootPhase
+  ) {
+    return render(
+      <SessionHeader
+        sessionState={sessionState}
+        sandboxError={sandboxError}
+        capabilities={capabilities}
+        bootPhase={bootPhase}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Mobile header" }}
+        connected
+        connecting={false}
+        {...connection}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen={false}
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+  }
+
+  it("keeps the repository out of the mobile bar", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+
+    // The desktop header still carries it; the mobile bar hides that element.
+    expect(screen.getByText("acme/web")).toHaveClass("hidden");
+  });
+
+  it("says nothing about a healthy sandbox", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+
+    expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
+  });
+
+  it("raises a strip for a sandbox that needs attention", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "failed" }));
+
+    expect(screen.getByRole("button", { name: "Show sandbox status: Failed" })).toBeInTheDocument();
+  });
+
+  it.each([
+    "pending",
+    "warming",
+    "spawning",
+    "connecting",
+    "snapshotting",
+    "stopped",
+    "stale",
+  ] as const)("raises a strip for a %s sandbox", (sandboxStatus) => {
+    renderMobileHeader(createSessionState({ sandboxStatus }));
+
+    expect(screen.getByRole("button", { name: /^Show sandbox status/ })).toBeInTheDocument();
+  });
+
+  it("opens the same status detail from the strip as the desktop icon", () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "failed",
+        sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+      })
+    );
+
+    const strip = screen.getByRole("button", { name: "Show sandbox status: Failed" });
+    fireEvent.pointerDown(strip, { button: 0, ctrlKey: false });
+    fireEvent.click(strip);
+
+    const popover = within(screen.getByRole("dialog"));
+    expect(popover.getByText("Sandbox Failed")).toBeInTheDocument();
+    expect(popover.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
+      "href",
+      "https://modal.com/apps/acme/main/sandbox"
+    );
+  });
+
+  it("reports a dropped connection ahead of the sandbox", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "failed" }), {
+      connected: false,
+      connecting: false,
+      reconnecting: false,
+    });
+
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["connecting", { connected: false, connecting: true, reconnecting: false }, "Connecting..."],
+    [
+      "reconnecting",
+      { connected: false, connecting: false, reconnecting: true },
+      "Reconnecting...",
+    ],
+  ] as const)(
+    "reports an in-progress %s socket rather than going silent",
+    (_name, connection, label) => {
+      renderMobileHeader(createSessionState({ sandboxStatus: "ready" }), connection);
+
+      // A retry budget that spans minutes must not read as a frozen app.
+      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+    }
+  );
+
+  it("keeps the live region mounted with nothing to report", () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+
+    // A region inserted in the same commit as its first text is commonly not
+    // announced, so it has to outlive the quiet state. The desktop connection
+    // dot is also role=status but carries an aria-label; this one does not.
+    const regions = screen.getAllByRole("status").filter((el) => !el.getAttribute("aria-label"));
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBeEmptyDOMElement();
+  });
+
+  it("fills the same live region when a status arrives", () => {
+    const { rerender } = renderMobileHeader(createSessionState({ sandboxStatus: "ready" }));
+    const before = screen.getAllByRole("status").filter((el) => !el.getAttribute("aria-label"))[0];
+
+    rerender(
+      <SessionHeader
+        sessionState={createSessionState({ sandboxStatus: "spawning" })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Mobile header" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen={false}
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const after = screen.getAllByRole("status").filter((el) => !el.getAttribute("aria-label"))[0];
+    expect(after).toBe(before);
+    expect(after).toHaveTextContent("Sandbox Starting...");
+  });
+
+  it("reaches the status detail and dashboard link for a healthy sandbox", async () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "ready",
+        sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+      })
+    );
+
+    // Nothing is on the bar in this state, so the actions menu has to carry it.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    const menu = within(await screen.findByRole("menu"));
+    expect(menu.getByText("Sandbox Ready")).toBeInTheDocument();
+    expect(menu.getByText("The sandbox is available.")).toBeInTheDocument();
+    expect(menu.getByRole("menuitem", { name: /Open provider dashboard/ })).toHaveAttribute(
+      "href",
+      "https://modal.com/apps/acme/main/sandbox"
+    );
+  });
+
+  it("names the step that broke in the actions menu", async () => {
+    // The strip yields to the connection line here, so the menu is the only
+    // place left that can say which boot step failed.
+    renderMobileHeader(
+      createSessionState({ sandboxStatus: "failed" }),
+      { connected: false, connecting: false, reconnecting: false },
+      undefined,
+      undefined,
+      { phase: "sync", status: "failed" }
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(
+      within(await screen.findByRole("menu")).getByText("Failed while cloning repository.")
+    ).toBeInTheDocument();
+  });
+
+  it("puts the provider's failure reason in the actions menu", async () => {
+    renderMobileHeader(createSessionState({ sandboxStatus: "failed" }), {}, "Quota exceeded.");
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(
+      within(await screen.findByRole("menu")).getByText("Quota exceeded.")
+    ).toBeInTheDocument();
+  });
+
+  it("withholds the dashboard link from a session without sandbox access", async () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "ready",
+        sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+      }),
+      {},
+      undefined,
+      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false }
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    const menu = within(await screen.findByRole("menu"));
+    expect(menu.getByText("Sandbox Ready")).toBeInTheDocument();
+    expect(
+      menu.queryByRole("menuitem", { name: /Open provider dashboard/ })
+    ).not.toBeInTheDocument();
   });
 });

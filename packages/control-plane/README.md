@@ -247,7 +247,6 @@ any child starting/running → `starting`/`running`; all terminal → `completed
 | `sandbox_spawning` | Sandbox is being created      |
 | `sandbox_warming`  | Sandbox warming               |
 | `sandbox_status`   | Sandbox status update         |
-| `sandbox_ready`    | Sandbox ready                 |
 | `sandbox_error`    | Sandbox error occurred        |
 | `sandbox_warning`  | Sandbox warning message       |
 | `sandbox_restored` | Restored from snapshot        |

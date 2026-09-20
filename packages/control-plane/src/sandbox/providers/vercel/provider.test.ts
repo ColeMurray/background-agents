@@ -234,6 +234,7 @@ describe("VercelSandboxProvider", () => {
       model: "anthropic/claude-sonnet-4-5",
       mcp_servers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
       branch: "feature/vercel",
+      bridge_early_connect: true,
     });
     expect(vi.mocked(client.runCommandAndWait)).not.toHaveBeenCalled();
     expect(vi.mocked(client.startCommand)).toHaveBeenCalledWith(

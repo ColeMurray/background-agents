@@ -63,6 +63,20 @@ npm test
 - Run `npm run typecheck` to ensure type safety
 - Follow existing code patterns in the codebase
 
+### Test Performance
+
+Run heavyweight validation commands (lint, typecheck, and full test suites) sequentially on a shared
+development host. Each Vitest invocation sizes its own worker pool independently; running multiple
+full suites together can exhaust a test's elapsed-time budget even when its assertions are correct.
+If you intentionally overlap suites, pass an explicit `--maxWorkers` budget to each invocation,
+accounting for the other work on the host.
+
+In DOM tests, scope queries to the relevant form section or open listbox. For example,
+`within(screen.getByRole("listbox")).getByRole("option", { name })` avoids scanning unrelated
+options, including Radix's hidden native selects, while preserving accessibility checks. Prefer
+label queries when selecting labeled inputs. Investigate slow operations before increasing test
+timeouts or adding retries.
+
 ### Commit Messages
 
 Use clear, descriptive commit messages:

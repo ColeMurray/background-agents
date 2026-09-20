@@ -2,6 +2,20 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 17, 2026
+
+**Repository-less Slack sessions.** The Slack target classifier can start suitable work in an empty
+sandbox, while uncertain requests use a target picker that also exposes **No repository**. Session
+startup messages now use concise target-neutral copy.
+
+**Sandbox boot progress.** The sandbox runtime now connects to the control plane before it clones
+the repository, so a session shows each boot step as it runs: Cloning repository, Running setup.sh,
+Starting services, Installing skills, Starting agent, with the repository named in multi-repository
+sessions. Failure reports retain phase, repository, and error metadata, while hook stdout and stderr
+are discarded rather than collected or shown. Long setup scripts no longer trip the four-minute
+connect timeout; a boot may take up to `SANDBOX_BOOT_TIMEOUT_MS` (30 minutes by default). See
+[How Open-Inspect Works](docs/HOW_IT_WORKS.md#fresh-start-no-snapshot).
+
 ## September 14, 2026
 
 **OpenCode Go models.** Adds 27 opt-in `opencode-go/*` models to Settings > Models for OpenCode
