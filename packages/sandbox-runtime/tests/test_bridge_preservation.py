@@ -16,6 +16,7 @@ from sandbox_runtime.push_operation import PushRequest, PushResult
 from tests.conftest import ScriptedHarness
 
 GENERATION = {"sandboxId": "sandbox-1", "createdAt": 1000}
+MAX_SAFE_GENERATION_CREATED_AT = 9_007_199_254_740_991
 
 
 class PreservationHarness(ScriptedHarness):
@@ -58,6 +59,81 @@ def prepare_command(**overrides):
         "stopByMs": time.time() * 1000 + 5_000,
         **overrides,
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ({"sandboxId": "sandbox-1", "createdAt": 1}, GENERATION | {"createdAt": 1}),
+        (
+            {"sandboxId": "sandbox-1", "createdAt": 1.0},
+            GENERATION | {"createdAt": 1},
+        ),
+        (
+            {"sandboxId": "sandbox-1", "createdAt": MAX_SAFE_GENERATION_CREATED_AT},
+            GENERATION | {"createdAt": MAX_SAFE_GENERATION_CREATED_AT},
+        ),
+        ({"sandboxId": "", "createdAt": 1}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": True}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": "1"}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": 0}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": -1}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": 0.5}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": float("nan")}, None),
+        ({"sandboxId": "sandbox-1", "createdAt": float("inf")}, None),
+        (
+            {"sandboxId": "sandbox-1", "createdAt": MAX_SAFE_GENERATION_CREATED_AT + 1},
+            None,
+        ),
+        ({"sandboxId": "sandbox-1", "createdAt": 10**1000}, None),
+    ],
+)
+def test_generation_parser_matches_shared_schema_boundary(value, expected) -> None:
+    assert AgentBridge._parse_generation(value) == expected
+
+
+@pytest.mark.asyncio
+async def test_malformed_prepare_generation_is_dropped_without_state() -> None:
+    bridge = make_bridge(PreservationHarness())
+    bridge._send_event.reset_mock()
+
+    await bridge._handle_command(
+        prepare_command(generation={"sandboxId": "sandbox-1", "createdAt": 0})
+    )
+
+    bridge._send_event.assert_not_awaited()
+    assert not bridge.preservation.fenced
+    assert bridge.preservation._results == {}
+
+
+@pytest.mark.asyncio
+async def test_malformed_prepare_generation_cannot_replay_cached_result() -> None:
+    bridge = make_bridge(PreservationHarness())
+    await establish_generation(bridge)
+    await bridge._handle_command(prepare_command())
+    bridge._send_event.reset_mock()
+
+    await bridge._handle_command(
+        prepare_command(generation={"sandboxId": "sandbox-1", "createdAt": 0})
+    )
+
+    bridge._send_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_by_ms", [True, "later", float("nan"), float("inf"), 10**1000])
+async def test_valid_generation_with_invalid_deadline_returns_invalid_command(stop_by_ms) -> None:
+    bridge = make_bridge(PreservationHarness())
+    await establish_generation(bridge)
+    bridge._send_event.reset_mock()
+
+    await bridge._handle_command(prepare_command(stopByMs=stop_by_ms))
+
+    result = bridge._send_event.await_args.args[0]
+    assert result["generation"] == GENERATION
+    assert result["error"] == "invalid_command"
+    assert result["executionStopped"] is False
+    assert not bridge.preservation.fenced
 
 
 @pytest.mark.asyncio

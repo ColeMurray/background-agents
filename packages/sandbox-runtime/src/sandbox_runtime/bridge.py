@@ -78,6 +78,8 @@ if TYPE_CHECKING:
 
 configure_logging()
 
+MAX_SAFE_GENERATION_CREATED_AT = 9_007_199_254_740_991
+
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
     """Parse the control plane's explicit Git author mode without inference."""
@@ -1017,13 +1019,19 @@ class AgentBridge:
         created_at = value.get("createdAt")
         if not isinstance(sandbox_id, str) or not sandbox_id:
             return None
-        if (
-            isinstance(created_at, bool)
-            or not isinstance(created_at, (int, float))
-            or not math.isfinite(created_at)
-        ):
+        if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
             return None
-        return {"sandboxId": sandbox_id, "createdAt": created_at}
+        if isinstance(created_at, int):
+            valid_created_at = 0 < created_at <= MAX_SAFE_GENERATION_CREATED_AT
+        else:
+            valid_created_at = (
+                math.isfinite(created_at)
+                and created_at.is_integer()
+                and 0 < created_at <= MAX_SAFE_GENERATION_CREATED_AT
+            )
+        if not valid_created_at:
+            return None
+        return {"sandboxId": sandbox_id, "createdAt": int(created_at)}
 
     async def _handle_sandbox_generation(self, cmd: dict[str, Any]) -> None:
         """Establish or advance the authenticated retained-runtime generation."""
@@ -1036,10 +1044,9 @@ class AgentBridge:
     async def _handle_prepare_preservation(self, cmd: dict[str, Any]) -> None:
         """Fence admission and confirm the active harness execution stopped."""
         generation = self._parse_generation(cmd.get("generation"))
-        if isinstance(cmd.get("stopByMs"), bool) or (
-            isinstance(cmd.get("stopByMs"), (int, float)) and not math.isfinite(cmd["stopByMs"])
-        ):
-            generation = None
+        if generation is None:
+            self.log.warn("bridge.preservation_generation_invalid")
+            return
 
         async def contain_activity(deadline: float) -> bool:
             harness = self._require_harness()

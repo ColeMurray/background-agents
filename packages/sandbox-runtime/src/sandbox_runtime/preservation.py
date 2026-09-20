@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -61,7 +62,7 @@ class PreservationCoordinator:
         self,
         command: dict[str, Any],
         *,
-        parsed_generation: Generation | None,
+        parsed_generation: Generation,
         contain_activity: Callable[[float], Awaitable[bool]],
         persist_session: Callable[[], Awaitable[None]],
         log: StructuredLogger,
@@ -74,8 +75,18 @@ class PreservationCoordinator:
         if cached := self._results.get(operation_id):
             return dict(cached)
 
+        deadline_at_ms: float | None = None
+        if not isinstance(stop_by_ms, bool) and isinstance(stop_by_ms, (int, float)):
+            try:
+                candidate_deadline = float(stop_by_ms)
+            except OverflowError:
+                pass
+            else:
+                if math.isfinite(candidate_deadline):
+                    deadline_at_ms = candidate_deadline
+
         error: str | None = None
-        if parsed_generation is None or not isinstance(stop_by_ms, (int, float)):
+        if deadline_at_ms is None:
             error = "invalid_command"
         elif self.generation is None:
             error = "generation_not_established"
@@ -86,11 +97,10 @@ class PreservationCoordinator:
 
         execution_stopped = False
         if error is None:
-            assert parsed_generation is not None
-            assert isinstance(stop_by_ms, (int, float))
+            assert deadline_at_ms is not None
             self.state = Draining(parsed_generation, operation_id)
             deadline = asyncio.get_running_loop().time() + max(
-                (float(stop_by_ms) - time.time() * 1000) / 1000,
+                (deadline_at_ms - time.time() * 1000) / 1000,
                 0.0,
             )
             try:
@@ -113,7 +123,7 @@ class PreservationCoordinator:
         result: Event = {
             "type": "preservation_prepared",
             "operationId": operation_id,
-            "generation": parsed_generation or command.get("generation"),
+            "generation": parsed_generation,
             "executionStopped": execution_stopped,
             **({"messageId": message_id} if isinstance(message_id, str) else {}),
             **({"error": error} if error is not None else {}),
