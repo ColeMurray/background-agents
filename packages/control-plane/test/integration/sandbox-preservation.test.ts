@@ -65,6 +65,45 @@ async function readPreservation(stub: DurableObjectStub): Promise<Record<string,
 }
 
 describe("sandbox preservation wiring", () => {
+  it("rejects push from saved state when no live sandbox is available", async () => {
+    const { stub } = await initNamedSession(`preservation-saved-push-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    await seedPreservation(stub, {
+      phase: "saved",
+      provider: "modal",
+      providerObjectId: "provider-1",
+      sourceRetired: true,
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+      generationReady: true,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "snapshot-1",
+        provider: "modal",
+        savedAtMs: Date.now(),
+        runtimeVersion: "v71-runtime",
+      },
+    });
+
+    const result = await runInSessionDO(stub, (instance) =>
+      componentsOf(instance).pushService.pushBranchToRemote({
+        remoteUrl: "https://token@example.com/acme/web-app.git",
+        redactedRemoteUrl: "https://***@example.com/acme/web-app.git",
+        refspec: "HEAD:refs/heads/feature/saved",
+        targetBranch: "feature/saved",
+        repoOwner: "acme",
+        repoName: "web-app",
+        force: false,
+      })
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "Sandbox must be started before pushing; retry once ready",
+    });
+  });
+
   it("snapshots an unmanaged destructive provider before inactivity destroys it", async () => {
     const { stub } = await initNamedSession(`preservation-unmanaged-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });

@@ -43,6 +43,13 @@ interface PreservationDeps {
   log?: Logger;
 }
 
+export type PreservationAdmissionDecision =
+  | "unmanaged"
+  | "ready"
+  | "restore_required"
+  | "spawn_required"
+  | "held";
+
 /** One durable owner of planned stopping. Provider side effects never imply a saved receipt. */
 export class SandboxPreservation {
   private activeOperation: string | null = null;
@@ -213,13 +220,15 @@ export class SandboxPreservation {
   }
 
   /** Synchronous admission gate; call again after every dispatch-path await. */
-  mayDispatch(): boolean {
+  admissionDecision(): PreservationAdmissionDecision {
     const state = this.deps.store.read();
-    if (!state) return true; // Legacy generations retain their existing policy until a new launch.
-    if (state.phase === "saved") return true; // Existing queue drives restore, never prompt replay.
-    if (state.phase !== "running" || !this.current(state)) return false;
-    if (!this.providerMatches(state)) return false;
-    if (state.lifecyclePolicy === "legacy") return !state.checkpointInFlight;
+    if (!state) return "unmanaged";
+    if (state.phase === "saved") return "restore_required";
+    if (state.phase !== "running" || !this.current(state)) return "held";
+    if (!this.providerMatches(state)) return "held";
+    if (state.lifecyclePolicy === "legacy") {
+      return state.checkpointInFlight ? "held" : "ready";
+    }
     // A provider-create failure with no connected runtime/receipt still uses
     // the existing fresh-spawn retry policy. Unknown preservation never does.
     if (
@@ -228,14 +237,29 @@ export class SandboxPreservation {
       !state.providerObjectId &&
       this.deps.sandbox.getSandbox()?.status === "failed"
     )
-      return true;
+      return "spawn_required";
     if (state.drainAtMs !== null && this.now() >= state.drainAtMs) {
       this.deps.background.submit(() => this.request("sandbox_lifetime_expiring"), {
         name: "sandbox.preserve",
       });
-      return false;
+      return "held";
     }
-    return state.lifetimeKind !== "unknown" && state.generationReady && !state.checkpointInFlight;
+    return state.lifetimeKind !== "unknown" && state.generationReady && !state.checkpointInFlight
+      ? "ready"
+      : "held";
+  }
+
+  /** Queue compatibility: saved state may restore and failed startup may retry. */
+  mayDispatch(): boolean {
+    switch (this.admissionDecision()) {
+      case "unmanaged":
+      case "ready":
+      case "restore_required":
+      case "spawn_required":
+        return true;
+      case "held":
+        return false;
+    }
   }
 
   isHolding(): boolean {

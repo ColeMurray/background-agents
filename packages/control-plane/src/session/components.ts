@@ -587,7 +587,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       isHolding: () => preservation.isHolding(),
     }
   );
-  const pushService = new SandboxPushService(log, wsManager, () => preservation.mayDispatch());
+  const pushService = new SandboxPushService(log, wsManager, () =>
+    preservation.admissionDecision()
+  );
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     log,
     messageRepository,

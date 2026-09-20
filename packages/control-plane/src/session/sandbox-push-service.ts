@@ -2,6 +2,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import type { PreservationAdmissionDecision } from "./sandbox-preservation";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 export type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
@@ -28,7 +29,7 @@ export class SandboxPushService {
   constructor(
     private readonly log: Logger,
     private readonly wsManager: SessionWebSocketManager,
-    private readonly mayDispatch: () => boolean = () => true
+    private readonly preservationAdmission: () => PreservationAdmissionDecision = () => "unmanaged"
   ) {}
 
   /**
@@ -42,8 +43,16 @@ export class SandboxPushService {
   async pushBranchToRemote(
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    if (!this.mayDispatch())
-      return { success: false, error: "Sandbox preservation is in progress; push is held" };
+    const admission = this.preservationAdmission();
+    if (admission !== "ready" && admission !== "unmanaged") {
+      if (admission === "held") {
+        return { success: false, error: "Sandbox preservation is in progress; push is held" };
+      }
+      return {
+        success: false,
+        error: "Sandbox must be started before pushing; retry once ready",
+      };
+    }
     // The ready socket, not the attached one: a bridge attached ahead of its
     // boot would otherwise be handed a push it cannot run, and the caller
     // would wait out PUSH_TIMEOUT_MS for an answer that never comes. Nor is
@@ -58,8 +67,14 @@ export class SandboxPushService {
         });
         return { success: false, error: "Sandbox is still starting; retry once it is ready" };
       }
-      this.log.info("No sandbox connected, assuming branch was pushed manually");
-      return { success: true };
+      if (admission === "unmanaged") {
+        this.log.info("No sandbox connected, assuming branch was pushed manually");
+        return { success: true };
+      }
+      this.log.info("Managed sandbox is not connected, refusing push", {
+        branch_name: pushSpec.targetBranch,
+      });
+      return { success: false, error: "Sandbox is disconnected; retry once it is ready" };
     }
 
     const sandboxWs = target.socket;
