@@ -3,6 +3,7 @@ import { z } from "zod";
 /** Versioned filesystem/runtime contracts, not infrastructure provider names. */
 export const sandboxExecutionProfileSchema = z.enum(["default", "docker-v1"]);
 export type SandboxExecutionProfile = z.infer<typeof sandboxExecutionProfileSchema>;
+export const DEFAULT_SANDBOX_EXECUTION_PROFILE = "default" satisfies SandboxExecutionProfile;
 
 export const DEFAULT_DOCKER_CPU_CORES = 2;
 export const DEFAULT_DOCKER_MEMORY_MIB = 4096;
@@ -31,6 +32,6 @@ export function parseSessionSandboxExecution(
   raw: string | null | undefined
 ): SessionSandboxExecution {
   return raw == null
-    ? { profile: "default" }
+    ? { profile: DEFAULT_SANDBOX_EXECUTION_PROFILE }
     : sessionSandboxExecutionSchema.parse(JSON.parse(raw));
 }

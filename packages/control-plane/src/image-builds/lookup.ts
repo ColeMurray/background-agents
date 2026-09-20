@@ -9,6 +9,7 @@ import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
 import type { ImageBuildProvider } from "./model";
 import { resolveScopeEnabled } from "./scope";
 import type { SqlDatabase } from "../db/sql-database";
+import { DEFAULT_SANDBOX_EXECUTION_PROFILE } from "@open-inspect/shared/types/sandbox-execution";
 
 export function createImageBuildLookup(
   db: SqlDatabase,
@@ -16,7 +17,7 @@ export function createImageBuildLookup(
 ): ImageBuildLookup {
   const store = new ImageBuildStore(db);
   return {
-    getLatestReady: async (scope, profile = "default") => {
+    getLatestReady: async (scope, profile = DEFAULT_SANDBOX_EXECUTION_PROFILE) => {
       // Enablement (and entity existence) is the scope resolver's answer;
       // the store read is a plain row lookup.
       if (!(await resolveScopeEnabled(db, scope))) return null;

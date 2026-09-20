@@ -4,7 +4,10 @@ import { repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
 import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 import { minimumRebuildGenerationForProfile } from "../sandbox/runtime-manifest";
-import type { SandboxExecutionProfile } from "@open-inspect/shared/types/sandbox-execution";
+import {
+  DEFAULT_SANDBOX_EXECUTION_PROFILE,
+  type SandboxExecutionProfile,
+} from "@open-inspect/shared/types/sandbox-execution";
 
 // Runtime generations are one sequence shared by every image-build provider.
 // The minimum compatible generation carries the generic provider-account token
@@ -23,7 +26,7 @@ export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
   rows: ImageBuildRecordView[],
   provider: ImageBuildProvider,
-  executionProfile: SandboxExecutionProfile = "default"
+  executionProfile: SandboxExecutionProfile = DEFAULT_SANDBOX_EXECUTION_PROFILE
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
   if (providerRows.some((row) => row.status === "building")) {

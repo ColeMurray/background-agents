@@ -15,6 +15,7 @@ import type { SqlDatabase } from "./sql-database";
 import { parseRepositoryShasJson } from "../image-builds/provenance";
 import { minimumRebuildGenerationForProfile } from "../sandbox/runtime-manifest";
 import {
+  DEFAULT_SANDBOX_EXECUTION_PROFILE,
   sessionSandboxExecutionSchema,
   type SessionSandboxExecution,
   type SandboxExecutionProfile,
@@ -489,7 +490,7 @@ export class ImageBuildStore {
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
     repositoriesFingerprint: string,
-    executionProfile: SandboxExecutionProfile = "default"
+    executionProfile: SandboxExecutionProfile = DEFAULT_SANDBOX_EXECUTION_PROFILE
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
@@ -809,7 +810,7 @@ export class ImageBuildStore {
   async getLatestReadyForSpawn(
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
-    executionProfile: SandboxExecutionProfile = "default"
+    executionProfile: SandboxExecutionProfile = DEFAULT_SANDBOX_EXECUTION_PROFILE
   ): Promise<ImageBuildRow | null> {
     return await this.db
       .prepare(
@@ -842,7 +843,7 @@ export class ImageBuildStore {
   async getReconciliationStatus(
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
-    executionProfile: SandboxExecutionProfile = "default"
+    executionProfile: SandboxExecutionProfile = DEFAULT_SANDBOX_EXECUTION_PROFILE
   ): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
