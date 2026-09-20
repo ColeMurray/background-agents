@@ -314,33 +314,17 @@ describe("E2BSandboxProvider", () => {
     expect(result.shouldSpawnFresh).toBe(true);
   });
 
-  it("stopSandbox pauses (resumable), not kills, and treats 404/409 as success", async () => {
+  it("stopSandbox pauses resumable sandboxes instead of killing them", async () => {
     const client = mockClient();
     const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
       providerObjectId: "x",
       sessionId: "s",
       reason: "idle",
+      intent: "preserve",
     });
     expect(res.success).toBe(true);
     expect(client.pauseSandbox).toHaveBeenCalledWith("x");
     expect(client.killSandbox).not.toHaveBeenCalled();
-
-    for (const err of [new E2BNotFoundError("gone"), new E2BConflictError("already paused")]) {
-      const c = mockClient({
-        pauseSandbox: vi.fn(async () => {
-          throw err;
-        }),
-      });
-      expect(
-        (
-          await new E2BSandboxProvider(c, providerConfig).stopSandbox({
-            providerObjectId: "x",
-            sessionId: "s",
-            reason: "idle",
-          })
-        ).success
-      ).toBe(true);
-    }
   });
 
   it("does not claim preservation when the sandbox is missing", async () => {
@@ -399,14 +383,15 @@ describe("E2BSandboxProvider", () => {
     ).resolves.toMatchObject({ success: false });
   });
 
-  it.each(["connecting_timeout", "respawn"])(
-    "stopSandbox KILLS on terminal reason %s",
+  it.each(["connecting_timeout", "respawn", "inactivity_timeout"])(
+    "stopSandbox kills on destroy intent regardless of reason %s",
     async (reason) => {
       const client = mockClient();
       const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
         providerObjectId: "x",
         sessionId: "s",
         reason,
+        intent: "destroy",
       });
       expect(res.success).toBe(true);
       expect(client.killSandbox).toHaveBeenCalledWith("x");
@@ -422,6 +407,7 @@ describe("E2BSandboxProvider", () => {
       providerObjectId: "x",
       sessionId: "s",
       reason: "respawn",
+      intent: "destroy",
       signal,
     });
 

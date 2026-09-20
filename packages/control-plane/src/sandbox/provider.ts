@@ -351,8 +351,8 @@ export interface StopConfig {
   sessionId: string;
   /** Reason for the stop operation */
   reason: string;
-  /** Typed lifecycle intent. Omitted preserves the legacy reason-based behavior. */
-  intent?: "preserve" | "destroy";
+  /** Whether the provider-owned state must remain resumable or be destroyed. */
+  intent: "preserve" | "destroy";
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /** Optional caller deadline for provider cleanup. */

@@ -1042,7 +1042,9 @@ describe("OpenComputerSandboxProvider", () => {
   });
 
   it("hibernates sandboxes on stop", async () => {
-    const client = createMockClient();
+    const client = createMockClient({
+      getSandbox: vi.fn(async () => ({ id: "oc-sandbox-1", state: "hibernated" })),
+    });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
       sandboxAccessPasswordSecret: "secret",
@@ -1053,6 +1055,7 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "session-1",
         reason: "inactivity_timeout",
+        intent: "preserve",
       })
     ).resolves.toEqual({ success: true });
 
@@ -1090,6 +1093,7 @@ describe("OpenComputerSandboxProvider", () => {
         providerObjectId: "oc-sandbox-1",
         sessionId: "session-1",
         reason: "respawn",
+        intent: "destroy",
         signal,
       })
     ).resolves.toEqual({ success: true });

@@ -711,6 +711,7 @@ describe("VercelSandboxProvider", () => {
       providerObjectId: "vercel-session-1",
       sessionId: "session-123",
       reason: "inactivity_timeout",
+      intent: "destroy",
       correlation,
     });
 

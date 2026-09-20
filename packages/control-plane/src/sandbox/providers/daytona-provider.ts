@@ -245,8 +245,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
     try {
       try {
-        const destroy =
-          config.intent === "destroy" || (!config.intent && config.reason === "respawn");
+        const destroy = config.intent === "destroy";
         if (destroy) {
           await this.client.deleteSandbox(config.providerObjectId, ...(signal ? [signal] : []));
         } else {
@@ -274,7 +273,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw classifyDaytonaError(
-        `Failed to ${config.intent === "destroy" || (!config.intent && config.reason === "respawn") ? "delete" : "stop"} Daytona sandbox`,
+        `Failed to ${config.intent === "destroy" ? "delete" : "stop"} Daytona sandbox`,
         error
       );
     }

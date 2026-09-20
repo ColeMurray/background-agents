@@ -33,6 +33,7 @@ import {
   type CreateSandboxResult,
   type SessionRepositoryInfo,
   type SandboxLifetime,
+  type StopConfig,
 } from "../provider";
 import {
   evaluateCircuitBreaker,
@@ -1481,7 +1482,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
       });
       await Promise.race([
-        this.stopProviderSandbox("respawn", controller.signal, providerObjectId),
+        this.stopProviderSandbox("respawn", "destroy", controller.signal, providerObjectId),
         stopTimeoutPromise,
       ]);
       this.storage.updateSandboxModalObjectId(null);
@@ -1520,6 +1521,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private async stopProviderSandbox(
     reason: string,
+    intent: StopConfig["intent"],
     signal?: AbortSignal,
     providerObjectId?: string
   ): Promise<void> {
@@ -1538,6 +1540,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       providerObjectId: objectId,
       sessionId: session.session_name || session.id,
       reason,
+      intent,
       signal,
     });
 
@@ -1604,7 +1607,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         // can still connect and serve the session.
         this.storage.fenceSandboxGeneration();
         try {
-          await this.stopProviderSandbox("connecting_timeout");
+          await this.stopProviderSandbox("connecting_timeout", "destroy");
         } catch (error) {
           this.log.warn("Provider stop failed after connecting timeout", {
             error: error instanceof Error ? error.message : String(error),
@@ -1642,7 +1645,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       if (this.usesProviderManagedStop()) {
         try {
-          await this.stopProviderSandbox("heartbeat_timeout");
+          await this.stopProviderSandbox("heartbeat_timeout", "preserve");
         } catch (error) {
           this.log.warn("Provider stop failed after heartbeat timeout", {
             error: error instanceof Error ? error.message : String(error),
@@ -1656,7 +1659,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         // stopped heartbeating is not there to receive it.
         if (this.canStopProviderSandbox()) {
           try {
-            await this.stopProviderSandbox("heartbeat_timeout");
+            await this.stopProviderSandbox("heartbeat_timeout", "destroy");
           } catch (error) {
             this.log.warn("Provider stop failed after heartbeat timeout", {
               error: error instanceof Error ? error.message : String(error),
@@ -1667,7 +1670,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         if (this.canStopProviderSandbox()) {
           await this.triggerSnapshot("heartbeat_timeout");
           try {
-            await this.stopProviderSandbox("heartbeat_timeout");
+            await this.stopProviderSandbox("heartbeat_timeout", "destroy");
           } catch (error) {
             this.log.warn("Provider stop failed after heartbeat timeout", {
               error: error instanceof Error ? error.message : String(error),
@@ -1730,7 +1733,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
         if (this.usesProviderManagedStop()) {
           try {
-            await this.stopProviderSandbox("inactivity_timeout");
+            await this.stopProviderSandbox("inactivity_timeout", "preserve");
           } catch (error) {
             this.log.error("Provider stop failed after inactivity timeout", {
               error: error instanceof Error ? error.message : String(error),
@@ -1741,7 +1744,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           this.wsManager.sendToSandbox({ type: "shutdown" });
           if (this.canStopProviderSandbox()) {
             try {
-              await this.stopProviderSandbox("inactivity_timeout");
+              await this.stopProviderSandbox("inactivity_timeout", "destroy");
             } catch (error) {
               this.log.error("Provider stop failed after inactivity timeout", {
                 error: error instanceof Error ? error.message : String(error),
@@ -1820,7 +1823,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     if (this.canStopProviderSandbox()) {
       this.isTerminatingSandbox = true;
       try {
-        await this.stopProviderSandbox("boot_budget_exceeded");
+        await this.stopProviderSandbox("boot_budget_exceeded", "destroy");
       } catch (error) {
         this.log.warn("Provider stop failed after boot budget", {
           error: error instanceof Error ? error.message : String(error),
@@ -1853,7 +1856,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.wsManager.detachSandboxWebSocket(1011, closeReason);
     if (canStopProvider) {
       try {
-        await this.stopProviderSandbox(trigger);
+        await this.stopProviderSandbox(
+          trigger,
+          this.usesProviderManagedStop() ? "preserve" : "destroy"
+        );
       } catch (error) {
         this.log.warn("Provider stop failed for unresponsive sandbox", {
           trigger,
@@ -1897,7 +1903,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
 
     try {
-      if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error");
+      if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error", "destroy");
     } catch (error) {
       this.log.warn("Provider stop failed after fatal runtime error", {
         error: error instanceof Error ? error.message : String(error),

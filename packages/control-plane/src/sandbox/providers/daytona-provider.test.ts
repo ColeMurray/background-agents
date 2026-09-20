@@ -111,6 +111,7 @@ const baseStopConfig: StopConfig = {
   providerObjectId: "daytona-sandbox-id",
   sessionId: "session-123",
   reason: "inactivity_timeout",
+  intent: "preserve",
 };
 
 // ==================== Tests ====================
@@ -589,7 +590,9 @@ describe("DaytonaSandboxProvider", () => {
       expect(client.getSandbox).toHaveBeenCalledWith("daytona-sandbox-id", expect.any(AbortSignal));
     });
     it("happy path: stops sandbox", async () => {
-      const client = createMockClient();
+      const client = createMockClient({
+        getSandbox: async () => ({ id: "daytona-sandbox-id", state: "stopped" }),
+      });
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.stopSandbox(baseStopConfig);
@@ -603,7 +606,12 @@ describe("DaytonaSandboxProvider", () => {
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
       const signal = AbortSignal.timeout(1_000);
 
-      const result = await provider.stopSandbox({ ...baseStopConfig, reason: "respawn", signal });
+      const result = await provider.stopSandbox({
+        ...baseStopConfig,
+        reason: "respawn",
+        intent: "destroy",
+        signal,
+      });
 
       expect(result.success).toBe(true);
       expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-sandbox-id", signal);
@@ -612,13 +620,13 @@ describe("DaytonaSandboxProvider", () => {
 
     it("returns success when sandbox not found (already gone)", async () => {
       const client = createMockClient({
-        stopSandbox: async () => {
+        deleteSandbox: async () => {
           throw new DaytonaNotFoundError("not found");
         },
       });
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
-      const result = await provider.stopSandbox(baseStopConfig);
+      const result = await provider.stopSandbox({ ...baseStopConfig, intent: "destroy" });
 
       expect(result.success).toBe(true);
     });

@@ -172,8 +172,6 @@ export class E2BSandboxProvider implements SandboxProvider {
    * Stop reasons after which the provider object cannot be resumed, including
    * replacement by a newly-created sandbox.
    */
-  private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout", "respawn"]);
-
   /**
    * Session continuity on E2B is provider-managed: stop pauses the sandbox and
    * resume reconnects to it, so there is no session snapshot/restore pair here.
@@ -459,9 +457,7 @@ export class E2BSandboxProvider implements SandboxProvider {
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
-    const terminal =
-      config.intent === "destroy" ||
-      (!config.intent && E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason));
+    const terminal = config.intent === "destroy";
     try {
       try {
         if (terminal) {

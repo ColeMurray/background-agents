@@ -846,6 +846,7 @@ describe("SandboxLifecycleManager", () => {
             providerObjectId: "modal-obj-123",
             sessionId: "test-session",
             reason: "respawn",
+            intent: "destroy",
             signal: expect.any(AbortSignal),
           })
         );
@@ -2428,7 +2429,7 @@ describe("SandboxLifecycleManager", () => {
         await manager.handleAlarm();
 
         expect(stopSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: "boot_budget_exceeded" })
+          expect.objectContaining({ reason: "boot_budget_exceeded", intent: "destroy" })
         );
       });
 
@@ -3003,6 +3004,7 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({
           providerObjectId: "modal-obj-123",
           reason: "inactivity_timeout",
+          intent: "destroy",
         })
       );
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
@@ -3084,6 +3086,7 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({
           providerObjectId: "modal-obj-123",
           reason: "inactivity_timeout",
+          intent: "preserve",
         })
       );
       expect(storage.calls).toContain("clearSandboxAccessUrl:codeServer");
@@ -3224,6 +3227,9 @@ describe("SandboxLifecycleManager", () => {
 
       expect(order).toEqual(["fence", "stop"]);
       expect(sandbox.fenced).toBe(1);
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "connecting_timeout", intent: "destroy" })
+      );
     });
 
     it("leaves a watchdog-failed generation unfenced when the provider cannot be stopped, so its late bridge may self-heal", async () => {
@@ -3339,7 +3345,9 @@ describe("SandboxLifecycleManager", () => {
 
         await manager.terminateUnresponsiveSandbox(trigger);
 
-        expect(stopSandbox).toHaveBeenCalledWith(expect.objectContaining({ reason: trigger }));
+        expect(stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: trigger, intent: "destroy" })
+        );
         expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(1011, closeReason);
       }
     );
@@ -3416,6 +3424,9 @@ describe("SandboxLifecycleManager", () => {
         "Fatal sandbox runtime error"
       );
       expect(manager.isSpawning()).toBe(true);
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "fatal_runtime_error", intent: "destroy" })
+      );
       await manager.spawnSandbox();
       expect(createSandbox).not.toHaveBeenCalled();
 
