@@ -218,9 +218,11 @@ class AgentBridge:
         else:
             self.harness = harness if harness is not None else self._harness_factory()
         # Set once the harness is attached and `ready` has been sent; prompts
-        # received before then wait on it, and heartbeats say `booting`. A
-        # classic bridge is attached from construction: it only starts after
-        # boot, and opens its harness before its first connect.
+        # received before then wait on it. `ready` is the readiness signal;
+        # heartbeats are liveness-only, with status retained for compatibility
+        # with control planes whose event schema still requires it. A classic
+        # bridge is attached from construction: it only starts after boot, and
+        # opens its harness before its first connect.
         self._boot_ready = asyncio.Event()
         if not early_connect:
             self._boot_ready.set()
@@ -582,6 +584,7 @@ class AgentBridge:
         return {
             "type": "heartbeat",
             "sandboxId": self.sandbox_id,
+            "status": "ready" if self._boot_ready.is_set() else "booting",
             "timestamp": time.time(),
         }
 
