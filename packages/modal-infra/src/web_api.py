@@ -21,6 +21,7 @@ from typing import Annotated, Any, Self
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
+from modal.exception import TimeoutError as ModalTimeoutError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
@@ -527,7 +528,7 @@ async def api_snapshot_sandbox(
                 raise HTTPException(status_code=408, detail="snapshot deadline expired")
             try:
                 image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
-            except TimeoutError as exc:
+            except (TimeoutError, ModalTimeoutError) as exc:
                 raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
         else:
             image_id = await manager.take_snapshot(handle)
