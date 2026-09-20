@@ -269,16 +269,20 @@ describe("VercelSandboxProvider", () => {
     response.session.createdAt = 0;
     const client = createMockClient({ createSandbox: vi.fn(async () => response) });
     const provider = new VercelSandboxProvider(client, providerConfig);
-    vi.spyOn(Date, "now").mockReturnValue(5_000);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(5_000);
 
-    const result = await provider.createSandbox(baseCreateConfig);
+    try {
+      const result = await provider.createSandbox(baseCreateConfig);
 
-    expect(result.createdAt).toBe(5_000);
-    expect(result.lifetime).toEqual(
-      expect.objectContaining({
-        expiresAtMs: 5_000 + VERCEL_MAX_SANDBOX_TIMEOUT_MS,
-      })
-    );
+      expect(result.createdAt).toBe(5_000);
+      expect(result.lifetime).toEqual(
+        expect.objectContaining({
+          expiresAtMs: 5_000 + VERCEL_MAX_SANDBOX_TIMEOUT_MS,
+        })
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("exposes and returns VNC access without adding its port to generic tunnels", async () => {
