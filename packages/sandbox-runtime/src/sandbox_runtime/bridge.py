@@ -1156,7 +1156,7 @@ class AgentBridge:
                             await task
                     if task is not None and not task.done():
                         execution_stopped = False
-                    await self._persist_rotated_session_id(harness)
+                    await self._persist_rotated_session_id(harness, strict=True)
             except TimeoutError:
                 error = "stop_deadline_exceeded"
                 if task is not None and not task.done():
@@ -1290,7 +1290,9 @@ class AgentBridge:
         if resumed:
             await self._save_session_id(harness)
 
-    async def _persist_rotated_session_id(self, harness: AgentHarness) -> None:
+    async def _persist_rotated_session_id(
+        self, harness: AgentHarness, *, strict: bool = False
+    ) -> None:
         """A conversation reset rotates the vendor id mid-connection; keep the file current."""
         try:
             persisted = self._read_persisted_session_id()
@@ -1298,9 +1300,11 @@ class AgentBridge:
             self.log.error("agent.session.load_error", exc=e)
             return
         if harness.session_id and harness.session_id != persisted:
-            await self._save_session_id(harness)
+            await self._save_session_id(harness, strict=strict)
 
-    async def _save_session_id(self, harness: AgentHarness | None = None) -> None:
+    async def _save_session_id(
+        self, harness: AgentHarness | None = None, *, strict: bool = False
+    ) -> None:
         """Persist the vendor session id so a snapshot restore can resume it."""
         harness = harness if harness is not None else self._require_harness()
         session_id = harness.session_id
@@ -1309,6 +1313,8 @@ class AgentBridge:
                 self.session_id_file.write_text(session_id)
             except Exception as e:
                 self.log.error("agent.session.save_error", exc=e)
+                if strict:
+                    raise
 
     @staticmethod
     def _record_fatal_error(message: str) -> None:

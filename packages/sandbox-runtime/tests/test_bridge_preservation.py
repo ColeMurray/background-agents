@@ -203,12 +203,13 @@ async def test_new_operation_retries_unconfirmed_stop_without_clearing_fence() -
 
 
 @pytest.mark.asyncio
-async def test_prepare_never_reports_stopped_when_later_flush_fails() -> None:
+async def test_prepare_never_reports_stopped_when_rotated_session_id_save_fails(tmp_path) -> None:
     harness = PreservationHarness()
     bridge = make_bridge(harness)
     await establish_generation(bridge)
     bridge._current_prompt_task = asyncio.create_task(asyncio.Event().wait())
-    bridge._persist_rotated_session_id = AsyncMock(side_effect=OSError("disk unavailable"))
+    bridge.session_id_file = tmp_path / "missing" / "agent-session-id"
+    bridge.legacy_session_id_file = tmp_path / "legacy-session-id"
 
     await bridge._handle_command(prepare_command())
 
