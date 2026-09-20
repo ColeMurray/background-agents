@@ -7,8 +7,13 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import { DEFAULT_TERMINAL_PORT } from "@open-inspect/shared/types/integrations";
 import { deriveVncPassword } from "../sandbox-env";
-import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
+import {
+  DaytonaSandboxProvider,
+  DEFAULT_PREVIEW_EXPIRY_SECONDS,
+  type DaytonaProviderConfig,
+} from "./daytona-provider";
 import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
@@ -413,16 +418,29 @@ describe("DaytonaSandboxProvider", () => {
         ...baseCreateConfig,
         sandboxSettings: {
           terminalEnabled: true,
-          tunnelPorts: [7680, 3000, 3000],
+          tunnelPorts: [DEFAULT_TERMINAL_PORT, 3000, 3000],
         },
       });
       const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
 
-      expect(envVars).toMatchObject({ TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: "7680" });
-      expect(result.ttydUrl).toBe("https://preview.test/7680");
+      expect(envVars).toMatchObject({
+        TERMINAL_ENABLED: "true",
+        TTYD_PROXY_PORT: String(DEFAULT_TERMINAL_PORT),
+      });
+      expect(result.ttydUrl).toBe(`https://preview.test/${DEFAULT_TERMINAL_PORT}`);
       expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
-      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(1, "daytona-sandbox-id", 7680, 3900);
-      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(2, "daytona-sandbox-id", 3000, 3900);
+      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(
+        1,
+        "daytona-sandbox-id",
+        DEFAULT_TERMINAL_PORT,
+        DEFAULT_PREVIEW_EXPIRY_SECONDS
+      );
+      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(
+        2,
+        "daytona-sandbox-id",
+        3000,
+        DEFAULT_PREVIEW_EXPIRY_SECONDS
+      );
       expect(getSignedPreviewUrl).toHaveBeenCalledTimes(2);
     });
 
@@ -443,7 +461,11 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(envVars.TTYD_PROXY_PORT).toBe("7000");
       expect(result.ttydUrl).toBe("https://preview.test/7000");
-      expect(getSignedPreviewUrl).toHaveBeenCalledWith("daytona-sandbox-id", 7000, 3900);
+      expect(getSignedPreviewUrl).toHaveBeenCalledWith(
+        "daytona-sandbox-id",
+        7000,
+        DEFAULT_PREVIEW_EXPIRY_SECONDS
+      );
     });
 
     it("does not start or expose the terminal when disabled", async () => {
@@ -467,7 +489,9 @@ describe("DaytonaSandboxProvider", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const client = createMockClient({
         getSignedPreviewUrl: async (_id, port) => {
-          if (port === 7680) throw new DaytonaApiError("preview unavailable", 500);
+          if (port === DEFAULT_TERMINAL_PORT) {
+            throw new DaytonaApiError("preview unavailable", 500);
+          }
           return { url: `https://preview.test/${port}` };
         },
       });
@@ -656,7 +680,11 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(result.ttydUrl).toBe("https://preview.test/7002");
       expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
-      expect(getSignedPreviewUrl).toHaveBeenCalledWith("daytona-sandbox-id", 7002, 3900);
+      expect(getSignedPreviewUrl).toHaveBeenCalledWith(
+        "daytona-sandbox-id",
+        7002,
+        DEFAULT_PREVIEW_EXPIRY_SECONDS
+      );
     });
 
     it("tunnel URL failure does not fail the resume", async () => {
@@ -853,7 +881,7 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
       RESTORED_FROM_SNAPSHOT: "false",
       OI_DEFERRED_START: "false",
       TERMINAL_ENABLED: "true",
-      TTYD_PROXY_PORT: "7680",
+      TTYD_PROXY_PORT: String(DEFAULT_TERMINAL_PORT),
     });
     expect(result.ttydUrl).toBe("https://preview.test/signed");
     // Presence of any callback key is what the runtime reads as a build

@@ -59,7 +59,7 @@ const log = createLogger("daytona-provider");
 // Constants (ported from packages/daytona-infra/src/config.py)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
+export const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
 
 /** How long a spawn waits for a cold prebuilt image before falling back to base. */
 const PREBUILT_ACTIVATION_TIMEOUT_MS = 45_000;
