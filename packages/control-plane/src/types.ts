@@ -56,6 +56,8 @@ export interface EnvConfig {
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
+  SLACK_BOT_URL?: string; // Node only: Slack bot origin; Cloudflare keeps its service binding
+  LINEAR_BOT_URL?: string; // Node only: Linear bot origin; Cloudflare keeps its service binding
   ALLOWED_USERS?: string;
   ALLOWED_EMAIL_DOMAINS?: string;
   ALLOWED_EMAILS?: string;

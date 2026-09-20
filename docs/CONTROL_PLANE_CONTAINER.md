@@ -82,6 +82,28 @@ SERVICE_AUTH_SECRET=<the SERVICE_AUTH_SECRET_WEB value from .env>
 Then `npm run dev -w @open-inspect/web`. The container's `WEB_APP_URL` must be the web app's origin
 (`http://localhost:3000` by default), because browser sign-in is origin-bound.
 
+## Connecting bot workers
+
+The bots still run on Cloudflare. To send callbacks and scheduler requests from
+the Node control plane, set `SLACK_BOT_URL` and/or `LINEAR_BOT_URL` to the corresponding
+worker's HTTPS origin in `.env`, and supply its matching
+`SERVICE_AUTH_SECRET_SLACK_BOT` / `SERVICE_AUTH_SECRET_LINEAR_BOT`. Each secret must
+match the receiver's configuration. Omit a URL when that bot is not deployed.
+Configured URLs without their secrets fail boot before data files are opened.
+
+Origins cannot contain credentials, a path prefix, query or fragment. Plain HTTP
+is allowed only for exact loopback hosts in local development; loopback inside
+Compose means the app container itself, not your laptop. Requests have a ten-second
+deadline (including response-body consumption), honor caller cancellation, and
+reject redirects. The adapter changes only the origin; callback body HMACs and
+the existing jobs/scheduler retry policies are unchanged. Cloudflare deployments
+continue using service bindings and ignore these URL settings.
+
+This enables **control-plane-to-bot** traffic only. Configuring the reverse
+bot-to-Node route is separate work (COL-107). Validate with isolated staging bot
+identities before enabling production notifications; local tests do not prove
+Cloudflare ingress or end-to-end bot routing.
+
 ## Reaching the container from a sandbox
 
 A sandbox connects back to the control plane over a WebSocket at `WORKER_URL`, so that URL has to be
@@ -119,11 +141,12 @@ lists sessions whose files are gone, and the host opens each of those as an empt
 next touched, with no pending deadlines. The entrypoint logs a warning to that effect after every
 restore. Treat the replica as protection for the global store, not as recovery of a deployment.
 
-`jobs.db` is left out of the replica for the same reason the alarm index is: what it holds is
-reconstructible from what _is_ replicated. Every job the control plane produces today is an
-image-build finalization, and the image-build scheduler republishes those from `global.db` on its
-cron slot — a build still `building` with an accepted completion and no live lease. A future job
-kind that cannot be rebuilt that way, such as a session callback, would have to revisit this.
+`jobs.db` is not included in the continuous replica. Image-build finalizations can
+be republished from `global.db`, but session callback jobs cannot. A restart on the
+same volume preserves accepted callbacks; a global-store-only restore does not.
+Use a stopped whole-volume snapshot when pending callback recovery is required.
+See [session callback durability](./SESSION_CALLBACK_JOBS.md) for the acceptance
+boundary and recovery limitations.
 
 `cache.db` is deliberately excluded from that replication: it holds the repositories listing and a
 live GitHub installation token, neither of which belongs in a backup bucket, and a cache refills by

@@ -61,9 +61,29 @@ import { createSessionRuntimeEnv } from "../session/runtime-env";
 import { createFileSessionStoreProvider } from "./session-store";
 import { openNodeSqlDatabase } from "./sqlite-database";
 import { createSessionUpgradeHandler, MAX_MESSAGE_BYTES } from "./websocket-upgrade";
+import { createUrlFetchClient } from "./url-fetch-client";
+import type { FetchClient } from "../platform-ports";
 
 /** The global store's file inside the data directory. */
 export const GLOBAL_STORE_FILE = "global.db";
+
+function configuredBotClient(
+  config: EnvConfig,
+  bot: "SLACK_BOT" | "LINEAR_BOT"
+): FetchClient | undefined {
+  const url = config[`${bot}_URL`];
+  if (!url) return undefined;
+  if (!config[`SERVICE_AUTH_SECRET_${bot}`]) {
+    throw new Error(`${bot}_URL requires SERVICE_AUTH_SECRET_${bot}`);
+  }
+  try {
+    return createUrlFetchClient(url);
+  } catch {
+    throw new Error(
+      `${bot}_URL must be an HTTPS origin without credentials, path, query or fragment (HTTP loopback is allowed)`
+    );
+  }
+}
 
 export interface NodeHostOptions {
   config: EnvConfig;
@@ -126,6 +146,10 @@ async function boot(
 ): Promise<NodeHost> {
   const { config, settings } = options;
   const startedAtMs = Date.now();
+
+  // Validate before creating data files; omitted bot deployments stay optional.
+  const slackBot = configuredBotClient(config, "SLACK_BOT");
+  const linearBot = configuredBotClient(config, "LINEAR_BOT");
 
   ensurePrivateDirectory(settings.dataDir);
 
@@ -194,6 +218,8 @@ async function boot(
     REPOS_CACHE: new SqlCacheStore(cacheDb),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
     JOBS: jobs,
+    SLACK_BOT: slackBot,
+    LINEAR_BOT: linearBot,
   };
   const env: Env = { ...config, ...platform };
 

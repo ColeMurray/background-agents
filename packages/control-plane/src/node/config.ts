@@ -55,6 +55,8 @@ const ENV_CONFIG_KEYS = {
   SCM_PROVIDER: true,
   WORKER_URL: true,
   WEB_APP_URL: true,
+  SLACK_BOT_URL: true,
+  LINEAR_BOT_URL: true,
   ALLOWED_USERS: true,
   ALLOWED_EMAIL_DOMAINS: true,
   ALLOWED_EMAILS: true,
