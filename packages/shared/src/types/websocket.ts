@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
-import { shutdownRecoveryActionSchema } from "./sandbox-preservation";
+import { shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 
 export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 

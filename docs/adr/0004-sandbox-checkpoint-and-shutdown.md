@@ -97,15 +97,22 @@ message.
 ### Compatibility and terminology
 
 Use shutdown terminology for the internal lifecycle operation and checkpoint/recovery terminology
-for the distinct concepts. Retain existing `preservation` wire messages, shared schemas, and SQLite
-storage names for compatibility with deployed runtimes and clients; a terminology cleanup must not
-silently become a protocol or data migration. Persisted recovery receipts remain internal and are
+for the distinct concepts. Retain existing `preservation` wire message identifiers, serialized
+fields, and SQLite storage names for compatibility with deployed runtimes and clients; a terminology
+cleanup must not silently become a protocol or data migration. Source module, type, and schema
+variable names are not wire contracts. Persisted recovery receipts remain internal and are
 translated into domain decisions rather than returned as an overloaded artifact identifier.
 
 Internal policies, repositories, collaborators, and their test files use `shutdown` naming,
-including `shutdown-policy.ts` and `sandbox-shutdown-repository.ts`. The shared
-`sandbox-preservation` schema module and runtime protocol definitions retain the deployed protocol
-vocabulary. These compatibility names do not extend to internal lifecycle APIs or UI callbacks.
+including `shutdown-policy.ts` and `sandbox-shutdown-repository.ts`. The shared `sandbox-shutdown`
+module exports `SandboxShutdownState` and `sandboxShutdownSchema` without changing their serialized
+shape. Runtime `shutdown_preparation.py` exposes `ShutdownPreparationCoordinator`: it owns fencing
+and preparation, not provider checkpoint capture or retirement. Internal lifecycle APIs, UI
+callbacks, and user-facing wording use shutdown terminology too.
+
+`MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION` names the existing protocol-support threshold; the
+runtime manifest keys, version string, and generation values remain unchanged. Existing log-event
+identifiers also remain stable until their dashboard and alert consumers are reviewed explicitly.
 
 ## Consequences
 

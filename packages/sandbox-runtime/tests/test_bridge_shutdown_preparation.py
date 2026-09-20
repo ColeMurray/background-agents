@@ -1,4 +1,4 @@
-"""Final-preservation runtime fencing and execution-stop tests."""
+"""Shutdown-preparation runtime fencing and execution-stop tests."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ GENERATION = {"sandboxId": "sandbox-1", "createdAt": 1000}
 MAX_SAFE_GENERATION_CREATED_AT = 9_007_199_254_740_991
 
 
-class PreservationHarness(ScriptedHarness):
+class ShutdownPreparationHarness(ScriptedHarness):
     def __init__(self, *, stopped: bool = True, wait: asyncio.Event | None = None) -> None:
         super().__init__()
         self.stopped = stopped
@@ -33,7 +33,7 @@ class PreservationHarness(ScriptedHarness):
         return self.stopped
 
 
-def make_bridge(harness: PreservationHarness) -> AgentBridge:
+def make_bridge(harness: ShutdownPreparationHarness) -> AgentBridge:
     bridge = AgentBridge(
         sandbox_id="sandbox-1",
         session_id="session-1",
@@ -94,7 +94,7 @@ def test_generation_parser_matches_shared_schema_boundary(value, expected) -> No
 
 @pytest.mark.asyncio
 async def test_malformed_prepare_generation_is_dropped_without_state() -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     bridge._send_event.reset_mock()
 
     await bridge._handle_command(
@@ -102,13 +102,13 @@ async def test_malformed_prepare_generation_is_dropped_without_state() -> None:
     )
 
     bridge._send_event.assert_not_awaited()
-    assert not bridge.preservation.fenced
-    assert bridge.preservation._results == {}
+    assert not bridge.shutdown_preparation.fenced
+    assert bridge.shutdown_preparation._results == {}
 
 
 @pytest.mark.asyncio
 async def test_malformed_prepare_generation_cannot_replay_cached_result() -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     await bridge._handle_command(prepare_command())
     bridge._send_event.reset_mock()
@@ -123,7 +123,7 @@ async def test_malformed_prepare_generation_cannot_replay_cached_result() -> Non
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stop_by_ms", [True, "later", float("nan"), float("inf"), 10**1000])
 async def test_valid_generation_with_invalid_deadline_returns_invalid_command(stop_by_ms) -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     bridge._send_event.reset_mock()
 
@@ -133,15 +133,15 @@ async def test_valid_generation_with_invalid_deadline_returns_invalid_command(st
     assert result["generation"] == GENERATION
     assert result["error"] == "invalid_command"
     assert result["executionStopped"] is False
-    assert not bridge.preservation.fenced
+    assert not bridge.shutdown_preparation.fenced
 
 
 @pytest.mark.asyncio
-async def test_preservation_override_wins_when_prompt_returns_success_during_cancellation() -> None:
+async def test_shutdown_override_wins_when_prompt_returns_success_during_cancellation() -> None:
     entered = asyncio.Event()
     cancelled = asyncio.Event()
 
-    class RacingHarness(PreservationHarness):
+    class RacingHarness(ShutdownPreparationHarness):
         async def run_prompt(self, prompt, emit):
             await emit({"type": "token", "messageId": prompt.message_id, "content": "partial"})
             entered.set()
@@ -184,7 +184,7 @@ async def test_preservation_override_wins_when_prompt_returns_success_during_can
 
 @pytest.mark.asyncio
 async def test_completed_push_with_stalled_delivery_is_buffered_once() -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     bridge._send_event = AgentBridge._send_event.__get__(bridge)
     bridge._persist_rotated_session_id = AsyncMock()
@@ -254,7 +254,7 @@ async def test_completed_push_with_stalled_delivery_is_buffered_once() -> None:
 @pytest.mark.asyncio
 async def test_prepare_fences_before_stop_await_and_confirms_prompt_halted() -> None:
     release_stop = asyncio.Event()
-    harness = PreservationHarness(wait=release_stop)
+    harness = ShutdownPreparationHarness(wait=release_stop)
     bridge = make_bridge(harness)
     await establish_generation(bridge)
 
@@ -274,7 +274,7 @@ async def test_prepare_fences_before_stop_await_and_confirms_prompt_halted() -> 
 
     preparing = asyncio.create_task(bridge._handle_command(prepare_command()))
     await asyncio.sleep(0)
-    assert bridge.preservation.state.operation_id == "operation-1"
+    assert bridge.shutdown_preparation.state.operation_id == "operation-1"
 
     await bridge._handle_command({"type": "prompt", "messageId": "late-message"})
     assert bridge.activity.current_prompt_task is prompt_task
@@ -296,7 +296,7 @@ async def test_prepare_fences_before_stop_await_and_confirms_prompt_halted() -> 
 
 @pytest.mark.asyncio
 async def test_prepare_deadline_reports_unconfirmed_and_keeps_fence() -> None:
-    harness = PreservationHarness(wait=asyncio.Event())
+    harness = ShutdownPreparationHarness(wait=asyncio.Event())
     bridge = make_bridge(harness)
     await establish_generation(bridge)
     task = asyncio.create_task(asyncio.Event().wait())
@@ -309,7 +309,7 @@ async def test_prepare_deadline_reports_unconfirmed_and_keeps_fence() -> None:
     result = bridge._send_event.await_args_list[-1].args[0]
     assert result["executionStopped"] is False
     assert result["error"] == "stop_deadline_exceeded"
-    assert bridge.preservation.state.operation_id == "operation-1"
+    assert bridge.shutdown_preparation.state.operation_id == "operation-1"
 
 
 @pytest.mark.asyncio
@@ -326,7 +326,7 @@ async def test_prepare_deadline_is_not_swallowed_by_prompt_cancellation_cleanup(
             first_cancel.set()
             await release_cleanup.wait()
 
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     bridge._persist_rotated_session_id = AsyncMock()
     task = asyncio.create_task(prompt_blocking_cancellation_cleanup())
@@ -341,7 +341,7 @@ async def test_prepare_deadline_is_not_swallowed_by_prompt_cancellation_cleanup(
         assert result["executionStopped"] is False
         assert result["error"] == "stop_deadline_exceeded"
         bridge._persist_rotated_session_id.assert_not_awaited()
-        assert bridge.preservation.state.operation_id == "operation-1"
+        assert bridge.shutdown_preparation.state.operation_id == "operation-1"
     finally:
         release_cleanup.set()
         if not task.done():
@@ -363,7 +363,7 @@ async def test_prepare_propagates_outer_cancellation_while_joining_prompt() -> N
             first_cancel.set()
             await release_cleanup.wait()
 
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     task = asyncio.create_task(prompt_blocking_cancellation_cleanup())
     bridge.activity.track_prompt("message-1", task)
@@ -386,7 +386,7 @@ async def test_prepare_propagates_outer_cancellation_while_joining_prompt() -> N
 
 @pytest.mark.asyncio
 async def test_prepare_confirms_vendor_idle_after_user_stop_cancelled_bridge_task() -> None:
-    class BusyAfterAbortHarness(PreservationHarness):
+    class BusyAfterAbortHarness(ShutdownPreparationHarness):
         async def abort(self) -> bool:
             return True  # Request acknowledgement, not vendor-idle evidence.
 
@@ -410,7 +410,7 @@ async def test_prepare_confirms_vendor_idle_after_user_stop_cancelled_bridge_tas
 
 @pytest.mark.asyncio
 async def test_duplicate_prepare_replays_result_without_stopping_twice() -> None:
-    harness = PreservationHarness()
+    harness = ShutdownPreparationHarness()
     bridge = make_bridge(harness)
     await establish_generation(bridge)
     command = prepare_command()
@@ -427,7 +427,7 @@ async def test_duplicate_prepare_replays_result_without_stopping_twice() -> None
 
 @pytest.mark.asyncio
 async def test_new_operation_retries_unconfirmed_stop_without_clearing_fence() -> None:
-    class RetryingHarness(PreservationHarness):
+    class RetryingHarness(ShutdownPreparationHarness):
         def __init__(self) -> None:
             super().__init__()
             self.outcomes = [False, True]
@@ -448,7 +448,7 @@ async def test_new_operation_retries_unconfirmed_stop_without_clearing_fence() -
         if call.args[0]["type"] == "preservation_prepared"
     )
     assert first["executionStopped"] is False
-    assert bridge.preservation.state.operation_id == "operation-1"
+    assert bridge.shutdown_preparation.state.operation_id == "operation-1"
 
     # The prompt task has already been cancelled and joined. A retry must
     # still ask the harness to contain its retained process owner.
@@ -457,7 +457,7 @@ async def test_new_operation_retries_unconfirmed_stop_without_clearing_fence() -
     assert second["operationId"] == "operation-2"
     assert second["executionStopped"] is True
     assert harness.stop_calls == 2
-    assert bridge.preservation.state.operation_id == "operation-2"
+    assert bridge.shutdown_preparation.state.operation_id == "operation-2"
 
     await bridge._handle_command({"type": "prompt", "messageId": "still-fenced"})
     assert bridge._send_event.await_args_list[-1].args[0] == {
@@ -470,7 +470,7 @@ async def test_new_operation_retries_unconfirmed_stop_without_clearing_fence() -
 
 @pytest.mark.asyncio
 async def test_prepare_never_reports_stopped_when_rotated_session_id_save_fails(tmp_path) -> None:
-    harness = PreservationHarness()
+    harness = ShutdownPreparationHarness()
     bridge = make_bridge(harness)
     await establish_generation(bridge)
     bridge.activity.track_prompt("message-1", asyncio.create_task(asyncio.Event().wait()))
@@ -486,7 +486,7 @@ async def test_prepare_never_reports_stopped_when_rotated_session_id_save_fails(
 
 @pytest.mark.asyncio
 async def test_prepare_never_reports_stopped_when_session_id_read_fails() -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     bridge._read_persisted_session_id = MagicMock(
         side_effect=PermissionError("session id is unreadable")
@@ -497,12 +497,12 @@ async def test_prepare_never_reports_stopped_when_session_id_read_fails() -> Non
     result = bridge._send_event.await_args_list[-1].args[0]
     assert result["error"] == "execution_stop_failed"
     assert result["executionStopped"] is False
-    assert bridge.preservation.fenced
+    assert bridge.shutdown_preparation.fenced
 
 
 @pytest.mark.asyncio
 async def test_nonstrict_session_id_read_failure_is_logged_and_ignored() -> None:
-    harness = PreservationHarness()
+    harness = ShutdownPreparationHarness()
     bridge = make_bridge(harness)
     error = PermissionError("session id is unreadable")
     bridge._read_persisted_session_id = MagicMock(side_effect=error)
@@ -513,8 +513,8 @@ async def test_nonstrict_session_id_read_failure_is_logged_and_ignored() -> None
 
 
 @pytest.mark.asyncio
-async def test_preservation_push_refusal_keeps_invalid_request_correlation() -> None:
-    bridge = make_bridge(PreservationHarness())
+async def test_shutdown_push_refusal_keeps_invalid_request_correlation() -> None:
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     await bridge._handle_command(prepare_command())
     bridge._send_event.reset_mock()
@@ -535,7 +535,7 @@ async def test_preservation_push_refusal_keeps_invalid_request_correlation() -> 
     assert event["branchName"] == "open-inspect/session-1"
     assert event["repoOwner"] == "acme"
     assert event["repoName"] == "api"
-    assert "preservation is in progress" in event["error"]
+    assert event["error"] == "Push failed — the sandbox is shutting down."
 
 
 @pytest.mark.asyncio
@@ -543,7 +543,7 @@ async def test_prepare_cancels_active_push_before_acknowledging() -> None:
     push_started = asyncio.Event()
     push_cleaned = asyncio.Event()
 
-    class CleanupCheckingHarness(PreservationHarness):
+    class CleanupCheckingHarness(ShutdownPreparationHarness):
         async def stop_execution(self, timeout_seconds: float) -> bool:
             assert push_cleaned.is_set()
             return await super().stop_execution(timeout_seconds)
@@ -581,29 +581,29 @@ async def test_prepare_cancels_active_push_before_acknowledging() -> None:
     events = [call.args[0] for call in bridge._send_event.await_args_list]
     push_error = next(event for event in events if event["type"] == "push_error")
     prepared = next(event for event in events if event["type"] == "preservation_prepared")
-    assert "preservation is in progress" in push_error["error"]
+    assert push_error["error"] == "Push failed — the sandbox is shutting down."
     assert prepared["executionStopped"] is True
     assert events.index(push_error) < events.index(prepared)
 
 
 @pytest.mark.asyncio
 async def test_same_generation_reconnect_does_not_clear_fence_but_new_generation_does() -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge)
     await bridge._handle_command(prepare_command())
 
     await establish_generation(bridge)
-    assert bridge.preservation.state.operation_id == "operation-1"
+    assert bridge.shutdown_preparation.state.operation_id == "operation-1"
 
     next_generation = {"sandboxId": "sandbox-1", "createdAt": 2000}
     await establish_generation(bridge, next_generation)
-    assert not bridge.preservation.fenced
-    assert bridge.preservation._results == {}
+    assert not bridge.shutdown_preparation.fenced
+    assert bridge.shutdown_preparation._results == {}
 
 
 @pytest.mark.asyncio
 async def test_late_generation_prepare_cannot_fence_current_generation() -> None:
-    bridge = make_bridge(PreservationHarness())
+    bridge = make_bridge(ShutdownPreparationHarness())
     await establish_generation(bridge, {"sandboxId": "sandbox-1", "createdAt": 2000})
 
     await bridge._handle_command(prepare_command())
@@ -611,9 +611,9 @@ async def test_late_generation_prepare_cannot_fence_current_generation() -> None
     result = bridge._send_event.await_args_list[-1].args[0]
     assert result["executionStopped"] is False
     assert result["error"] == "generation_mismatch"
-    assert not bridge.preservation.fenced
+    assert not bridge.shutdown_preparation.fenced
 
 
-def test_ready_advertises_preservation_protocol_version() -> None:
-    bridge = make_bridge(PreservationHarness())
+def test_ready_advertises_shutdown_protocol_version() -> None:
+    bridge = make_bridge(ShutdownPreparationHarness())
     assert bridge._build_ready_event()["preservationProtocolVersion"] == 1

@@ -26,9 +26,9 @@ import {
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
 import type {
-  SandboxPreservationState,
+  SandboxShutdownState,
   ShutdownRecoveryAction,
-} from "@open-inspect/shared/types/sandbox-preservation";
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import {
   sessionHasRepository,
   type SandboxAccessKind,
@@ -145,7 +145,7 @@ export interface SandboxShutdownLifecycle {
   /** Applies an already-authorized recovery choice; only explicit restore releases a saved pause. */
   recover(action: ShutdownRecoveryAction): Promise<void>;
   /** Returns the safe public projection, excluding private provider handles and recovery receipts. */
-  snapshot(): SandboxPreservationState | null;
+  snapshot(): SandboxShutdownState | null;
 }
 
 export type { SandboxPushAdmission } from "./ports";
@@ -2032,7 +2032,7 @@ export class SandboxLifecycleManager
     return this.shutdown.recover(action);
   }
 
-  shutdownSnapshot(): SandboxPreservationState | null {
+  shutdownSnapshot(): SandboxShutdownState | null {
     return this.shutdown.snapshot();
   }
 

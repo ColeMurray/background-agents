@@ -1,4 +1,4 @@
-"""Typed final-preservation state machine and deadline owner."""
+"""Typed shutdown-preparation state machine and deadline owner."""
 
 from __future__ import annotations
 
@@ -34,14 +34,14 @@ class Fenced:
     operation_id: str
 
 
-type PreservationState = Open | Draining | Fenced
+type ShutdownPreparationState = Open | Draining | Fenced
 
 
 @dataclass
-class PreservationCoordinator:
+class ShutdownPreparationCoordinator:
     """Own authenticated generation, fencing, replay, retry, and stop deadlines."""
 
-    state: PreservationState = field(default_factory=lambda: Open(generation=None))
+    state: ShutdownPreparationState = field(default_factory=lambda: Open(generation=None))
     _results: dict[str, Event] = field(default_factory=dict)
 
     @property

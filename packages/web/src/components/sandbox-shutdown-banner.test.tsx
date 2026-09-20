@@ -2,7 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-preservation";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 import { SandboxShutdownBanner as Banner } from "./sandbox-shutdown-banner";
 
 const acceptedRecovery = () =>

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { sandboxGenerationSchema } from "@open-inspect/shared/types/sandbox-events";
-import { sandboxPreservationSchema } from "@open-inspect/shared/types/sandbox-preservation";
+import { sandboxShutdownSchema } from "@open-inspect/shared/types/sandbox-shutdown";
 import type { SqlStorage } from "./sql-storage";
 import { SessionStorageIntegrityError } from "./types";
 
@@ -12,7 +12,7 @@ const receiptSchema = z.object({
   runtimeVersion: z.string().nullable(),
 });
 
-const stateSchema = sandboxPreservationSchema
+const stateSchema = sandboxShutdownSchema
   .extend({
     generation: sandboxGenerationSchema,
     provider: z.string().optional(),

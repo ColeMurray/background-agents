@@ -1,10 +1,10 @@
 import { DEFAULT_FINAL_SNAPSHOT_BUFFER_MS } from "@open-inspect/shared/types/integrations";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
-  sandboxPreservationSchema,
-  type SandboxPreservationState,
+  sandboxShutdownSchema,
+  type SandboxShutdownState,
   type ShutdownRecoveryAction,
-} from "@open-inspect/shared/types/sandbox-preservation";
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
@@ -65,10 +65,10 @@ export class SandboxShutdownCoordinator {
     this.now = deps.now ?? Date.now;
   }
 
-  snapshot(): SandboxPreservationState | null {
+  snapshot(): SandboxShutdownState | null {
     const state = this.normalizeInterruptedRestore();
     return state
-      ? sandboxPreservationSchema.parse({
+      ? sandboxShutdownSchema.parse({
           ...state,
           savedAtMs: state.receipt?.savedAtMs ?? state.savedAtMs,
           hasRecoveryPoint: !!state.receipt,
@@ -103,7 +103,7 @@ export class SandboxShutdownCoordinator {
     });
     this.deps.messenger.broadcast({
       type: "sandbox_preservation",
-      preservation: sandboxPreservationSchema.parse({
+      preservation: sandboxShutdownSchema.parse({
         ...state,
         savedAtMs: state.receipt?.savedAtMs ?? state.savedAtMs,
         hasRecoveryPoint: !!state.receipt,

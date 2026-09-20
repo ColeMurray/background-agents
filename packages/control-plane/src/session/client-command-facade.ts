@@ -22,7 +22,7 @@ import type { SessionMessageQueue } from "./message-queue";
 import type { PresenceService } from "./presence-service";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { SessionWebSocket } from "../platform-ports";
-import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-preservation";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 
 export class SessionClientCommandFacade implements SessionClientCommands<
   SessionWebSocket,

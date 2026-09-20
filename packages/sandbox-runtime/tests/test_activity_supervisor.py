@@ -21,7 +21,7 @@ def make_supervisor(events: list[dict]) -> ActivitySupervisor:
 
 
 @pytest.mark.asyncio
-async def test_preservation_drains_all_overlapping_prompts() -> None:
+async def test_shutdown_drains_all_overlapping_prompts() -> None:
     events: list[dict] = []
     entered = [asyncio.Event(), asyncio.Event()]
 
@@ -35,7 +35,7 @@ async def test_preservation_drains_all_overlapping_prompts() -> None:
     supervisor.start_prompt("second", lambda: pending_prompt(1))
     await asyncio.gather(*(event.wait() for event in entered))
 
-    stopped = await supervisor.drain_for_preservation(
+    stopped = await supervisor.drain_for_shutdown(
         deadline=asyncio.get_running_loop().time() + 1,
         prompt_error="sandbox_lifetime_expiring",
         push_cancellation_event=lambda _command: {},
@@ -49,7 +49,7 @@ async def test_preservation_drains_all_overlapping_prompts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preservation_settles_prompt_cancellation_cleanup_before_vendor_stop() -> None:
+async def test_shutdown_settles_prompt_cancellation_cleanup_before_vendor_stop() -> None:
     events: list[dict] = []
     entered = asyncio.Event()
     cleanup_finished = asyncio.Event()
@@ -77,7 +77,7 @@ async def test_preservation_settles_prompt_cancellation_cleanup_before_vendor_st
     supervisor.start_prompt("message-1", prompt)
     await entered.wait()
 
-    stopped = await supervisor.drain_for_preservation(
+    stopped = await supervisor.drain_for_shutdown(
         deadline=asyncio.get_running_loop().time() + 1,
         prompt_error="sandbox_lifetime_expiring",
         push_cancellation_event=lambda _command: {},
@@ -98,7 +98,7 @@ async def test_preservation_settles_prompt_cancellation_cleanup_before_vendor_st
 
 
 @pytest.mark.asyncio
-async def test_preservation_cancels_gated_local_submission_before_vendor_idle_check() -> None:
+async def test_shutdown_cancels_gated_local_submission_before_vendor_idle_check() -> None:
     events: list[dict] = []
     entered = asyncio.Event()
     submit = asyncio.Event()
@@ -122,7 +122,7 @@ async def test_preservation_cancels_gated_local_submission_before_vendor_idle_ch
     supervisor.start_prompt("message-1", prompt)
     await entered.wait()
 
-    stopped = await supervisor.drain_for_preservation(
+    stopped = await supervisor.drain_for_shutdown(
         deadline=asyncio.get_running_loop().time() + 1,
         prompt_error="sandbox_lifetime_expiring",
         push_cancellation_event=lambda _command: {},
@@ -135,7 +135,7 @@ async def test_preservation_cancels_gated_local_submission_before_vendor_idle_ch
 
 
 @pytest.mark.asyncio
-async def test_preservation_does_not_check_vendor_idle_when_local_cleanup_misses_deadline() -> None:
+async def test_shutdown_does_not_check_vendor_idle_when_local_cleanup_misses_deadline() -> None:
     events: list[dict] = []
     entered = asyncio.Event()
     cleanup_started = asyncio.Event()
@@ -162,7 +162,7 @@ async def test_preservation_does_not_check_vendor_idle_when_local_cleanup_misses
 
     try:
         with pytest.raises(TimeoutError):
-            await supervisor.drain_for_preservation(
+            await supervisor.drain_for_shutdown(
                 deadline=asyncio.get_running_loop().time() + 0.01,
                 prompt_error="sandbox_lifetime_expiring",
                 push_cancellation_event=lambda _command: {},
@@ -204,7 +204,7 @@ async def test_prestart_prompt_cancellation_selects_one_terminal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ordinary_stop_does_not_replace_preservation_override() -> None:
+async def test_ordinary_stop_does_not_replace_shutdown_override() -> None:
     events: list[dict] = []
     entered = asyncio.Event()
 

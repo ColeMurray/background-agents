@@ -19,7 +19,7 @@ import {
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-preservation";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 import type {
   ParticipantPresence,
   PromptQueueItem,
@@ -93,7 +93,7 @@ type QueuePromptResult =
   | CorrelatedRequestFailure;
 
 type CancelPromptResult = { ok: true; messageId: string } | CorrelatedRequestFailure;
-/** Success confirms server acceptance only; the preservation projection confirms the outcome. */
+/** Success confirms server acceptance only; the shutdown state confirms the outcome. */
 export type ShutdownRecoveryResult =
   | { ok: true; action: ShutdownRecoveryAction }
   | CorrelatedRequestFailure;

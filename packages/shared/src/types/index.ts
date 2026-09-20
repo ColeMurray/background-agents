@@ -137,8 +137,8 @@ export {
   sessionTimelineEventSchema,
 } from "./server-messages";
 
-export { sandboxPreservationSchema } from "./sandbox-preservation";
-export type { SandboxPreservationState } from "./sandbox-preservation";
+export { sandboxShutdownSchema } from "./sandbox-shutdown";
+export type { SandboxShutdownState } from "./sandbox-shutdown";
 export type {
   ParticipantPresence,
   PromptQueueItem,

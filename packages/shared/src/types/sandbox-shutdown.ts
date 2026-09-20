@@ -4,7 +4,7 @@ export const shutdownRecoveryActionSchema = z.enum(["retry", "restore_saved"]);
 export type ShutdownRecoveryAction = z.infer<typeof shutdownRecoveryActionSchema>;
 
 /** Durable user-visible outcome, also included in reconnect snapshots. */
-export const sandboxPreservationSchema = z.object({
+export const sandboxShutdownSchema = z.object({
   phase: z.enum([
     "running",
     "restoring",
@@ -28,4 +28,4 @@ export const sandboxPreservationSchema = z.object({
   continuationPaused: z.boolean().optional(),
 });
 
-export type SandboxPreservationState = z.infer<typeof sandboxPreservationSchema>;
+export type SandboxShutdownState = z.infer<typeof sandboxShutdownSchema>;

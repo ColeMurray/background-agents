@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import type {
-  SandboxPreservationState,
+  SandboxShutdownState,
   ShutdownRecoveryAction,
-} from "@open-inspect/shared/types/sandbox-preservation";
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import { cn } from "@/lib/utils";
 import type { ShutdownRecoveryResult } from "@/hooks/use-session-socket";
 
-const PHASE_MESSAGES: Record<Exclude<SandboxPreservationState["phase"], "running">, string> = {
+const PHASE_MESSAGES: Record<Exclude<SandboxShutdownState["phase"], "running">, string> = {
   draining: "Stopping the prompt to save your sandbox state.",
   prepared: "Prompt stopped. Preparing final sandbox state.",
   capturing: "Saving final sandbox state.",
@@ -20,7 +20,7 @@ const PHASE_MESSAGES: Record<Exclude<SandboxPreservationState["phase"], "running
 };
 
 interface SandboxShutdownBannerProps {
-  shutdown: SandboxPreservationState | null | undefined;
+  shutdown: SandboxShutdownState | null | undefined;
   onRecover?: (action: ShutdownRecoveryAction) => Promise<ShutdownRecoveryResult>;
 }
 

@@ -860,7 +860,7 @@ describe("boundary schemas", () => {
   });
 
   describe("clientMessageSchema", () => {
-    it("accepts only supported preservation recovery actions", () => {
+    it("accepts only supported shutdown recovery actions", () => {
       expect(
         clientMessageSchema.safeParse({ type: "recover_preservation", action: "retry" }).success
       ).toBe(true);

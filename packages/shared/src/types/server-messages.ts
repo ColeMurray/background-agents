@@ -4,7 +4,7 @@ import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
-import { sandboxPreservationSchema, shutdownRecoveryActionSchema } from "./sandbox-preservation";
+import { sandboxShutdownSchema, shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 import { clientRequestIdSchema } from "./prompts";
 
 const timelineSequenceSchema = z.number().int().nonnegative().safe();
@@ -25,7 +25,7 @@ const sessionStateSchema = z.object({
   branchName: z.string().nullable(),
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
-  sandboxPreservation: sandboxPreservationSchema.nullable().optional(),
+  sandboxPreservation: sandboxShutdownSchema.nullable().optional(),
   messageCount: z.number(),
   createdAt: z.number(),
   /**
@@ -190,7 +190,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     repoName: z.string().optional(),
   }),
   z.object({ type: z.literal("snapshot_saved"), imageId: z.string(), reason: z.string() }),
-  z.object({ type: z.literal("sandbox_preservation"), preservation: sandboxPreservationSchema }),
+  z.object({ type: z.literal("sandbox_preservation"), preservation: sandboxShutdownSchema }),
   z.object({
     type: z.literal("shutdown_recovery_accepted"),
     clientRequestId: clientRequestIdSchema,
