@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SourceControlModule from "../source-control";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
+import type * as SandboxExecutionModule from "../sandbox/execution";
 import type { Env } from "../types";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
@@ -21,6 +22,9 @@ const scmProvider = vi.hoisted(() => ({
 
 const integrationSettings = vi.hoisted(() => ({
   resolveSandboxSettings: vi.fn(async () => ({})),
+}));
+const sandboxExecution = vi.hoisted(() => ({
+  readSandboxExecutionSettings: vi.fn<typeof SandboxExecutionModule.readSandboxExecutionSettings>(),
 }));
 
 const secretsStores = vi.hoisted(() => ({
@@ -44,6 +48,10 @@ vi.mock("../session/integration-settings-resolution", async (importOriginal) => 
     resolveSandboxSettings: integrationSettings.resolveSandboxSettings,
   };
 });
+vi.mock("../sandbox/execution", async (importOriginal) => ({
+  ...(await importOriginal<typeof SandboxExecutionModule>()),
+  readSandboxExecutionSettings: sandboxExecution.readSandboxExecutionSettings,
+}));
 
 vi.mock("../db/global-secrets", () => ({
   GlobalSecretsStore: class {
@@ -117,6 +125,11 @@ function repoTarget(repoId = 123): ResolvedImageBuildTarget {
 beforeEach(() => {
   vi.clearAllMocks();
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
+  sandboxExecution.readSandboxExecutionSettings.mockResolvedValue({
+    settings: {},
+    scopeAllowed: true,
+    repository: "acme/web",
+  });
   secretsStores.global.mockResolvedValue({});
   secretsStores.repo.mockResolvedValue({});
   secretsStores.environment.mockResolvedValue({});
@@ -313,6 +326,7 @@ describe("listEnabledScopeUnits", () => {
       repositoriesFingerprint: await computeRepositoriesFingerprint([
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
       ]),
+      executionProfile: "default",
     });
   });
 
@@ -327,6 +341,50 @@ describe("listEnabledScopeUnits", () => {
     const units = await listEnabledScopeUnits(envWith(db), db);
 
     expect(units.map((unit) => unit.scope.kind)).toEqual(["environment"]);
+  });
+
+  it("reports configured Docker intent while Docker admission is closed", async () => {
+    sandboxExecution.readSandboxExecutionSettings.mockResolvedValue({
+      settings: { dockerEnabled: true },
+      scopeAllowed: true,
+      repository: "acme/api",
+    });
+    const db = fakeDb({
+      environment: { id: "env_1", prebuild_enabled: 1, name: "Env One" },
+      repositories: [{ position: 0, repo_owner: "acme", repo_name: "api", base_branch: "main" }],
+    });
+
+    const units = await listEnabledScopeUnits(
+      envWith(db, { ENABLE_MODAL_VM_SANDBOXES: "false" }),
+      db
+    );
+
+    expect(units).toHaveLength(1);
+    expect(units[0].executionProfile).toBe("docker-v1");
+  });
+
+  it("quarantines malformed settings for one unit while retaining a healthy unit", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue({
+      repoId: 123,
+      repoOwner: "acme",
+      repoName: "web",
+      defaultBranch: "main",
+    });
+    sandboxExecution.readSandboxExecutionSettings.mockImplementation(
+      async (_db, repository, environmentId) => {
+        if (environmentId === "env_1") throw new Error("malformed settings");
+        return { settings: {}, scopeAllowed: true, repository };
+      }
+    );
+    const db = fakeDb({
+      environment: { id: "env_1", prebuild_enabled: 1, name: "Env One" },
+      repositories: [{ position: 0, repo_owner: "acme", repo_name: "api", base_branch: "main" }],
+      enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
+    });
+
+    const units = await listEnabledScopeUnits(envWith(db), db);
+
+    expect(units.map((unit) => unit.scope)).toEqual([{ kind: "repo", id: "acme/web" }]);
   });
 });
 

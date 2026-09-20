@@ -103,7 +103,8 @@ export default function Home() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canCreateSession = hasPermission("sessions.create");
   const router = useRouter();
-  const picker = useSessionTargetPicker();
+  const [dockerEnabled, setDockerEnabled] = useState<boolean | undefined>(undefined);
+  const picker = useSessionTargetPicker(dockerEnabled);
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
@@ -111,7 +112,6 @@ export default function Home() {
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
-  const [dockerEnabled, setDockerEnabled] = useState<boolean | undefined>(undefined);
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});

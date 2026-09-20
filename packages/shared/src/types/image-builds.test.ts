@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   imageBuildRecordViewSchema,
   imageBuildStatusResponseSchema,
+  imageBuildUnitViewSchema,
   repositoryShaEntrySchema,
 } from "./image-builds";
 
@@ -21,7 +22,13 @@ describe("imageBuildRecordViewSchema", () => {
   };
 
   it("parses a valid image build record", () => {
-    expect(imageBuildRecordViewSchema.safeParse(validRecord).success).toBe(true);
+    expect(imageBuildRecordViewSchema.parse(validRecord).executionProfile).toBe("default");
+  });
+
+  it("rejects a malformed present execution profile", () => {
+    expect(
+      imageBuildRecordViewSchema.safeParse({ ...validRecord, executionProfile: "unknown" }).success
+    ).toBe(false);
   });
 
   it("parses nullable build duration and error fields", () => {
@@ -41,6 +48,24 @@ describe("imageBuildRecordViewSchema", () => {
     );
     expect(
       imageBuildRecordViewSchema.safeParse({ ...validRecord, scopeId: undefined }).success
+    ).toBe(false);
+  });
+});
+
+describe("imageBuildUnitViewSchema", () => {
+  const validUnit = {
+    scopeKind: "environment",
+    scopeId: "env-1",
+    repositoriesFingerprint: "fp-current",
+  };
+
+  it("defaults a legacy unit to the default execution profile", () => {
+    expect(imageBuildUnitViewSchema.parse(validUnit).executionProfile).toBe("default");
+  });
+
+  it("rejects a malformed present execution profile", () => {
+    expect(
+      imageBuildUnitViewSchema.safeParse({ ...validUnit, executionProfile: "unknown" }).success
     ).toBe(false);
   });
 });

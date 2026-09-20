@@ -63,6 +63,7 @@ describe("describeEnvironment", () => {
       scopeKind: "environment",
       scopeId: "env-1",
       provider: "modal",
+      executionProfile: "default",
       status: "failed",
       repositoriesFingerprint: "fp-current",
       repositoryShas: [],
@@ -74,7 +75,14 @@ describe("describeEnvironment", () => {
 
     const folded = foldImageBuildStatusByScope(
       [failedRow],
-      [{ scopeKind: "environment", scopeId: "env-1", repositoriesFingerprint: "fp-current" }]
+      [
+        {
+          scopeKind: "environment",
+          scopeId: "env-1",
+          repositoriesFingerprint: "fp-current",
+          executionProfile: "default",
+        },
+      ]
     );
 
     expect(describeEnvironment(environment(), folded)).toBe("2 repositories · prebuild failed");

@@ -56,6 +56,19 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   next_attempt_at INTEGER NOT NULL
 );`;
 
+const SANDBOX_ALLOCATION_INTENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_allocation_intents (
+  allocation_name TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  sandbox_id TEXT NOT NULL,
+  generation_created_at INTEGER NOT NULL,
+  auth_token_hash TEXT NOT NULL,
+  provider_object_id TEXT,
+  cleanup_required INTEGER NOT NULL DEFAULT 0,
+  recovery_attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -221,6 +234,7 @@ ${SESSION_ALARM_STATE_TABLE_SQL}
 -- A terminal message whose D1 projection has not landed yet. Only the newest
 -- is kept: the projection is monotonic, so an older one would be a no-op.
 ${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
+${SANDBOX_ALLOCATION_INTENTS_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -723,6 +737,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_execution_profile TEXT`);
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_recovery_error_code TEXT`);
     },
+  },
+  {
+    id: 55,
+    description: "Persist sandbox allocation recovery intents",
+    run: SANDBOX_ALLOCATION_INTENTS_TABLE_SQL,
   },
 ];
 

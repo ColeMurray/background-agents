@@ -26,6 +26,7 @@ import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
+import { SandboxAllocationCoordinator } from "../sandbox/allocation-coordinator";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
@@ -57,6 +58,7 @@ import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionPlatform } from "./platform";
+import type { SqlStorage, TransactionSync } from "./sql-storage";
 import { SessionCoreRepository } from "./session-core-repository";
 // The composition root grants each consumer only its declared sandbox port.
 // eslint-disable-next-line no-restricted-imports
@@ -426,6 +428,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    sql,
+    transaction,
+    log,
   });
 
   // Tier 6 — the message queue.
@@ -963,6 +968,9 @@ interface LifecycleManagerDeps {
   wsManager: SessionWebSocketManager;
   alarmScheduler: RehydratableAlarmScheduler;
   sandboxDashboardSettings: SandboxDashboardSettings;
+  sql: SqlStorage;
+  transaction: TransactionSync;
+  log: Logger;
 }
 
 /** Create the lifecycle manager with all required adapters. */
@@ -978,12 +986,22 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    sql,
+    transaction,
+    log,
   } = deps;
   // Both throw on a misconfigured deployment — deliberately at graph
   // construction, so every session request fails at initialization instead of
   // the error surfacing later at the first spawn.
   const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
   const provider = createSandboxProviderFromEnv(env, sandboxBackend);
+  const allocationCoordinator = new SandboxAllocationCoordinator(
+    sql,
+    transaction,
+    provider,
+    alarmScheduler,
+    log
+  );
 
   const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
 
@@ -1080,6 +1098,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     alarmScheduler,
     idGenerator,
     config,
-    imageBuildLookup
+    imageBuildLookup,
+    allocationCoordinator
   );
 }

@@ -5,13 +5,14 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import { ModalApiError } from "../client";
+import { ModalAllocationValidationError, ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
 import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
+  InvalidAllocationResponseError,
   SandboxProviderError,
   SnapshotArtifactUnavailableError,
   createVncAccess,
@@ -98,6 +99,23 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
 
   constructor(private readonly client: ModalClient) {}
 
+  reconcileAllocation(config: {
+    allocationName: string;
+    sessionId: string;
+    sandboxId: string;
+  }): Promise<string | null> {
+    return this.client.reconcileSandboxAllocation(config);
+  }
+
+  terminateAllocation(config: {
+    allocationName: string;
+    providerObjectId: string;
+    sessionId: string;
+    sandboxId: string;
+  }): Promise<void> {
+    return this.client.terminateSandboxAllocation(config);
+  }
+
   /**
    * Create a new sandbox via Modal API.
    */
@@ -107,6 +125,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         {
           sessionId: config.sessionId,
           sandboxId: config.sandboxId,
+          allocationName: config.allocationName,
           repoOwner: config.repoOwner,
           repoName: config.repoName,
           controlPlaneUrl: config.controlPlaneUrl,
@@ -142,6 +161,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
+      if (error instanceof ModalAllocationValidationError) {
+        throw new InvalidAllocationResponseError(error.providerObjectId, error);
+      }
       if (config.prebuiltImageId && error instanceof ModalApiError && error.status === 410) {
         throw new PrebuiltImageUnavailableError("Modal prebuilt image is unavailable", error);
       }
@@ -159,6 +181,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           snapshotImageId: config.snapshotImageId,
           sessionId: config.sessionId,
           sandboxId: config.sandboxId,
+          allocationName: config.allocationName,
           sandboxAuthToken: config.sandboxAuthToken,
           controlPlaneUrl: config.controlPlaneUrl,
           repoOwner: config.repoOwner,
@@ -191,6 +214,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
+      if (error instanceof ModalAllocationValidationError) {
+        throw new InvalidAllocationResponseError(error.providerObjectId, error);
+      }
       if (error instanceof ModalApiError && error.status === 410) {
         throw new SnapshotArtifactUnavailableError("Modal snapshot artifact is unavailable", error);
       }

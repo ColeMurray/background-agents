@@ -37,6 +37,7 @@ from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.process_output import finish_cancellation_cleanup
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
+from ..allocation_identity import session_allocation_tags
 from ..app import app, llm_secrets
 from ..images.base import base_image
 from .execution import resolve_execution, select_base_image, vm_create_kwargs
@@ -107,6 +108,7 @@ class SandboxConfig:
     repo_owner: str | None
     repo_name: str | None
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
+    allocation_name: str | None = None  # Durable provider idempotency key (VM profiles)
     session_config: SessionConfig | dict[str, Any] | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
@@ -477,11 +479,14 @@ class SandboxManager:
             **vm_create_kwargs(execution),
         }
         if execution.profile == "docker-v1":
-            create_kwargs["tags"] = {
-                "openinspect_kind": "session",
-                "openinspect_session_id": str(session_config.get("session_id", "")),
-                "openinspect_sandbox_id": sandbox_id,
-            }
+            if not config.allocation_name:
+                raise ValueError("Docker VM allocation_name is required")
+            create_kwargs["name"] = config.allocation_name
+            create_kwargs["tags"] = session_allocation_tags(
+                session_id=str(session_config.get("session_id", "")),
+                sandbox_id=sandbox_id,
+                allocation_name=config.allocation_name,
+            )
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
@@ -492,6 +497,14 @@ class SandboxManager:
                 "sandbox_runtime.entrypoint",
                 **create_kwargs,
             )
+        except modal.exception.AlreadyExistsError:
+            # A prior create may have succeeded after its HTTP caller lost the
+            # response. Names are unique per app, so recover exactly that live
+            # allocation instead of creating a second VM.
+            sandbox = await modal.Sandbox.from_name.aio(app.name, config.allocation_name)
+            tags = await sandbox.get_tags.aio()
+            if tags != create_kwargs["tags"]:
+                raise RuntimeError("Named sandbox allocation ownership mismatch")
         except modal.exception.NotFoundError as e:
             if isinstance(spec.source, _RepositoryImageSource):
                 raise RepositoryImageUnavailableError("repository image is unavailable") from e
@@ -688,6 +701,7 @@ class SandboxManager:
         snapshot_image_id: str,
         session_config: SessionConfig | dict[str, Any],
         sandbox_id: str | None = None,
+        allocation_name: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
         clone_token: str | None = None,
@@ -739,6 +753,7 @@ class SandboxManager:
                     repo_owner=repo_owner,
                     repo_name=repo_name,
                     sandbox_id=sandbox_id,
+                    allocation_name=allocation_name,
                     session_config=session_config,
                     control_plane_url=control_plane_url,
                     sandbox_auth_token=sandbox_auth_token,

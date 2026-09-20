@@ -22,6 +22,7 @@ function createHandler() {
     resumeAfterSandboxTermination: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const lifecycleManager = {
+    recoverAllocations: vi.fn<() => Promise<boolean>>().mockResolvedValue(false),
     handleAlarm: vi.fn<() => Promise<SandboxAlarmResult>>().mockResolvedValue("no_action"),
   };
   const getSnapshotRecoveryError = vi.fn<() => string | null>(() => null);
@@ -227,6 +228,7 @@ describe("createAlarmHandler", () => {
       completeDelivery: vi.fn(),
     });
     const lifecycleManager = {
+      recoverAllocations: vi.fn(async () => false),
       handleAlarm: vi.fn(async () => {
         await alarmScheduler.schedule(5000);
         return "no_action" as const;

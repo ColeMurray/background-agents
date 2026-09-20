@@ -133,7 +133,7 @@ export interface SessionTargetSelection {
  * request-field construction. The controls render through SessionTargetPicker
  * via `pickerProps`; the page keeps model, prompt, and warming.
  */
-export function useSessionTargetPicker(): SessionTargetSelection {
+export function useSessionTargetPicker(dockerEnabled?: boolean): SessionTargetSelection {
   const { repos, loading: loadingRepos } = useRepos();
   const { environments, loading: loadingEnvironments } = useEnvironments();
   const [sessionTarget, setSessionTarget] = useState<SessionTarget | null>(null);
@@ -152,8 +152,13 @@ export function useSessionTargetPicker(): SessionTargetSelection {
   // there is anything to annotate.
   const { data: imageBuildsData } = useImageBuilds(environments.length > 0 || repos.length > 0);
   const imageStatusByScope = useMemo(
-    () => foldImageBuildStatusByScope(imageBuildsData?.images ?? [], imageBuildsData?.units ?? []),
-    [imageBuildsData]
+    () =>
+      foldImageBuildStatusByScope(
+        imageBuildsData?.images ?? [],
+        imageBuildsData?.units ?? [],
+        dockerEnabled === undefined ? undefined : dockerEnabled ? "docker-v1" : "default"
+      ),
+    [dockerEnabled, imageBuildsData]
   );
   // Persisted repo prebuild scope ids, folded next to the feed shape so this
   // hook doesn't re-encode the lowercased-repo-key invariant.

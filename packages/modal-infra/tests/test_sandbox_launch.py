@@ -87,6 +87,7 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     }
     common = {
         "sandbox_id": "sandbox-1",
+        "allocation_name": "session-sandbox-1" if docker_enabled else None,
         "control_plane_url": "https://control.example",
         "sandbox_auth_token": "sandbox-token",
         "timeout_seconds": 4321,

@@ -43,6 +43,7 @@ import {
 } from "../provider";
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxAllocationCoordinator } from "../allocation-coordinator";
 import { hashToken } from "../../auth/crypto";
 import type * as AuthCrypto from "../../auth/crypto";
 
@@ -667,6 +668,27 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = { ...createMockProvider(), name: "modal" };
       const broadcaster = createMockBroadcaster();
+      const intent = {
+        allocation_name: "oi-test",
+        session_id: session.session_name ?? session.id,
+        sandbox_id: "sandbox-testowner-testrepo-1",
+        generation_created_at: 0,
+        auth_token_hash: "hash",
+        provider_object_id: null,
+        created_at: 0,
+      };
+      const allocationCoordinator = {
+        reserve: vi.fn(async (input) => {
+          intent.allocation_name = input.allocationName;
+          intent.session_id = input.sessionId;
+          intent.sandbox_id = input.sandboxId;
+          intent.generation_created_at = input.generationCreatedAt;
+          intent.auth_token_hash = input.authTokenHash;
+        }),
+        find: vi.fn(() => intent),
+        acceptProviderResult: vi.fn(async () => true),
+        recover: vi.fn(async () => false),
+      } as unknown as SandboxAllocationCoordinator;
       const create = () =>
         new SandboxLifecycleManager(
           provider,
@@ -676,7 +698,9 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createTestConfig()
+          createTestConfig(),
+          undefined,
+          allocationCoordinator
         );
       return { session, sandbox, storage, provider, broadcaster, create };
     }

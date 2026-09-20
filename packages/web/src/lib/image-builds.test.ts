@@ -9,6 +9,7 @@ import {
   IMAGE_BUILD_POLL_INTERVAL_MS,
   imageBuildPollInterval,
   imageBuildScopeKey,
+  selectCurrentImageBuild,
   imageBuildEnabledRepoViewSchema,
   imageBuildsEnabledReposResponseSchema,
   imageBuildsEnabledResponseSchema,
@@ -24,6 +25,7 @@ function record(overrides: Partial<ImageBuildRecordView>): ImageBuildRecordView 
     scopeKind: "environment",
     scopeId: "env-1",
     provider: "modal",
+    executionProfile: "default",
     status: "ready",
     repositoriesFingerprint: "fp-current",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
@@ -40,6 +42,7 @@ function unit(overrides: Partial<ImageBuildUnitView> = {}): ImageBuildUnitView {
     scopeKind: "environment",
     scopeId: "env-1",
     repositoriesFingerprint: "fp-current",
+    executionProfile: "default",
     ...overrides,
   };
 }
@@ -132,7 +135,7 @@ describe("foldImageBuildStatusByScope", () => {
     expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("ready");
   });
 
-  it("falls back to the unfiltered fold for a scope missing from units", () => {
+  it("omits status for a scope missing from the configured units", () => {
     const folded = foldImageBuildStatusByScope(
       [
         record({ id: "a", status: "ready", repositoriesFingerprint: "fp-stale" }),
@@ -141,7 +144,64 @@ describe("foldImageBuildStatusByScope", () => {
       []
     );
 
-    expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("ready");
+    expect(folded.has(imageBuildScopeKey("environment", "env-1"))).toBe(false);
+  });
+
+  it("folds only the configured execution profile unless the session overrides it", () => {
+    const rows = [
+      record({ id: "default-ready", executionProfile: "default", status: "ready" }),
+      record({ id: "docker-building", executionProfile: "docker-v1", status: "building" }),
+    ];
+    const configuredDocker = [unit({ executionProfile: "docker-v1" })];
+
+    expect(
+      foldImageBuildStatusByScope(rows, configuredDocker).get(
+        imageBuildScopeKey("environment", "env-1")
+      )
+    ).toBe("building");
+    expect(
+      foldImageBuildStatusByScope(rows, configuredDocker, "default").get(
+        imageBuildScopeKey("environment", "env-1")
+      )
+    ).toBe("ready");
+  });
+
+  it("does not advertise a default ready image when configured Docker has failed", () => {
+    const folded = foldImageBuildStatusByScope(
+      [
+        record({ id: "default-ready", executionProfile: "default", status: "ready" }),
+        record({ id: "docker-failed", executionProfile: "docker-v1", status: "failed" }),
+      ],
+      [unit({ executionProfile: "docker-v1" })]
+    );
+
+    expect(folded.get(imageBuildScopeKey("environment", "env-1"))).toBe("failed");
+  });
+});
+
+describe("selectCurrentImageBuild", () => {
+  it("selects only the configured profile and current fingerprint", () => {
+    const current = record({ id: "docker-current", executionProfile: "docker-v1" });
+    expect(
+      selectCurrentImageBuild(
+        [
+          record({ id: "default-current" }),
+          record({
+            id: "docker-stale",
+            executionProfile: "docker-v1",
+            repositoriesFingerprint: "old",
+          }),
+          current,
+        ],
+        [unit({ executionProfile: "docker-v1" })],
+        "environment",
+        "env-1"
+      )
+    ).toEqual(current);
+  });
+
+  it("returns undefined without a resolved unit", () => {
+    expect(selectCurrentImageBuild([record({})], [], "environment", "env-1")).toBeUndefined();
   });
 });
 
@@ -169,12 +229,12 @@ describe("foldEnabledRepoScopeIds", () => {
 describe("image-build feed schemas", () => {
   it("parses valid unit and enabled-repo payloads", () => {
     expect(
-      imageBuildUnitViewSchema.safeParse({
+      imageBuildUnitViewSchema.parse({
         scopeKind: "environment",
         scopeId: "env_1",
         repositoriesFingerprint: "fp-current",
-      }).success
-    ).toBe(true);
+      }).executionProfile
+    ).toBe("default");
     expect(
       imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme", repoName: "web" }).success
     ).toBe(true);
@@ -189,6 +249,14 @@ describe("image-build feed schemas", () => {
       }).success
     ).toBe(false);
     expect(imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme" }).success).toBe(false);
+    expect(
+      imageBuildUnitViewSchema.safeParse({
+        scopeKind: "environment",
+        scopeId: "env_1",
+        repositoriesFingerprint: "fp-current",
+        executionProfile: "unknown",
+      }).success
+    ).toBe(false);
   });
 
   it("requires response arrays from the control-plane feed", () => {

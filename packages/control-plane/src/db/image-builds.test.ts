@@ -11,6 +11,7 @@ const PUBLIC_KEYS = [
   "scopeKind",
   "scopeId",
   "provider",
+  "executionProfile",
   "status",
   "repositoriesFingerprint",
   "repositoryShas",

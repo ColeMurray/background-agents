@@ -16,6 +16,7 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
     scopeKind: "repo",
     scopeId: "acme/web",
     provider: "modal",
+    executionProfile: "default",
     status: "ready",
     repositoriesFingerprint: "fp-current",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],

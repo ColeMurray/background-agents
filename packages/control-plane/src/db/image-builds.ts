@@ -12,7 +12,11 @@ import type {
 } from "../image-builds/model";
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
 import type { SqlDatabase } from "./sql-database";
-import { parseRepositoryShasJson } from "../image-builds/provenance";
+import {
+  getImageBuildReconciliationStatus,
+  getImageBuildStatus,
+  getImageBuildStatusForEnabledScopes,
+} from "./image-build-reads";
 import { minimumRebuildGenerationForProfile } from "../sandbox/runtime-manifest";
 import {
   DEFAULT_SANDBOX_EXECUTION_PROFILE,
@@ -20,42 +24,6 @@ import {
   type SessionSandboxExecution,
   type SandboxExecutionProfile,
 } from "@open-inspect/shared/types/sandbox-execution";
-
-/** D1 caps bound parameters per statement; IN-list queries chunk below it. */
-const MAX_SCOPE_IDS_PER_QUERY = 50;
-
-/**
- * The exact public-safe storage columns, in declaration order. Status
- * reads project this list rather than `SELECT *` so internal columns
- * (callback token, provider session/image ids) never reach a client — the
- * table carries columns the wire contract does not.
- *
- * `satisfies` rejects any key outside the wire contract (a leaking column is
- * a compile error); the exhaustiveness assertion below rejects any wire field
- * missing from the projection. The integration tests keep independent
- * hand-written key-set pins on the runtime payload.
- */
-const STATUS_VIEW_KEYS = [
-  "id",
-  "scope_kind",
-  "scope_id",
-  "provider",
-  "status",
-  "repositories_fingerprint",
-  "repository_shas",
-  "runtime_version",
-  "build_duration_seconds",
-  "error_message",
-  "created_at",
-] as const satisfies readonly (keyof ImageBuildStatusRow)[];
-
-type MissingStatusViewKey = Exclude<keyof ImageBuildStatusRow, (typeof STATUS_VIEW_KEYS)[number]>;
-// Fails to compile — naming the missing key — if ImageBuildStatusRow gains a
-// field the projection does not carry.
-const _statusViewComplete: MissingStatusViewKey extends never ? true : MissingStatusViewKey = true;
-void _statusViewComplete;
-
-const STATUS_VIEW_COLUMNS = STATUS_VIEW_KEYS.join(", ");
 
 // One message for both sweeps (global cron + lazy trigger-time) so a stale
 // mark is attributable regardless of which path performed it.
@@ -72,12 +40,18 @@ export interface ImageBuildRegistration {
   callbackTokenExpiresAt?: number;
 }
 
-/** Public-safe D1 projection retained in storage encoding inside persistence. */
-interface ImageBuildStatusRow {
+/**
+ * One full row, including the internal columns (callback token, provider
+ * session/image ids). Mirrors the `image_builds` table (migration 0039).
+ * Internal row — never serialized to clients; the outward wire contract is
+ * `ImageBuildRecordView`, and the read module projects exactly its columns.
+ */
+export interface ImageBuildRow {
   id: string;
   scope_kind: ImageBuildScopeKind;
   scope_id: string;
   provider: ImageBuildProvider;
+  execution_profile: SandboxExecutionProfile;
   status: ImageBuildStatus;
   repositories_fingerprint: string;
   repository_shas: string;
@@ -85,32 +59,6 @@ interface ImageBuildStatusRow {
   build_duration_seconds: number | null;
   error_message: string | null;
   created_at: number;
-}
-
-function toImageBuildRecordView(row: ImageBuildStatusRow): ImageBuildRecordView {
-  return {
-    id: row.id,
-    scopeKind: row.scope_kind,
-    scopeId: row.scope_id,
-    provider: row.provider,
-    status: row.status,
-    repositoriesFingerprint: row.repositories_fingerprint,
-    repositoryShas: parseRepositoryShasJson(row.repository_shas),
-    runtimeVersion: row.runtime_version,
-    buildDurationSeconds: row.build_duration_seconds,
-    errorMessage: row.error_message,
-    createdAt: row.created_at,
-  };
-}
-
-/**
- * One full row, including the internal columns (callback token, provider
- * session/image ids). Mirrors the `image_builds` table (migration 0039).
- * Internal row — never serialized to clients; the outward wire contract is
- * `ImageBuildStatusRow`, and status reads project exactly its columns.
- */
-export interface ImageBuildRow extends ImageBuildStatusRow {
-  execution_profile: SandboxExecutionProfile;
   sandbox_execution: string;
   provider_image_id: string | null;
   provider_session_id: string | null;
@@ -825,14 +773,7 @@ export class ImageBuildStore {
 
   /** Per-scope recent non-superseded rows (settings UI / debugging view). */
   async getStatus(scope: ImageBuildScope): Promise<ImageBuildRecordView[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10`
-      )
-      .bind(scope.kind, scope.id)
-      .all<ImageBuildStatusRow>();
-
-    return (result.results || []).map(toImageBuildRecordView);
+    return getImageBuildStatus(this.db, scope);
   }
 
   /**
@@ -845,17 +786,7 @@ export class ImageBuildStore {
     provider: ImageBuildProvider,
     executionProfile: SandboxExecutionProfile = DEFAULT_SANDBOX_EXECUTION_PROFILE
   ): Promise<ImageBuildRecordView[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
-         WHERE scope_kind = ? AND scope_id = ? AND provider = ?
-           AND (status = 'building' OR (status = 'ready' AND execution_profile = ?))
-         ORDER BY created_at DESC`
-      )
-      .bind(scope.kind, scope.id, provider, executionProfile)
-      .all<ImageBuildStatusRow>();
-
-    return (result.results || []).map(toImageBuildRecordView);
+    return getImageBuildReconciliationStatus(this.db, scope, provider, executionProfile);
   }
 
   /**
@@ -868,31 +799,7 @@ export class ImageBuildStore {
    * ready images dropping out of the cron's view and re-triggering forever.
    */
   async getStatusForEnabledScopes(scopes: ImageBuildScope[]): Promise<ImageBuildRecordView[]> {
-    const idsByKind = new Map<ImageBuildScopeKind, string[]>();
-    for (const scope of scopes) {
-      const ids = idsByKind.get(scope.kind) ?? [];
-      ids.push(scope.id);
-      idsByKind.set(scope.kind, ids);
-    }
-
-    const rows: ImageBuildRecordView[] = [];
-    for (const [kind, ids] of idsByKind) {
-      for (let offset = 0; offset < ids.length; offset += MAX_SCOPE_IDS_PER_QUERY) {
-        const chunk = ids.slice(offset, offset + MAX_SCOPE_IDS_PER_QUERY);
-        const placeholders = chunk.map(() => "?").join(", ");
-        const result = await this.db
-          .prepare(
-            `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
-             WHERE scope_kind = ? AND scope_id IN (${placeholders}) AND status <> 'superseded'`
-          )
-          .bind(kind, ...chunk)
-          .all<ImageBuildStatusRow>();
-        rows.push(...(result.results || []).map(toImageBuildRecordView));
-      }
-    }
-
-    rows.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
-    return rows;
+    return getImageBuildStatusForEnabledScopes(this.db, scopes);
   }
 
   /**

@@ -467,6 +467,7 @@ async function handleGetEnabledUnits(
         scopeKind: unit.scope.kind,
         scopeId: unit.scope.id,
         repositoriesFingerprint: unit.repositoriesFingerprint,
+        executionProfile: unit.executionProfile,
       })),
       // Scope toggles say what an operator wants; this says whether the
       // deployment will act on it, so the settings surfaces can stop

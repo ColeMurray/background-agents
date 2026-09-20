@@ -42,6 +42,9 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
+      // Cleanup-only provider reconciliation must precede every ordinary
+      // lifecycle early return, including stopped/failed/terminal sessions.
+      await deps.lifecycleManager.recoverAllocations();
       let projectionFailure: { error: unknown } | undefined;
       try {
         await deps.terminalMessageProjection.flushPending();

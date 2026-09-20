@@ -84,6 +84,18 @@ async def _call_create_sandbox(request: dict, **headers) -> dict:
     )
 
 
+async def _call_create_sandbox_v2(request: dict, **headers) -> dict:
+    request_headers = {
+        "authorization": "Bearer test",
+        "x_trace_id": None,
+        "x_request_id": None,
+        "x_session_id": None,
+        "x_sandbox_id": None,
+        **headers,
+    }
+    return await web_api.api_create_sandbox_v2.get_raw_f()(request, **request_headers)
+
+
 async def _call_restore_sandbox(request: dict, **headers) -> dict:
     request_headers = {
         "authorization": "Bearer test",
@@ -99,6 +111,18 @@ async def _call_restore_sandbox(request: dict, **headers) -> dict:
     )
 
 
+async def _call_restore_sandbox_v2(request: dict, **headers) -> dict:
+    request_headers = {
+        "authorization": "Bearer test",
+        "x_trace_id": None,
+        "x_request_id": None,
+        "x_session_id": None,
+        "x_sandbox_id": None,
+        **headers,
+    }
+    return await web_api.api_restore_sandbox_v2.get_raw_f()(request, **request_headers)
+
+
 CREATE_REQUEST = {
     "session_id": "sess-1",
     "control_plane_url": "https://control-plane.example",
@@ -111,6 +135,75 @@ RESTORE_REQUEST = {
     "control_plane_url": "https://control-plane.example",
     "sandbox_auth_token": "sandbox-token",
 }
+
+
+@pytest.mark.asyncio
+async def test_create_v2_uses_strict_contract_allocation_and_v2_metrics(monkeypatch):
+    _patch_auth(monkeypatch)
+    captured: dict = {}
+    _patch_manager(monkeypatch, captured)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
+    request = {
+        **CREATE_REQUEST,
+        "sandbox_id": "generation-1",
+        "allocation_name": "session-generation-1",
+        "sandbox_execution": {
+            "profile": "docker-v1",
+            "provider": "modal",
+            "cpuCores": 4.0,
+            "memoryMib": 8192,
+        },
+    }
+
+    result = await _call_create_sandbox_v2(request)
+
+    assert captured["config"].allocation_name == "session-generation-1"
+    assert result["data"]["execution_profile"] == "docker-v1"
+    assert info.call_args.kwargs["endpoint_name"] == "api_create_sandbox_v2"
+    assert info.call_args.kwargs["http_path"] == "/api_create_sandbox_v2"
+
+
+@pytest.mark.asyncio
+async def test_create_v1_ignores_future_fields_while_v2_rejects_them(monkeypatch):
+    _patch_auth(monkeypatch)
+    captured: dict = {}
+    _patch_manager(monkeypatch, captured)
+    assert (await _call_create_sandbox({**CREATE_REQUEST, "future": True}))["success"] is True
+
+    with pytest.raises(HTTPException) as error:
+        await _call_create_sandbox_v2(
+            {
+                **CREATE_REQUEST,
+                "allocation_name": "session-generation-1",
+                "sandbox_execution": {"profile": "default"},
+                "future": True,
+            }
+        )
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_restore_v2_uses_v2_metrics_and_allocation(monkeypatch):
+    _patch_auth(monkeypatch)
+    captured: dict = {}
+    _patch_restore_manager(monkeypatch, captured)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
+
+    result = await _call_restore_sandbox_v2(
+        {
+            **RESTORE_REQUEST,
+            "sandbox_id": "generation-1",
+            "allocation_name": "allocation-1",
+            "sandbox_execution": {"profile": "default"},
+        }
+    )
+
+    assert result["data"]["execution_profile"] == "default"
+    assert captured["restore"]["allocation_name"] == "allocation-1"
+    assert info.call_args.kwargs["endpoint_name"] == "api_restore_sandbox_v2"
+    assert info.call_args.kwargs["http_path"] == "/api_restore_sandbox_v2"
 
 
 @pytest.mark.asyncio

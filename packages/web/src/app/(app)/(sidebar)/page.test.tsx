@@ -82,6 +82,7 @@ const mocks = vi.hoisted(() => ({
   },
   keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
   canCreateSession: true,
+  imageBuildFeed: undefined as unknown,
 }));
 
 const repo = {
@@ -111,7 +112,10 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("swr", () => ({
   // Home uses the default export only for the picker's prebuild-status text.
-  default: () => ({ data: undefined, isLoading: false }),
+  default: (key: string | null) => ({
+    data: key === "/api/image-builds" ? mocks.imageBuildFeed : undefined,
+    isLoading: false,
+  }),
   mutate: mocks.mutateMock,
 }));
 
@@ -230,6 +234,7 @@ beforeEach(() => {
   mocks.providerAccountsLoadingValue = false;
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.canCreateSession = true;
+  mocks.imageBuildFeed = undefined;
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -283,6 +288,64 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("shows status for the inherited image profile and an explicit execution override", async () => {
+    mocks.imageBuildFeed = {
+      units: [
+        {
+          scopeKind: "repo",
+          scopeId: "open-inspect/background-agents",
+          repositoriesFingerprint: "fp-current",
+          executionProfile: "docker-v1",
+        },
+      ],
+      enabledRepos: [{ repoOwner: "open-inspect", repoName: "background-agents" }],
+      images: [
+        {
+          id: "default-ready",
+          scopeKind: "repo",
+          scopeId: "open-inspect/background-agents",
+          provider: "modal",
+          executionProfile: "default",
+          status: "ready",
+          repositoriesFingerprint: "fp-current",
+          repositoryShas: [],
+          runtimeVersion: "60",
+          buildDurationSeconds: 1,
+          errorMessage: null,
+          createdAt: 1,
+        },
+        {
+          id: "docker-failed",
+          scopeKind: "repo",
+          scopeId: "open-inspect/background-agents",
+          provider: "modal",
+          executionProfile: "docker-v1",
+          status: "failed",
+          repositoriesFingerprint: "fp-current",
+          repositoryShas: [],
+          runtimeVersion: "60",
+          buildDurationSeconds: null,
+          errorMessage: "boom",
+          createdAt: 2,
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.click(screen.getByRole("button", { name: /background-agents/i }));
+    expect(screen.getByText(/prebuild failed/i)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sandbox execution" }), "false");
+    await user.click(screen.getByRole("button", { name: /background-agents/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /background-agents/i })).toHaveTextContent(
+        "prebuilt"
+      )
+    );
+  });
+
   it("does not render session creation UI without session creation permission", () => {
     mocks.canCreateSession = false;
 

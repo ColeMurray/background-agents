@@ -35,5 +35,6 @@ export type SandboxAlarmResult =
   | { kind: "boot_budget_exceeded"; reason: string };
 
 export interface SandboxAlarm {
+  recoverAllocations(): Promise<boolean>;
   handleAlarm(): Promise<SandboxAlarmResult>;
 }

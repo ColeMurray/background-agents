@@ -51,6 +51,7 @@ export async function seedImageRowForScope(
     id: string;
     status: string;
     provider?: string;
+    executionProfile?: "default" | "docker-v1";
     providerImageId?: string | null;
     repositoriesFingerprint?: string;
     runtimeVersion?: string;
@@ -59,15 +60,16 @@ export async function seedImageRowForScope(
 ): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO image_builds
-       (id, scope_kind, scope_id, provider, provider_image_id, repositories_fingerprint,
+       (id, scope_kind, scope_id, provider, execution_profile, provider_image_id, repositories_fingerprint,
         repository_shas, runtime_version, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       row.id,
       scope.kind,
       scope.id,
       row.provider ?? "modal",
+      row.executionProfile ?? "default",
       row.providerImageId ?? null,
       row.repositoriesFingerprint ?? "fp-seeded",
       JSON.stringify(REPOSITORY_SHAS),
@@ -83,6 +85,7 @@ export async function seedImageRow(row: {
   environmentId: string;
   status: string;
   provider?: string;
+  executionProfile?: "default" | "docker-v1";
   providerImageId?: string | null;
   repositoriesFingerprint?: string;
   createdAt?: number;

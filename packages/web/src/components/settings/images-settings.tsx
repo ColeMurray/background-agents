@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { mutate } from "swr";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { selectCurrentImageBuild } from "@/lib/image-builds";
 import { useImageBuilds } from "@/hooks/use-image-builds";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,7 @@ export function ImagesSettings() {
   // Repo scope ids are lowercase `owner/name` pairs.
   const getLatestImage = (owner: string, name: string): ImageBuildRecordView | undefined => {
     const key = `${owner}/${name}`.toLowerCase();
-    return data?.images.find((img) => img.scopeKind === "repo" && img.scopeId === key);
+    return data ? selectCurrentImageBuild(data.images, data.units, "repo", key) : undefined;
   };
 
   const handleToggle = async (owner: string, name: string, enabled: boolean) => {

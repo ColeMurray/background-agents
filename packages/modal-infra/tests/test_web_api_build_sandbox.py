@@ -266,6 +266,29 @@ async def test_create_logs_http_outcome(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_v2_logs_versioned_http_outcome(monkeypatch):
+    _patch_dependencies(monkeypatch)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
+
+    result = await _call(
+        web_api.api_create_build_sandbox_v2,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-v2",
+            "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            "sandbox_execution": {"profile": "default"},
+            **CALLBACK_CONTEXT,
+        },
+    )
+
+    assert result["data"]["execution_profile"] == "default"
+    assert info.call_args.kwargs["endpoint_name"] == "api_create_build_sandbox_v2"
+    assert info.call_args.kwargs["http_path"] == "/api_create_build_sandbox_v2"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field",
     ["build_execution_timeout_seconds", "provider_session_timeout_seconds"],

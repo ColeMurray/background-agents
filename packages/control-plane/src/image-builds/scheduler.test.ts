@@ -252,6 +252,7 @@ describe("ImageBuildScheduler", () => {
           scopeKind: scope.kind,
           scopeId: scope.id,
           provider: "modal",
+          executionProfile: "default",
           status: "ready",
           repositoriesFingerprint: target.repositoriesFingerprint,
           repositoryShas: target.repositories.map((repository) => ({

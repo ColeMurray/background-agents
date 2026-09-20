@@ -101,6 +101,7 @@ describe("GET /api/image-builds feed", () => {
       scopeKind: "repo",
       scopeId: "acme/web",
       provider: "modal",
+      executionProfile: "default",
       status: "ready",
       repositoriesFingerprint: "fp-repo",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
@@ -114,6 +115,7 @@ describe("GET /api/image-builds feed", () => {
       scopeKind: "environment",
       scopeId: "env_1",
       provider: "modal",
+      executionProfile: "default",
       status: "failed",
       repositoriesFingerprint: "fp-env",
       repositoryShas: [],
@@ -130,6 +132,7 @@ describe("GET /api/image-builds feed", () => {
               scopeKind: "repo",
               scopeId: "acme/web",
               repositoriesFingerprint: "fp-repo",
+              executionProfile: "docker-v1",
             },
             {
               scopeKind: "environment",
@@ -153,8 +156,18 @@ describe("GET /api/image-builds feed", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       units: [
-        { scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp-repo" },
-        { scopeKind: "environment", scopeId: "env_1", repositoriesFingerprint: "fp-env" },
+        {
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          repositoriesFingerprint: "fp-repo",
+          executionProfile: "docker-v1",
+        },
+        {
+          scopeKind: "environment",
+          scopeId: "env_1",
+          repositoriesFingerprint: "fp-env",
+          executionProfile: "default",
+        },
       ],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [readyRepoRow, failedEnvironmentRow],

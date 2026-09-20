@@ -249,7 +249,6 @@ export class ImageBuildScheduler {
         );
         const decision = evaluateImageBuildRebuildPolicy(
           {
-            scope,
             repositories: target.repositories,
             repositoriesFingerprint: target.repositoriesFingerprint,
           },

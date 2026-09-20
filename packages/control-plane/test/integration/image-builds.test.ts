@@ -49,6 +49,7 @@ const WIRE_KEYS = [
   "scopeKind",
   "scopeId",
   "provider",
+  "executionProfile",
   "status",
   "repositoriesFingerprint",
   "repositoryShas",
@@ -404,6 +405,7 @@ describe("Image builds", () => {
             scopeKind: "environment",
             scopeId: enabledId,
             repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+            executionProfile: "default",
           },
         ],
         // The settings surfaces read this to stop offering builds a paused
@@ -449,6 +451,42 @@ describe("Image builds", () => {
       );
       const filteredBody = (await filtered.json()) as { images: Array<{ id: string }> };
       expect(filteredBody.images.map((i) => i.id)).toEqual(["st-ready", "st-failed"]);
+    });
+
+    it("GET /image-builds/status preserves coexisting execution profiles", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedImageRow({
+        id: "default-ready",
+        environmentId,
+        status: "ready",
+        executionProfile: "default",
+      });
+      await seedImageRow({
+        id: "docker-building",
+        environmentId,
+        status: "building",
+        executionProfile: "docker-v1",
+      });
+      await seedImageRow({
+        id: "docker-failed",
+        environmentId,
+        status: "failed",
+        executionProfile: "docker-v1",
+      });
+
+      const response = await serviceFetch(`${BASE}/image-builds/status`);
+      const body = (await response.json()) as {
+        images: Array<{ id: string; executionProfile: string }>;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.images.map(({ id, executionProfile }) => ({ id, executionProfile }))).toEqual(
+        expect.arrayContaining([
+          { id: "default-ready", executionProfile: "default" },
+          { id: "docker-building", executionProfile: "docker-v1" },
+          { id: "docker-failed", executionProfile: "docker-v1" },
+        ])
+      );
     });
 
     it("GET /image-builds/status projects only the wire columns (no internal fields)", async () => {

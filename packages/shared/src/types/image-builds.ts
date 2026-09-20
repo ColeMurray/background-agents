@@ -8,6 +8,10 @@
  */
 
 import { z } from "zod";
+import {
+  DEFAULT_SANDBOX_EXECUTION_PROFILE,
+  sandboxExecutionProfileSchema,
+} from "./sandbox-execution";
 
 /** Mirrors the `image_builds.status` column. */
 export const imageBuildStatusSchema = z.enum(["building", "ready", "failed", "superseded"]);
@@ -55,6 +59,7 @@ export const imageBuildRecordViewSchema = z.object({
   scopeKind: imageBuildScopeKindSchema,
   scopeId: z.string(),
   provider: z.string(),
+  executionProfile: sandboxExecutionProfileSchema.default(DEFAULT_SANDBOX_EXECUTION_PROFILE),
   status: imageBuildStatusSchema,
   repositoriesFingerprint: z.string(),
   repositoryShas: repositoryShasSchema.nullable(),
@@ -65,6 +70,17 @@ export const imageBuildRecordViewSchema = z.object({
 });
 
 export type ImageBuildRecordView = z.infer<typeof imageBuildRecordViewSchema>;
+
+export const imageBuildUnitViewSchema = z.object({
+  scopeKind: imageBuildScopeKindSchema,
+  scopeId: z.string(),
+  /** Current repo-set fingerprint used to reject stale build rows. */
+  repositoriesFingerprint: z.string(),
+  /** Configured execution intent for staging/status; independent of live admission gates. */
+  executionProfile: sandboxExecutionProfileSchema.default(DEFAULT_SANDBOX_EXECUTION_PROFILE),
+});
+
+export type ImageBuildUnitView = z.infer<typeof imageBuildUnitViewSchema>;
 
 export const imageBuildStatusResponseSchema = z.object({
   images: z.array(imageBuildRecordViewSchema),

@@ -36,7 +36,25 @@ import type { ImageBuildRepository } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
 import { readSandboxExecutionSettings, resolveSandboxExecution } from "../sandbox/execution";
 import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
-import type { SessionSandboxExecution } from "@open-inspect/shared/types/sandbox-execution";
+import {
+  DEFAULT_SANDBOX_EXECUTION_PROFILE,
+  type SandboxExecutionProfile,
+  type SessionSandboxExecution,
+} from "@open-inspect/shared/types/sandbox-execution";
+
+async function configuredExecutionProfile(
+  db: SqlDatabase,
+  repositories: readonly ImageBuildRepository[],
+  environmentId?: string
+): Promise<SandboxExecutionProfile> {
+  const primary = repositories[0];
+  const snapshot = await readSandboxExecutionSettings(
+    db,
+    primary ? `${primary.repoOwner}/${primary.repoName}` : null,
+    environmentId
+  );
+  return snapshot.settings.dockerEnabled === true ? "docker-v1" : DEFAULT_SANDBOX_EXECUTION_PROFILE;
+}
 
 /** Non-secret build intent, frozen before registration and secret reads. */
 export interface ImageBuildExecutionIntent {
@@ -93,6 +111,7 @@ export interface EnabledScopeUnit {
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
+  executionProfile: SandboxExecutionProfile;
 }
 
 /** The scope's buildable repository set, in position order ([0] = primary). */
@@ -237,17 +256,27 @@ export async function listEnabledScopeUnits(
   );
 
   const environmentUnits = await Promise.all(
-    enabled.map(async (row) => {
+    enabled.map(async (row): Promise<EnabledScopeUnit | null> => {
       const repositories = (repositoriesById.get(row.id) ?? []).map((repo) => ({
         repoOwner: repo.repo_owner,
         repoName: repo.repo_name,
         baseBranch: repo.base_branch,
       }));
-      return {
-        scope: { kind: "environment" as const, id: row.id },
-        repositories,
-        repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
-      };
+      try {
+        return {
+          scope: { kind: "environment" as const, id: row.id },
+          repositories,
+          repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+          executionProfile: await configuredExecutionProfile(db, repositories, row.id),
+        };
+      } catch (e) {
+        logger.warn("image_build.enabled_unit_skipped", {
+          error: errorMessage(e),
+          scope_kind: "environment",
+          scope_id: row.id,
+        });
+        return null;
+      }
     })
   );
 
@@ -261,6 +290,7 @@ export async function listEnabledScopeUnits(
           scope,
           repositories: target.repositories,
           repositoriesFingerprint: target.repositoriesFingerprint,
+          executionProfile: await configuredExecutionProfile(db, target.repositories),
         };
       } catch (e) {
         logger.warn("image_build.enabled_unit_skipped", {
@@ -273,7 +303,10 @@ export async function listEnabledScopeUnits(
     })
   );
 
-  return [...environmentUnits, ...repoUnits.filter((unit) => unit !== null)];
+  return [
+    ...environmentUnits.filter((unit) => unit !== null),
+    ...repoUnits.filter((unit) => unit !== null),
+  ];
 }
 
 /**

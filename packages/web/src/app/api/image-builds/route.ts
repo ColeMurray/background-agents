@@ -58,6 +58,7 @@ export async function GET() {
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,
       repositoriesFingerprint: unit.repositoriesFingerprint,
+      executionProfile: unit.executionProfile,
     }));
     // Persisted repo flags, unlike units, never drop a scope on a transient
     // resolution failure — the settings toggles read these.

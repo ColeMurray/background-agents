@@ -6,14 +6,19 @@
  */
 
 import {
-  imageBuildScopeKindSchema,
   imageBuildStatusResponseSchema,
+  imageBuildUnitViewSchema,
   type ImageBuildRecordView,
   type ImageBuildScopeKind,
   type ImageBuildStatus,
+  type ImageBuildUnitView,
   type RepositoryShaEntry,
 } from "@open-inspect/shared/types/image-builds";
+import type { SandboxExecutionProfile } from "@open-inspect/shared/types/sandbox-execution";
 import { z } from "zod";
+
+export { imageBuildUnitViewSchema };
+export type { ImageBuildUnitView };
 
 /** SWR key for the unified image-build feed. */
 export const IMAGE_BUILDS_KEY = "/api/image-builds";
@@ -40,16 +45,6 @@ export function imageBuildPollInterval(images: ImageBuildRecordView[] | undefine
     ? IMAGE_BUILD_POLL_INTERVAL_MS
     : IMAGE_BUILD_IDLE_POLL_INTERVAL_MS;
 }
-
-/** One prebuild-enabled scope as served by GET /api/image-builds. */
-export const imageBuildUnitViewSchema = z.object({
-  scopeKind: imageBuildScopeKindSchema,
-  scopeId: z.string(),
-  /** The scope's current repo-set fingerprint — build rows with any other fingerprint are stale. */
-  repositoriesFingerprint: z.string(),
-});
-
-export type ImageBuildUnitView = z.infer<typeof imageBuildUnitViewSchema>;
 
 /** One persisted repo prebuild flag as served by GET /api/image-builds. */
 export const imageBuildEnabledRepoViewSchema = z.object({
@@ -164,24 +159,26 @@ const STATUS_FOLD_PRECEDENCE: Record<ImageBuildStatus, number> = {
  *
  * Only rows matching the scope's current fingerprint (per `units`) count —
  * spawn rejects stale-fingerprint rows, so a stale ready row must not outrank
- * a failed current build. A scope with no unit (transiently dropped from the
- * enabled feed) falls back to the unfiltered fold over all its rows.
+ * a failed current build. A scope with no unit has no trustworthy current
+ * fingerprint/profile and therefore reports no status.
  */
 export function foldImageBuildStatusByScope(
   images: ImageBuildRecordView[],
-  units: ImageBuildUnitView[]
+  units: ImageBuildUnitView[],
+  executionProfileOverride?: SandboxExecutionProfile
 ): Map<string, ImageBuildStatus> {
-  const currentFingerprintByScope = new Map(
-    units.map((unit) => [
-      imageBuildScopeKey(unit.scopeKind, unit.scopeId),
-      unit.repositoriesFingerprint,
-    ])
+  const unitByScope = new Map(
+    units.map((unit) => [imageBuildScopeKey(unit.scopeKind, unit.scopeId), unit])
   );
   const statusByScope = new Map<string, ImageBuildStatus>();
   for (const image of images) {
     const key = imageBuildScopeKey(image.scopeKind, image.scopeId);
-    const currentFingerprint = currentFingerprintByScope.get(key);
-    if (currentFingerprint !== undefined && image.repositoriesFingerprint !== currentFingerprint) {
+    const unit = unitByScope.get(key);
+    if (
+      !unit ||
+      image.repositoriesFingerprint !== unit.repositoriesFingerprint ||
+      image.executionProfile !== (executionProfileOverride ?? unit.executionProfile)
+    ) {
       continue;
     }
     const current = statusByScope.get(key);
@@ -190,6 +187,26 @@ export function foldImageBuildStatusByScope(
     }
   }
   return statusByScope;
+}
+
+export function selectCurrentImageBuild(
+  images: ImageBuildRecordView[],
+  units: ImageBuildUnitView[],
+  scopeKind: ImageBuildScopeKind,
+  scopeId: string
+): ImageBuildRecordView | undefined {
+  const unit = units.find(
+    (candidate) => candidate.scopeKind === scopeKind && candidate.scopeId === scopeId
+  );
+  return unit
+    ? images.find(
+        (image) =>
+          image.scopeKind === scopeKind &&
+          image.scopeId === scopeId &&
+          image.repositoriesFingerprint === unit.repositoriesFingerprint &&
+          image.executionProfile === unit.executionProfile
+      )
+    : undefined;
 }
 
 /**

@@ -67,7 +67,14 @@ afterEach(() => {
 describe("ImagesSettings", () => {
   it("renders ready details from the primary repository provenance entry", () => {
     renderWithFeed({
-      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
+      units: [
+        {
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          repositoriesFingerprint: "fp",
+          executionProfile: "default",
+        },
+      ],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
@@ -75,6 +82,7 @@ describe("ImagesSettings", () => {
           scopeKind: "repo",
           scopeId: "acme/web",
           provider: "modal",
+          executionProfile: "default",
           status: "ready",
           repositoriesFingerprint: "fp",
           repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc1234def5678" }],
@@ -92,7 +100,14 @@ describe("ImagesSettings", () => {
 
   it("renders a failed build with its error message", () => {
     renderWithFeed({
-      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
+      units: [
+        {
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          repositoriesFingerprint: "fp",
+          executionProfile: "default",
+        },
+      ],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [
         {
@@ -100,6 +115,7 @@ describe("ImagesSettings", () => {
           scopeKind: "repo",
           scopeId: "acme/web",
           provider: "modal",
+          executionProfile: "default",
           status: "failed",
           repositoriesFingerprint: "fp",
           repositoryShas: [],
@@ -117,7 +133,14 @@ describe("ImagesSettings", () => {
 
   it("says prebuilds are paused and offers no rebuild while admission is closed", () => {
     renderWithFeed({
-      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
+      units: [
+        {
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          repositoriesFingerprint: "fp",
+          executionProfile: "default",
+        },
+      ],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [],
       admission: { open: false, reason: "daytona_prebuilds_disabled" },
@@ -133,7 +156,14 @@ describe("ImagesSettings", () => {
 
   it("offers rebuilds when the control plane reports no admission state at all", () => {
     renderWithFeed({
-      units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],
+      units: [
+        {
+          scopeKind: "repo",
+          scopeId: "acme/web",
+          repositoriesFingerprint: "fp",
+          executionProfile: "default",
+        },
+      ],
       enabledRepos: [{ repoOwner: "acme", repoName: "web" }],
       images: [],
     });

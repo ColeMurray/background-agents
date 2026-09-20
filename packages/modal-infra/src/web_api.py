@@ -28,6 +28,7 @@ from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.execution import DefaultSandboxExecution, SandboxExecution
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
 
+from .allocation_identity import session_allocation_tags
 from .app import (
     app,
     function_image,
@@ -37,6 +38,9 @@ from .app import (
 )
 from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
+from .transport import (
+    LaunchEndpoint,
+)
 
 configure_logging()
 log = get_logger("web_api")
@@ -52,6 +56,14 @@ class _ModalRequestModel(BaseModel):
 class TerminateSandboxRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     provider_object_id: str = Field(pattern=r"^sb-[a-zA-Z0-9]+$")
+    session_id: str = Field(min_length=1)
+    sandbox_id: str = Field(min_length=1)
+    allocation_name: str | None = Field(default=None, min_length=1)
+
+
+class ReconcileSandboxAllocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    allocation_name: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
     sandbox_id: str = Field(min_length=1)
 
@@ -72,16 +84,52 @@ async def api_terminate_sandbox(request: dict, authorization: str | None = Heade
     try:
         sandbox = await modal.Sandbox.from_id.aio(parsed.provider_object_id)
         tags = await sandbox.get_tags.aio()
-        if (
-            tags.get("openinspect_kind") != "session"
-            or tags.get("openinspect_session_id") != parsed.session_id
-            or tags.get("openinspect_sandbox_id") != parsed.sandbox_id
-        ):
+        legacy_owned = (
+            tags.get("openinspect_kind") == "session"
+            and tags.get("openinspect_session_id") == parsed.session_id
+            and tags.get("openinspect_sandbox_id") == parsed.sandbox_id
+        )
+        exact_owned = parsed.allocation_name is not None and tags == session_allocation_tags(
+            session_id=parsed.session_id,
+            sandbox_id=parsed.sandbox_id,
+            allocation_name=parsed.allocation_name,
+        )
+        if not legacy_owned and not exact_owned:
             raise HTTPException(status_code=409, detail="Sandbox allocation identity mismatch")
         await sandbox.terminate.aio()
     except modal.exception.NotFoundError:
         pass
     return {"success": True}
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_reconcile_sandbox_allocation(
+    request: dict, authorization: str | None = Header(None)
+) -> dict:
+    """Resolve a named live VM without treating absence as completion proof."""
+    import modal
+
+    require_auth(authorization)
+    parsed = _parse_request(ReconcileSandboxAllocationRequest, request)
+    try:
+        sandbox = await modal.Sandbox.from_name.aio(app.name, parsed.allocation_name)
+        tags = await sandbox.get_tags.aio()
+        expected = session_allocation_tags(
+            session_id=parsed.session_id,
+            sandbox_id=parsed.sandbox_id,
+            allocation_name=parsed.allocation_name,
+        )
+        if tags != expected:
+            raise HTTPException(status_code=409, detail="Sandbox allocation identity mismatch")
+        return {
+            "success": True,
+            "data": {"state": "running", "provider_object_id": sandbox.object_id},
+        }
+    except modal.exception.NotFoundError:
+        # from_name only finds running sandboxes. This cannot distinguish a
+        # create still queued/in flight from a definitively absent allocation.
+        return {"success": True, "data": {"state": "unknown"}}
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -243,16 +291,30 @@ class RestoreSandboxRequest(_ModalRequestModel):
 class CreateSandboxV2Request(CreateSandboxRequest):
     model_config = ConfigDict(extra="forbid", strict=True)
     sandbox_execution: SandboxExecution = Field(...)
+    allocation_name: NonEmptyString
 
 
 class RestoreSandboxV2Request(RestoreSandboxRequest):
     model_config = ConfigDict(extra="forbid", strict=True)
     sandbox_execution: SandboxExecution = Field(...)
+    allocation_name: NonEmptyString
 
 
 class CreateBuildSandboxV2Request(CreateBuildSandboxRequest):
     model_config = ConfigDict(extra="forbid", strict=True)
     sandbox_execution: SandboxExecution = Field(...)
+
+
+CREATE_SANDBOX_V1 = LaunchEndpoint("api_create_sandbox", "v1", CreateSandboxRequest)
+CREATE_SANDBOX_V2 = LaunchEndpoint("api_create_sandbox_v2", "v2", CreateSandboxV2Request)
+RESTORE_SANDBOX_V1 = LaunchEndpoint("api_restore_sandbox", "v1", RestoreSandboxRequest)
+RESTORE_SANDBOX_V2 = LaunchEndpoint("api_restore_sandbox_v2", "v2", RestoreSandboxV2Request)
+CREATE_BUILD_SANDBOX_V1 = LaunchEndpoint(
+    "api_create_build_sandbox", "v1", CreateBuildSandboxRequest
+)
+CREATE_BUILD_SANDBOX_V2 = LaunchEndpoint(
+    "api_create_build_sandbox_v2", "v2", CreateBuildSandboxV2Request
+)
 
 
 @dataclass
@@ -445,7 +507,7 @@ def _session_config_from_create_request(
     return SessionConfig(**fields)
 
 
-async def _create_sandbox(
+async def _create_sandbox[CreateRequestT: CreateSandboxRequest](
     request: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
@@ -453,7 +515,7 @@ async def _create_sandbox(
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
     *,
-    versioned: bool = False,
+    endpoint: LaunchEndpoint[CreateRequestT],
 ) -> dict:
     """
     HTTP endpoint to create a sandbox.
@@ -473,16 +535,15 @@ async def _create_sandbox(
     }
     """
     async with _execute_endpoint(
-        endpoint_name="api_create_sandbox",
+        endpoint_name=endpoint.name,
         authorization=authorization,
         trace_id=x_trace_id,
         request_id=x_request_id,
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
     ):
-        parsed_request = _parse_request(
-            CreateSandboxV2Request if versioned else CreateSandboxRequest, request
-        )
+        launch = endpoint.parse(request, _parse_request)
+        parsed_request = launch.request
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -506,6 +567,7 @@ async def _create_sandbox(
             repo_owner=repo_owner,
             repo_name=repo_name,
             sandbox_id=parsed_request.sandbox_id,
+            allocation_name=launch.allocation_name,
             session_config=session_config,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
@@ -539,11 +601,7 @@ async def _create_sandbox(
                 "modal_object_id": handle.modal_object_id,  # Modal's internal ID for snapshot API
                 "status": handle.status.value,
                 "created_at": handle.created_at,
-                **(
-                    {"execution_profile": parsed_request.sandbox_execution.profile}
-                    if versioned
-                    else {}
-                ),
+                **launch.response_fields,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,
@@ -709,7 +767,7 @@ async def api_snapshot_build_sandbox(
         }
 
 
-async def _restore_sandbox(
+async def _restore_sandbox[RestoreRequestT: RestoreSandboxRequest](
     request: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
@@ -717,7 +775,7 @@ async def _restore_sandbox(
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
     *,
-    versioned: bool = False,
+    endpoint: LaunchEndpoint[RestoreRequestT],
 ) -> dict:
     """
     Create a new sandbox from a filesystem snapshot.
@@ -753,16 +811,15 @@ async def _restore_sandbox(
     }
     """
     async with _execute_endpoint(
-        endpoint_name="api_restore_sandbox",
+        endpoint_name=endpoint.name,
         authorization=authorization,
         trace_id=x_trace_id,
         request_id=x_request_id,
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
     ):
-        parsed_request = _parse_request(
-            RestoreSandboxV2Request if versioned else RestoreSandboxRequest, request
-        )
+        launch = endpoint.parse(request, _parse_request)
+        parsed_request = launch.request
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -784,6 +841,7 @@ async def _restore_sandbox(
             snapshot_image_id=parsed_request.snapshot_image_id,
             session_config=session_config,
             sandbox_id=parsed_request.sandbox_id,
+            allocation_name=launch.allocation_name,
             control_plane_url=parsed_request.control_plane_url,
             sandbox_auth_token=parsed_request.sandbox_auth_token,
             clone_token=clone_token,
@@ -809,11 +867,7 @@ async def _restore_sandbox(
                 "sandbox_id": handle.sandbox_id,
                 "modal_object_id": handle.modal_object_id,
                 "status": handle.status.value,
-                **(
-                    {"execution_profile": parsed_request.sandbox_execution.profile}
-                    if versioned
-                    else {}
-                ),
+                **launch.response_fields,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,
@@ -824,17 +878,17 @@ async def _restore_sandbox(
         }
 
 
-async def _create_build_sandbox(
+async def _create_build_sandbox[BuildRequestT: CreateBuildSandboxRequest](
     request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
     *,
-    versioned: bool = False,
+    endpoint: LaunchEndpoint[BuildRequestT],
 ) -> dict:
     """Create a dormant provider-session build sandbox."""
     async with _execute_endpoint(
-        endpoint_name="api_create_build_sandbox",
+        endpoint_name=endpoint.name,
         authorization=authorization,
         trace_id=x_trace_id,
         request_id=x_request_id,
@@ -847,9 +901,8 @@ async def _create_build_sandbox(
             ModalBuildSessionService,
         )
 
-        parsed_request = _parse_request(
-            CreateBuildSandboxV2Request if versioned else CreateBuildSandboxRequest, request
-        )
+        launch = endpoint.parse(request, _parse_request)
+        parsed_request = launch.request
         build_id = parsed_request.build_id
         execution.log_fields["build_id"] = build_id
         scope_kind = parsed_request.scope_kind
@@ -894,8 +947,8 @@ async def _create_build_sandbox(
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,
             **(
-                {"sandbox_execution": parsed_request.sandbox_execution.model_dump()}
-                if versioned
+                {"sandbox_execution": launch.sandbox_execution}
+                if launch.sandbox_execution is not None
                 else {}
             ),
         )
@@ -904,11 +957,7 @@ async def _create_build_sandbox(
             "success": True,
             "data": {
                 "provider_session_id": provider_session_id,
-                **(
-                    {"execution_profile": parsed_request.sandbox_execution.profile}
-                    if versioned
-                    else {}
-                ),
+                **launch.response_fields,
             },
         }
 
@@ -1033,7 +1082,7 @@ async def api_create_sandbox(
         x_request_id,
         x_session_id,
         x_sandbox_id,
-        versioned=False,
+        endpoint=CREATE_SANDBOX_V1,
     )
 
 
@@ -1048,7 +1097,13 @@ async def api_create_sandbox_v2(
     x_sandbox_id: str | None = Header(None),
 ) -> dict:
     return await _create_sandbox(
-        request, authorization, x_trace_id, x_request_id, x_session_id, x_sandbox_id, versioned=True
+        request,
+        authorization,
+        x_trace_id,
+        x_request_id,
+        x_session_id,
+        x_sandbox_id,
+        endpoint=CREATE_SANDBOX_V2,
     )
 
 
@@ -1069,7 +1124,7 @@ async def api_restore_sandbox(
         x_request_id,
         x_session_id,
         x_sandbox_id,
-        versioned=False,
+        endpoint=RESTORE_SANDBOX_V1,
     )
 
 
@@ -1084,7 +1139,13 @@ async def api_restore_sandbox_v2(
     x_sandbox_id: str | None = Header(None),
 ) -> dict:
     return await _restore_sandbox(
-        request, authorization, x_trace_id, x_request_id, x_session_id, x_sandbox_id, versioned=True
+        request,
+        authorization,
+        x_trace_id,
+        x_request_id,
+        x_session_id,
+        x_sandbox_id,
+        endpoint=RESTORE_SANDBOX_V2,
     )
 
 
@@ -1097,7 +1158,7 @@ async def api_create_build_sandbox(
     x_request_id: str | None = Header(None),
 ) -> dict:
     return await _create_build_sandbox(
-        request, authorization, x_trace_id, x_request_id, versioned=False
+        request, authorization, x_trace_id, x_request_id, endpoint=CREATE_BUILD_SANDBOX_V1
     )
 
 
@@ -1110,5 +1171,5 @@ async def api_create_build_sandbox_v2(
     x_request_id: str | None = Header(None),
 ) -> dict:
     return await _create_build_sandbox(
-        request, authorization, x_trace_id, x_request_id, versioned=True
+        request, authorization, x_trace_id, x_request_id, endpoint=CREATE_BUILD_SANDBOX_V2
     )

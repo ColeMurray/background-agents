@@ -88,33 +88,24 @@ describe("Modal VM wire contract", () => {
     { execution_profile: undefined },
     { sandbox_id: "wrong-generation" },
     { created_at: "invalid" },
-  ])("compensates known allocations on invalid response %j", async (override) => {
+  ])("reports known allocations for durable cleanup on invalid response %j", async (override) => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
         Response.json({ ...allocation, data: { ...allocation.data, ...override } })
-      )
-      .mockResolvedValueOnce(Response.json({ success: true }));
+      );
     await expect(
       client().createSandbox({ ...request, sandboxExecution: execution })
     ).rejects.toThrow("Modal VM allocation response");
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(fetch.mock.calls[1][0]).toBe("http://modal.test/api-terminate-sandbox");
-    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toEqual({
-      provider_object_id: "sb-Owned123",
-      session_id: "session-1",
-      sandbox_id: "logical-1",
-    });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
-  it("reports the known allocation when compensation fails", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        Response.json({ ...allocation, data: { ...allocation.data, execution_profile: "default" } })
-      )
-      .mockRejectedValueOnce(new Error("network"));
+  it("reports the known allocation for coordinator cleanup", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({ ...allocation, data: { ...allocation.data, execution_profile: "default" } })
+    );
     await expect(
       client().createSandbox({ ...request, sandboxExecution: execution })
-    ).rejects.toThrow("cleanup required for sb-Owned123");
+    ).rejects.toThrow("Modal VM allocation response");
   });
   it("uses the image deletion endpoint's exact request field", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: true }));

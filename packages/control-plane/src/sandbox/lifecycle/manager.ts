@@ -32,12 +32,14 @@ import {
 } from "../../session/types";
 import {
   PrebuiltImageUnavailableError,
+  InvalidAllocationResponseError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type SessionRepositoryInfo,
 } from "../provider";
+import type { AllocationIntent, SandboxAllocationCoordinator } from "../allocation-coordinator";
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
@@ -450,6 +452,9 @@ export class SandboxLifecycleManager
     SandboxAttachment,
     SandboxAlarm
 {
+  async recoverAllocations(): Promise<boolean> {
+    return (await this.allocationCoordinator?.recover()) ?? false;
+  }
   /**
    * In-memory flag to prevent concurrent spawn attempts within the same request.
    * This is NOT persisted - it protects against multiple spawns in one DO method call.
@@ -489,7 +494,8 @@ export class SandboxLifecycleManager
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
     private readonly config: SandboxLifecycleConfig,
-    private readonly imageBuildLookup?: ImageBuildLookup
+    private readonly imageBuildLookup?: ImageBuildLookup,
+    private readonly allocationCoordinator?: SandboxAllocationCoordinator
   ) {}
 
   /**
@@ -721,7 +727,7 @@ export class SandboxLifecycleManager
   private async reserveSpawnIdentity(
     generation: SandboxGeneration & { sandboxId: string },
     opts: { preserveProviderObjectId: boolean }
-  ): Promise<{ sandboxAuthToken: string; expectedSandboxId: string }> {
+  ): Promise<{ sandboxAuthToken: string; authTokenHash: string; expectedSandboxId: string }> {
     const sandboxAuthToken = this.idGenerator.generateId();
     const { sandboxId: expectedSandboxId, createdAt } = generation;
     await this.enterProviderStartup("spawning", createdAt, () =>
@@ -736,7 +742,7 @@ export class SandboxLifecycleManager
     if (!this.storage.updateSandboxAuthTokenHash(expectedSandboxId, authTokenHash)) {
       throw new SpawnSupersededError();
     }
-    return { sandboxAuthToken, expectedSandboxId };
+    return { sandboxAuthToken, authTokenHash, expectedSandboxId };
   }
 
   /**
@@ -764,6 +770,7 @@ export class SandboxLifecycleManager
     const spawnStartedAt = Date.now();
     let session: SessionRow | null = null;
     let generation: SandboxGeneration | null = null;
+    let allocationIntent: AllocationIntent | null = null;
 
     try {
       session = this.sessionContext.getSession();
@@ -779,9 +786,12 @@ export class SandboxLifecycleManager
       const hasRepository = sessionHasRepository(session);
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
-      let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
-        preserveProviderObjectId: true,
-      });
+      let { sandboxAuthToken, authTokenHash, expectedSandboxId } = await this.reserveSpawnIdentity(
+        reserved,
+        {
+          preserveProviderObjectId: true,
+        }
+      );
 
       await this.stopPriorProviderSandbox();
 
@@ -824,10 +834,27 @@ export class SandboxLifecycleManager
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      let allocationName: string | undefined;
+      if (this.sessionExecution().profile === "docker-v1") {
+        if (!this.allocationCoordinator) {
+          throw new Error("Docker VM allocation recovery is not configured");
+        }
+        allocationName = `oi-${this.idGenerator.generateId()}`;
+        await this.allocationCoordinator.reserve({
+          allocationName,
+          sessionId,
+          sandboxId: expectedSandboxId,
+          generationCreatedAt: generation.createdAt,
+          authTokenHash,
+        });
+        allocationIntent = this.allocationCoordinator.find(allocationName);
+        if (!allocationIntent) throw new Error("Failed to persist sandbox allocation intent");
+      }
       const createConfig: CreateSandboxConfig = {
         sandboxExecution: this.sessionExecution(),
         sessionId,
         sandboxId: expectedSandboxId,
+        allocationName,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
         controlPlaneUrl: this.config.controlPlaneUrl,
@@ -881,19 +908,46 @@ export class SandboxLifecycleManager
         const retryNow = Math.max(Date.now(), now + 1);
         const retry = this.spawnGeneration(session, retryNow);
         generation = retry;
-        ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
-          preserveProviderObjectId: false,
-        }));
+        ({ sandboxAuthToken, authTokenHash, expectedSandboxId } = await this.reserveSpawnIdentity(
+          retry,
+          {
+            preserveProviderObjectId: false,
+          }
+        ));
+        allocationName = undefined;
+        allocationIntent = null;
+        if (this.sessionExecution().profile === "docker-v1") {
+          allocationName = `oi-${this.idGenerator.generateId()}`;
+          await this.allocationCoordinator!.reserve({
+            allocationName,
+            sessionId,
+            sandboxId: expectedSandboxId,
+            generationCreatedAt: retry.createdAt,
+            authTokenHash,
+          });
+          allocationIntent = this.allocationCoordinator!.find(allocationName);
+          if (!allocationIntent) throw new Error("Failed to persist sandbox allocation intent");
+        }
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
           sandboxAuthToken,
+          allocationName,
           prebuiltImageId: null,
           prebuiltImageSha: null,
         });
       }
 
       if (result.providerObjectId) {
+        if (
+          allocationIntent &&
+          !(await this.allocationCoordinator!.acceptProviderResult(
+            allocationIntent,
+            result.providerObjectId
+          ))
+        ) {
+          throw new SpawnSupersededError();
+        }
         this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
       if (result.codeServerUrl && result.codeServerPassword) {
@@ -920,6 +974,24 @@ export class SandboxLifecycleManager
         repo_name: session.repo_name,
       });
     } catch (error) {
+      if (
+        allocationIntent &&
+        error instanceof InvalidAllocationResponseError &&
+        error.providerObjectId
+      ) {
+        try {
+          await this.allocationCoordinator!.rejectProviderResult(
+            allocationIntent,
+            error.providerObjectId
+          );
+        } catch (cleanupError) {
+          this.log.error("sandbox.allocation_cleanup_required", {
+            allocation_name: allocationIntent.allocation_name,
+            provider_object_id: error.providerObjectId,
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
       if (error instanceof SpawnSupersededError) {
         this.log.warn("Spawn attempt superseded; abandoning", {
           event: "sandbox.spawn_superseded",
@@ -1205,6 +1277,7 @@ export class SandboxLifecycleManager
     const restoreStartedAt = Date.now();
     let session: SessionRow | null = null;
     let generation: SandboxGeneration | null = null;
+    let allocationIntent: AllocationIntent | null = null;
 
     try {
       session = this.sessionContext.getSession();
@@ -1218,9 +1291,8 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
-      const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
-        preserveProviderObjectId: true,
-      });
+      const { sandboxAuthToken, authTokenHash, expectedSandboxId } =
+        await this.reserveSpawnIdentity(reserved, { preserveProviderObjectId: true });
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
       // exports at launch, so the snapshot's version is the authoritative one.
@@ -1240,11 +1312,28 @@ export class SandboxLifecycleManager
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      let allocationName: string | undefined;
+      if (this.sessionExecution().profile === "docker-v1") {
+        if (!this.allocationCoordinator) {
+          throw new Error("Docker VM allocation recovery is not configured");
+        }
+        allocationName = `oi-${this.idGenerator.generateId()}`;
+        await this.allocationCoordinator.reserve({
+          allocationName,
+          sessionId: session.session_name || session.id,
+          sandboxId: expectedSandboxId,
+          generationCreatedAt: reserved.createdAt,
+          authTokenHash,
+        });
+        allocationIntent = this.allocationCoordinator.find(allocationName);
+        if (!allocationIntent) throw new Error("Failed to persist sandbox allocation intent");
+      }
       const result = await this.provider.restoreFromSnapshot({
         sandboxExecution: this.sessionExecution(),
         snapshotImageId,
         sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
+        allocationName,
         sandboxAuthToken,
         controlPlaneUrl: this.config.controlPlaneUrl,
         repoOwner: session.repo_owner,
@@ -1265,6 +1354,15 @@ export class SandboxLifecycleManager
 
       if (result.success) {
         if (result.providerObjectId) {
+          if (
+            allocationIntent &&
+            !(await this.allocationCoordinator!.acceptProviderResult(
+              allocationIntent,
+              result.providerObjectId
+            ))
+          ) {
+            throw new SpawnSupersededError();
+          }
           this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
         if (result.codeServerUrl && result.codeServerPassword) {
@@ -1313,6 +1411,24 @@ export class SandboxLifecycleManager
         this.failAttempt(generation, "spawning", result.error || "Failed to restore from snapshot");
       }
     } catch (error) {
+      if (
+        allocationIntent &&
+        error instanceof InvalidAllocationResponseError &&
+        error.providerObjectId
+      ) {
+        try {
+          await this.allocationCoordinator!.rejectProviderResult(
+            allocationIntent,
+            error.providerObjectId
+          );
+        } catch (cleanupError) {
+          this.log.error("sandbox.allocation_cleanup_required", {
+            allocation_name: allocationIntent.allocation_name,
+            provider_object_id: error.providerObjectId,
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
       if (error instanceof SpawnSupersededError) {
         this.log.warn("Restore attempt superseded; abandoning", {
           event: "sandbox.spawn_superseded",

@@ -5,6 +5,7 @@ import { mutate } from "swr";
 import { toast } from "sonner";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { selectCurrentImageBuild } from "@/lib/image-builds";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -361,11 +362,16 @@ export function EnvironmentsSettings() {
                         {canReadImages && (
                           <EnvironmentImageStatus
                             environment={environment}
-                            image={imageBuildsFeed?.images.find(
-                              (image) =>
-                                image.scopeKind === "environment" &&
-                                image.scopeId === environment.id
-                            )}
+                            image={
+                              imageBuildsFeed
+                                ? selectCurrentImageBuild(
+                                    imageBuildsFeed.images,
+                                    imageBuildsFeed.units,
+                                    "environment",
+                                    environment.id
+                                  )
+                                : undefined
+                            }
                             feedUnavailable={Boolean(imageBuildsError) && !imageBuildsFeed}
                           />
                         )}

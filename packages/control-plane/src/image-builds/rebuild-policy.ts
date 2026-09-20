@@ -23,7 +23,7 @@ export type ImageBuildRebuildDecision =
   | { type: "check_branches"; recordedShas: Map<string, string> };
 
 export function evaluateImageBuildRebuildPolicy(
-  unit: EnabledScopeUnit,
+  unit: Pick<EnabledScopeUnit, "repositories" | "repositoriesFingerprint">,
   rows: ImageBuildRecordView[],
   provider: ImageBuildProvider,
   executionProfile: SandboxExecutionProfile = DEFAULT_SANDBOX_EXECUTION_PROFILE
