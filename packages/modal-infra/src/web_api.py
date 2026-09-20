@@ -541,13 +541,13 @@ async def api_snapshot_sandbox(
 @app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
 async def api_stop_sandbox(
-    request: dict,
+    request: dict[str, Any],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
-) -> dict:
+) -> dict[str, Any]:
     """Explicitly terminate a session sandbox through the authenticated API."""
     sandbox_id = request.get("sandbox_id")
     async with _execute_endpoint(

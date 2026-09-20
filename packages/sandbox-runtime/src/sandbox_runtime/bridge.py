@@ -1129,6 +1129,7 @@ class AgentBridge:
 
         execution_stopped = False
         if error is None:
+            assert isinstance(stop_by_ms, (int, float))
             # Fence before the first await. Same-generation reconnects and
             # duplicate ready commands cannot clear this operation.
             self._preservation_operation_id = operation_id
@@ -1143,14 +1144,13 @@ class AgentBridge:
             try:
                 async with asyncio.timeout_at(deadline):
                     harness = self._require_harness()
-                    active_task = task is not None and not task.done()
                     # Python task completion is not vendor-idle evidence: an
                     # earlier user stop or prompt cleanup may have cancelled
                     # the bridge task while tools continued in the harness.
                     execution_stopped = await harness.stop_execution(
                         max(deadline - asyncio.get_running_loop().time(), 0.0)
                     )
-                    if active_task:
+                    if task is not None and not task.done():
                         task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await task

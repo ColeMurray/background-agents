@@ -53,6 +53,38 @@ async def test_get_sandbox_by_id_awaits_async_lookup(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("budget, expected", [(179.8, 179), (500, 300)])
+async def test_take_snapshot_bounds_whole_second_timeout(budget, expected):
+    snapshot_filesystem = _async_method(SimpleNamespace(object_id="im-session"))
+    handle = SandboxHandle(
+        sandbox_id="sandbox-1",
+        modal_sandbox=SimpleNamespace(snapshot_filesystem=snapshot_filesystem),
+        status=SandboxStatus.READY,
+        created_at=0,
+    )
+
+    await SandboxManager().take_snapshot(handle, timeout_seconds=budget)
+
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=expected)
+
+
+@pytest.mark.asyncio
+async def test_take_snapshot_rejects_subsecond_budget_without_provider_call():
+    snapshot_filesystem = _async_method()
+    handle = SandboxHandle(
+        sandbox_id="sandbox-1",
+        modal_sandbox=SimpleNamespace(snapshot_filesystem=snapshot_filesystem),
+        status=SandboxStatus.READY,
+        created_at=0,
+    )
+
+    with pytest.raises(TimeoutError):
+        await SandboxManager().take_snapshot(handle, timeout_seconds=0.5)
+
+    snapshot_filesystem.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_stop_sandbox_waits_for_provider_termination(monkeypatch):
     terminate = _async_method()
     modal_sandbox = SimpleNamespace(terminate=terminate)
