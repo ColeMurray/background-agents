@@ -517,6 +517,50 @@ class TestConcurrentRecovery:
     """Races between bind() recovery, stale-send drains, sends, and eviction."""
 
     @pytest.mark.asyncio
+    async def test_bind_does_not_resend_critical_flushed_by_lock_owner(self) -> None:
+        forwarder = make_forwarder()
+        original = GatedWs()
+        await forwarder.bind(original)
+
+        send_pending = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-pending"})
+        )
+        await settle()
+        original.release(0)
+        await send_pending
+
+        send_w = asyncio.create_task(forwarder.send({"type": "token", "content": "W"}))
+        await settle()
+
+        forwarder.unbind()
+        intermediate = GatedWs()
+        bind_intermediate = asyncio.create_task(forwarder.bind(intermediate))
+        await settle()
+        intermediate.release(0)
+        await bind_intermediate
+
+        original.release(1, ConnectionError("original connection failed"))
+        await settle()
+        assert [event.get("content") for event in intermediate.calls] == [None, "W"]
+
+        forwarder.unbind()
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-X"})
+        replacement = open_ws()
+        bind_replacement = asyncio.create_task(forwarder.bind(replacement))
+        await settle()
+
+        intermediate.release(1)
+        await send_w
+        await bind_replacement
+
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-X",
+            "execution_complete:msg-pending",
+        ]
+        assert forwarder.acknowledge("execution_complete:msg-X") is True
+        assert forwarder.acknowledge("execution_complete:msg-pending") is True
+
+    @pytest.mark.asyncio
     async def test_drain_waits_for_bind_flush_no_loss_or_duplicates(self):
         """Bug A: a stale-send drain must not walk the buffer concurrently
         with bind()'s recovery flush. Unserialized, both loops claim the same
