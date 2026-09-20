@@ -445,7 +445,8 @@ which is logged as `sandbox.failed_reconnected` and resumes as `connecting`.
 service="control-plane" event="sandbox.spawn" outcome="error" session_id="<SESSION_ID>"
 ```
 
-Check the `error_type` and `error_message`. Then look at the selected provider side. Modal example:
+Check `error_type` and `error_message` when present. If the caught value was not an `Error`, inspect
+`error`, which contains `String(error)`. Then look at the selected provider side. Modal example:
 
 ```
 service="modal-infra" msg="sandbox.create" outcome="error"
