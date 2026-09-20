@@ -385,6 +385,42 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
     expect(registerBuildSpy).not.toHaveBeenCalled();
   });
+
+  it("returns the typed Docker scope denial without registering or allocating", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
+    vi.spyOn(IntegrationSettingsStore.prototype, "getResolvedConfig").mockResolvedValueOnce({
+      settings: { dockerEnabled: true },
+      enabledRepos: [],
+    } as Awaited<ReturnType<IntegrationSettingsStore["getResolvedConfig"]>>);
+
+    const response = await callTrigger(createModalEnv());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Docker is not allowed for this repository scope",
+      code: "docker_not_allowed",
+    });
+    expect(registerBuildSpy).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
+  });
+
+  it("returns the typed closed Docker gate without registering or allocating", async () => {
+    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
+    vi.spyOn(IntegrationSettingsStore.prototype, "getResolvedConfig").mockResolvedValueOnce({
+      settings: { dockerEnabled: true },
+      enabledRepos: null,
+    } as Awaited<ReturnType<IntegrationSettingsStore["getResolvedConfig"]>>);
+
+    const response = await callTrigger(createModalEnv());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Docker-enabled Modal VM sessions are unavailable",
+      code: "docker_not_available",
+    });
+    expect(registerBuildSpy).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /image-builds/status", () => {

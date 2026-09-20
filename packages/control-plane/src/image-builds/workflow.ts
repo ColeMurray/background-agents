@@ -36,6 +36,7 @@ import type {
   ImageBuildWorkflowContext,
   TriggerImageBuildResult,
 } from "./types";
+import { SandboxExecutionError } from "../sandbox/execution";
 
 const logger = createLogger("image-builds:workflow");
 /** Request-path compensation is best-effort; maintenance owns slow deletes. */
@@ -234,7 +235,8 @@ export class ImageBuildWorkflow {
       if (
         e instanceof ImageBuildScopeNotFoundError ||
         e instanceof ImageBuildPlanningError ||
-        e instanceof ImageBuildProviderUnconfiguredError
+        e instanceof ImageBuildProviderUnconfiguredError ||
+        e instanceof SandboxExecutionError
       ) {
         throw e;
       }

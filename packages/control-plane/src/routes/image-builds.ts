@@ -23,6 +23,7 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
+import { SandboxExecutionError } from "../sandbox/execution";
 import {
   parseRuntimeVersionNumber,
   repoImageBuildScope,
@@ -104,6 +105,9 @@ function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
 }
 
 function imageBuildErrorToResponse(errorValue: unknown): Response {
+  if (errorValue instanceof SandboxExecutionError) {
+    return json({ error: errorValue.message, code: errorValue.code }, errorValue.status);
+  }
   if (!(errorValue instanceof ImageBuildError)) throw errorValue;
 
   switch (errorValue.code) {
