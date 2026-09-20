@@ -102,7 +102,7 @@ export class SandboxPreservation {
       phase: "running",
       generation: { ...generation, sandboxId: generation.sandboxId },
       provider: this.deps.provider.name,
-      providerObjectId: this.deps.sandbox.getSandbox()?.modal_object_id ?? null,
+      providerObjectId: null,
       lifetimeKind: "unknown",
       expiresAtMs: null,
       drainAtMs: null,

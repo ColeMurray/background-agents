@@ -248,9 +248,8 @@ describe("SandboxPreservation", () => {
     });
   });
 
-  it("allows the existing fresh-spawn retry after provider startup fails before attachment", () => {
+  it("allows a fresh-spawn retry after startup fails with a prior provider handle", () => {
     const f = fixture();
-    f.sandboxRow.modal_object_id = null;
     f.sandboxRow.status = "failed";
     f.preservation.beginGeneration(GENERATION);
 
