@@ -28,6 +28,8 @@ import type {
   DaytonaSnapshotResponse,
   DaytonaToolboxTarget,
 } from "../sandbox/daytona-rest-client";
+import { daytonaCreateSource } from "../sandbox/daytona-resources";
+import type { DaytonaResources } from "../sandbox/daytona-resources";
 import {
   DaytonaApiError,
   DaytonaNotFoundError,
@@ -101,6 +103,10 @@ export interface DaytonaImageBuildResourcesConfig {
   scmProvider: SourceControlProviderName;
 }
 
+export interface DaytonaImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
+  resources: DaytonaResources;
+}
+
 // ---------------------------------------------------------------------------
 // Resources
 // ---------------------------------------------------------------------------
@@ -125,16 +131,20 @@ export class DaytonaImageBuildResources {
    * so a build that reports completion is always a build whose row names the
    * sandbox that reported it.
    */
-  async triggerImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
+  async triggerImageBuild(config: DaytonaImageBuildTriggerConfig): Promise<void> {
     const identity = imageBuildSandboxIdentity(config, Date.now());
     const sourceName = await daytonaBuildResourceName("source", config.buildId);
     const ttlMinutes = Math.ceil(config.providerSessionTimeoutSeconds / SECONDS_PER_MINUTE);
     const expiresAt = Date.now() + ttlMinutes * MS_PER_MINUTE;
 
     try {
+      const source = daytonaCreateSource({
+        image: this.client.requireBaseImage(),
+        resources: config.resources,
+      });
       const params: DaytonaCreateSandboxParams = {
         name: sourceName,
-        snapshot: this.client.requireBaseSnapshot(),
+        ...source,
         // The only two values a capture may inherit: neither is secret, and
         // the launcher clears the dormant marker before the build composes.
         env: { [DEFERRED_START_ENV_VAR]: "true", PYTHONUNBUFFERED: "1" },
@@ -159,6 +169,12 @@ export class DaytonaImageBuildResources {
       await config.onProviderSessionCreated(created.id);
 
       const started = await this.awaitSandboxState(created.id, "started", BUILD_START_TIMEOUT_MS);
+      if (started.cpu !== config.resources.cpu || started.memory !== config.resources.memory) {
+        throw new SandboxProviderError(
+          "Daytona build sandbox resources do not match the requested allocation",
+          "permanent"
+        );
+      }
       const target: DaytonaToolboxTarget = {
         sandboxId: created.id,
         baseUrl: await this.client.resolveToolboxBaseUrl(created.id, { sandbox: started }),
@@ -357,27 +373,11 @@ export class DaytonaImageBuildResources {
   /**
    * Delete one captured snapshot by its immutable id, confirming it is gone.
    *
-   * Refuses the configured base snapshot outright: an artifact reference that
-   * somehow names the base image would otherwise take the deployment's
-   * ability to start any sandbox with it.
+   * The configured OCI base image is not a snapshot and cannot reach this endpoint.
    */
   async deleteProviderImage(providerImageId: string, signal?: AbortSignal): Promise<void> {
-    const baseSnapshot = this.client.config.baseSnapshot;
-    if (baseSnapshot && providerImageId === baseSnapshot) {
-      throw new SandboxProviderError(
-        "Refusing to delete the configured Daytona base snapshot",
-        "permanent"
-      );
-    }
-
     const snapshot = await this.getBuildSnapshot(providerImageId, signal);
     if (!snapshot) return;
-    if (baseSnapshot && snapshot.name === baseSnapshot) {
-      throw new SandboxProviderError(
-        "Refusing to delete the configured Daytona base snapshot",
-        "permanent"
-      );
-    }
     // Already being reclaimed: acceptance is not reclamation, so the
     // obligation stays until a lookup says it is gone.
     if (parseDaytonaSnapshotState(snapshot.state) !== "removing") {

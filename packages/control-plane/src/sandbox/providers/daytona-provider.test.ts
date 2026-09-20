@@ -11,6 +11,7 @@ import { deriveVncPassword } from "../sandbox-env";
 import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
 import {
   PrebuiltImageActivationPendingError,
+  PrebuiltImageCompatibilityError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
 } from "../provider";
@@ -31,7 +32,7 @@ import {
 const defaultRestConfig: DaytonaRestConfig = {
   apiUrl: "https://daytona.test/api",
   apiKey: "test-api-key",
-  baseSnapshot: "base-snapshot-v1",
+  baseImage: `ghcr.io/acme/open-inspect@sha256:${"a".repeat(64)}`,
   autoStopIntervalMinutes: 120,
   autoArchiveIntervalMinutes: 10080,
 };
@@ -55,9 +56,9 @@ function createMockClient(
   const config = { ...defaultRestConfig, ...configOverrides };
   return {
     config,
-    requireBaseSnapshot: vi.fn(() => {
-      if (!config.baseSnapshot) throw new Error("DAYTONA_BASE_SNAPSHOT is required");
-      return config.baseSnapshot;
+    requireBaseImage: vi.fn(() => {
+      if (!config.baseImage) throw new Error("DAYTONA_BASE_IMAGE is required");
+      return config.baseImage;
     }),
     createSandbox: vi.fn(
       async (): Promise<DaytonaSandboxResponse> => ({
@@ -148,7 +149,11 @@ describe("DaytonaSandboxProvider", () => {
       // Verify create was called with correct params
       const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(createCall.name).toBe("sandbox-456");
-      expect(createCall.snapshot).toBe("base-snapshot-v1");
+      expect(createCall).toMatchObject({
+        buildInfo: { dockerfileContent: `FROM ${defaultRestConfig.baseImage}` },
+        cpu: 1,
+        memory: 2,
+      });
       expect(createCall.autoStopInterval).toBe(120);
       expect(createCall.autoArchiveInterval).toBe(10080);
       expect(createCall.public).toBe(false);
@@ -628,7 +633,7 @@ function createPrebuiltClient(overrides: Record<string, unknown> = {}) {
   const config = { ...defaultRestConfig };
   return {
     config,
-    requireBaseSnapshot: vi.fn(() => config.baseSnapshot as string),
+    requireBaseImage: vi.fn(() => config.baseImage as string),
     createSandbox: vi.fn(
       async (_params: DaytonaCreateSandboxParams): Promise<DaytonaSandboxResponse> => ({
         id: "daytona-session-1",
@@ -641,6 +646,8 @@ function createPrebuiltClient(overrides: Record<string, unknown> = {}) {
       name: "oi-image-abc",
       state: "active",
       sourceSandboxId: "daytona-build-1",
+      cpu: 1,
+      mem: 2,
     })),
     activateSnapshot: vi.fn(async () => ({
       id: "snapshot-1",
@@ -755,7 +762,11 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
     await prebuiltProvider(client).createSandbox(baseCreateConfig);
 
     const params = client.createSandbox.mock.calls[0][0];
-    expect(params.snapshot).toBe("base-snapshot-v1");
+    expect(params).toMatchObject({
+      buildInfo: { dockerfileContent: `FROM ${defaultRestConfig.baseImage}` },
+      cpu: 1,
+      memory: 2,
+    });
     expect(params.env).toMatchObject({
       FROM_REPO_IMAGE: "false",
       IMAGE_BUILD_MODE: "false",
@@ -765,12 +776,51 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
     expect(params.env?.REPO_IMAGE_SHA).toBeUndefined();
   });
 
+  it("sends normalized custom resources on an OCI image create", async () => {
+    const client = createPrebuiltClient();
+    await prebuiltProvider(client).createSandbox({
+      ...baseCreateConfig,
+      sandboxSettings: { cpuCores: 1.25, memoryMib: 3073 },
+    });
+
+    expect(client.createSandbox.mock.calls[0][0]).toMatchObject({ cpu: 2, memory: 4 });
+  });
+
+  it.each([
+    ["missing", { cpu: undefined, mem: undefined }],
+    ["CPU-mismatched", { cpu: 2, mem: 2 }],
+    ["memory-mismatched", { cpu: 1, mem: 4 }],
+  ])(
+    "treats %s snapshot resource metadata as a local compatibility miss",
+    async (_name, metadata) => {
+      const client = createPrebuiltClient({
+        getSnapshot: vi.fn(async () => ({
+          id: "snapshot-1",
+          name: "oi-image-abc",
+          state: "active",
+          ...metadata,
+        })),
+      });
+
+      await expect(prebuiltProvider(client).createSandbox(prebuiltConfig)).rejects.toBeInstanceOf(
+        PrebuiltImageCompatibilityError
+      );
+      expect(client.createSandbox).not.toHaveBeenCalled();
+    }
+  );
+
   it("activates a cold prebuilt image before using it", async () => {
     const client = createPrebuiltClient({
       getSnapshot: vi
         .fn()
         .mockResolvedValueOnce({ id: "snapshot-1", name: "oi-image-abc", state: "inactive" })
-        .mockResolvedValue({ id: "snapshot-1", name: "oi-image-abc", state: "active" }),
+        .mockResolvedValue({
+          id: "snapshot-1",
+          name: "oi-image-abc",
+          state: "active",
+          cpu: 1,
+          mem: 2,
+        }),
     });
     client.createSandbox.mockResolvedValue({ id: "daytona-session-1", state: "started" });
     (client as unknown as Record<string, unknown>).getSignedPreviewUrl = vi.fn(async () => ({

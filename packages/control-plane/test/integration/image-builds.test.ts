@@ -25,6 +25,9 @@ import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { DeleteImageInput, ImageBuildAdapter } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { createImageBuildLookup } from "../../src/image-builds/lookup";
+import { daytonaBuildConfigurationKey } from "../../src/sandbox/daytona-resources";
+import { IntegrationSettingsStore } from "../../src/db/integration-settings";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import {
@@ -119,7 +122,103 @@ async function selectForSpawn(environmentId: string, provider: "modal" | "vercel
 describe("Image builds", () => {
   beforeEach(cleanD1Tables);
 
+  describe("Daytona configuration-aware lookup", () => {
+    const imageA = `ghcr.io/acme/runtime@sha256:${"a".repeat(64)}`;
+    const imageB = `ghcr.io/acme/runtime@sha256:${"b".repeat(64)}`;
+    const frozenSettings = { cpuCores: 1.5, memoryMib: 3072 };
+    const resources = { cpu: 2, memory: 3 };
+
+    async function setup(provider: "daytona" | "modal", key: string | null) {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      await seedImageRow({
+        id: `lookup-${provider}`,
+        environmentId,
+        provider,
+        status: "ready",
+        providerImageId: "snapshot-1",
+        buildConfigurationKey: key,
+      });
+      return environmentId;
+    }
+
+    it("selects only the exact frozen resource and digest key", async () => {
+      const key = daytonaBuildConfigurationKey(imageA, resources);
+      const environmentId = await setup("daytona", key);
+      // Current saved settings deliberately differ; lookup must use the
+      // frozen settings supplied by the session, not re-resolve this row.
+      await new IntegrationSettingsStore(env.DB).setEnvironmentSettings("sandbox", environmentId, {
+        cpuCores: 8,
+        memoryMib: 16384,
+      });
+      const lookup = createImageBuildLookup(
+        createCloudflareEnv({ ...env, DAYTONA_BASE_IMAGE: imageA }),
+        env.DB,
+        "daytona"
+      );
+
+      await expect(
+        lookup.getLatestReady(environmentScope(environmentId), frozenSettings)
+      ).resolves.toMatchObject({ id: "lookup-daytona" });
+      for (const settings of [
+        { cpuCores: 3, memoryMib: 3072 },
+        { cpuCores: 1.5, memoryMib: 4096 },
+      ]) {
+        await expect(
+          lookup.getLatestReady(environmentScope(environmentId), settings)
+        ).resolves.toBeNull();
+      }
+      const otherDigestLookup = createImageBuildLookup(
+        createCloudflareEnv({ ...env, DAYTONA_BASE_IMAGE: imageB }),
+        env.DB,
+        "daytona"
+      );
+      await expect(
+        otherDigestLookup.getLatestReady(environmentScope(environmentId), frozenSettings)
+      ).resolves.toBeNull();
+    });
+
+    it("treats legacy null Daytona keys as misses and leaves other providers unchanged", async () => {
+      const legacyId = await setup("daytona", null);
+      const daytona = createImageBuildLookup(
+        createCloudflareEnv({ ...env, DAYTONA_BASE_IMAGE: imageA }),
+        env.DB,
+        "daytona"
+      );
+      await expect(daytona.getLatestReady(environmentScope(legacyId), {})).resolves.toBeNull();
+
+      const modalId = await setup("modal", null);
+      const modal = createImageBuildLookup(createCloudflareEnv(env), env.DB, "modal");
+      await expect(
+        modal.getLatestReady(environmentScope(modalId), frozenSettings)
+      ).resolves.toMatchObject({
+        id: "lookup-modal",
+      });
+    });
+  });
+
   describe("ImageBuildStore state machine", () => {
+    it("persists Daytona configuration keys while legacy rows remain null", async () => {
+      const environmentId = await seedEnvironment();
+      const store = new ImageBuildStore(env.DB);
+      const key = "daytona-oci-v1:ghcr.io/acme/image@sha256:" + "a".repeat(64) + ":cpu=1:memory=2";
+      await store.registerBuild({
+        id: "imgb-keyed",
+        scope: environmentScope(environmentId),
+        provider: "daytona",
+        repositoriesFingerprint: "fp-keyed",
+        buildConfigurationKey: key,
+      });
+      expect((await getRow("imgb-keyed"))?.build_configuration_key).toBe(key);
+
+      await seedImageRow({
+        id: "imgb-legacy",
+        environmentId,
+        provider: "daytona",
+        status: "ready",
+      });
+      expect((await getRow("imgb-legacy"))?.build_configuration_key).toBeNull();
+    });
+
     it("registers, marks ready, and supersedes older ready images", async () => {
       const environmentId = await seedEnvironment();
       const store = new ImageBuildStore(env.DB);

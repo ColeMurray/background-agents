@@ -219,7 +219,8 @@ export class ImageBuildWorkflow {
         (await this.store.hasReadyImageForFingerprint(
           scope,
           provider,
-          target.repositoriesFingerprint
+          target.repositoriesFingerprint,
+          target.buildConfigurationKey
         ))
       ) {
         return { type: "up_to_date" };
@@ -252,6 +253,7 @@ export class ImageBuildWorkflow {
         scope,
         provider,
         repositoriesFingerprint: target.repositoriesFingerprint,
+        buildConfigurationKey: target.buildConfigurationKey,
         ...callbackAuthRegistration(callbackAuth),
       });
       if (!registered) {

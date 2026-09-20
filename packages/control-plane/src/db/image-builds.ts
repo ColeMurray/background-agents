@@ -62,6 +62,7 @@ export interface ImageBuildRegistration {
   repositoriesFingerprint: string;
   callbackTokenHash?: string;
   callbackTokenExpiresAt?: number;
+  buildConfigurationKey?: string | null;
 }
 
 /** Public-safe D1 projection retained in storage encoding inside persistence. */
@@ -102,6 +103,7 @@ function toImageBuildRecordView(row: ImageBuildStatusRow): ImageBuildRecordView 
  * `ImageBuildStatusRow`, and status reads project exactly its columns.
  */
 export interface ImageBuildRow extends ImageBuildStatusRow {
+  build_configuration_key: string | null;
   provider_image_id: string | null;
   provider_session_id: string | null;
   provider_operation_ref: string | null;
@@ -295,9 +297,10 @@ export class ImageBuildStore {
            status,
            callback_token_hash,
            callback_token_expires_at,
+           build_configuration_key,
            created_at
          )
-         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM image_builds
            WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
@@ -311,6 +314,7 @@ export class ImageBuildStore {
         build.repositoriesFingerprint,
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
+        build.buildConfigurationKey ?? null,
         Date.now(),
         build.scope.kind,
         build.scope.id,
@@ -472,16 +476,25 @@ export class ImageBuildStore {
   async hasReadyImageForFingerprint(
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
-    repositoriesFingerprint: string
+    repositoriesFingerprint: string,
+    buildConfigurationKey: string | null = null
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
         `SELECT 1 AS present FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
            AND repositories_fingerprint = ?
+           AND (? IS NULL OR build_configuration_key = ?)
          LIMIT 1`
       )
-      .bind(scope.kind, scope.id, provider, repositoriesFingerprint)
+      .bind(
+        scope.kind,
+        scope.id,
+        provider,
+        repositoriesFingerprint,
+        buildConfigurationKey,
+        buildConfigurationKey
+      )
       .first<{ present: number }>();
     return row !== null;
   }
@@ -810,18 +823,21 @@ export class ImageBuildStore {
   async getReconciliationStatus(
     scope: ImageBuildScope,
     provider: ImageBuildProvider
-  ): Promise<ImageBuildRecordView[]> {
+  ): Promise<Array<ImageBuildRecordView & { buildConfigurationKey: string | null }>> {
     const result = await this.db
       .prepare(
-        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
+        `SELECT ${STATUS_VIEW_COLUMNS}, build_configuration_key FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ?
            AND status IN ('building', 'ready')
          ORDER BY created_at DESC`
       )
       .bind(scope.kind, scope.id, provider)
-      .all<ImageBuildStatusRow>();
+      .all<ImageBuildStatusRow & { build_configuration_key: string | null }>();
 
-    return (result.results || []).map(toImageBuildRecordView);
+    return (result.results || []).map((row) => ({
+      ...toImageBuildRecordView(row),
+      buildConfigurationKey: row.build_configuration_key,
+    }));
   }
 
   /**

@@ -25,7 +25,7 @@ import {
 const defaultConfig: DaytonaRestConfig = {
   apiUrl: "https://daytona.test/api",
   apiKey: "test-api-key",
-  baseSnapshot: "base-snapshot-v1",
+  baseImage: `ghcr.io/acme/open-inspect@sha256:${"a".repeat(64)}`,
   autoStopIntervalMinutes: 120,
   autoArchiveIntervalMinutes: 10080,
 };
@@ -121,11 +121,11 @@ describe("DaytonaRestClient", () => {
     // A deployment that has switched providers still finalizes and reclaims
     // the Daytona resources its last configuration created, so credentials
     // without a current base image must construct.
-    it("constructs without a base snapshot and refuses only creates", () => {
-      const client = new DaytonaRestClient({ ...defaultConfig, baseSnapshot: "" });
+    it("constructs without a base image and refuses only creates", () => {
+      const client = new DaytonaRestClient({ ...defaultConfig, baseImage: "" });
 
-      expect(() => client.requireBaseSnapshot()).toThrow("DAYTONA_BASE_SNAPSHOT is required");
-      expect(new DaytonaRestClient(defaultConfig).requireBaseSnapshot()).toBe("base-snapshot-v1");
+      expect(() => client.requireBaseImage()).toThrow("DAYTONA_BASE_IMAGE is required");
+      expect(new DaytonaRestClient(defaultConfig).requireBaseImage()).toBe(defaultConfig.baseImage);
     });
 
     it("strips trailing slashes from apiUrl", async () => {
@@ -203,6 +203,16 @@ describe("DaytonaRestClient", () => {
         name: "DaytonaApiError",
         message: "Invalid Daytona API response",
       });
+    });
+
+    it("reads sandbox allocation from memory, not snapshot mem", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(
+        jsonResponse({ id: "sb-1", state: "started", cpu: 2, memory: 4, mem: 99 })
+      );
+      const sandbox = await client.getSandbox("sb-1");
+      expect(sandbox).toMatchObject({ cpu: 2, memory: 4 });
+      expect(sandbox).not.toHaveProperty("mem");
     });
   });
 
@@ -481,6 +491,9 @@ describe("DaytonaRestClient snapshots", () => {
         name: "oi-image-abc",
         state: "active",
         sourceSandboxId: "sb-1",
+        cpu: 2,
+        mem: 4,
+        memory: 99,
       })
     );
 
@@ -490,7 +503,14 @@ describe("DaytonaRestClient snapshots", () => {
       "https://daytona.test/api/snapshots/oi-image-abc",
       expect.objectContaining({ method: "GET" })
     );
-    expect(snapshot).toMatchObject({ id: "snap-1", state: "active", sourceSandboxId: "sb-1" });
+    expect(snapshot).toMatchObject({
+      id: "snap-1",
+      state: "active",
+      sourceSandboxId: "sb-1",
+      cpu: 2,
+      mem: 4,
+    });
+    expect(snapshot).not.toHaveProperty("memory");
   });
 
   it("reports an absent snapshot as not found rather than an API error", async () => {

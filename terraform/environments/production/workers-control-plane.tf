@@ -126,10 +126,8 @@ module "control_plane_worker" {
     trimspace(var.daytona_api_key) != "" && var.daytona_toolbox_api_url != "" ? {
       DAYTONA_TOOLBOX_API_URL = { value = var.daytona_toolbox_api_url }
     } : {},
-    # The base snapshot is the one Daytona setting that needs the module, and
-    # only a create needs the base snapshot.
     local.use_daytona_backend ? {
-      DAYTONA_BASE_SNAPSHOT     = { value = module.daytona_infra[0].snapshot_name }
+      DAYTONA_BASE_IMAGE        = { value = var.daytona_base_image }
       DAYTONA_PREBUILDS_ENABLED = { value = tostring(var.daytona_prebuilds_enabled) }
     } : {},
     trimspace(var.opencomputer_api_url) != "" ? {
@@ -245,7 +243,6 @@ module "control_plane_worker" {
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
-    module.daytona_infra,
     module.e2b_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,

@@ -213,6 +213,24 @@ jobs:
           fi
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Resolve Daytona digest for plan
+        env:
+          SANDBOX_PROVIDER: ${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}
+          CONFIGURED_DAYTONA_BASE_IMAGE: ${{ vars.DAYTONA_BASE_IMAGE }}
+        run: |
+          set -euo pipefail
+          if [ "$SANDBOX_PROVIDER" != daytona ]; then exit 0; fi
+          reference="$CONFIGURED_DAYTONA_BASE_IMAGE"
+          if [ -z "$reference" ]; then
+            reference="$(terraform output -raw daytona_base_image 2>/dev/null || true)"
+          fi
+          if [[ ! "$reference" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Set DAYTONA_BASE_IMAGE to a verified digest for the first plan." >&2
+            exit 1
+          fi
+          echo "TF_VAR_daytona_base_image=$reference" >> "$GITHUB_ENV"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform Plan
         id: plan
         run: |
@@ -282,8 +300,6 @@ jobs:
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
-          TF_VAR_daytona_base_snapshot: ${{ vars.DAYTONA_BASE_SNAPSHOT || secrets.DAYTONA_BASE_SNAPSHOT }}
-          TF_VAR_daytona_base_snapshot_memory_gib: "${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}"
           TF_VAR_daytona_target: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
           TF_VAR_daytona_toolbox_api_url: ${{ vars.DAYTONA_TOOLBOX_API_URL || secrets.DAYTONA_TOOLBOX_API_URL }}
           TF_VAR_daytona_prebuilds_enabled: "${{ vars.DAYTONA_PREBUILDS_ENABLED || secrets.DAYTONA_PREBUILDS_ENABLED || 'false' }}"
@@ -352,6 +368,11 @@ jobs:
     needs: [validate, check-secrets]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.check-secrets.outputs.has-secrets == 'true'
     environment: production
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DEPLOY_SANDBOX_PROVIDER: ${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -379,6 +400,37 @@ jobs:
       - name: Install Modal and Python dependencies
         run: uv sync --frozen
         working-directory: packages/modal-infra
+
+      - name: Install Daytona publisher dependencies
+        if: env.DEPLOY_SANDBOX_PROVIDER == 'daytona'
+        run: uv sync --frozen
+        working-directory: packages/daytona-infra
+
+      - name: Log in to OCI registry
+        if: env.DEPLOY_SANDBOX_PROVIDER == 'daytona'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: env.DEPLOY_SANDBOX_PROVIDER == 'daytona'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Publish and natively verify Daytona image
+        if: env.DEPLOY_SANDBOX_PROVIDER == 'daytona'
+        env:
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          DAYTONA_API_URL: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
+          DAYTONA_TARGET: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
+          DAYTONA_IMAGE_REPOSITORY: ${{ vars.DAYTONA_IMAGE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/daytona-image.json"
+          python3 packages/sandbox-images/cli.py build --provider daytona --output "$result"
+          reference="$(jq -er '.reference' "$result")"
+          echo "TF_VAR_daytona_base_image=$reference" >> "$GITHUB_ENV"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -472,8 +524,6 @@ jobs:
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
-          TF_VAR_daytona_base_snapshot: ${{ vars.DAYTONA_BASE_SNAPSHOT || secrets.DAYTONA_BASE_SNAPSHOT }}
-          TF_VAR_daytona_base_snapshot_memory_gib: "${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}"
           TF_VAR_daytona_target: ${{ vars.DAYTONA_TARGET || secrets.DAYTONA_TARGET }}
           TF_VAR_daytona_toolbox_api_url: ${{ vars.DAYTONA_TOOLBOX_API_URL || secrets.DAYTONA_TOOLBOX_API_URL }}
           TF_VAR_daytona_prebuilds_enabled: "${{ vars.DAYTONA_PREBUILDS_ENABLED || secrets.DAYTONA_PREBUILDS_ENABLED || 'false' }}"

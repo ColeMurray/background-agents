@@ -11,12 +11,7 @@ import {
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
 import type { ImageBuildScope } from "./model";
-import {
-  loadScopeBuildSecrets,
-  resolveScopeSandboxSettings,
-  resolveScopeTarget,
-  type ResolvedImageBuildTarget,
-} from "./scope";
+import { loadScopeBuildSecrets, resolveScopeTarget, type ResolvedImageBuildTarget } from "./scope";
 import type { ImageBuildCloneAuth, ImageBuildPlan } from "./types";
 
 const logger = createLogger("image-builds:planner");
@@ -83,10 +78,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
 
   async planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan> {
     const { repositories, repositoriesFingerprint } = params.target;
-    const primary = repositories[0];
-
-    const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
-      resolveScopeSandboxSettings(this.db, params.scope, primary),
+    const [userEnvVars, cloneAuth] = await Promise.all([
       loadScopeBuildSecrets(this.env, this.db, params.scope, params.target),
       this.resolveCloneAuth(params.scope),
     ]);
@@ -98,7 +90,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
       repositoriesFingerprint,
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
-      buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
+      buildTimeoutMs: resolveBuildTimeoutSeconds(params.target.sandboxSettings) * MS_PER_SECOND,
       userEnvVars: userEnvVars
         ? prepareLegacyManagedProviderEnv({
             exposedSecrets: userEnvVars,
@@ -115,6 +107,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
       ...basePlan,
       callbackToken: params.callbackAuth.token,
       cloneAuth,
+      sandboxSettings: params.target.sandboxSettings,
     };
   }
 

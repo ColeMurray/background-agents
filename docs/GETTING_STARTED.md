@@ -167,15 +167,14 @@ Create an R2 API Token:
 1. Create a [Daytona](https://app.daytona.io) account and generate an **API key** with the following
    permissions:
    - **Sandboxes**: Read, Write (runtime sandbox management and preview URLs)
-   - **Snapshots**: Read, Write, Delete (automated snapshot builds via Terraform)
+   - **Snapshots**: Read, Write, Delete (repository prebuild capture and cleanup)
 2. Note the **API URL** (e.g., `https://app.daytona.io/api`) and optional **target**
-3. Terraform builds and verifies a new base snapshot before switching the Worker to it. See the
+3. Publish and natively verify the OCI runtime before switching the Worker to its digest. See the
    [sandbox image workflow](../packages/sandbox-images/README.md) for dependency updates and manual
    builds.
 4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
-5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`.
-   `daytona_base_snapshot_memory_gib` controls the memory inherited by sandboxes created from the
-   snapshot and defaults to `2`.
+5. Set `daytona_api_url`, `daytona_api_key`, and the returned `daytona_base_image` digest in
+   `terraform.tfvars`. CPU and memory are selected per sandbox from Sandbox Settings.
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
 
@@ -543,8 +542,7 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # Daytona (only required when sandbox_provider = "daytona")
 # daytona_api_url           = "https://app.daytona.io/api"
 # daytona_api_key           = "your-daytona-api-key"
-# daytona_base_snapshot     = "your-snapshot-name"
-# daytona_base_snapshot_memory_gib = 2
+# daytona_base_image        = "ghcr.io/your-org/open-inspect-daytona@sha256:..."
 
 # Vercel Sandboxes (only required when sandbox_provider = "vercel")
 # vercel_sandbox_token      = "your-vercel-token"
@@ -1068,8 +1066,8 @@ APP_ICON_URL
 
 # Daytona
 DAYTONA_API_URL
-DAYTONA_BASE_SNAPSHOT
-DAYTONA_BASE_SNAPSHOT_MEMORY_GIB
+DAYTONA_BASE_IMAGE
+DAYTONA_IMAGE_REPOSITORY
 DAYTONA_TARGET
 DAYTONA_TOOLBOX_API_URL
 DAYTONA_PREBUILDS_ENABLED
@@ -1133,8 +1131,8 @@ Secrets for credentials:
 | `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
 | `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
-| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                |
-| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB` | Base snapshot memory in GiB (defaults to `2`)                                               |
+| `DAYTONA_BASE_IMAGE`               | Verified Daytona OCI digest _(only if `sandbox_provider = "daytona"`)_                      |
+| `DAYTONA_IMAGE_REPOSITORY`         | Registry-qualified repository used by the trusted main deployment publisher                 |
 | `DAYTONA_TARGET`                   | Optional Daytona target name                                                                |
 | `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports          |
 | `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)     |

@@ -22,6 +22,7 @@ import { MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
 import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { getPublicSandboxProvider } from "@/lib/sandbox-provider";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -425,6 +426,12 @@ export function SandboxSettingsEditor({
           Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
           reservation.
         </p>
+        {getPublicSandboxProvider() === "daytona" && (
+          <p className="text-xs text-muted-foreground mb-2">
+            Daytona rounds CPU up to whole cores and memory up to whole GiB (1024 MiB). Changes
+            apply to new sessions and prebuilds, not running or resumed sandboxes.
+          </p>
+        )}
         <div className="grid gap-3 max-w-sm sm:grid-cols-2">
           <div>
             <label

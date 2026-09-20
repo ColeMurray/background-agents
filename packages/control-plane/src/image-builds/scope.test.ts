@@ -111,6 +111,8 @@ function repoTarget(repoId = 123): ResolvedImageBuildTarget {
     repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     repositoriesFingerprint: "fp-repo",
     repoId,
+    sandboxSettings: {},
+    buildConfigurationKey: null,
   };
 }
 
@@ -313,6 +315,7 @@ describe("listEnabledScopeUnits", () => {
       repositoriesFingerprint: await computeRepositoriesFingerprint([
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
       ]),
+      buildConfigurationKey: null,
     });
   });
 
@@ -371,6 +374,8 @@ describe("loadScopeBuildSecrets", () => {
       kind: "environment",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-env",
+      sandboxSettings: {},
+      buildConfigurationKey: null,
     });
 
     expect(secretsStores.environment).toHaveBeenCalledWith("env_1");

@@ -95,6 +95,11 @@ output "sandbox_provider" {
   value       = var.sandbox_provider
 }
 
+output "daytona_base_image" {
+  description = "Immutable Daytona OCI base image configured for sandbox creation"
+  value       = local.use_daytona_backend ? var.daytona_base_image : null
+}
+
 output "vercel_base_snapshot_id" {
   description = "Vercel base runtime snapshot ID configured for sandbox creation"
   value       = local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : null

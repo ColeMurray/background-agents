@@ -76,11 +76,10 @@ modal_environment_web_suffix  = ""
 # Only required when sandbox_provider = "daytona"
 # Create an API key at https://app.daytona.io with permissions:
 #   Sandboxes: Read, Write  |  Snapshots: Read, Write, Delete
-# Seed the base snapshot with packages/daytona-infra/src/bootstrap.py before enabling.
+# Publish and verify the OCI image with packages/daytona-infra/src/bootstrap.py before enabling.
 daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
 daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
-daytona_base_snapshot = ""     # Prefix for the Terraform-managed Daytona snapshot
-# daytona_base_snapshot_memory_gib = 2 # Memory inherited by sandboxes created from the snapshot
+daytona_base_image = ""        # e.g. ghcr.io/org/open-inspect-daytona@sha256:...
 # daytona_target = ""          # Optional Daytona target name
 # daytona_toolbox_api_url = "" # Optional override; empty uses the proxy each sandbox reports
 # Admits new Daytona prebuilt-image builds and lets fresh sessions boot from one; closing it

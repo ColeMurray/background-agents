@@ -1,10 +1,12 @@
 """Native retries verify retained artifacts without rebuilding or publishing failures."""
 
+import json
 import runpy
+import subprocess
 import sys
 import time
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -90,146 +92,96 @@ def test_e2b_retry_never_overwrites_existing_template(monkeypatch, build_mocks, 
     sandbox.kill.assert_called_once()
 
 
-@pytest.mark.parametrize("failed", [False, True])
-@pytest.mark.parametrize("retained", [False, True])
-def test_daytona_retry_never_recreates_existing_snapshot(
-    monkeypatch, build_mocks, failed, retained
-):
-    client = Mock()
-    if not retained:
-        client.snapshot.get.side_effect = FileNotFoundError("not found")
-    sandbox = Mock()
-    sandbox.process.exec.return_value = SimpleNamespace(exit_code=1 if failed else 0, result="")
-    client.create.return_value = sandbox
-    sandbox_params = Mock()
-    monkeypatch.setitem(
-        sys.modules,
-        "daytona",
-        SimpleNamespace(
-            Daytona=Mock(return_value=client),
-            DaytonaConfig=Mock(),
-            CreateSandboxFromSnapshotParams=sandbox_params,
-            DaytonaNotFoundError=FileNotFoundError,
-        ),
-    )
-    package = ModuleType("test_daytona")
-    package.__path__ = []
-    monkeypatch.setitem(sys.modules, "test_daytona", package)
-    monkeypatch.setitem(
-        sys.modules,
-        "test_daytona.config",
-        SimpleNamespace(
-            load_config=lambda: SimpleNamespace(
-                repo_root=ROOT,
-                base_snapshot="prefix",
-                api_key="test",
-                api_url="test",
-                target="test",
-                base_snapshot_memory_gib=2,
-            )
-        ),
-    )
-    create = Mock()
-    monkeypatch.setitem(
-        sys.modules, "test_daytona.toolchain", SimpleNamespace(create_base_snapshot=create)
-    )
-    main = runpy.run_path(
-        str(ROOT / "packages/daytona-infra/src/bootstrap.py"), run_name="test_daytona.bootstrap"
-    )["main"]
-    if failed:
-        with pytest.raises(RuntimeError, match="verification failed"):
-            main()
-        build_mocks.assert_not_called()
-    else:
-        main()
-        build_mocks.assert_called_once_with(EXPECTED_NAME)
-    client.snapshot.get.assert_called_once_with(EXPECTED_NAME)
-    assert create.call_count == (0 if retained else 1)
-    if not retained:
-        create.assert_called_once_with(client, bundle.pack_bundle.return_value, EXPECTED_NAME, 2)
-    assert not bundle.pack_bundle.return_value.directory.exists()
-    assert sandbox_params.call_args.kwargs["env_vars"] is PLAN["runtimeEnv"]
-    assert sandbox.process.exec.call_args.args[0].endswith("/app/verify/smoke_test.py verify")
-    sandbox.delete.assert_called_once()
-
-
-def test_daytona_image_uses_packed_bundle_plan(monkeypatch, tmp_path):
-    image = Mock()
-    for method in ("add_local_dir", "run_commands", "env", "workdir"):
-        getattr(image, method).return_value = image
-    image_class = Mock()
-    image_class.base.return_value = image
-    monkeypatch.setitem(
-        sys.modules,
-        "daytona",
-        SimpleNamespace(
-            CreateSnapshotParams=Mock(), Daytona=Mock(), Image=image_class, Resources=Mock()
-        ),
-    )
-    build_base_image = runpy.run_path(str(ROOT / "packages/daytona-infra/src/toolchain.py"))[
-        "build_base_image"
-    ]
-
-    packed = bundle.PackedBundle(tmp_path, PLAN)
-    assert build_base_image(packed) is image
-    image_class.base.assert_called_once_with("test-base")
-    image.add_local_dir.assert_called_once_with(str(tmp_path), "/tmp/openinspect-image")
-    image.env.assert_called_once_with({"PACKED_PLAN": "true", "SANDBOX_VERSION": "test-runtime"})
-
-
-def test_daytona_snapshot_uses_configured_memory(monkeypatch, tmp_path):
-    image = Mock()
-    for method in ("add_local_dir", "run_commands", "env", "workdir"):
-        getattr(image, method).return_value = image
-    image_class = Mock()
-    image_class.base.return_value = image
-    snapshot_params = Mock()
-    resources = Mock()
-    monkeypatch.setitem(
-        sys.modules,
-        "daytona",
-        SimpleNamespace(
-            CreateSnapshotParams=snapshot_params,
-            Daytona=Mock(),
-            Image=image_class,
-            Resources=resources,
-        ),
-    )
-    create_base_snapshot = runpy.run_path(str(ROOT / "packages/daytona-infra/src/toolchain.py"))[
-        "create_base_snapshot"
-    ]
-    daytona = SimpleNamespace(snapshot=SimpleNamespace(create=Mock()))
-
-    create_base_snapshot(daytona, bundle.PackedBundle(tmp_path, PLAN), "snapshot-name", 4)
-
-    resources.assert_called_once_with(memory=4)
-    snapshot_params.assert_called_once_with(
-        name="snapshot-name",
-        image=image,
-        resources=resources.return_value,
-        entrypoint=["python", "-m", "sandbox_runtime.entrypoint"],
-    )
-    assert daytona.snapshot.create.call_args.args == (snapshot_params.return_value,)
-    assert callable(daytona.snapshot.create.call_args.kwargs["on_logs"])
-
-
-@pytest.mark.parametrize("memory_gib", ["", "0", "-1", "1.5"])
-def test_daytona_config_rejects_invalid_snapshot_memory(monkeypatch, memory_gib):
+def test_daytona_config_requires_registry_repository(monkeypatch):
     monkeypatch.setenv("DAYTONA_API_KEY", "test")
-    monkeypatch.setenv("DAYTONA_BASE_SNAPSHOT", "snapshot")
-    monkeypatch.setenv("DAYTONA_BASE_SNAPSHOT_MEMORY_GIB", memory_gib)
+    monkeypatch.delenv("DAYTONA_IMAGE_REPOSITORY", raising=False)
     load_config = runpy.run_path(str(ROOT / "packages/daytona-infra/src/config.py"))["load_config"]
 
-    with pytest.raises(
-        RuntimeError, match="DAYTONA_BASE_SNAPSHOT_MEMORY_GIB must be a positive integer"
-    ):
+    with pytest.raises(RuntimeError, match="DAYTONA_IMAGE_REPOSITORY is required"):
         load_config()
 
 
-def test_daytona_config_loads_snapshot_memory(monkeypatch):
-    monkeypatch.setenv("DAYTONA_API_KEY", "test")
-    monkeypatch.setenv("DAYTONA_BASE_SNAPSHOT", "snapshot")
-    monkeypatch.setenv("DAYTONA_BASE_SNAPSHOT_MEMORY_GIB", "4")
-    load_config = runpy.run_path(str(ROOT / "packages/daytona-infra/src/config.py"))["load_config"]
+def load_daytona_toolchain(monkeypatch):
+    params = Mock(side_effect=lambda **values: SimpleNamespace(**values))
+    resources = Mock(side_effect=lambda **values: SimpleNamespace(**values))
+    monkeypatch.setitem(
+        sys.modules,
+        "daytona",
+        SimpleNamespace(
+            CreateSandboxFromImageParams=params,
+            Daytona=object,
+            DaytonaNotFoundError=FileNotFoundError,
+            Resources=resources,
+        ),
+    )
+    module = runpy.run_path(str(ROOT / "packages/daytona-infra/src/toolchain.py"))
+    return module, params, resources
 
-    assert load_config().base_snapshot_memory_gib == 4
+
+def test_daytona_publish_uses_exact_buildx_metadata_digest(monkeypatch, tmp_path):
+    module, _, _ = load_daytona_toolchain(monkeypatch)
+    packed = bundle.PackedBundle(tmp_path, PLAN)
+
+    def run(command, **kwargs):
+        metadata = command[command.index("--metadata-file") + 1]
+        Path(metadata).write_text(json.dumps({"containerimage.digest": "sha256:" + "b" * 64}))
+        assert command[-1] == str(tmp_path)
+        assert command[command.index("--target") + 1] == "daytona-runtime"
+        assert "--push" in command
+        assert "OI_ENV_PACKED_PLAN=true" in command
+        return SimpleNamespace(returncode=0)
+
+    reference = module["publish_image"](
+        packed, "ghcr.io/example/open-inspect-daytona", "candidate-1", run=run
+    )
+    assert reference == "ghcr.io/example/open-inspect-daytona@sha256:" + "b" * 64
+
+
+def test_daytona_publish_failure_never_returns_reference(monkeypatch, tmp_path):
+    module, _, _ = load_daytona_toolchain(monkeypatch)
+    packed = bundle.PackedBundle(tmp_path, PLAN)
+    failed_run = Mock(side_effect=subprocess.CalledProcessError(1, ["docker", "buildx"]))
+
+    with pytest.raises(subprocess.CalledProcessError):
+        module["publish_image"](
+            packed, "private.example.com/team/open-inspect", "candidate-1", run=failed_run
+        )
+
+
+def test_daytona_create_failure_is_preserved_when_probe_is_absent(monkeypatch):
+    module, _, _ = load_daytona_toolchain(monkeypatch)
+    client = SimpleNamespace(
+        create=Mock(side_effect=RuntimeError("registry pull denied")),
+        get=Mock(side_effect=FileNotFoundError("not found")),
+        delete=Mock(),
+    )
+
+    with pytest.raises(RuntimeError, match="registry pull denied"):
+        module["verify_image"](client, "private.example.com/team/image@sha256:" + "c" * 64, 2)
+
+    client.get.assert_called_once()
+    client.delete.assert_not_called()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_daytona_native_verification_allocation_and_cleanup(monkeypatch, failed):
+    module, params, resources = load_daytona_toolchain(monkeypatch)
+    sandbox = SimpleNamespace(
+        cpu=1,
+        memory=4,
+        process=SimpleNamespace(
+            exec=Mock(return_value=SimpleNamespace(exit_code=1 if failed else 0, result="failure"))
+        ),
+    )
+    client = SimpleNamespace(create=Mock(return_value=sandbox), get=Mock(), delete=Mock())
+
+    if failed:
+        with pytest.raises(RuntimeError, match="verification failed"):
+            module["verify_image"](client, "ghcr.io/example/image@sha256:" + "c" * 64, 4)
+    else:
+        module["verify_image"](client, "ghcr.io/example/image@sha256:" + "c" * 64, 4)
+
+    resources.assert_called_once_with(cpu=1, memory=4)
+    assert params.call_args.kwargs["env_vars"] == {"OI_DEFERRED_START": "true"}
+    assert params.call_args.kwargs["ttl_minutes"] == 10
+    client.delete.assert_called_once_with(sandbox, timeout=30)

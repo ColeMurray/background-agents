@@ -241,6 +241,17 @@ create request, so the source is created dormant and the build is launched after
 sandbox's own stdin, once its id is recorded. Sessions created from the resulting image set every
 boot marker explicitly rather than relying on absence.
 
+### Base image and resources
+
+Fresh Daytona sessions and prebuild sources launch from the same digest-pinned OCI runtime image
+(`DAYTONA_BASE_IMAGE`), with CPU and memory from effective Sandbox Settings. Unset resources default
+to 1 CPU and 2048 MiB; fractional CPU and MiB memory round up to whole cores and whole GiB. A
+captured prebuild still inherits its source allocation. It is selected only when its base digest and
+resources match the session's frozen settings; old or mismatched prebuilds fall back to OCI without
+resizing. Settings changes schedule affected enabled scopes for rebuild, and cron reconciles any
+missed work. Running or resumed sandboxes keep their original allocation. See the
+[hard-cutover design](plans/daytona-oci-hard-cutover.md) for deployment and rollback.
+
 ### Admission
 
 `daytona_prebuilds_enabled` (Terraform) / `DAYTONA_PREBUILDS_ENABLED` (env) admits **new** Daytona
@@ -260,7 +271,8 @@ Nothing here is a claim that Daytona prebuilds are proven against a live deploym
 must pass against the actual organization, target and container class before an operator opens
 admission:
 
-- **G0 — SDK baseline.** The pinned Daytona SDK builds, verifies and publishes a base snapshot.
+- **G0 — OCI baseline.** Publish one runtime digest and use the pinned Daytona SDK to verify native
+  launches at 2 and 4 GiB before deploying that digest.
 - **G1 — Provider support.** The deployment permits stopped-container capture, snapshot activation
   and deletion, process-session stdin, and the hard TTL a build source needs.
 - **G2 — Startup and secrets.** A dormant source composes nothing before it is launched; the launch
@@ -301,7 +313,7 @@ own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
 | Build source lifetime exhausted                       | The source's hard TTL ended before finalization.               | The build fails. Check whether the scope's build timeout plus the finalization reserve fits the account's TTL ceiling.                                                                                                                                   |
 | `image_build.source_intent_unresolved`                | A create whose response was lost may have left a sandbox.      | Maintenance looks it up by its reserved name each tick. It is only written off once the source's hard lifetime has certainly elapsed.                                                                                                                    |
 | `image_build.operation_unresolved` older than 6 hours | A reserved capture has not settled and is not being reclaimed. | Investigate provider-side. Verify ownership labels before deleting anything by hand: a resource is this build's only when its labels (or a snapshot's `sourceSandboxId`) say so.                                                                         |
-| Cleanup backlog after a provider switch               | Rows dispatch cleanup from their own recorded provider.        | Keep `daytona_api_key` and `daytona_api_url` configured until the backlog drains. The base snapshot is not needed for cleanup.                                                                                                                           |
+| Cleanup backlog after a provider switch               | Rows dispatch cleanup from their own recorded provider.        | Keep `daytona_api_key` and `daytona_api_url` configured until the backlog drains. The OCI base image is not needed for cleanup.                                                                                                                          |
 
 ---
 

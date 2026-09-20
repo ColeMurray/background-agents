@@ -27,6 +27,7 @@ import {
 } from "../../session/types";
 import {
   PrebuiltImageUnavailableError,
+  PrebuiltImageCompatibilityError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -657,18 +658,21 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       // repository's setup and secrets, not the environment's — and
       // multi-repo ad-hoc sessions never use prebuilt images (a repo image
       // bakes a single checkout), so both miss straight to the base image.
+      const sandboxSettings = this.parseSandboxSettings(session);
       let selectedImage: SelectedImageBuild | null = null;
       if (session.environment_id) {
         selectedImage = await this.lookupImageBuildForSpawn(
           { kind: "environment", id: session.environment_id },
           repositories,
-          getValidHarnessOrDefault(session.harness)
+          getValidHarnessOrDefault(session.harness),
+          sandboxSettings
         );
       } else if (hasRepository && repositories.length === 1) {
         selectedImage = await this.lookupImageBuildForSpawn(
           repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
           repositories,
-          getValidHarnessOrDefault(session.harness)
+          getValidHarnessOrDefault(session.harness),
+          sandboxSettings
         );
       }
 
@@ -680,7 +684,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
         sessionId,
@@ -710,7 +713,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
-        if (!(error instanceof PrebuiltImageUnavailableError)) {
+        if (
+          !(error instanceof PrebuiltImageUnavailableError) &&
+          !(error instanceof PrebuiltImageCompatibilityError)
+        ) {
           if (error instanceof SandboxProviderError && error.errorType === "transient") {
             this.log.warn("Prebuilt-image spawn failed with a transient provider error", {
               event: "image_build.spawn_error_transient",
@@ -721,15 +727,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           }
           throw error;
         }
-        // An unavailable prebuilt artifact is "no image" (design §7.3): fail
-        // the row so the cron rebuilds it and boot this session from base.
+        // A provider-confirmed incompatibility is a local cache miss. The
+        // artifact may still be valid for sessions requesting its resources.
         this.log.warn("Prebuilt-image spawn failed, retrying from base image", {
           event: "image_build.restore_failed",
           image_build_id: selectedImage.imageBuildId,
           error_type: error.errorType,
           error: error.message,
         });
-        await this.markImageBuildRestoreFailed(selectedImage, error);
+        if (error instanceof PrebuiltImageUnavailableError) {
+          await this.markImageBuildRestoreFailed(selectedImage, error);
+        }
         // The retry gets a fresh spawn identity: the failed attempt may have
         // actually created a sandbox provider-side (post-create errors are
         // indistinguishable here), and rotating the token hash and sandbox id
@@ -833,11 +841,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
     repositories: SessionRepositoryInfo[],
-    harness: HarnessId
+    harness: HarnessId,
+    sandboxSettings: SandboxSettings
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
-      const image = await this.imageBuildLookup.getLatestReady(scope);
+      const image = await this.imageBuildLookup.getLatestReady(scope, sandboxSettings);
       const result = await evaluateImageBuildForSpawn(image, repositories, harness);
       if (result.outcome === "selected") {
         this.log.info("Using prebuilt image", {

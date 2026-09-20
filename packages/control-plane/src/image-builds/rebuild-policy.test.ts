@@ -28,6 +28,21 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
 }
 
 describe("evaluateImageBuildRebuildPolicy", () => {
+  it("retries after an in-flight Daytona build completes with an obsolete key", () => {
+    const desired = { ...unit, buildConfigurationKey: "daytona-key-new" };
+    const obsolete = {
+      ...row({ provider: "daytona" }),
+      buildConfigurationKey: "daytona-key-old",
+    };
+    expect(
+      evaluateImageBuildRebuildPolicy(desired, [{ ...obsolete, status: "building" }], "daytona")
+    ).toEqual({ type: "skip", reason: "building" });
+    expect(evaluateImageBuildRebuildPolicy(desired, [obsolete], "daytona")).toEqual({
+      type: "rebuild",
+      reason: "missing_image",
+    });
+  });
+
   it("skips an active build for the active provider", () => {
     expect(evaluateImageBuildRebuildPolicy(unit, [row({ status: "building" })], "modal")).toEqual({
       type: "skip",

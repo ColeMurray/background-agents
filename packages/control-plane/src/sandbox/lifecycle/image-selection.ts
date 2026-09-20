@@ -27,6 +27,7 @@ import {
   type ImageBuildScope,
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -39,6 +40,8 @@ export interface ImageBuildSpawnRow {
   repositories_fingerprint: string;
   repository_shas: string;
   runtime_version: string;
+  /** Null/absent on legacy rows; Daytona treats both as a hard-cutover miss. */
+  build_configuration_key?: string | null;
 }
 
 /**
@@ -47,7 +50,10 @@ export interface ImageBuildSpawnRow {
  */
 export interface ImageBuildLookup {
   /** Latest ready image for the scope on the active provider, enablement-gated. */
-  getLatestReady(scope: ImageBuildScope): Promise<ImageBuildSpawnRow | null>;
+  getLatestReady(
+    scope: ImageBuildScope,
+    sandboxSettings?: SandboxSettings
+  ): Promise<ImageBuildSpawnRow | null>;
   /**
    * Fail a ready image whose provider artifact could not be restored, so the
    * rebuild cron sees no ready image and rebuilds it.
@@ -73,7 +79,8 @@ type ImageBuildMissReason =
   | "no_ready_image"
   | "missing_artifact"
   | "runtime_below_floor"
-  | "fingerprint_mismatch";
+  | "fingerprint_mismatch"
+  | "configuration_mismatch";
 
 export type ImageBuildSelectionResult =
   | { outcome: "selected"; image: SelectedImageBuild }
@@ -87,10 +94,17 @@ export type ImageBuildSelectionResult =
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
   sessionRepositories: FingerprintRepositoryInput[],
-  harness: HarnessId = DEFAULT_HARNESS
+  harness: HarnessId = DEFAULT_HARNESS,
+  expectedBuildConfigurationKey?: string | null
 ): Promise<ImageBuildSelectionResult> {
   if (!image) {
     return { outcome: "miss", reason: "no_ready_image" };
+  }
+  if (
+    expectedBuildConfigurationKey !== undefined &&
+    image.build_configuration_key !== expectedBuildConfigurationKey
+  ) {
+    return { outcome: "miss", reason: "configuration_mismatch", imageBuildId: image.id };
   }
   if (!image.provider_image_id) {
     // Ready rows always record their artifact at mark-ready time; defensive

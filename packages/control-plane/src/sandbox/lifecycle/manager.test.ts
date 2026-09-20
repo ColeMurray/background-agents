@@ -26,6 +26,7 @@ import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
+  PrebuiltImageCompatibilityError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -3604,10 +3605,10 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "repo",
-        id: "testowner/testrepo",
-      });
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        { kind: "repo", id: "testowner/testrepo" },
+        {}
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           prebuiltImageId: "img-abc123",
@@ -3655,10 +3656,10 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "repo",
-        id: "testowner/testrepo",
-      });
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        { kind: "repo", id: "testowner/testrepo" },
+        {}
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
@@ -3797,6 +3798,33 @@ describe("SandboxLifecycleManager", () => {
       warnSpy.mockRestore();
     });
 
+    it("retries a resource-mismatched prebuild without failing it globally", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi
+        .fn<(config: CreateSandboxConfig) => Promise<CreateSandboxResult>>()
+        .mockRejectedValueOnce(new PrebuiltImageCompatibilityError("resource mismatch"))
+        .mockImplementation(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-base",
+          createdAt: Date.now(),
+        }));
+      const { manager } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      expect(createSandbox.mock.calls[1][0]).toEqual(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
+      );
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+    });
+
     it("does not fail the image or retry from base on an unrelated permanent provider error", async () => {
       const imageBuildLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () => repoImageRow()),
@@ -3909,10 +3937,10 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "environment",
-        id: "env-1",
-      });
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith(
+        { kind: "environment", id: "env-1" },
+        {}
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           prebuiltImageId: "im-env-123",
@@ -3959,10 +3987,10 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(environmentImageLookup.getLatestReady).toHaveBeenCalledTimes(1);
-      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "environment",
-        id: "env-1",
-      });
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith(
+        { kind: "environment", id: "env-1" },
+        {}
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );

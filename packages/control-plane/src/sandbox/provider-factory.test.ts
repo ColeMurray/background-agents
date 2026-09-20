@@ -24,7 +24,7 @@ describe("createSandboxProviderFromEnv", () => {
     const env = createEnv({
       DAYTONA_API_URL: "https://daytona.test",
       DAYTONA_API_KEY: "daytona-key",
-      DAYTONA_BASE_SNAPSHOT: "base",
+      DAYTONA_BASE_IMAGE: `ghcr.io/acme/image@sha256:${"a".repeat(64)}`,
       DAYTONA_AUTO_STOP_INTERVAL_MINUTES: "abc",
     });
 
@@ -37,7 +37,7 @@ describe("createSandboxProviderFromEnv", () => {
     const env = createEnv({
       DAYTONA_API_URL: "https://daytona.test",
       DAYTONA_API_KEY: "daytona-key",
-      DAYTONA_BASE_SNAPSHOT: "base",
+      DAYTONA_BASE_IMAGE: `ghcr.io/acme/image@sha256:${"a".repeat(64)}`,
       DAYTONA_AUTO_STOP_INTERVAL_MINUTES: "30",
       DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES: "abc",
     });
@@ -47,14 +47,14 @@ describe("createSandboxProviderFromEnv", () => {
     );
   });
 
-  it("needs a base snapshot to create Daytona sandboxes", () => {
+  it("needs a base image to create Daytona sandboxes", () => {
     const env = createEnv({
       DAYTONA_API_URL: "https://daytona.test",
       DAYTONA_API_KEY: "daytona-key",
     });
 
     expect(() => createSandboxProviderFromEnv(env, "daytona")).toThrow(
-      "DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes"
+      "DAYTONA_BASE_IMAGE must be a fully qualified sha256 digest reference"
     );
   });
 

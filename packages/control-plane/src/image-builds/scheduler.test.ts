@@ -116,6 +116,8 @@ function harness(
       repoId: 1,
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-current",
+      sandboxSettings: {},
+      buildConfigurationKey: null,
     })
   );
   const scheduler = new ImageBuildScheduler(
@@ -240,6 +242,8 @@ describe("ImageBuildScheduler", () => {
             },
           ],
           repositoriesFingerprint: `fp-${scope.id}`,
+          sandboxSettings: {},
+          buildConfigurationKey: null,
         };
       }
     );
@@ -262,6 +266,7 @@ describe("ImageBuildScheduler", () => {
           buildDurationSeconds: 1,
           errorMessage: null,
           createdAt: 1,
+          buildConfigurationKey: null,
         },
       ];
     });

@@ -36,8 +36,52 @@ import {
   requirePermission,
 } from "./shared";
 import { parseJsonBody } from "./body";
+import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
+import { listEnabledScopes } from "../image-builds/scope";
+import { repoImageBuildScope } from "../image-builds/model";
 
 const logger = createLogger("router:integration-settings");
+
+export async function scheduleSandboxSettingsRebuilds(
+  env: Env,
+  ctx: RequestContext,
+  target: "global" | { repoOwner: string; repoName: string } | { environmentId: string }
+): Promise<void> {
+  if (env.SANDBOX_PROVIDER !== "daytona") return;
+  try {
+    let scopes =
+      target === "global"
+        ? await listEnabledScopes(ctx.db)
+        : "environmentId" in target
+          ? [{ kind: "environment" as const, id: target.environmentId }]
+          : [repoImageBuildScope(target.repoOwner, target.repoName)];
+    if (target !== "global" && "repoOwner" in target) {
+      const environmentStore = new EnvironmentStore(ctx.db);
+      const { environments } = await environmentStore.list();
+      const enabled = environments.filter((row) => row.prebuild_enabled === 1);
+      const repositories = await environmentStore.getRepositoriesForEnvironmentIds(
+        enabled.map((row) => row.id)
+      );
+      scopes = scopes.concat(
+        enabled
+          .filter((row) => {
+            const primary = repositories.get(row.id)?.[0];
+            return (
+              primary?.repo_owner === target.repoOwner && primary.repo_name === target.repoName
+            );
+          })
+          .map((row) => ({ kind: "environment" as const, id: row.id }))
+      );
+    }
+    for (const scope of scopes) scheduleImageBuildOnSave(env, scope, ctx);
+  } catch (e) {
+    logger.warn("image_build.settings_save_hook_failed", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -119,6 +163,7 @@ async function handleSetIntegrationSettings(
 
   try {
     await store.setGlobal(id, settings);
+    if (id === "sandbox") await scheduleSandboxSettingsRebuilds(env, ctx, "global");
 
     logger.info("integration_settings.updated", {
       event: "integration_settings.updated",
@@ -154,6 +199,7 @@ async function handleDeleteIntegrationSettings(
 
   try {
     await store.deleteGlobal(id);
+    if (id === "sandbox") await scheduleSandboxSettingsRebuilds(env, ctx, "global");
 
     logger.info("integration_settings.deleted", {
       event: "integration_settings.deleted",
@@ -230,6 +276,9 @@ async function handleSetRepoSettings(
 
   try {
     await store.setRepoSettings(id, repo, settings);
+    if (id === "sandbox") {
+      await scheduleSandboxSettingsRebuilds(env, ctx, { repoOwner: owner, repoName: name });
+    }
 
     logger.info("integration_repo_settings.updated", {
       event: "integration_repo_settings.updated",
@@ -271,6 +320,9 @@ async function handleDeleteRepoSettings(
 
   try {
     await store.deleteRepoSettings(id, repo);
+    if (id === "sandbox") {
+      await scheduleSandboxSettingsRebuilds(env, ctx, { repoOwner: owner, repoName: name });
+    }
 
     logger.info("integration_repo_settings.deleted", {
       event: "integration_repo_settings.deleted",
@@ -322,6 +374,9 @@ async function handleSetEnvironmentSettings(
 
   try {
     await store.setEnvironmentSettings(integrationId, environmentId, settings);
+    if (integrationId === "sandbox") {
+      await scheduleSandboxSettingsRebuilds(env, ctx, { environmentId });
+    }
 
     logger.info("integration_environment_settings.updated", {
       event: "integration_environment_settings.updated",
@@ -357,6 +412,9 @@ async function handleDeleteEnvironmentSettings(
 
   try {
     await store.deleteEnvironmentSettings(integrationId, environmentId);
+    if (integrationId === "sandbox") {
+      await scheduleSandboxSettingsRebuilds(env, ctx, { environmentId });
+    }
 
     logger.info("integration_environment_settings.deleted", {
       event: "integration_environment_settings.deleted",

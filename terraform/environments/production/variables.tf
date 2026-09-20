@@ -471,25 +471,14 @@ variable "daytona_api_key" {
   }
 }
 
-variable "daytona_base_snapshot" {
-  description = "Name prefix for the Terraform-managed Daytona base snapshot"
+variable "daytona_base_image" {
+  description = "Verified registry-qualified Daytona OCI image digest"
   type        = string
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "daytona" || length(var.daytona_base_snapshot) > 0
-    error_message = "daytona_base_snapshot must be set when sandbox_provider = 'daytona'."
-  }
-}
-
-variable "daytona_base_snapshot_memory_gib" {
-  description = "Memory in GiB reserved by sandboxes created from the Daytona base snapshot"
-  type        = number
-  default     = 2
-
-  validation {
-    condition     = var.daytona_base_snapshot_memory_gib >= 1 && var.daytona_base_snapshot_memory_gib == floor(var.daytona_base_snapshot_memory_gib)
-    error_message = "daytona_base_snapshot_memory_gib must be a positive integer."
+    condition     = var.sandbox_provider != "daytona" || can(regex("^(localhost(:[0-9]+)?|[a-z0-9.-]+\\.[a-z0-9.-]+(:[0-9]+)?)/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$", var.daytona_base_image))
+    error_message = "daytona_base_image must be a registry-qualified sha256 digest when sandbox_provider = 'daytona'."
   }
 }
 

@@ -1,16 +1,15 @@
-"""Construct an immutable Daytona candidate and verify a fresh restore."""
+"""Publish an immutable Daytona OCI candidate and verify two allocations."""
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 import time
 
-from daytona import CreateSandboxFromSnapshotParams, Daytona, DaytonaConfig, DaytonaNotFoundError
+from daytona import Daytona, DaytonaConfig
 
 from .config import load_config
-from .toolchain import create_base_snapshot
+from .toolchain import publish_image, verify_image
 
 
 def main() -> None:
@@ -22,36 +21,16 @@ def main() -> None:
     bundle = pack_bundle(config.repo_root, "daytona", config.repo_root / ".cache/sandbox-images")
     try:
         plan = bundle.plan
-        name = (
-            os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
-            or f"{config.base_snapshot}-{plan['buildHash'][:12]}-{time.time_ns()}"
-        )
+        candidate = f"candidate-{plan['buildHash'][:12]}-{time.time_ns()}"
         client = Daytona(
             DaytonaConfig(api_key=config.api_key, api_url=config.api_url, target=config.target)
         )
-        # No delete/recreate of the selected snapshot, even on a failed build.
-        try:
-            client.snapshot.get(name)
-        except DaytonaNotFoundError:
-            create_base_snapshot(client, bundle, name, config.base_snapshot_memory_gib)
+        reference = publish_image(bundle, config.image_repository, candidate)
+        for memory_gib in (2, 4):
+            verify_image(client, reference, memory_gib)
+        write_build_result(reference)
     finally:
         shutil.rmtree(bundle.directory)
-    # Retry a retained build by restoring it and checking required services.
-
-    sandbox = client.create(
-        CreateSandboxFromSnapshotParams(snapshot=name, env_vars=plan["runtimeEnv"], ephemeral=True),
-        timeout=180,
-    )
-    try:
-        result = sandbox.process.exec(
-            "/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify",
-            timeout=240,
-        )
-        if result.exit_code != 0:
-            raise RuntimeError(f"Daytona image verification failed: {result.result}")
-        write_build_result(name)
-    finally:
-        sandbox.delete()
 
 
 if __name__ == "__main__":

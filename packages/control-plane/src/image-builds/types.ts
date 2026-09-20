@@ -1,6 +1,7 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
 import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 
 export type ImageBuildWorkflowContext = CorrelationContext;
 
@@ -49,6 +50,7 @@ export interface ImageBuildPlan {
   correlation: CorrelationContext;
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
+  sandboxSettings: SandboxSettings;
 }
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */

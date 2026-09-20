@@ -20,6 +20,7 @@ import { createVercelSandboxClient } from "./providers/vercel/client";
 import { createVercelProvider, type VercelSandboxProvider } from "./providers/vercel/provider";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import { requireDaytonaBaseImage } from "./daytona-resources";
 
 function createModalProviderFromEnv(env: Env): ModalSandboxProvider {
   if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
@@ -105,22 +106,22 @@ function createOpenComputerProviderFromEnv(
  */
 export function createDaytonaRestClientFromEnv(
   env: Env,
-  options: { requireBaseSnapshot: boolean }
+  options: { requireBaseImage: boolean }
 ): DaytonaRestClient {
   if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY) {
     throw new Error(
       "DAYTONA_API_URL and DAYTONA_API_KEY are required when SANDBOX_PROVIDER=daytona"
     );
   }
-  if (options.requireBaseSnapshot && !env.DAYTONA_BASE_SNAPSHOT) {
-    throw new Error("DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes");
+  if (options.requireBaseImage) {
+    requireDaytonaBaseImage(env.DAYTONA_BASE_IMAGE);
   }
 
   return createDaytonaRestClient({
     apiUrl: env.DAYTONA_API_URL,
     apiKey: env.DAYTONA_API_KEY,
     target: env.DAYTONA_TARGET,
-    baseSnapshot: env.DAYTONA_BASE_SNAPSHOT,
+    baseImage: env.DAYTONA_BASE_IMAGE,
     toolboxApiUrl: env.DAYTONA_TOOLBOX_API_URL,
     autoStopIntervalMinutes: parseNumericEnv(
       "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
@@ -136,7 +137,7 @@ export function createDaytonaRestClientFromEnv(
 }
 
 function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
-  const client = createDaytonaRestClientFromEnv(env, { requireBaseSnapshot: true });
+  const client = createDaytonaRestClientFromEnv(env, { requireBaseImage: true });
 
   return createDaytonaProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),

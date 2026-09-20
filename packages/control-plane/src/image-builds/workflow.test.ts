@@ -92,6 +92,7 @@ function plannedBuild(overrides: Record<string, unknown> = {}): ImageBuildPlan {
     correlation: { trace_id: "t", request_id: "r" },
     callbackToken: MODAL_CALLBACK_TOKEN,
     cloneAuth: { type: "unavailable" },
+    sandboxSettings: {},
     ...overrides,
   };
 }
@@ -108,6 +109,7 @@ function vercelPlannedBuild(): ImageBuildPlan {
     correlation: { trace_id: "t", request_id: "r" },
     callbackToken: "callback-token",
     cloneAuth: { type: "unavailable" },
+    sandboxSettings: {},
   };
 }
 
@@ -131,6 +133,8 @@ function createWorkflow(options: {
     vi.fn().mockResolvedValue({
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-1",
+      sandboxSettings: {},
+      buildConfigurationKey: null,
     });
   const createCallbackAuth =
     options.createCallbackAuth ??
@@ -184,6 +188,7 @@ describe("ImageBuildWorkflow", () => {
         scope: ENV_SCOPE,
         provider: "modal",
         repositoriesFingerprint: "fp-1",
+        buildConfigurationKey: null,
         callbackTokenHash: "hash-modal",
         callbackTokenExpiresAt: 9_999_999_999_999,
       });
@@ -196,6 +201,8 @@ describe("ImageBuildWorkflow", () => {
         kind: "environment" as const,
         repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
         repositoriesFingerprint: "fp-reconciled",
+        sandboxSettings: {},
+        buildConfigurationKey: null,
       };
 
       await workflow.triggerBuildWithTarget(ENV_SCOPE, target, ctx);
@@ -447,7 +454,12 @@ describe("ImageBuildWorkflow", () => {
       const result = await workflow.triggerBuildIfStale(ENV_SCOPE, ctx);
 
       expect(result).toEqual({ type: "up_to_date" });
-      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(ENV_SCOPE, "modal", "fp-1");
+      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(
+        ENV_SCOPE,
+        "modal",
+        "fp-1",
+        null
+      );
       expect(store.registerBuild).not.toHaveBeenCalled();
       // A no-op save must not decrypt secrets or mint clone tokens.
       expect(planBuild).not.toHaveBeenCalled();

@@ -71,7 +71,7 @@ export interface EnvConfig {
   // stand-in server sets it, as the other providers' `*_API_URL` settings do.
   MODAL_API_URL?: string;
   DAYTONA_API_URL?: string; // Daytona REST API base URL
-  DAYTONA_BASE_SNAPSHOT?: string; // Named Daytona snapshot used for fresh sandbox creation
+  DAYTONA_BASE_IMAGE?: string; // Immutable digest-pinned OCI image used for fresh Daytona sandboxes
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
   DAYTONA_TARGET?: string; // Optional Daytona target name

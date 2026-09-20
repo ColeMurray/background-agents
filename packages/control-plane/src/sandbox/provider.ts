@@ -442,6 +442,14 @@ export class PrebuiltImageUnavailableError extends SandboxProviderError {
   }
 }
 
+/** The artifact exists but is not compatible with this session; do not retire it globally. */
+export class PrebuiltImageCompatibilityError extends SandboxProviderError {
+  constructor(message: string) {
+    super(message, "permanent");
+    this.name = "PrebuiltImageCompatibilityError";
+  }
+}
+
 /**
  * A prebuilt image the provider could not confirm as usable right now: it is
  * still being brought back from cold storage, or the provider could not be

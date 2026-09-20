@@ -29,6 +29,7 @@ import {
 } from "./timeouts";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 import { SandboxProviderError } from "../sandbox/provider";
+import { resolveDaytonaResources } from "../sandbox/daytona-resources";
 
 const MS_PER_SECOND = 1000;
 
@@ -98,6 +99,7 @@ export class DaytonaImageBuildAdapter implements ImageBuildAdapter {
       ),
       onProviderSessionCreated: callbacks.bindProviderSession,
       correlation: plan.correlation,
+      resources: resolveDaytonaResources(plan.sandboxSettings),
     });
   }
 

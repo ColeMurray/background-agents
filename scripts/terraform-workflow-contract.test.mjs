@@ -6,23 +6,32 @@ const workflow = await readFile(
   new URL("../.github/workflows/terraform.yml", import.meta.url),
   "utf8"
 );
+const planStart = workflow.indexOf("\n  plan:\n");
+const applyStart = workflow.indexOf("\n  apply:\n");
+assert.notEqual(planStart, -1, "expected the Terraform plan job");
+assert.notEqual(applyStart, -1, "expected the Terraform apply job");
+const plan = workflow.slice(planStart, applyStart);
+const apply = workflow.slice(applyStart);
 
-test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
-  const assignment =
-    "TF_VAR_daytona_base_snapshot_memory_gib: \"${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}\"";
-  const planStart = workflow.indexOf("\n  plan:\n");
-  const applyStart = workflow.indexOf("\n  apply:\n");
+test("PR plans reuse an explicit or currently deployed Daytona digest", () => {
+  assert.match(plan, /CONFIGURED_DAYTONA_BASE_IMAGE:.*vars\.DAYTONA_BASE_IMAGE/);
+  assert.match(plan, /terraform output -raw daytona_base_image/);
+  assert.match(plan, /TF_VAR_daytona_base_image=\$reference/);
+  assert.doesNotMatch(plan, /docker login|--push|DAYTONA_IMAGE_REPOSITORY/);
+});
 
-  assert.notEqual(planStart, -1, "expected the Terraform plan job");
-  assert.notEqual(applyStart, -1, "expected the Terraform apply job");
+test("trusted main apply publishes and verifies before Terraform apply", () => {
+  assert.match(apply, /packages: write/);
+  assert.match(apply, /docker\/login-action@v4/);
+  assert.match(apply, /docker\/setup-buildx-action@v4/);
+  assert.match(apply, /cli\.py build --provider daytona --output/);
+  assert.match(apply, /TF_VAR_daytona_base_image=\$reference/);
+  assert.ok(
+    apply.indexOf("Publish and natively verify Daytona image") < apply.indexOf("Terraform Apply"),
+    "publication gate must precede apply"
+  );
+});
 
-  const jobs = {
-    plan: workflow.slice(planStart, applyStart),
-    apply: workflow.slice(applyStart),
-  };
-
-  for (const [name, job] of Object.entries(jobs)) {
-    const occurrences = job.split(assignment).length - 1;
-    assert.equal(occurrences, 1, `expected one Daytona memory input in the ${name} job`);
-  }
+test("obsolete Daytona snapshot inputs are absent", () => {
+  assert.doesNotMatch(workflow, /DAYTONA_BASE_SNAPSHOT|daytona_base_snapshot/);
 });

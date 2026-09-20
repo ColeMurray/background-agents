@@ -19,7 +19,7 @@ export type ImageBuildRebuildDecision =
 
 export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
-  rows: ImageBuildRecordView[],
+  rows: Array<ImageBuildRecordView & { buildConfigurationKey?: string | null }>,
   provider: ImageBuildProvider
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
@@ -28,7 +28,13 @@ export function evaluateImageBuildRebuildPolicy(
   }
 
   const ready = providerRows.find(
-    (row) => row.status === "ready" && row.repositoriesFingerprint === unit.repositoriesFingerprint
+    (row) =>
+      row.status === "ready" &&
+      row.repositoriesFingerprint === unit.repositoriesFingerprint &&
+      (provider !== "daytona" ||
+        (typeof unit.buildConfigurationKey === "string" &&
+          unit.buildConfigurationKey.length > 0 &&
+          row.buildConfigurationKey === unit.buildConfigurationKey))
   );
   if (!ready) return { type: "rebuild", reason: "missing_image" };
 

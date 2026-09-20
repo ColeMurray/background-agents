@@ -36,10 +36,10 @@ PAYLOAD_ROOTS = (
     RUNTIME_PACKAGE / "pyproject.toml",
     RUNTIME_PACKAGE / "uv.lock",
     *(IMAGE_PACKAGE / part for part in ("install", "verify", "locks", "toolchain.json")),
+    IMAGE_PACKAGE / "Dockerfile",
 )
 INFRA_MODULES = {
     "modal": "modal-app",
-    "daytona": "daytona-infra",
     "e2b": "e2b-infra",
     "vercel": "vercel-sandbox-infra",
     "opencomputer": "opencomputer-infra",
@@ -142,7 +142,7 @@ def plan_image(root: Path, provider: str) -> ImagePlan:
         IMAGE_PACKAGE / "uv.lock",
         IMAGE_PACKAGE / "targets.json",
         Path(f"packages/{provider}-infra"),
-        Path(f"terraform/modules/{INFRA_MODULES[provider]}"),
+        *(() if provider == "daytona" else (Path(f"terraform/modules/{INFRA_MODULES[provider]}"),)),
     )
     if provider in ("vercel", "opencomputer"):
         paths += (Path("package-lock.json"),)
@@ -214,7 +214,6 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             "\n".join(f"export {key}={shlex.quote(value)}" for key, value in variables.items())
             + "\n"
         )
-
         return PackedBundle(destination, plan)
     except BaseException:
         shutil.rmtree(destination)

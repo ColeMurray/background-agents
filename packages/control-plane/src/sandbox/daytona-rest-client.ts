@@ -15,6 +15,7 @@
 
 import { createLogger } from "../logger";
 import { z } from "zod";
+import type { DaytonaCreateSource } from "./daytona-resources";
 
 const log = createLogger("daytona-rest-client");
 
@@ -30,11 +31,11 @@ export interface DaytonaRestConfig {
   /** Optional Daytona target name */
   target?: string;
   /**
-   * Snapshot name for fresh sandboxes. Absent on a deployment that only
+   * OCI digest for fresh sandboxes. Absent on a deployment that only
    * finalizes or reclaims resources a previous configuration created, so it
    * is required at the create call rather than at construction.
    */
-  baseSnapshot?: string;
+  baseImage?: string;
   /**
    * Explicit toolbox proxy base URL. Unset on the hosted service, where each
    * sandbox reports its own; set it for a deployment whose proxy the sandbox
@@ -155,6 +156,8 @@ export const daytonaSandboxResponseSchema = z.object({
   /** Wall-clock end of the sandbox's hard TTL, when one was requested. */
   autoDestroyAt: optionalString,
   toolboxProxyUrl: optionalString,
+  cpu: z.number().int().positive().nullish().catch(undefined),
+  memory: z.number().int().positive().nullish().catch(undefined),
 });
 
 export type DaytonaSandboxResponse = z.infer<typeof daytonaSandboxResponseSchema>;
@@ -170,6 +173,8 @@ const daytonaSnapshotResponseSchema = z.object({
    */
   sourceSandboxId: optionalString,
   errorReason: optionalString,
+  cpu: z.number().int().positive().nullish().catch(undefined),
+  mem: z.number().int().positive().nullish().catch(undefined),
 });
 
 export type DaytonaSnapshotResponse = z.infer<typeof daytonaSnapshotResponseSchema>;
@@ -203,9 +208,8 @@ export type DaytonaSessionCommand = z.infer<typeof daytonaSessionCommandSchema>;
 // Request types
 // ---------------------------------------------------------------------------
 
-export interface DaytonaCreateSandboxParams {
+interface DaytonaCreateSandboxCommon {
   name: string;
-  snapshot: string;
   env?: Record<string, string>;
   labels?: Record<string, string>;
   autoStopInterval?: number;
@@ -215,6 +219,8 @@ export interface DaytonaCreateSandboxParams {
   public?: boolean;
   target?: string;
 }
+
+export type DaytonaCreateSandboxParams = DaytonaCreateSandboxCommon & DaytonaCreateSource;
 
 /** One sandbox's toolbox endpoint: its proxy base URL and its own id. */
 export interface DaytonaToolboxTarget {
@@ -340,15 +346,15 @@ export class DaytonaRestClient {
   // -----------------------------------------------------------------------
 
   /**
-   * The configured base snapshot. Only creates need one, so a cleanup-only
+   * The configured OCI base image. Only creates need one, so a cleanup-only
    * deployment can hold credentials without a current base image.
    */
-  requireBaseSnapshot(): string {
-    const baseSnapshot = this.config.baseSnapshot;
-    if (!baseSnapshot) {
-      throw new Error("DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes");
+  requireBaseImage(): string {
+    const baseImage = this.config.baseImage;
+    if (!baseImage) {
+      throw new Error("DAYTONA_BASE_IMAGE is required to create Daytona sandboxes");
     }
-    return baseSnapshot;
+    return baseImage;
   }
 
   // -----------------------------------------------------------------------

@@ -40,6 +40,7 @@ import {
 } from "../sandbox-env";
 import {
   PrebuiltImageActivationPendingError,
+  PrebuiltImageCompatibilityError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -52,6 +53,7 @@ import {
   type StopResult,
   type VncAccess,
 } from "../provider";
+import { daytonaCreateSource, resolveDaytonaResources } from "../daytona-resources";
 
 const log = createLogger("daytona-provider");
 
@@ -104,17 +106,27 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       // A prebuilt image id is a Daytona snapshot; spawn from it in place of
       // the base image. Selection is the control plane's (image-selection.ts);
       // this only has to make the chosen snapshot usable or say why not.
-      const snapshot = config.prebuiltImageId || this.client.requireBaseSnapshot();
       if (config.prebuiltImageId) {
-        await this.ensurePrebuiltImageUsable(config.prebuiltImageId);
+        await this.ensurePrebuiltImageUsable(
+          config.prebuiltImageId,
+          resolveDaytonaResources(config.sandboxSettings)
+        );
       }
 
       const envVars = await this.buildEnvVars(config);
       const labels = this.buildLabels(config);
 
+      const source = daytonaCreateSource(
+        config.prebuiltImageId
+          ? { snapshot: config.prebuiltImageId }
+          : {
+              image: this.client.requireBaseImage(),
+              resources: resolveDaytonaResources(config.sandboxSettings),
+            }
+      );
       const params: DaytonaCreateSandboxParams = {
         name: config.sandboxId,
-        snapshot,
+        ...source,
         env: envVars,
         labels,
         autoStopInterval: this.client.config.autoStopIntervalMinutes,
@@ -411,7 +423,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
    * terminal snapshot, which is reported as unavailable so the row is failed
    * and the next reconciliation rebuilds it.
    */
-  private async ensurePrebuiltImageUsable(prebuiltImageId: string): Promise<void> {
+  private async ensurePrebuiltImageUsable(
+    prebuiltImageId: string,
+    resources: { cpu: number; memory: number }
+  ): Promise<void> {
     const deadline = Date.now() + PREBUILT_ACTIVATION_TIMEOUT_MS;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), PREBUILT_ACTIVATION_TIMEOUT_MS);
@@ -422,7 +437,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         throw new PrebuiltImageUnavailableError("Daytona prebuilt snapshot no longer exists");
       }
       const state = parseDaytonaSnapshotState(snapshot.state);
-      if (state === "active") return;
+      if (state === "active") {
+        this.assertPrebuiltResources(snapshot, resources);
+        return;
+      }
       if (state === "error" || state === "build_failed" || state === "removing") {
         throw new PrebuiltImageUnavailableError(
           `Daytona prebuilt snapshot is ${state} and cannot be used`
@@ -441,7 +459,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           throw new PrebuiltImageUnavailableError("Daytona prebuilt snapshot no longer exists");
         }
         const currentState = parseDaytonaSnapshotState(current.state);
-        if (currentState === "active") return;
+        if (currentState === "active") {
+          this.assertPrebuiltResources(current, resources);
+          return;
+        }
         if (
           currentState === "error" ||
           currentState === "build_failed" ||
@@ -489,6 +510,17 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       throw error;
     } finally {
       clearTimeout(timeoutId);
+    }
+  }
+
+  private assertPrebuiltResources(
+    snapshot: { cpu?: number | null; mem?: number | null },
+    resources: { cpu: number; memory: number }
+  ): void {
+    if (snapshot.cpu !== resources.cpu || snapshot.mem !== resources.memory) {
+      throw new PrebuiltImageCompatibilityError(
+        "Daytona prebuilt snapshot resources do not match this session"
+      );
     }
   }
 }

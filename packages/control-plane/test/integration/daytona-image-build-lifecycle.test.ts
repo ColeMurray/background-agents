@@ -54,6 +54,7 @@ it.each([429, 503, "request-timeout"] as const)(
       repositoriesFingerprint: "fp",
       callbackTokenHash: "token-hash",
       callbackTokenExpiresAt: Date.now() + 60_000,
+      buildConfigurationKey: "daytona-test-key",
     });
     await store.bindProviderSession(buildId, "daytona", "source-1");
     await accept(store, buildId);
@@ -122,14 +123,16 @@ it.each(["probe-unavailable", "probe-exited", "stdin-response-lost"])(
       finishCapture = resolve;
     });
     const client = {
-      config: { baseSnapshot: "base" },
-      requireBaseSnapshot: () => "base",
-      createSandbox: vi.fn(async () => ({ id: "source-1", state: "started" })),
+      config: { baseImage: `ghcr.io/acme/image@sha256:${"a".repeat(64)}` },
+      requireBaseImage: () => `ghcr.io/acme/image@sha256:${"a".repeat(64)}`,
+      createSandbox: vi.fn(async () => ({ id: "source-1", state: "started", cpu: 1, memory: 2 })),
       getSandbox: vi.fn(async () => {
         if (deleted) throw new DaytonaNotFoundError("source deleted");
         return {
           id: "source-1",
           state: sourceState,
+          cpu: 1,
+          memory: 2,
           labels: {
             openinspect_framework: "open-inspect",
             openinspect_kind: "environment-image-build",
@@ -178,6 +181,8 @@ it.each(["probe-unavailable", "probe-exited", "stdin-response-lost"])(
         kind: "environment" as const,
         repositories,
         repositoriesFingerprint: "fp",
+        sandboxSettings: {},
+        buildConfigurationKey: "daytona-test-key",
       }),
       createCallbackAuth: async () => ({
         token: "b".repeat(64),
@@ -195,6 +200,7 @@ it.each(["probe-unavailable", "probe-exited", "stdin-response-lost"])(
           buildTimeoutMs: 1_800_000,
           correlation,
           cloneAuth: { type: "unavailable" as const },
+          sandboxSettings: {},
         };
       },
     };

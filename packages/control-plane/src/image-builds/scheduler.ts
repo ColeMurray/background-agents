@@ -247,6 +247,7 @@ export class ImageBuildScheduler {
             scope,
             repositories: target.repositories,
             repositoriesFingerprint: target.repositoriesFingerprint,
+            buildConfigurationKey: target.buildConfigurationKey,
           },
           rows,
           provider

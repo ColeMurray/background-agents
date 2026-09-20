@@ -25,7 +25,7 @@ import {
 const defaultRestConfig: DaytonaRestConfig = {
   apiUrl: "https://daytona.test/api",
   apiKey: "test-api-key",
-  baseSnapshot: "base-snapshot-v1",
+  baseImage: `ghcr.io/acme/open-inspect@sha256:${"a".repeat(64)}`,
   autoStopIntervalMinutes: 120,
   autoArchiveIntervalMinutes: 10080,
 };
@@ -39,7 +39,7 @@ function createBuildClient(overrides: Record<string, unknown> = {}) {
   const config = { ...defaultRestConfig };
   return {
     config,
-    requireBaseSnapshot: vi.fn(() => config.baseSnapshot as string),
+    requireBaseImage: vi.fn(() => config.baseImage as string),
     createSandbox: vi.fn(
       async (_params: DaytonaCreateSandboxParams): Promise<DaytonaSandboxResponse> => ({
         id: "daytona-build-1",
@@ -49,6 +49,8 @@ function createBuildClient(overrides: Record<string, unknown> = {}) {
     getSandbox: vi.fn(async (_idOrName: string) => ({
       id: "daytona-build-1",
       state: "started",
+      cpu: 1,
+      memory: 2,
       labels: {
         openinspect_framework: "open-inspect",
         openinspect_kind: "environment-image-build",
@@ -108,6 +110,7 @@ function buildTriggerConfig(overrides: Record<string, unknown> = {}) {
     providerSessionTimeoutSeconds: 2400,
     onProviderSessionCreated: vi.fn(async () => undefined),
     correlation: { request_id: "request-1", trace_id: "trace-1" },
+    resources: { cpu: 1, memory: 2 },
     ...overrides,
   };
 }
@@ -427,27 +430,6 @@ describe("DaytonaImageBuildResources", () => {
     await expect(
       complete(buildResources(absent).findBuildSandboxByName(BUILD_ID))
     ).resolves.toBeNull();
-  });
-
-  it("never deletes the configured base snapshot", async () => {
-    const byName = createBuildClient();
-
-    await expect(
-      complete(buildResources(byName).deleteProviderImage("base-snapshot-v1"))
-    ).rejects.toThrow(/base snapshot/);
-    expect(byName.deleteSnapshot).not.toHaveBeenCalled();
-
-    const byId = createBuildClient({
-      getSnapshot: vi.fn(async () => ({
-        id: "snapshot-1",
-        name: "base-snapshot-v1",
-        state: "active",
-      })),
-    });
-    await expect(complete(buildResources(byId).deleteProviderImage("snapshot-1"))).rejects.toThrow(
-      /base snapshot/
-    );
-    expect(byId.deleteSnapshot).not.toHaveBeenCalled();
   });
 
   it("confirms a snapshot is gone before reporting it deleted", async () => {

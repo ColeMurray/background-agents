@@ -33,6 +33,12 @@ import { errorMessage, ImageBuildPlanningError, ImageBuildScopeNotFoundError } f
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { parseRepoScopeId, repoImageBuildScope, type ImageBuildScope } from "./model";
 import type { ImageBuildRepository } from "./types";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  daytonaBuildConfigurationKey,
+  requireDaytonaBaseImage,
+  resolveDaytonaResources,
+} from "../sandbox/daytona-resources";
 import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("image-builds:scope");
@@ -40,6 +46,8 @@ const logger = createLogger("image-builds:scope");
 interface ResolvedImageBuildTargetBase {
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
+  sandboxSettings: SandboxSettings;
+  buildConfigurationKey: string | null;
 }
 
 /**
@@ -65,6 +73,7 @@ export interface EnabledScopeUnit {
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
+  buildConfigurationKey?: string | null;
 }
 
 /** The scope's buildable repository set, in position order ([0] = primary). */
@@ -94,10 +103,14 @@ export async function resolveScopeTarget(
         baseBranch: row.base_branch,
       }));
 
+      const sandboxSettings = await resolveScopeSandboxSettings(db, scope, repositories[0]);
+      const buildConfigurationKey = resolveBuildConfigurationKey(env, sandboxSettings);
       return {
         kind: "environment",
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        sandboxSettings,
+        buildConfigurationKey,
       };
     }
     case "repo": {
@@ -122,14 +135,26 @@ export async function resolveScopeTarget(
         },
       ];
 
+      const sandboxSettings = await resolveScopeSandboxSettings(db, scope, repositories[0]);
+      const buildConfigurationKey = resolveBuildConfigurationKey(env, sandboxSettings);
       return {
         kind: "repo",
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
         repoId: resolved.repoId,
+        sandboxSettings,
+        buildConfigurationKey,
       };
     }
   }
+}
+
+function resolveBuildConfigurationKey(env: Env, settings: SandboxSettings): string | null {
+  if (env.SANDBOX_PROVIDER !== "daytona") return null;
+  return daytonaBuildConfigurationKey(
+    requireDaytonaBaseImage(env.DAYTONA_BASE_IMAGE),
+    resolveDaytonaResources(settings)
+  );
 }
 
 async function resolveRepositoryAccess(
@@ -204,21 +229,14 @@ export async function listEnabledScopeUnits(
   const store = new EnvironmentStore(db);
   const { environments } = await store.list();
   const enabled = environments.filter((row) => row.prebuild_enabled === 1);
-  const repositoriesById = await store.getRepositoriesForEnvironmentIds(
-    enabled.map((row) => row.id)
-  );
-
   const environmentUnits = await Promise.all(
     enabled.map(async (row) => {
-      const repositories = (repositoriesById.get(row.id) ?? []).map((repo) => ({
-        repoOwner: repo.repo_owner,
-        repoName: repo.repo_name,
-        baseBranch: repo.base_branch,
-      }));
+      const target = await resolveScopeTarget(env, db, { kind: "environment", id: row.id });
       return {
         scope: { kind: "environment" as const, id: row.id },
-        repositories,
-        repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        repositories: target.repositories,
+        repositoriesFingerprint: target.repositoriesFingerprint,
+        buildConfigurationKey: target.buildConfigurationKey,
       };
     })
   );
@@ -233,6 +251,7 @@ export async function listEnabledScopeUnits(
           scope,
           repositories: target.repositories,
           repositoriesFingerprint: target.repositoriesFingerprint,
+          buildConfigurationKey: target.buildConfigurationKey,
         };
       } catch (e) {
         logger.warn("image_build.enabled_unit_skipped", {

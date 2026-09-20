@@ -31,13 +31,13 @@ project virtualenv. Existing images retain their legacy launch environment.
 Install workspace dependencies with `npm ci` for Node adapters. Native operations require provider
 credentials and create billable temporary sandboxes; they do not deploy the control plane.
 
-| Provider     | Configuration                                                               |
-| ------------ | --------------------------------------------------------------------------- |
-| Modal        | Modal CLI credentials and intended environment                              |
-| Daytona      | DAYTONA_API_KEY, DAYTONA_BASE_SNAPSHOT name prefix; optional API URL/target |
-| E2B          | E2B_API_KEY, E2B_TEMPLATE_ID name prefix; optional API URL/CPU/memory       |
-| Vercel       | VERCEL_TOKEN, VERCEL_PROJECT_ID; optional team/API URL                      |
-| OpenComputer | OPENCOMPUTER_API_KEY; optional API URL/template prefix                      |
+| Provider     | Configuration                                                                         |
+| ------------ | ------------------------------------------------------------------------------------- |
+| Modal        | Modal CLI credentials and intended environment                                        |
+| Daytona      | DAYTONA_API_KEY, registry-qualified DAYTONA_IMAGE_REPOSITORY; optional API URL/target |
+| E2B          | E2B_API_KEY, E2B_TEMPLATE_ID name prefix; optional API URL/CPU/memory                 |
+| Vercel       | VERCEL_TOKEN, VERCEL_PROJECT_ID; optional team/API URL                                |
+| OpenComputer | OPENCOMPUTER_API_KEY; optional API URL/template prefix                                |
 
 ```bash
 npm run sandbox:images -- build --provider e2b --output /tmp/e2b-image.json
@@ -52,26 +52,37 @@ Python imports, exact pinned tool versions, plugin loading, writable user paths,
 OpenCode health, code-server, ttyd, Chromium screenshots, user-global pnpm execution, and the full
 desktop WebSocket/RFB chain. Vercel may lack the optional ffmpeg encoder.
 
-Manual builds use unique names. Terraform supplies deterministic names; retries re-verify retained
-artifacts instead of overwriting them. Temporary verification sandboxes are terminated, including on
-failure. Failed native artifacts remain for investigation and explicit cleanup.
+Manual builds use unique names. For snapshot/template builders, Terraform supplies deterministic
+names and retries re-verify retained artifacts instead of overwriting them. Daytona publishes a
+unique OCI candidate and verifies its exact digest at both 2 and 4 GiB. Temporary verification
+sandboxes are terminated, including on failure. Failed artifacts remain for explicit cleanup.
 
 ## Deployment and refresh
 
 Terraform uses the shared build-input hash for change detection and the existing provider bindings
 for artifact selection. Modal passes the verified native image ID to function deployment; other
-providers use verified template/snapshot references. E2B and Daytona now build distinct names before
-switching their existing Worker bindings. The configured E2B/Daytona base names act as prefixes.
-Vercel/OpenComputer retain their existing manual-reference overrides.
+providers use verified template/snapshot references. E2B builds distinct names before switching its
+Worker binding; the configured E2B base name acts as a prefix. Vercel/OpenComputer retain their
+existing manual-reference overrides.
+
+Daytona is the exception: the trusted main deployment workflow publishes to
+`DAYTONA_IMAGE_REPOSITORY` on GHCR, natively verifies the digest, then supplies it as Terraform's
+`daytona_base_image` input and the Worker's `DAYTONA_BASE_IMAGE` binding. Terraform never builds it.
+Configure a Daytona organization registry integration with a read-only pull credential for private
+images (GHCR requires package read access). Publication does not make the package public. PR builds
+never publish; PR plans use `DAYTONA_BASE_IMAGE` or the currently deployed Terraform output. The
+first plan requires an explicitly configured, verified digest. For another registry, authenticate
+Docker and run the same build command manually.
 
 For manual deployment, use the returned reference in the provider's existing configuration; do not
 assume building alone redirects sessions. Roll back using a previous known-good configuration and
 retained artifact. Do not delete artifacts still referenced by sessions or prepared images.
 
-**Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
-existing repository/environment image-build workflow to rebuild them after dependency-only updates
-when needed. Runtime version reporting, compatibility floors, and saved-session behavior are
-unchanged. This package adds no database columns or callback fields.
+Daytona prebuild compatibility includes the OCI digest and normalized CPU/RAM. New sessions miss old
+prebuilds immediately after a digest/settings change; the existing image-build scheduler rebuilds
+them. Other providers retain their existing refresh behavior: use the repository/environment
+image-build workflow after dependency-only updates when needed. Runtime version reporting,
+compatibility floors, and saved-session behavior are unchanged.
 
 ## Build implementation and local validation
 
