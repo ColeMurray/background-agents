@@ -9,12 +9,16 @@ import type { SessionTerminalMessageProjection } from "../terminal-message-proje
 
 export interface AlarmHandlerDeps {
   repository: MessageRepository;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failPendingMessage">;
+  messageQueue: Pick<
+    SessionMessageQueue,
+    "failStuckProcessingMessage" | "failPendingMessage" | "processMessageQueue"
+  >;
   executionStop: Pick<
     ExecutionStopCoordinator,
     "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
   >;
   lifecycleManager: SandboxAlarm;
+  getSnapshotRecoveryError: () => string | null;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
@@ -95,6 +99,12 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // The boot was for that prompt; it fails with the same words the user
         // sees, and nothing re-drives it onto a fresh sandbox.
         await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
+      }
+      if (lifecycleResult === "sandbox_failed") {
+        const recoveryError = deps.getSnapshotRecoveryError();
+        if (recoveryError) {
+          await deps.messageQueue.processMessageQueue();
+        }
       }
       if (projectionFailure) throw projectionFailure.error;
     },

@@ -635,6 +635,29 @@ describe("SessionMessageQueue", () => {
     }
   );
 
+  it("settles every queued prompt and callback when recovery remains blocked", async () => {
+    const h = buildQueue();
+    const first = createMessage({ id: "msg-1" });
+    const second = createMessage({ id: "msg-2" });
+    const reason = "Snapshot recovery required (artifact_missing). Original reference retained.";
+    h.repository.getNextPendingMessage
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValue(null);
+    h.repository.getMessageById
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValue(null);
+    h.sandboxLifecycle.getSnapshotRecoveryError.mockReturnValue(reason);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledTimes(2);
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith("msg-1", false, reason);
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith("msg-2", false, reason);
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
   it("does not spawn or dispatch while the session budget is exhausted", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));

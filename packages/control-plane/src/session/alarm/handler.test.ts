@@ -15,6 +15,7 @@ function createHandler() {
     failPendingMessage: vi
       .fn<(messageId: string, reason: string) => Promise<void>>()
       .mockResolvedValue(),
+    processMessageQueue: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const executionStop = {
     recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
@@ -23,6 +24,7 @@ function createHandler() {
   const lifecycleManager = {
     handleAlarm: vi.fn<() => Promise<SandboxAlarmResult>>().mockResolvedValue("no_action"),
   };
+  const getSnapshotRecoveryError = vi.fn<() => string | null>(() => null);
   const terminalMessageProjection = {
     flushPending: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
@@ -45,6 +47,7 @@ function createHandler() {
     messageQueue,
     executionStop,
     lifecycleManager,
+    getSnapshotRecoveryError,
     terminalMessageProjection,
     alarmScheduler,
     getExecutionTimeoutMs: () => 1000,
@@ -58,6 +61,7 @@ function createHandler() {
     messageQueue,
     executionStop,
     lifecycleManager,
+    getSnapshotRecoveryError,
     terminalMessageProjection,
     alarmScheduler,
     now,
@@ -240,6 +244,7 @@ describe("createAlarmHandler", () => {
       failPendingMessage: vi
         .fn<(messageId: string, reason: string) => Promise<void>>()
         .mockResolvedValue(),
+      processMessageQueue: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
     const executionStop = {
       recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
@@ -251,6 +256,7 @@ describe("createAlarmHandler", () => {
       messageQueue,
       executionStop,
       lifecycleManager,
+      getSnapshotRecoveryError: () => null,
       terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
       alarmScheduler,
       getExecutionTimeoutMs: () => 1000,
@@ -294,7 +300,23 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
+    expect(messageQueue.processMessageQueue).not.toHaveBeenCalled();
     expect(executionStop.resumeAfterSandboxTermination).not.toHaveBeenCalled();
+  });
+
+  it("fails queued recovery work when a retry reaches its connecting timeout", async () => {
+    const { handler, repository, messageQueue, lifecycleManager, getSnapshotRecoveryError } =
+      createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    repository.getNextPendingMessage.mockReturnValue({ id: "msg-recovery" });
+    lifecycleManager.handleAlarm.mockResolvedValue("sandbox_failed");
+    getSnapshotRecoveryError.mockReturnValue(
+      "Snapshot recovery required (artifact_missing). The original snapshot reference is retained."
+    );
+
+    await handler.handle();
+
+    expect(messageQueue.processMessageQueue).toHaveBeenCalledOnce();
   });
 
   it("fails stuck work and resumes after lifecycle termination", async () => {

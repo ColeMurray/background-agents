@@ -72,7 +72,8 @@ export class SessionLifecycleHandler {
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>,
     private readonly retrySnapshotRestore: () => SnapshotRestoreRetryAdmission,
-    private readonly backgroundTasks: BackgroundTasks
+    private readonly backgroundTasks: BackgroundTasks,
+    private readonly onSnapshotRetryComplete: () => Promise<void>
   ) {}
 
   async retrySnapshot(request: Request): Promise<Response> {
@@ -90,9 +91,16 @@ export class SessionLifecycleHandler {
     try {
       const admission = this.retrySnapshotRestore();
       if (!admission.admitted) return Response.json({ started: false }, { status: 409 });
-      this.backgroundTasks.submit(() => admission.completion, {
-        name: "sandbox.snapshot_restore_retry",
-      });
+      this.backgroundTasks.submit(
+        async () => {
+          try {
+            await admission.completion;
+          } finally {
+            await this.onSnapshotRetryComplete();
+          }
+        },
+        { name: "sandbox.snapshot_restore_retry" }
+      );
       return Response.json({ started: true }, { status: 202 });
     } catch {
       return Response.json(

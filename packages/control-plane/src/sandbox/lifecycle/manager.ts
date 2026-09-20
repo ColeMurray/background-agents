@@ -624,7 +624,9 @@ export class SandboxLifecycleManager
   }
 
   getSnapshotRecoveryError(): string | null {
-    const code = this.storage.getSandbox()?.snapshot_recovery_error_code;
+    const sandbox = this.storage.getSandbox();
+    if (sandbox?.status === "spawning" || sandbox?.status === "connecting") return null;
+    const code = sandbox?.snapshot_recovery_error_code;
     if (!code) return null;
     const parsed = snapshotRecoveryErrorCodeSchema.safeParse(code);
     return `Snapshot recovery required (${parsed.success ? parsed.data : "invalid_snapshot_metadata"}). The original snapshot reference is retained; retry recovery after operator repair or create a separate new session.`;

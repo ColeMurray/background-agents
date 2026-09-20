@@ -574,6 +574,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     executionStop,
     lifecycleManager,
+    getSnapshotRecoveryError: () => lifecycleManager.getSnapshotRecoveryError(),
     terminalMessageProjection,
     alarmScheduler,
     getExecutionTimeoutMs,
@@ -699,7 +700,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       await statusService.cancel(() => messageQueue.cancelExecution());
     },
     () => lifecycleManager.retrySnapshotRestore(),
-    backgroundTasks
+    backgroundTasks,
+    () => messageQueue.processMessageQueue()
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()

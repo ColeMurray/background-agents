@@ -103,6 +103,7 @@ function createHandler(
   const cancelSession = vi.fn();
   const cancelSandbox = vi.fn();
   const backgroundTasks = createTestBackgroundTasks();
+  const onSnapshotRetryComplete = vi.fn(async () => {});
 
   const lifecycleHandler = new SessionLifecycleHandler(
     repository as unknown as SessionCoreRepository,
@@ -114,7 +115,8 @@ function createHandler(
     "session-do-id",
     cancelSession,
     retrySnapshotRestore,
-    backgroundTasks
+    backgroundTasks,
+    onSnapshotRetryComplete
   );
 
   const handler = {
@@ -142,6 +144,7 @@ function createHandler(
     cancelSandbox,
     retrySnapshotRestore,
     backgroundTasks,
+    onSnapshotRetryComplete,
   };
 }
 
@@ -155,7 +158,8 @@ describe("SessionLifecycleHandler", () => {
       .fn<() => SnapshotRestoreRetryAdmission>()
       .mockReturnValueOnce({ admitted: true, completion })
       .mockReturnValue({ admitted: false });
-    const { handler, getSession, backgroundTasks } = createHandler(retrySnapshotRestore);
+    const { handler, getSession, backgroundTasks, onSnapshotRetryComplete } =
+      createHandler(retrySnapshotRestore);
     getSession.mockReturnValue(createSession());
     const request = () =>
       new Request("http://internal/internal/retry-snapshot", { method: "POST", body: "{}" });
@@ -173,6 +177,27 @@ describe("SessionLifecycleHandler", () => {
     expect(await second.json()).toEqual({ started: false });
     release();
     await backgroundTasks.settle();
+    expect(onSnapshotRetryComplete).toHaveBeenCalledOnce();
+  });
+
+  it("re-pumps queued work when admitted snapshot retry completion rejects", async () => {
+    const failure = new Error("restore failed");
+    const retrySnapshotRestore = vi.fn<() => SnapshotRestoreRetryAdmission>(() => ({
+      admitted: true,
+      completion: Promise.reject(failure),
+    }));
+    const { handler, getSession, backgroundTasks, onSnapshotRetryComplete } =
+      createHandler(retrySnapshotRestore);
+    getSession.mockReturnValue(createSession());
+
+    const response = await handler.retrySnapshot(
+      new Request("http://internal/internal/retry-snapshot", { method: "POST", body: "{}" })
+    );
+    await backgroundTasks.settle();
+
+    expect(response.status).toBe(202);
+    expect(onSnapshotRetryComplete).toHaveBeenCalledOnce();
+    expect(backgroundTasks.failures).toEqual([failure]);
   });
 
   it("returns 404 state response when session is missing", async () => {

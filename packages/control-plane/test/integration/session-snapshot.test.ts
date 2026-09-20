@@ -66,6 +66,20 @@ describe("session snapshot synchronization", () => {
       body: "{}",
     });
     expect(repeated.status).toBe(409);
+    const prompt = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Continue recovered work",
+        authorId: "user-1",
+        source: "web",
+      }),
+    });
+    expect(prompt.status).toBe(200);
+    const { messageId } = await prompt.json<{ messageId: string }>();
+    expect(
+      await queryDO<{ status: string }>(stub, "SELECT status FROM messages WHERE id = ?", messageId)
+    ).toEqual([{ status: "pending" }]);
     expect(
       (await (await stub.fetch("http://internal/internal/snapshot")).json<SessionSnapshot>())
         .snapshotRecoveryError
@@ -82,6 +96,7 @@ describe("session snapshot synchronization", () => {
     expect(ws).not.toBeNull();
     ws!.accept();
     try {
+      const deliveries = collectMessages(ws!, { timeoutMs: 500 });
       const ready = JSON.stringify({
         type: "ready",
         sandboxId: restoreRequest!.sandbox_id,
@@ -94,17 +109,6 @@ describe("session snapshot synchronization", () => {
       ).json<SessionSnapshot>();
       expect(snapshot.snapshotRecoveryError).toBeNull();
       expect(snapshot.session.sandboxExecution).toEqual(execution);
-      const deliveries = collectMessages(ws!, { timeoutMs: 500 });
-      const prompt = await stub.fetch("http://internal/internal/prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: "Continue recovered work",
-          authorId: "user-1",
-          source: "web",
-        }),
-      });
-      expect(prompt.status).toBe(200);
       ws!.send(ready);
       expect((await deliveries).filter((message) => message.type === "prompt")).toHaveLength(1);
     } finally {

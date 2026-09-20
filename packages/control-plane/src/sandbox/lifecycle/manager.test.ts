@@ -719,6 +719,7 @@ describe("SandboxLifecycleManager", () => {
       expect(retry.admitted).toBe(true);
       try {
         expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
+        expect(manager.getSnapshotRecoveryError()).toBeNull();
         await vi.waitFor(() => expect(provider.restoreFromSnapshot).toHaveBeenCalledTimes(1));
         expect(manager.retrySnapshotRestore()).toEqual({ admitted: false });
       } finally {
@@ -784,6 +785,7 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.last_spawn_error_at).not.toBeNull();
       expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
       expect(sandbox.snapshot_image_id).toBe("im-preserved");
+      expect(create().getSnapshotRecoveryError()).toContain("artifact_missing");
     });
     it("retains cancellation's verdict when an explicit retry reports late artifact loss", async () => {
       const { session, sandbox, provider, create } = setup("docker-v1");
