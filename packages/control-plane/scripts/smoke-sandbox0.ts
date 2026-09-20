@@ -53,6 +53,7 @@ async def main():
 asyncio.run(main())
 `;
 
+/** Read or write a guest file; omitting data selects a read, and redirects must not carry the API key. */
 async function file(id: string, path: string, data?: string): Promise<string> {
   const response = await fetch(
     `${apiUrl}${sandbox0Path(id)}/files?path=${encodeURIComponent(path)}`,
@@ -68,6 +69,7 @@ async function file(id: string, path: string, data?: string): Promise<string> {
   return response.text();
 }
 
+/** Run a guest assertion to completion and reject nonzero exits before inspecting its output. */
 async function command(id: string, command: string[]) {
   const context = await request<{ exit_code: number; stdout?: string; output_raw?: string }>(
     "POST",
@@ -83,6 +85,7 @@ async function command(id: string, command: string[]) {
   return context.stdout ?? context.output_raw ?? "";
 }
 
+/** Require a new bridge-ready event after each boot, tolerating only a not-yet-created event log. */
 async function waitForReady(id: string, count: number) {
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
@@ -116,7 +119,7 @@ async function waitForReady(id: string, count: number) {
   throw new Error("Runtime did not report ready within three minutes");
 }
 
-// Insert the loopback fixture after allocation, before the actual provider launch.
+/** Install or restart the loopback control plane before the provider launches its real bridge. */
 client.request = async <T>(
   method: string,
   path: string,

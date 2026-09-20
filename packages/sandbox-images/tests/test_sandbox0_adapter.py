@@ -13,6 +13,7 @@ ROOT = Path(__file__).parents[3]
 
 @pytest.fixture
 def adapter(monkeypatch, tmp_path):
+    """Run the real builder orchestration with isolated API, bundle, and publication doubles."""
     namespace = runpy.run_path(str(ROOT / "packages/sandbox0-infra/build-template.py"))
     main = namespace["main"]
     client = Mock()
@@ -37,6 +38,7 @@ def adapter(monkeypatch, tmp_path):
 
 
 def test_only_publishes_after_verifying_a_fresh_claim(adapter):
+    """A ready capture is insufficient: publish its reference only after a fresh guest verifies it."""
     main, client, publish = adapter
     client.command.side_effect = lambda *_args, **_kwargs: publish.assert_not_called()
     main()
@@ -52,6 +54,7 @@ def test_only_publishes_after_verifying_a_fresh_claim(adapter):
 
 
 def test_failed_verification_cleans_resources_without_publishing(adapter):
+    """A failed probe must release both owned guests without advertising a usable artifact."""
     main, client, publish = adapter
     client.command.side_effect = [None, RuntimeError("verification failed")]
     with pytest.raises(RuntimeError, match="verification failed"):
@@ -61,6 +64,7 @@ def test_failed_verification_cleans_resources_without_publishing(adapter):
 
 
 def test_ambiguous_capture_preserves_its_source(adapter):
+    """A lost capture response cannot prove the source is safe to delete."""
     main, client, publish = adapter
     client.request.side_effect = [None, TimeoutError("capture request timed out")]
     with pytest.raises(TimeoutError):
@@ -70,6 +74,7 @@ def test_ambiguous_capture_preserves_its_source(adapter):
 
 
 def test_retry_verifies_retained_candidate_without_overwriting_it(adapter, monkeypatch):
+    """Retrying a retained capture verifies it read-only and cleans up only the new probe."""
     main, client, publish = adapter
     monkeypatch.setenv("OPENINSPECT_IMAGE_CANDIDATE", "retained")
     client.create.side_effect = ["probe"]
@@ -81,9 +86,11 @@ def test_retry_verifies_retained_candidate_without_overwriting_it(adapter, monke
 
 
 def test_native_command_dispatches_sandbox0_builder(monkeypatch, tmp_path):
+    """The shared dispatcher must receive the builder's verified reference via its result file."""
     monkeypatch.setattr(native, "update_locks", Mock())
 
     def run(command, *, cwd, env, check):
+        """Emulate only the subprocess result-file contract, without allocating a live guest."""
         assert cwd == tmp_path
         assert check
         assert command[1] == "packages/sandbox0-infra/build-template.py"

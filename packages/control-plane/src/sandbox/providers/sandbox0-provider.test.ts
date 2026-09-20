@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { SANDBOX0_PAUSE_TIMEOUT_MS, Sandbox0SandboxProvider } from "./sandbox0-provider";
+import {
+  SANDBOX0_PAUSE_POLL_INTERVAL_MS,
+  SANDBOX0_PAUSE_TIMEOUT_MS,
+  Sandbox0SandboxProvider,
+} from "./sandbox0-provider";
 import { Sandbox0ApiError, Sandbox0RestClient } from "../sandbox0-rest-client";
 import { PrebuiltImageUnavailableError } from "../provider";
 import { createSandboxProviderFromEnv } from "../provider-factory";
@@ -31,6 +35,7 @@ const services = {
     publishable: false,
   })),
 };
+/** Exercise the real provider while keeping all allocation and runtime calls in a transport spy. */
 function fixture() {
   const client = new Sandbox0RestClient({ apiKey: "api-secret" });
   const request = vi.spyOn(client, "request");
@@ -43,6 +48,7 @@ function fixture() {
     }),
   };
 }
+/** Model persisted runtime identity and installed passwords independently of the current API key. */
 const runtime = (phase = "stopped") => ({
   id: "runtime",
   phase,
@@ -209,8 +215,11 @@ describe("Sandbox0SandboxProvider", () => {
         .mockResolvedValueOnce({ status: "failed" })
         .mockResolvedValueOnce({ status: "paused" });
       const result = provider.stopSandbox({ ...resume, reason: "inactivity_timeout" });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(SANDBOX0_PAUSE_POLL_INTERVAL_MS - 1);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
       await expect(result).resolves.toEqual({ success: true });
+      expect(request).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

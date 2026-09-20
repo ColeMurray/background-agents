@@ -170,6 +170,7 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
+/** Construct only the selected backend, validating its required deployment configuration. */
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(
@@ -188,6 +189,7 @@ export function createSandboxProviderFromEnv(
   backend?: SandboxBackendName,
   options?: SandboxProviderFactoryOptions
 ): SandboxProvider;
+/** Bind the selected backend without allocating a sandbox or validating unrelated providers. */
 export function createSandboxProviderFromEnv(
   env: Env,
   backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER),

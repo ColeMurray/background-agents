@@ -29,6 +29,7 @@ const RUNTIME_NAME = "openinspect-runtime";
 const ENTRYPOINT = ["/opt/openinspect/start-runtime"];
 
 export const SANDBOX0_PAUSE_TIMEOUT_MS = 120_000;
+export const SANDBOX0_PAUSE_POLL_INTERVAL_MS = 1_000;
 
 interface RuntimeSpec {
   name: string;
@@ -65,6 +66,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
     supportsExplicitStop: true,
   };
 
+  /** Bind an authenticated transport and a verified template; construction allocates no resources. */
   constructor(
     readonly client: Sandbox0RestClient,
     readonly config: Sandbox0ProviderConfig
@@ -252,7 +254,7 @@ export class Sandbox0SandboxProvider implements SandboxProvider {
             const timer = setTimeout(() => {
               signal.removeEventListener("abort", onAbort);
               resolve();
-            }, 1000);
+            }, SANDBOX0_PAUSE_POLL_INTERVAL_MS);
             signal.addEventListener("abort", onAbort, { once: true });
             if (signal.aborted) onAbort();
           });

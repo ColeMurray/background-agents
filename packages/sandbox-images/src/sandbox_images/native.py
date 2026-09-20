@@ -15,6 +15,11 @@ from .locks import update_locks
 
 
 def build_image(root: Path, provider: str) -> dict[str, Any]:
+    """Run the selected builder with checked locks and an isolated result handoff.
+
+    Provider builders own live verification. A successful subprocess must also
+    return a nonempty artifact reference before deployment can select it.
+    """
     if provider not in PROVIDERS:
         raise ValueError("Unknown image provider")
     update_locks(root, check=True)
