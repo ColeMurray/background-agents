@@ -29,6 +29,11 @@ export interface SandboxPreservationStorage extends SandboxStateReader {
     runtimeVersion: string | null
   ): boolean;
   updateSandboxStatus(status: SandboxStatus): void;
+  transitionSandboxStatus(
+    generation: { sandboxId: string | null; createdAt: number },
+    from: SandboxStatus,
+    to: SandboxStatus
+  ): boolean;
 }
 
 /** Aggregate initialization is separate from transitions of an existing sandbox. */

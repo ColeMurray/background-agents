@@ -26,11 +26,9 @@ const sessionInboxPageClientSchema = z
     items: z.array(sessionInboxItemClientSchema),
   })
   .pipe(sessionInboxPageSchema);
-const sessionInboxSnapshotClientSchema = z
-  .looseObject({
-    categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
-  })
-  .pipe(sessionInboxSnapshotSchema);
+const sessionInboxSnapshotClientSchema = sessionInboxSnapshotSchema.extend({
+  categories: z.record(sessionInboxCategorySchema, sessionInboxPageClientSchema),
+});
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 

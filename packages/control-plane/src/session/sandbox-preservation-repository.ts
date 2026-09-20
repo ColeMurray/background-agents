@@ -20,9 +20,12 @@ const stateSchema = sandboxPreservationSchema
     // Proof about the current source, not the artifact's original source.
     sourceRetired: z.boolean().optional(),
     lifetimeKind: z.enum(["finite", "none", "unknown"]),
+    lifetimeSource: z.enum(["provider", "conservative_start_bound"]).optional(),
     protocolVersion: z.literal(1).optional(),
     generationReady: z.boolean(),
     runtimeReady: z.boolean().optional(),
+    lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
+    restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
@@ -34,8 +37,10 @@ const stateSchema = sandboxPreservationSchema
   .superRefine((state, context) => {
     const incomplete =
       (state.lifetimeKind === "finite" &&
-        (state.expiresAtMs === null || state.drainAtMs === null)) ||
-      ((state.phase === "saved" || state.phase === "retiring") && !state.receipt) ||
+        (state.expiresAtMs === null ||
+          (state.lifecyclePolicy !== "legacy" && state.drainAtMs === null))) ||
+      ((state.phase === "saved" || state.phase === "restoring" || state.phase === "retiring") &&
+        !state.receipt) ||
       (["draining", "prepared", "capturing"].includes(state.phase) &&
         (!state.operationId ||
           state.stopByMs === undefined ||

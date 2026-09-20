@@ -8,7 +8,7 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
 
 export interface AlarmHandlerDeps {
-  preserveBeforeWatchdogs?: () => Promise<boolean>;
+  preserveBeforeWatchdogs?: () => Promise<"continue" | "hold_watchdogs">;
   repository: MessageRepository;
   messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failPendingMessage">;
   executionStop: Pick<
@@ -41,7 +41,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
     async handle(): Promise<void> {
       // Preservation must not wait behind a remote index projection or a
       // generic stop timeout. Recheck below if projection I/O crosses D.
-      if (await deps.preserveBeforeWatchdogs?.()) return;
+      await deps.preserveBeforeWatchdogs?.();
       let projectionFailure: { error: unknown } | undefined;
       try {
         await deps.terminalMessageProjection.flushPending();
@@ -50,7 +50,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // Rethrow after recovery so transient storage failures still retry.
         projectionFailure = { error };
       }
-      if (await deps.preserveBeforeWatchdogs?.()) {
+      if ((await deps.preserveBeforeWatchdogs?.()) === "hold_watchdogs") {
         if (projectionFailure) throw projectionFailure.error;
         return;
       }

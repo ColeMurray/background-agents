@@ -61,7 +61,7 @@ const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
 const RESERVED_VNC_ENV_KEYS = ["VNC_PASSWORD", "NOVNC_PORT"] as const;
 const RESTORE_READY_TIMEOUT_MS = 90_000;
-const RESTORE_READY_POLL_MS = 1_000;
+const POLL_INTERVAL_MS = 1_000;
 const SNAPSHOT_TIMEOUT_MS = 300_000;
 
 export interface OpenComputerProviderConfig {
@@ -256,7 +256,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         }
         if (signal?.aborted) throw signal.reason;
         await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 1_000);
+          const timer = setTimeout(resolve, POLL_INTERVAL_MS);
           signal?.addEventListener(
             "abort",
             () => {
@@ -452,7 +452,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       if (Date.now() >= deadline) {
         throw new Error("OpenComputer sandbox was not ready before restore deadline");
       }
-      await new Promise((resolve) => setTimeout(resolve, RESTORE_READY_POLL_MS));
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       sandbox = undefined;
     }
   }

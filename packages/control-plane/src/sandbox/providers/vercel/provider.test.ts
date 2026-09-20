@@ -264,6 +264,27 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("uses one fallback timestamp for a zero provider creation time", async () => {
+    const response = createSessionResponse();
+    response.session.createdAt = 0;
+    const client = createMockClient({ createSandbox: vi.fn(async () => response) });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(5_000);
+
+    try {
+      const result = await provider.createSandbox(baseCreateConfig);
+
+      expect(result.createdAt).toBe(5_000);
+      expect(result.lifetime).toEqual(
+        expect.objectContaining({
+          expiresAtMs: 5_000 + VERCEL_MAX_SANDBOX_TIMEOUT_MS,
+        })
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("exposes and returns VNC access without adding its port to generic tunnels", async () => {
     const client = createMockClient({
       createSandbox: vi.fn(async () =>

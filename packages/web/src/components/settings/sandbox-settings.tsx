@@ -2,12 +2,12 @@
 
 import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -16,6 +16,8 @@ import {
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
+  sandboxSettingsSchema,
+  type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import {
@@ -34,21 +36,51 @@ import {
 
 const GLOBAL_SCOPE = "__global__";
 
-interface GlobalSettingsResponse {
-  integrationId: string;
-  settings: { defaults?: SandboxSettings; enabledRepos?: string[] } | null;
+export const sandboxGlobalSettingsResponseSchema = z.object({
+  integrationId: z.literal("sandbox"),
+  settings: z
+    .object({
+      defaults: sandboxSettingsSchema.optional(),
+      enabledRepos: z.array(z.string()).nullable().optional(),
+    })
+    .nullable(),
+});
+
+export type GlobalSettingsResponse = z.infer<typeof sandboxGlobalSettingsResponseSchema>;
+
+export const sandboxRepoSettingsResponseSchema = z.object({
+  integrationId: z.literal("sandbox"),
+  repo: z.string(),
+  settings: sandboxSettingsSchema.nullable(),
+});
+
+export type RepoSettingsResponse = z.infer<typeof sandboxRepoSettingsResponseSchema>;
+
+export const sandboxEnvironmentSettingsResponseSchema = z.object({
+  integrationId: z.literal("sandbox"),
+  environmentId: z.string(),
+  settings: sandboxSettingsSchema.nullable(),
+});
+
+export type EnvironmentSettingsResponse = z.infer<typeof sandboxEnvironmentSettingsResponseSchema>;
+
+export function parseSandboxGlobalSettingsResponse(
+  value: unknown
+): GlobalSettingsResponse | undefined {
+  const parsed = sandboxGlobalSettingsResponseSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
-interface RepoSettingsResponse {
-  integrationId: string;
-  repo: string;
-  settings: SandboxSettings | null;
+function parseSandboxRepoSettingsResponse(value: unknown): RepoSettingsResponse | undefined {
+  const parsed = sandboxRepoSettingsResponseSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
-interface EnvironmentSettingsResponse {
-  integrationId: string;
-  environmentId: string;
-  settings: SandboxSettings | null;
+function parseSandboxEnvironmentSettingsResponse(
+  value: unknown
+): EnvironmentSettingsResponse | undefined {
+  const parsed = sandboxEnvironmentSettingsResponseSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
@@ -61,7 +93,7 @@ interface SandboxScopeModel {
   /** The layer beneath this scope's overrides (undefined at global scope). */
   baseDefaults: SandboxSettings | undefined;
   /** Preserved on global saves so a defaults update can't drop the allowlist. */
-  enabledRepos: string[] | undefined;
+  enabledRepos: string[] | null | undefined;
   isLoading: boolean;
   mutate: () => Promise<unknown>;
 }
@@ -93,30 +125,31 @@ function useSandboxSettingsScope(
       ? repoApiUrl
       : `/api/integration-settings/sandbox/environments/${environmentId}`;
 
-  const { data, mutate, isLoading } = useSWR<
-    GlobalSettingsResponse | RepoSettingsResponse | EnvironmentSettingsResponse
-  >(apiUrl, fetcher);
-  const { data: globalData, isLoading: isLoadingGlobal } = useSWR<GlobalSettingsResponse>(
+  const { data, mutate, isLoading } = useSWR<unknown>(apiUrl, fetcher);
+  const { data: rawGlobalData, isLoading: isLoadingGlobal } = useSWR<unknown>(
     isGlobal ? null : globalApiUrl,
     fetcher
   );
-  const { data: primaryRepoData, isLoading: isLoadingPrimaryRepo } = useSWR<RepoSettingsResponse>(
+  const { data: rawPrimaryRepoData, isLoading: isLoadingPrimaryRepo } = useSWR<unknown>(
     scope === "environment" && owner && name ? repoApiUrl : null,
     fetcher
   );
 
-  const globalSettings = isGlobal
-    ? (data as GlobalSettingsResponse | undefined)?.settings
-    : undefined;
-  const ownSettings = isGlobal
-    ? globalSettings?.defaults
-    : ((data as RepoSettingsResponse | EnvironmentSettingsResponse | undefined)?.settings ??
-      undefined);
+  const globalResponse = parseSandboxGlobalSettingsResponse(isGlobal ? data : rawGlobalData);
+  const scopedResponse = isGlobal
+    ? undefined
+    : scope === "repo"
+      ? parseSandboxRepoSettingsResponse(data)
+      : parseSandboxEnvironmentSettingsResponse(data);
+  const primaryRepoResponse = parseSandboxRepoSettingsResponse(rawPrimaryRepoData);
+
+  const globalSettings = isGlobal ? globalResponse?.settings : undefined;
+  const ownSettings = isGlobal ? globalSettings?.defaults : (scopedResponse?.settings ?? undefined);
   const baseDefaults = isGlobal
     ? undefined
     : scope === "environment"
-      ? { ...globalData?.settings?.defaults, ...primaryRepoData?.settings }
-      : globalData?.settings?.defaults;
+      ? { ...globalResponse?.settings?.defaults, ...primaryRepoResponse?.settings }
+      : globalResponse?.settings?.defaults;
 
   return {
     apiUrl,

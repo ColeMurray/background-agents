@@ -38,6 +38,16 @@ describe("SandboxPreservationRepository", () => {
     fixture.db.close();
   });
 
+  it("round-trips an explicit legacy generation without a drain deadline", () => {
+    const fixture = repository();
+    const legacy = record({ lifecyclePolicy: "legacy", drainAtMs: null });
+
+    fixture.repository.write(legacy);
+
+    expect(fixture.repository.read()).toEqual(legacy);
+    fixture.db.close();
+  });
+
   it("atomically replaces the singleton while preserving a verified receipt", () => {
     const fixture = repository();
     fixture.repository.write(record());
@@ -62,6 +72,26 @@ describe("SandboxPreservationRepository", () => {
     expect(
       fixture.sql.exec("SELECT COUNT(*) AS count FROM sandbox_preservation").toArray()
     ).toEqual([{ count: 1 }]);
+    fixture.db.close();
+  });
+
+  it("round-trips a restoring phase only with its actionable receipt", () => {
+    const fixture = repository();
+    const restoring = record({
+      phase: "restoring",
+      restoreInvoked: false,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "image-1",
+        provider: "modal",
+        savedAtMs: 15_000,
+        runtimeVersion: "runtime-1",
+      },
+    });
+
+    fixture.repository.write(restoring);
+    expect(fixture.repository.read()).toEqual(restoring);
+    expect(() => fixture.repository.write({ ...restoring, receipt: undefined })).toThrow();
     fixture.db.close();
   });
 

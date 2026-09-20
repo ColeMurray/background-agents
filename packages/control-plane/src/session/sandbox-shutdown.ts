@@ -8,7 +8,14 @@ import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
-import type { SandboxGeneration } from "../sandbox/lifecycle/ports";
+import type {
+  SandboxCheckpointOutcome,
+  SandboxGeneration,
+  SandboxStartupDecision,
+  SandboxWorkAdmission,
+} from "../sandbox/lifecycle/ports";
+import type { PreservationLifecyclePolicy } from "../sandbox/lifecycle/preservation-policy";
+import { isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
 import type { SandboxPreservationStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
@@ -35,7 +42,8 @@ interface PreservationDeps {
   sockets: SessionWebSocketManager;
   alarm: AlarmScheduler;
   background: BackgroundTasks;
-  processQueue(): Promise<void>;
+  /** Notifies the lifecycle boundary to re-evaluate queued work under current policy. */
+  onLifecycleChange(): Promise<void>;
   reconcileStatus(): Promise<void>;
   retireAccess(): void;
   now?: () => number;
@@ -43,11 +51,12 @@ interface PreservationDeps {
 }
 
 /** One durable owner of planned stopping. Provider side effects never imply a saved receipt. */
-export class SandboxPreservation {
+export class SandboxShutdownCoordinator {
   private activeOperation: string | null = null;
-  private checkpointActive = false;
+  private checkpointLeaseId: string | null = null;
   private checkpointGeneration: SandboxGeneration | null = null;
   private retiringOperation: string | null = null;
+  private activeRestoreGeneration: SandboxGeneration | null = null;
   private readonly now: () => number;
 
   constructor(private readonly deps: PreservationDeps) {
@@ -55,12 +64,13 @@ export class SandboxPreservation {
   }
 
   snapshot(): SandboxPreservationState | null {
-    const state = this.deps.store.read();
+    const state = this.normalizeInterruptedRestore();
     return state
       ? sandboxPreservationSchema.parse({
           ...state,
           savedAtMs: state.receipt?.savedAtMs ?? state.savedAtMs,
           hasRecoveryPoint: !!state.receipt,
+          continuationPaused: this.continuationPaused(state),
         })
       : null;
   }
@@ -75,6 +85,10 @@ export class SandboxPreservation {
 
   private publish(state: PreservationRecord): void {
     this.deps.store.write(state);
+    this.announce(state);
+  }
+
+  private announce(state: PreservationRecord): void {
     this.deps.log?.info("sandbox.preservation", {
       event: "sandbox.preservation",
       phase: state.phase,
@@ -90,37 +104,72 @@ export class SandboxPreservation {
         ...state,
         savedAtMs: state.receipt?.savedAtMs ?? state.savedAtMs,
         hasRecoveryPoint: !!state.receipt,
+        continuationPaused: this.continuationPaused(state),
       }),
     });
   }
 
-  /** Called before the provider can start a bridge for this generation. */
-  beginGeneration(generation: SandboxGeneration): void {
-    if (!generation.sandboxId) throw new Error("Missing sandbox generation");
+  /** Atomically reserves the sandbox row and shutdown ownership before provider work. */
+  reserveStartup(
+    createdAt: number,
+    lifecyclePolicy: PreservationLifecyclePolicy,
+    persistSandboxRow: () => void
+  ): void {
     const previous = this.deps.store.read();
-    this.publish({
-      phase: "running",
-      generation: { ...generation, sandboxId: generation.sandboxId },
-      provider: this.deps.provider.name,
-      providerObjectId: null,
-      sourceRetired: previous?.phase === "saved",
-      lifetimeKind: "unknown",
-      expiresAtMs: null,
-      drainAtMs: null,
-      generationReady: false,
-      receipt: previous?.receipt,
+    const restoring =
+      !!previous?.receipt &&
+      (previous.phase === "saved" ||
+        (previous.phase === "restoring" && previous.restoreInvoked !== true));
+    let next!: PreservationRecord;
+    this.deps.session.transaction(() => {
+      persistSandboxRow();
+      const row = this.deps.sandbox.getSandbox();
+      if (!row?.modal_sandbox_id || row.created_at !== createdAt)
+        throw new Error("Missing sandbox generation after reservation");
+      next = {
+        phase: restoring ? "restoring" : "running",
+        generation: { sandboxId: row.modal_sandbox_id, createdAt },
+        provider: this.deps.provider.name,
+        providerObjectId: null,
+        sourceRetired: previous?.sourceRetired === true || previous?.phase === "saved",
+        lifetimeKind: "unknown",
+        lifetimeSource: undefined,
+        expiresAtMs: null,
+        drainAtMs: null,
+        generationReady: false,
+        lifecyclePolicy,
+        receipt: previous?.receipt,
+        restoreInvoked: restoring ? false : undefined,
+      };
+      this.deps.store.write(next);
     });
+    this.activeRestoreGeneration = restoring ? next.generation : null;
+    this.announce(next);
+    if (next.lifecyclePolicy === "legacy") {
+      this.deps.log?.warn("Restoring existing sandbox under legacy lifecycle policy", {
+        event: "sandbox.preservation_legacy_lifecycle",
+        sandbox_id: next.generation.sandboxId,
+      });
+    }
   }
 
   /** Persist uncertainty before restore/resume can create or reactivate execution. */
-  restoreStarting(generation: SandboxGeneration, providerObjectId?: string): void {
+  markRecoveryInvoked(generation: SandboxGeneration, providerObjectId?: string): void {
     const state = this.deps.store.read();
     if (!state || !this.current(state) || !this.matches(state, generation))
       throw new Error("Saved sandbox restore generation was superseded");
-    this.publish({ ...state, sourceRetired: false, providerObjectId: providerObjectId ?? null });
+    this.publish({
+      ...state,
+      restoreInvoked: true,
+      sourceRetired: false,
+      providerObjectId: providerObjectId ?? null,
+    });
   }
 
-  async started(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void> {
+  async recordProviderStartup(
+    generation: SandboxGeneration,
+    lifetime: SandboxLifetime
+  ): Promise<void> {
     const state = this.deps.store.read();
     if (
       !state ||
@@ -135,15 +184,23 @@ export class SandboxPreservation {
     );
     const buffer = settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS;
     const expiresAtMs = lifetime.kind === "finite" ? lifetime.expiresAtMs : null;
+    const legacy = state.lifecyclePolicy === "legacy";
     const next: PreservationRecord = {
       ...state,
+      phase: state.phase === "restoring" ? "running" : state.phase,
+      restoreInvoked: undefined,
       providerObjectId: row?.modal_object_id ?? null,
       sourceRetired: false,
       lifetimeKind: lifetime.kind,
+      lifetimeSource: lifetime.kind === "finite" ? lifetime.source : undefined,
       expiresAtMs,
-      drainAtMs: expiresAtMs === null ? null : expiresAtMs - buffer,
+      drainAtMs: legacy || expiresAtMs === null ? null : expiresAtMs - buffer,
     };
     this.publish(next);
+    if (legacy) {
+      this.notifyLifecycleChange();
+      return;
+    }
     if (lifetime.kind === "unknown") {
       this.fail(
         next,
@@ -155,10 +212,10 @@ export class SandboxPreservation {
     if (next.phase !== "running") return;
     this.bindGeneration(next);
     if (next.drainAtMs !== null) {
-      if (this.now() >= next.drainAtMs) await this.request("sandbox_lifetime_expiring");
+      if (this.now() >= next.drainAtMs) await this.requestShutdown("sandbox_lifetime_expiring");
       else await this.deps.alarm.schedule(next.drainAtMs);
     }
-    this.kickQueue();
+    this.notifyLifecycleChange();
   }
 
   runtimeReady(version?: 1): void {
@@ -166,6 +223,10 @@ export class SandboxPreservation {
     if (!state || !this.current(state)) return;
     const next = { ...state, runtimeReady: true, protocolVersion: version };
     this.publish(next);
+    if (state.lifecyclePolicy === "legacy") {
+      this.notifyLifecycleChange();
+      return;
+    }
     if (version !== 1) {
       this.fail(
         next,
@@ -189,16 +250,21 @@ export class SandboxPreservation {
     if (!state || !this.matches(state, event.generation) || !this.current(state)) return;
     this.publish({ ...state, generationReady: true });
     if (state.phase === "draining") this.kickAdvance();
-    else this.kickQueue();
+    else this.notifyLifecycleChange();
   }
 
   /** Synchronous admission gate; call again after every dispatch-path await. */
-  mayDispatch(): boolean {
-    const state = this.deps.store.read();
-    if (!state) return true; // Legacy generations retain their existing policy until a new launch.
-    if (state.phase === "saved") return true; // Existing queue drives restore, never prompt replay.
-    if (state.phase !== "running" || !this.current(state)) return false;
-    if (!this.providerMatches(state)) return false;
+  admissionDecision(): SandboxWorkAdmission {
+    const state = this.normalizeInterruptedRestore();
+    if (!state) return "unmanaged";
+    if (state.phase === "saved" && this.continuationPaused(state)) return "held";
+    if (state.phase === "saved") return "restore_required";
+    if (state.phase === "restoring" && !state.restoreInvoked) return "restore_required";
+    if (state.phase !== "running" || !this.current(state)) return "held";
+    if (!this.providerMatches(state)) return "held";
+    if (state.lifecyclePolicy === "legacy") {
+      return state.checkpointInFlight ? "held" : "ready";
+    }
     // A provider-create failure with no connected runtime/receipt still uses
     // the existing fresh-spawn retry policy. Unknown preservation never does.
     if (
@@ -207,27 +273,70 @@ export class SandboxPreservation {
       !state.providerObjectId &&
       this.deps.sandbox.getSandbox()?.status === "failed"
     )
-      return true;
+      return "spawn_required";
     if (state.drainAtMs !== null && this.now() >= state.drainAtMs) {
-      this.deps.background.submit(() => this.request("sandbox_lifetime_expiring"), {
+      this.deps.background.submit(() => this.requestShutdown("sandbox_lifetime_expiring"), {
         name: "sandbox.preserve",
       });
-      return false;
+      return "held";
     }
-    return state.lifetimeKind !== "unknown" && state.generationReady && !state.checkpointInFlight;
+    return state.lifetimeKind !== "unknown" && state.generationReady && !state.checkpointInFlight
+      ? "ready"
+      : "held";
   }
 
   isHolding(): boolean {
-    const phase = this.deps.store.read()?.phase;
-    return phase !== undefined && phase !== "running" && phase !== "saved";
+    const state = this.normalizeInterruptedRestore();
+    if (
+      state?.phase === "restoring" &&
+      (!state.restoreInvoked ||
+        (this.activeRestoreGeneration && this.matches(state, this.activeRestoreGeneration)))
+    )
+      return false;
+    const phase = state?.phase;
+    return (
+      state?.checkpointInFlight === true ||
+      (state !== null && phase === "saved" && this.continuationPaused(state)) ||
+      (phase !== undefined && phase !== "running" && phase !== "saved")
+    );
   }
 
-  recoveryReceipt() {
-    const state = this.deps.store.read();
-    return state?.phase === "saved" ? state.receipt : undefined;
+  startupDecision(): SandboxStartupDecision {
+    const state = this.normalizeInterruptedRestore();
+    if (!state) return { kind: "normal" };
+    if (
+      (state.provider !== undefined && state.provider !== this.deps.provider.name) ||
+      (state.receipt && state.receipt.provider !== this.deps.provider.name)
+    ) {
+      const reason = "The configured sandbox provider changed";
+      if (state.phase !== "unknown") this.fail(state, "unknown", reason);
+      return { kind: "hold", reason };
+    }
+    if (!this.current(state))
+      return { kind: "hold", reason: "Sandbox generation changed during graceful shutdown" };
+    const receipt =
+      (state.phase === "saved" && !this.continuationPaused(state)) ||
+      (state.phase === "restoring" && !state.restoreInvoked)
+        ? state.receipt
+        : undefined;
+    if (receipt?.kind === "snapshot")
+      return {
+        kind: "restore_snapshot",
+        snapshotId: receipt.artifactId,
+        runtimeVersion: receipt.runtimeVersion,
+      };
+    if (receipt?.kind === "retained")
+      return {
+        kind: "resume_retained",
+        providerObjectId: receipt.artifactId,
+        runtimeVersion: receipt.runtimeVersion,
+      };
+    return this.isHolding()
+      ? { kind: "hold", reason: state.error ?? "Sandbox shutdown is held" }
+      : { kind: "normal" };
   }
 
-  restoreFailed(error: string, generation?: SandboxGeneration): void {
+  holdFailedRecovery(error: string, generation?: SandboxGeneration): void {
     const state = this.deps.store.read();
     if (!state || !this.current(state) || (generation && !this.matches(state, generation))) return;
     if (state.receipt)
@@ -240,9 +349,15 @@ export class SandboxPreservation {
 
   /** Only an explicit authenticated user choice may leave a failed/unknown hold. */
   async recover(action: "retry" | "restore_saved"): Promise<void> {
-    const state = this.deps.store.read();
-    if (!state || (state.phase !== "failed" && state.phase !== "unknown") || !this.current(state))
+    const state = this.normalizeInterruptedRestore();
+    if (!state || !this.current(state)) return;
+    if (state.phase === "saved" && this.continuationPaused(state)) {
+      if (action !== "restore_saved") return;
+      this.publish({ ...state, continuationPaused: false });
+      this.notifyLifecycleChange();
       return;
+    }
+    if (state.phase !== "failed" && state.phase !== "unknown") return;
     if (action === "retry") {
       // Unknown means provider I/O may still have run; never repeat that capture blindly.
       if (state.phase !== "failed")
@@ -250,7 +365,7 @@ export class SandboxPreservation {
           "An unknown provider result cannot be retried safely; restore a saved recovery point or start a separate session."
         );
       this.publish({ ...state, phase: "running", error: undefined });
-      await this.request(state.reason ?? "preservation_retry");
+      await this.requestShutdown(state.reason ?? "preservation_retry");
       return;
     }
     if (!state.receipt || state.receipt.provider !== this.deps.provider.name)
@@ -260,11 +375,17 @@ export class SandboxPreservation {
       phase: "retiring",
       reason: "restore_saved_state",
       error: undefined,
+      continuationPaused: false,
       operationId: crypto.randomUUID(),
       retireByMs: this.now() + RETIRE_MS,
     };
     this.publish(next);
-    if (state.sourceRetired || (state.expiresAtMs !== null && this.now() >= state.expiresAtMs)) {
+    if (
+      state.sourceRetired ||
+      (state.lifetimeSource === "provider" &&
+        state.expiresAtMs !== null &&
+        this.now() >= state.expiresAtMs)
+    ) {
       // The hard provider deadline independently proves the old execution ended.
       this.finish(next);
     } else if (state.providerObjectId) await this.retire(next);
@@ -276,20 +397,125 @@ export class SandboxPreservation {
       );
   }
 
-  /** Ordinary non-destructive checkpoints share the capture gate. */
-  beginCheckpoint(): boolean {
-    if (this.checkpointActive) return false;
-    const state = this.deps.store.read();
-    if (!state) return true;
-    if (!this.mayDispatch()) return false;
-    this.checkpointActive = true;
-    this.checkpointGeneration = state.generation;
+  /** Owns an ordinary capture from admission through durable outcome classification. */
+  async captureCheckpoint(
+    generation: SandboxGeneration,
+    reason: string
+  ): Promise<SandboxCheckpointOutcome> {
+    if (this.checkpointLeaseId || generation.sandboxId === null) return { outcome: "held" };
+    const checkpointGeneration = { ...generation, sandboxId: generation.sandboxId };
+    const now = this.now();
+    let state = this.deps.store.read();
+    if (state) {
+      if (
+        this.admissionDecision() !== "ready" ||
+        !this.matches(state, generation) ||
+        state.checkpointInFlight
+      )
+        return { outcome: "held" };
+      if (state.drainAtMs !== null && now + CAPTURE_MS + MARGIN_MS > state.drainAtMs)
+        return { outcome: "held" };
+    } else {
+      const row = this.deps.sandbox.getSandbox();
+      if (
+        !row ||
+        row.modal_sandbox_id !== generation.sandboxId ||
+        row.created_at !== generation.createdAt
+      )
+        return { outcome: "held" };
+      state = {
+        phase: "running",
+        generation: checkpointGeneration,
+        provider: this.deps.provider.name,
+        providerObjectId: row.modal_object_id,
+        sourceRetired: false,
+        lifetimeKind: "none",
+        lifetimeSource: undefined,
+        expiresAtMs: null,
+        drainAtMs: null,
+        generationReady: true,
+        lifecyclePolicy: "legacy",
+      };
+    }
+
+    const deadlineAtMs = Math.min(
+      now + CAPTURE_MS,
+      state.drainAtMs === null ? Number.POSITIVE_INFINITY : state.drainAtMs - MARGIN_MS
+    );
+    const id = crypto.randomUUID();
     this.deps.store.write({ ...state, checkpointInFlight: true });
-    return true;
+    this.checkpointLeaseId = id;
+    this.checkpointGeneration = checkpointGeneration;
+    const row = this.deps.sandbox.getSandbox();
+    const session = this.deps.session.getSession();
+    if (!row?.modal_object_id || !session) {
+      this.endCheckpoint(id, false);
+      return { outcome: "held" };
+    }
+    const previousStatus = row.status;
+    const statusChanged =
+      !isDeadSandboxStatus(previousStatus) &&
+      this.deps.sandbox.transitionSandboxStatus(
+        checkpointGeneration,
+        previousStatus,
+        "snapshotting"
+      );
+    if (statusChanged)
+      this.deps.messenger.broadcast({ type: "sandbox_status", status: "snapshotting" });
+    try {
+      const result = await this.captureSnapshot(
+        row.modal_object_id,
+        session.session_name || session.id,
+        reason,
+        deadlineAtMs
+      );
+      const current = this.deps.sandbox.getSandbox();
+      if (
+        this.checkpointLeaseId !== id ||
+        current?.modal_sandbox_id !== checkpointGeneration.sandboxId ||
+        current.created_at !== checkpointGeneration.createdAt ||
+        !this.deps.sandbox.recordSandboxSnapshot(
+          checkpointGeneration.sandboxId,
+          result.imageId,
+          row.runtime_version
+        )
+      ) {
+        this.endCheckpoint(id, true);
+        return { outcome: "unknown" };
+      }
+      this.deps.messenger.broadcast({ type: "snapshot_saved", imageId: result.imageId, reason });
+      if (result.sourceStopped) {
+        this.deps.sandbox.updateSandboxStatus("stopped");
+        this.deps.retireAccess();
+        this.deps.messenger.broadcast({ type: "sandbox_status", status: "stopped" });
+      } else if (
+        statusChanged &&
+        reason !== "heartbeat_timeout" &&
+        this.deps.sandbox.transitionSandboxStatus(
+          checkpointGeneration,
+          "snapshotting",
+          previousStatus
+        )
+      ) {
+        this.deps.messenger.broadcast({ type: "sandbox_status", status: previousStatus });
+        if (previousStatus === "ready")
+          this.deps.messenger.broadcast({ type: "sandbox_access_changed" });
+      }
+      this.endCheckpoint(id, false);
+      return {
+        outcome: "saved",
+        imageId: result.imageId,
+        sourceStopped: result.sourceStopped,
+      };
+    } catch {
+      this.endCheckpoint(id, true);
+      return { outcome: "unknown" };
+    }
   }
 
-  endCheckpoint(): void {
-    this.checkpointActive = false;
+  private endCheckpoint(id: string, uncertain: boolean): void {
+    if (this.checkpointLeaseId !== id) return;
+    this.checkpointLeaseId = null;
     const state = this.deps.store.read();
     const generation = this.checkpointGeneration;
     this.checkpointGeneration = null;
@@ -301,15 +527,27 @@ export class SandboxPreservation {
     )
       return;
     if (!state?.checkpointInFlight) return;
+    if (uncertain) {
+      this.fail(
+        { ...state, checkpointInFlight: false },
+        "unknown",
+        "Checkpoint provider outcome is unknown; destructive follow-up remains held."
+      );
+      return;
+    }
     this.deps.store.write({ ...state, checkpointInFlight: false });
     if (state.phase === "draining") this.kickAdvance();
-    else this.kickQueue();
+    else this.notifyLifecycleChange();
   }
 
-  async request(reason: string): Promise<boolean> {
+  async requestShutdown(reason: string): Promise<"owned" | "unmanaged" | "held"> {
     const state = this.deps.store.read();
-    if (!state || !this.current(state) || state.phase !== "running") return false;
-    if (!this.providerMatches(state)) return true;
+    if (!state) return "unmanaged";
+    if (!this.current(state) || state.phase !== "running" || !this.providerMatches(state))
+      return "held";
+    if (state.lifecyclePolicy === "legacy") {
+      return state.checkpointInFlight ? "held" : "unmanaged";
+    }
     const now = this.now();
     const end = state.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS;
     // A shorter buffer reduces capture time, not the prompt-stop allowance.
@@ -326,7 +564,10 @@ export class SandboxPreservation {
     };
     const failure = this.deps.session.transaction(() => {
       const message = this.deps.messages.getProcessingMessage();
-      if (message) next.messageId = message.id;
+      if (message) {
+        next.messageId = message.id;
+        next.continuationPaused = true;
+      }
       this.deps.store.write(next); // Fence before any asynchronous work or terminal publication.
       return message ? this.deps.failures.record(message.id, reason, now, "processing") : null;
     });
@@ -337,7 +578,7 @@ export class SandboxPreservation {
       name: "sandbox.preservation_status",
     });
     await this.advance();
-    return true;
+    return "owned";
   }
 
   prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void {
@@ -363,23 +604,24 @@ export class SandboxPreservation {
   }
 
   /** Runs before generic watchdogs, and reasserts the absolute deadline on every alarm. */
-  async handleAlarm(): Promise<boolean> {
-    const state = this.deps.store.read();
-    if (!state) return false;
+  async handleAlarm(): Promise<"continue" | "hold_watchdogs"> {
+    const state = this.normalizeInterruptedRestore();
+    if (!state) return "continue";
     if (state.phase === "running") {
-      if (state.checkpointInFlight && !this.checkpointActive) {
+      if (state.checkpointInFlight && !this.checkpointLeaseId) {
         this.fail(state, "unknown", "Checkpoint result was lost during a control-plane restart.");
-        return true;
+        return "hold_watchdogs";
       }
       if (state.drainAtMs !== null) {
-        if (this.now() >= state.drainAtMs) await this.request("sandbox_lifetime_expiring");
+        if (this.now() >= state.drainAtMs) await this.requestShutdown("sandbox_lifetime_expiring");
         else await this.deps.alarm.schedule(state.drainAtMs);
       }
-      return this.isHolding();
+      return this.isHolding() ? "hold_watchdogs" : "continue";
     }
-    if (state.phase === "saved") return false;
+    if (state.phase === "saved")
+      return this.continuationPaused(state) ? "hold_watchdogs" : "continue";
     await this.advance();
-    return true;
+    return "hold_watchdogs";
   }
 
   private async advance(): Promise<void> {
@@ -397,7 +639,7 @@ export class SandboxPreservation {
       }
       await this.deps.alarm.schedule(state.stopByMs!);
       if (state.checkpointInFlight) {
-        if (!this.checkpointActive)
+        if (!this.checkpointLeaseId)
           this.fail(state, "unknown", "An earlier checkpoint has an unknown result.");
         return;
       }
@@ -424,6 +666,27 @@ export class SandboxPreservation {
     }
     if (state.phase === "prepared") await this.capture(state);
     else if (state.phase === "retiring") await this.retire(state);
+  }
+
+  private normalizeInterruptedRestore(): PreservationRecord | null {
+    const state = this.deps.store.read();
+    if (
+      state?.phase !== "restoring" ||
+      !state.restoreInvoked ||
+      (this.activeRestoreGeneration && this.matches(state, this.activeRestoreGeneration)) ||
+      !this.current(state)
+    )
+      return state;
+    const row = this.deps.sandbox.getSandbox();
+    const unknown: PreservationRecord = {
+      ...state,
+      phase: "unknown",
+      providerObjectId: row?.modal_object_id ?? state.providerObjectId,
+      error:
+        "Saved sandbox restore was interrupted after provider invocation; its outcome is unknown.",
+    };
+    this.publish(unknown);
+    return unknown;
   }
 
   private async capture(state: PreservationRecord): Promise<void> {
@@ -457,14 +720,14 @@ export class SandboxPreservation {
         if (!result.success)
           throw new Error(result.error ?? "Provider did not confirm preservation");
       } else {
-        if (!provider.takeSnapshot) throw new Error("Provider has no snapshot operation");
-        const result = await this.bounded(state.captureByMs!, (signal) =>
-          provider.takeSnapshot!({ ...common, signal })
+        const result = await this.captureSnapshot(
+          state.providerObjectId,
+          common.sessionId,
+          state.reason!,
+          state.captureByMs!
         );
-        if (!result.success || !result.imageId)
-          throw new Error(result.error ?? "Provider did not return a ready snapshot");
         artifactId = result.imageId;
-        sourceStopped = result.sourceStopped === true;
+        sourceStopped = result.sourceStopped;
       }
       if (!this.owns(capturing)) return;
       const receipt = {
@@ -546,7 +809,7 @@ export class SandboxPreservation {
     this.deps.retireAccess();
     this.publish({ ...state, phase: "saved", sourceRetired: true });
     this.deps.messenger.broadcast({ type: "sandbox_status", status: "stopped" });
-    this.kickQueue();
+    this.notifyLifecycleChange();
   }
 
   private fail(state: PreservationRecord, phase: "failed" | "unknown", error: string): void {
@@ -585,8 +848,15 @@ export class SandboxPreservation {
     return false;
   }
 
-  private kickQueue(): void {
-    this.deps.background.submit(() => this.deps.processQueue(), { name: "message_queue.process" });
+  /** Old interrupted records lacked the explicit flag but retained the message marker. */
+  private continuationPaused(state: PreservationRecord): boolean {
+    return state.continuationPaused ?? state.messageId !== undefined;
+  }
+
+  private notifyLifecycleChange(): void {
+    this.deps.background.submit(() => this.deps.onLifecycleChange(), {
+      name: "sandbox.lifecycle_change",
+    });
   }
 
   private kickAdvance(): void {
@@ -615,5 +885,27 @@ export class SandboxPreservation {
     } finally {
       clearTimeout(timer!);
     }
+  }
+
+  /** Shared snapshot invocation and conservative classification for checkpoint and shutdown. */
+  private async captureSnapshot(
+    providerObjectId: string,
+    sessionId: string,
+    reason: string,
+    deadlineAtMs: number
+  ): Promise<{ imageId: string; sourceStopped: boolean }> {
+    if (!this.deps.provider.takeSnapshot) throw new Error("Provider has no snapshot operation");
+    const result = await this.bounded(deadlineAtMs, (signal) =>
+      this.deps.provider.takeSnapshot!({
+        providerObjectId,
+        sessionId,
+        reason,
+        deadlineAtMs,
+        signal,
+      })
+    );
+    if (!result.success || !result.imageId)
+      throw new Error(result.error ?? "Provider snapshot result is unknown");
+    return { imageId: result.imageId, sourceStopped: result.sourceStopped === true };
   }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SandboxPushAdmission } from "../sandbox/lifecycle/manager";
 import type { GitPushSpec } from "../source-control";
 import { SandboxPushService } from "./sandbox-push-service";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
@@ -15,7 +16,7 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
   };
 }
 
-function createService() {
+function createService(admission: () => SandboxPushAdmission = () => "unmanaged") {
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
     getSandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
@@ -31,7 +32,11 @@ function createService() {
     error: vi.fn(),
     child: vi.fn(),
   };
-  const service = new SandboxPushService(log, wsManager as unknown as SessionWebSocketManager);
+  const service = new SandboxPushService(
+    log,
+    wsManager as unknown as SessionWebSocketManager,
+    admission
+  );
   return { service, wsManager, log };
 }
 
@@ -48,6 +53,72 @@ describe("SandboxPushService", () => {
     expect(h.log.info).toHaveBeenCalledWith(
       "No sandbox connected, assuming branch was pushed manually"
     );
+  });
+
+  it("rejects a saved managed sandbox instead of assuming a manual push", async () => {
+    const h = createService(() => "start_required");
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
+
+    const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
+
+    expect(result).toEqual({
+      success: false,
+      error: "Sandbox must be started before pushing; retry once ready",
+    });
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
+  it.each(["confirmed", "legacy"] as const)(
+    "does not fake a %s managed push while its ready runtime is disconnected",
+    async (lifecyclePolicy) => {
+      const h = createService(() => "ready");
+      h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
+
+      const result = await h.service.pushBranchToRemote(
+        createPushSpec("acme", "web", `feature/${lifecyclePolicy}`)
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: "Sandbox is disconnected; retry once it is ready",
+      });
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    }
+  );
+
+  it("pushes through an acknowledged live managed sandbox", async () => {
+    const h = createService(() => "ready");
+
+    const pushing = h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/live"));
+    h.service.settlePush({
+      type: "push_complete",
+      branchName: "feature/live",
+      repoOwner: "acme",
+      repoName: "web",
+      timestamp: 1_000,
+    });
+
+    await expect(pushing).resolves.toEqual({ success: true });
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "push" })
+    );
+  });
+
+  it.each([
+    ["held", "Sandbox preservation is in progress; push is held"],
+    ["start_required", "Sandbox must be started before pushing; retry once ready"],
+  ] as const)("rejects %s admission before socket fallback", async (admission, error) => {
+    const h = createService(() => admission);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
+
+    const result = await h.service.pushBranchToRemote(
+      createPushSpec("acme", "web", `feature/${admission}`)
+    );
+
+    expect(result).toEqual({ success: false, error });
+    expect(h.wsManager.getSandboxCommandTarget).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
   it("refuses, rather than fakes, a push while the attached sandbox is still booting", async () => {

@@ -1,26 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
-import { E2BSandboxProvider, E2B_SANDBOX_VERSION, type E2BProviderConfig } from "./e2b-provider";
+import { E2BSandboxProvider, E2B_SANDBOX_VERSION } from "./e2b-provider";
+import {
+  baseCreateConfig,
+  createEnv,
+  mockClient,
+  providerConfig,
+} from "./e2b-provider.test-helpers";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
 } from "../../image-builds/model";
 import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
-import {
-  E2BNotFoundError,
-  E2BConflictError,
-  E2BApiError,
-  type E2BRestClient,
-  type E2BSandboxDetail,
-} from "../e2b-rest-client";
-
-const providerConfig: E2BProviderConfig = {
-  scmProvider: "github",
-  sandboxAccessPasswordSecret: "secret",
-  sandboxTimeoutSeconds: 1800,
-  autoPause: true,
-};
+import { E2BNotFoundError, E2BApiError } from "../e2b-rest-client";
 
 /**
  * The one start command, shared by every boot path (base template, prebuilt
@@ -29,58 +22,6 @@ const providerConfig: E2BProviderConfig = {
  */
 const ENTRYPOINT_COMMAND =
   "nohup /opt/openinspect/python/bin/python -m sandbox_runtime.entrypoint >/tmp/oi-supervisor.log 2>&1 &";
-
-function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
-  return {
-    config: { apiUrl: "https://api.e2b.app", apiKey: "secret", templateId: "tmpl" },
-    createSandbox: vi.fn(async () => ({
-      sandboxID: "e2b-id",
-      templateID: "tmpl",
-      envdAccessToken: "envd-token",
-    })),
-    getSandbox: vi.fn(
-      async (): Promise<E2BSandboxDetail> => ({
-        sandboxID: "e2b-id",
-        templateID: "tmpl",
-        state: "paused",
-      })
-    ),
-    pauseSandbox: vi.fn(async () => {}),
-    // Connect answers with the create-style shape, fresh envd token included.
-    connectSandbox: vi.fn(async () => ({
-      sandboxID: "e2b-id",
-      templateID: "tmpl",
-      envdAccessToken: "fresh-envd-token",
-    })),
-    startProcess: vi.fn(async () => {}),
-    killSandbox: vi.fn(async () => {}),
-    setSandboxTimeout: vi.fn(async () => {}),
-    createSnapshot: vi.fn(async () => ({ snapshotID: "snap-abc:default", names: ["oi/snap"] })),
-    deleteTemplate: vi.fn(async () => {}),
-    getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),
-    ...overrides,
-  } as unknown as E2BRestClient;
-}
-
-/** Env map passed to POST /sandboxes — the sole delivery channel for session env. */
-function createEnv(client: E2BRestClient): Record<string, string> {
-  const [params] = vi.mocked(client.createSandbox).mock.calls[0];
-  expect(params.envVars).toBeDefined();
-  return params.envVars!;
-}
-
-const baseCreateConfig = {
-  sessionId: "sess-1",
-  sandboxId: "sandbox-logical",
-  repoOwner: "o",
-  repoName: "r",
-  controlPlaneUrl: "https://cp.test",
-  sandboxAuthToken: "tok",
-  harness: "opencode" as const,
-  provider: "anthropic",
-  model: "claude",
-  codeServerEnabled: true,
-};
 
 const baseBuildConfig = {
   buildId: "build-1",
@@ -119,90 +60,6 @@ describe("E2BSandboxProvider", () => {
       expiresAtMs: Date.parse("2030-01-02T03:04:05.000Z"),
       source: "provider",
     });
-  });
-
-  it("returns created ownership with unknown lifetime when the post-start metadata read fails", async () => {
-    const client = mockClient({
-      getSandbox: vi.fn(async () => {
-        throw new Error("metadata unavailable");
-      }),
-    });
-
-    const result = await new E2BSandboxProvider(client, providerConfig).createSandbox(
-      baseCreateConfig
-    );
-
-    expect(result).toMatchObject({
-      providerObjectId: "e2b-id",
-      lifetime: {
-        kind: "unknown",
-        reason: "Failed to read E2B lifetime after successful create",
-      },
-    });
-    expect(result.lifetime?.observedAtMs).toEqual(expect.any(Number));
-    expect(client.startProcess).toHaveBeenCalled();
-    expect(client.killSandbox).not.toHaveBeenCalled();
-  });
-
-  it("re-reads endAt after resume and verifies an explicit preserve pause", async () => {
-    const getSandbox = vi
-      .fn()
-      .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })
-      .mockResolvedValueOnce({
-        sandboxID: "e2b-id",
-        templateID: "tmpl",
-        state: "running",
-        endAt: "2031-02-03T04:05:06.000Z",
-      })
-      .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" });
-    const client = mockClient({ getSandbox });
-    const provider = new E2BSandboxProvider(client, providerConfig);
-    const resumed = await provider.resumeSandbox({
-      providerObjectId: "e2b-id",
-      sessionId: "sess-1",
-      sandboxId: "sandbox-logical",
-    });
-    expect(resumed.lifetime).toMatchObject({
-      kind: "finite",
-      expiresAtMs: Date.parse("2031-02-03T04:05:06.000Z"),
-      source: "provider",
-    });
-    await expect(
-      provider.stopSandbox({
-        providerObjectId: "e2b-id",
-        sessionId: "sess-1",
-        reason: "final_preservation",
-        intent: "preserve",
-        deadlineAtMs: Date.now() + 60_000,
-      })
-    ).resolves.toEqual({ success: true });
-    expect(client.pauseSandbox).toHaveBeenCalled();
-    expect(getSandbox).toHaveBeenCalledTimes(3);
-  });
-
-  it("returns resumed ownership with unknown lifetime when the post-resume metadata read fails", async () => {
-    const getSandbox = vi
-      .fn()
-      .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })
-      .mockRejectedValueOnce(new Error("metadata unavailable"));
-    const client = mockClient({ getSandbox });
-
-    const result = await new E2BSandboxProvider(client, providerConfig).resumeSandbox({
-      providerObjectId: "e2b-id",
-      sessionId: "sess-1",
-      sandboxId: "sandbox-logical",
-    });
-
-    expect(result).toMatchObject({
-      success: true,
-      providerObjectId: "e2b-id",
-      lifetime: {
-        kind: "unknown",
-        reason: "Failed to read E2B lifetime after successful resume",
-      },
-    });
-    expect(result.lifetime?.observedAtMs).toEqual(expect.any(Number));
-    expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
   });
 
   it("injects and returns VNC access without including its port in generic tunnels", async () => {
@@ -362,75 +219,6 @@ describe("E2BSandboxProvider", () => {
     expect(result.shouldSpawnFresh).toBe(true);
   });
 
-  it("stopSandbox pauses resumable sandboxes instead of killing them", async () => {
-    const client = mockClient();
-    const res = await new E2BSandboxProvider(client, providerConfig).stopSandbox({
-      providerObjectId: "x",
-      sessionId: "s",
-      reason: "idle",
-      intent: "preserve",
-    });
-    expect(res.success).toBe(true);
-    expect(client.pauseSandbox).toHaveBeenCalledWith("x");
-    expect(client.killSandbox).not.toHaveBeenCalled();
-  });
-
-  it("does not claim preservation when the sandbox is missing", async () => {
-    const client = mockClient({
-      pauseSandbox: vi.fn(async () => {
-        throw new E2BNotFoundError("gone");
-      }),
-    });
-    await expect(
-      new E2BSandboxProvider(client, providerConfig).stopSandbox({
-        providerObjectId: "x",
-        sessionId: "s",
-        reason: "snapshot",
-        intent: "preserve",
-      })
-    ).resolves.toMatchObject({ success: false });
-  });
-
-  it("verifies a pause conflict under the preservation deadline signal", async () => {
-    const client = mockClient({
-      pauseSandbox: vi.fn(async () => {
-        throw new E2BConflictError("already transitioning");
-      }),
-    });
-    const signal = AbortSignal.timeout(1_000);
-    await expect(
-      new E2BSandboxProvider(client, providerConfig).stopSandbox({
-        providerObjectId: "x",
-        sessionId: "s",
-        reason: "snapshot",
-        intent: "preserve",
-        signal,
-      })
-    ).resolves.toEqual({ success: true });
-    expect(client.getSandbox).toHaveBeenCalledWith("x", signal);
-  });
-
-  it("rejects a pause conflict unless the sandbox is verified paused", async () => {
-    const client = mockClient({
-      pauseSandbox: vi.fn(async () => {
-        throw new E2BConflictError("already transitioning");
-      }),
-      getSandbox: vi.fn(async () => ({
-        sandboxID: "x",
-        templateID: "tmpl",
-        state: "running",
-      })),
-    });
-    await expect(
-      new E2BSandboxProvider(client, providerConfig).stopSandbox({
-        providerObjectId: "x",
-        sessionId: "s",
-        reason: "snapshot",
-        intent: "preserve",
-      })
-    ).resolves.toMatchObject({ success: false });
-  });
-
   it.each(["connecting_timeout", "respawn", "inactivity_timeout"])(
     "stopSandbox kills on destroy intent regardless of reason %s",
     async (reason) => {
@@ -446,21 +234,6 @@ describe("E2BSandboxProvider", () => {
       expect(client.pauseSandbox).not.toHaveBeenCalled();
     }
   );
-
-  it("forwards the caller signal when killing a replaced sandbox", async () => {
-    const client = mockClient();
-    const signal = AbortSignal.timeout(1_000);
-
-    await new E2BSandboxProvider(client, providerConfig).stopSandbox({
-      providerObjectId: "x",
-      sessionId: "s",
-      reason: "respawn",
-      intent: "destroy",
-      signal,
-    });
-
-    expect(client.killSandbox).toHaveBeenCalledWith("x", signal);
-  });
 
   it("resumeSandbox: 404 during connect (post-GET race) returns shouldSpawnFresh", async () => {
     const client = mockClient({
