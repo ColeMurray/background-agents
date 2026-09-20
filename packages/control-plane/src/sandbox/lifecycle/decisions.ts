@@ -40,6 +40,29 @@ export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean 
   return status === "stopped" || status === "stale";
 }
 
+/** Ordinary commands need readiness; lifecycle control can use an attached bridge. */
+export type SandboxCommandAvailability = "dispatch" | "booting" | "unavailable";
+
+export function evaluateSandboxCommandAvailability(
+  status: SandboxStatus | undefined,
+  hasAuthoritativeSocket: boolean
+): SandboxCommandAvailability {
+  if (!hasAuthoritativeSocket || (status !== undefined && isDeadSandboxStatus(status))) {
+    return "unavailable";
+  }
+  return status === "ready" || status === "snapshotting" ? "dispatch" : "booting";
+}
+
+/** Access and ordinary command eligibility intentionally differ during snapshots in C1. */
+export function isSandboxAccessAvailable(status: SandboxStatus | undefined): boolean {
+  return status === "ready";
+}
+
+/** Preserve cancellation's distinct policy: stale becomes stopped, failed stays failed. */
+export function shouldStopSandboxOnSessionCancel(status: SandboxStatus | undefined): boolean {
+  return status !== undefined && status !== "stopped" && status !== "failed";
+}
+
 // ==================== Circuit Breaker ====================
 
 /**

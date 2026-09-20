@@ -287,7 +287,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       duration_ms: Date.now() - now,
     });
 
-    if (wsManager.getReadySandboxSocket()) {
+    if (wsManager.getSandboxCommandTarget().kind === "dispatch") {
       backgroundTasks.submit(() => this.deps.messageQueue.processMessageQueue(), {
         name: "message_queue.process",
       });

@@ -550,7 +550,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => lifecycleManager.scheduleInactivityCheck(),
     backgroundTasks,
     messageQueue,
-    log
+    log,
+    lifecycleManager
   );
   const pushService = new SandboxPushService(log, wsManager);
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
@@ -670,7 +671,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const wsTokenHandler = new WsTokenHandler(participantRepository, generateId, hashToken);
 
-  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
   const sessionInitHandler = new SessionInitHandler(
     sessionCoreRepository,
     sandboxRepository,
@@ -689,7 +689,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageRepository,
     statusService,
     titleService,
-    lifecycleWsManager,
+    lifecycleManager,
     durableObjectId,
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());

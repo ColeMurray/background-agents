@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitPushSpec } from "../source-control";
 import { SandboxPushService } from "./sandbox-push-service";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -19,7 +19,9 @@ function createService() {
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
     getSandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
-    getReadySandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
+    getSandboxCommandTarget: vi.fn(
+      (): SandboxCommandTarget => ({ kind: "dispatch", socket: sandboxWs })
+    ),
     send: vi.fn(() => true),
   };
   const log = {
@@ -37,7 +39,7 @@ describe("SandboxPushService", () => {
   it("assumes a manual push when no sandbox is attached at all", async () => {
     const h = createService();
     h.wsManager.getSandboxSocket.mockReturnValue(null);
-    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
 
     const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
 
@@ -53,7 +55,7 @@ describe("SandboxPushService", () => {
     // manual-push assumption would let a PR be opened on a branch that was
     // never pushed; the caller must retry once the sandbox is ready.
     const h = createService();
-    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting" });
 
     const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
 

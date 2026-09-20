@@ -8,6 +8,15 @@ import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
 import type { SandboxRepository } from "../sandbox-repository";
 import type { SessionCoreRepository } from "../session-core-repository";
+import {
+  SandboxLifecycleManager,
+  DEFAULT_LIFECYCLE_CONFIG,
+  type SandboxStorage,
+  type SessionContextReader,
+  type WebSocketManager,
+  type IdGenerator,
+} from "../../sandbox/lifecycle/manager";
+import type { SandboxProvider } from "../../sandbox/provider";
 
 function createHandler() {
   const sandboxRepository = {
@@ -28,6 +37,25 @@ function createHandler() {
   const backgroundTasks = createTestBackgroundTasks();
   const processMessageQueue = vi.fn(async () => {});
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() };
+  // Exercise the real owner across this seam so readiness publication/order
+  // assertions cannot pass against a mock that reimplements the old handler.
+  const lifecycle = new SandboxLifecycleManager(
+    {} as SandboxProvider,
+    {
+      ...sandboxRepository,
+      updateSandboxLastActivity: updateLastActivity,
+    } as unknown as SandboxStorage,
+    {} as SessionContextReader,
+    messenger,
+    {} as WebSocketManager,
+    {
+      schedule: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      current: vi.fn(async () => null),
+    },
+    {} as IdGenerator,
+    { ...DEFAULT_LIFECYCLE_CONFIG, controlPlaneUrl: "https://control.test", model: "test" }
+  );
   const handler = new SandboxRuntimeEventHandler(
     repository as unknown as SessionCoreRepository,
     sandboxRepository as unknown as SandboxRepository,
@@ -40,7 +68,8 @@ function createHandler() {
     scheduleInactivityCheck,
     backgroundTasks,
     { processMessageQueue },
-    log
+    log,
+    lifecycle
   );
   return {
     handler,

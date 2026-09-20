@@ -42,6 +42,7 @@ import {
   evaluateBootBudget,
   evaluateWarmDecision,
   isDeadSandboxStatus,
+  shouldStopSandboxOnSessionCancel,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -136,6 +137,8 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
+  /** Atomically accept readiness only for the current, eligible, unfenced attempt. */
+  markSandboxReady(generation: SandboxGeneration): boolean;
   /**
    * Revoke the current generation's credentials and socket authority for
    * good, so the runtime cannot reconnect and the row cannot become ready.
@@ -1864,8 +1867,31 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
-   * Update last activity timestamp.
+   * Called synchronously for an already-authorized runtime event. Publication
+   * and activity follow the guarded commit; the event handler wakes the queue
+   * and arms inactivity afterward, preserving their existing ordering.
    */
+  onRuntimeReady(timestamp: number, harness?: string): boolean {
+    const row = this.storage.getSandbox();
+    if (!row) return false;
+    const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
+    if (!this.storage.markSandboxReady(generation)) return false;
+    this.log.info("sandbox.ready", { event: "sandbox.ready", harness: harness ?? null });
+    this.updateLastActivity(timestamp);
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
+    return true;
+  }
+
+  /** Session cancellation preserves its existing shutdown-before-status policy. */
+  cancelSandbox(): void {
+    if (!shouldStopSandboxOnSessionCancel(this.storage.getSandbox()?.status)) return;
+    if (this.wsManager.getSandboxWebSocket()) {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+    }
+    this.storage.updateSandboxStatus("stopped");
+  }
+
+  /** Update last activity timestamp. */
   updateLastActivity(timestamp: number): void {
     this.storage.updateSandboxLastActivity(timestamp);
   }
