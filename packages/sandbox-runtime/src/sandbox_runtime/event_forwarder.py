@@ -30,9 +30,9 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on each individual send inside recovery (bind / drain) paths. Those
-# paths hold the recovery lock, so an unbounded wedged send would turn into a
-# wedged reconnect: the next bind() could never recover.
+# Bound on a direct send and on each recovery stage. A failed direct send may
+# spend one additional budget acquiring the recovery lock and flushing after
+# a rebind, so send() takes at most two configured budgets before returning.
 SEND_TIMEOUT_SECONDS: Final = 30.0
 
 
@@ -137,7 +137,7 @@ class BufferedEventForwarder:
             return False
 
         try:
-            await ws.send(json.dumps(event))
+            await asyncio.wait_for(ws.send(json.dumps(event)), timeout=self._send_timeout_seconds)
             if is_critical:
                 self._pending_acks[event["ackId"]] = event
         except asyncio.CancelledError:
@@ -182,12 +182,21 @@ class BufferedEventForwarder:
         The event was buffered before this await, and an active recovery
         cannot pass its final empty-check and release the lock without that
         event being visible — so waiting on the lock (rather than skipping
-        when busy) guarantees the event is flushed exactly once.
+        when busy) lets this recovery flush the event exactly once when it
+        completes within budget. On timeout, the event remains buffered for
+        a later bind.
         """
         current = self._ws
         if current is not None and current is not failed_ws and current.state == State.OPEN:
-            async with self._recovery_lock:
-                await self._flush_buffer()
+            try:
+                async with asyncio.timeout(self._send_timeout_seconds):
+                    async with self._recovery_lock:
+                        await self._flush_buffer()
+            except TimeoutError as e:
+                # send() already buffered the event before recovery. Leave
+                # that single copy for a later bind rather than buffering it
+                # again when lock acquisition or flushing exhausts the stage.
+                self._log.warn("bridge.rebound_recovery_timeout", exc=e)
 
     async def _flush_buffer(self) -> None:
         """Flush buffered events over the currently bound connection.
