@@ -106,6 +106,42 @@ describe("DaytonaImageBuildAdapter start", () => {
 });
 
 describe("DaytonaImageBuildAdapter capture", () => {
+  it.each([
+    ["HTTP 429", () => new DaytonaApiError("rate limited", 429)],
+    ["HTTP 502", () => new DaytonaApiError("bad gateway", 502)],
+    ["a request timeout", () => new DOMException("The operation was aborted", "AbortError")],
+    ["a network failure", () => new TypeError("fetch failed")],
+  ])("retries when the initial source read hits %s", async (_name, failure) => {
+    const resources = createResources({
+      getBuildSandbox: vi.fn(async () => {
+        throw failure();
+      }),
+    });
+    const reserveOperation = vi.fn(async (_ref: string, _deadlineAt: number) => true);
+
+    await expect(
+      createAdapter(resources).finalizeSuccessfulBuild(finalizeInput({ reserveOperation }))
+    ).rejects.toMatchObject({ outcome: "definitely_not_created" });
+
+    expect(resources.stopBuildSandboxForCapture).not.toHaveBeenCalled();
+    expect(reserveOperation).not.toHaveBeenCalled();
+    expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("fails a permanent initial source-read error", async () => {
+    const resources = createResources({
+      getBuildSandbox: vi.fn(async () => {
+        throw new DaytonaApiError("unauthorized", 401);
+      }),
+    });
+
+    await expect(
+      createAdapter(resources).finalizeSuccessfulBuild(finalizeInput())
+    ).rejects.toMatchObject({ status: 401 });
+    expect(resources.stopBuildSandboxForCapture).not.toHaveBeenCalled();
+    expect(resources.captureBuildSnapshot).not.toHaveBeenCalled();
+  });
+
   it("reserves the capture's name before submitting it", async () => {
     const resources = createResources();
     const order: string[] = [];
