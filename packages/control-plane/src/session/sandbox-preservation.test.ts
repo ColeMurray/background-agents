@@ -168,10 +168,11 @@ describe("SandboxPreservation", () => {
     expect(restarted.mayDispatch()).toBe(true);
     await expect(restarted.request("inactivity_timeout")).resolves.toBe("unmanaged");
 
-    expect(restarted.beginCheckpoint()).toBe(true);
+    const checkpoint = restarted.beginCheckpoint(GENERATION);
+    expect(checkpoint).not.toBeNull();
     expect(restarted.mayDispatch()).toBe(false);
     await expect(restarted.request("inactivity_timeout")).resolves.toBe("held");
-    restarted.endCheckpoint();
+    checkpoint!.finish();
     expect(restarted.mayDispatch()).toBe(true);
 
     const mismatched = new SandboxPreservation({
@@ -320,7 +321,8 @@ describe("SandboxPreservation", () => {
   it("serializes final preparation behind an ordinary checkpoint", async () => {
     const f = fixture();
     await readyFinite(f);
-    expect(f.preservation.beginCheckpoint()).toBe(true);
+    const checkpoint = f.preservation.beginCheckpoint(GENERATION);
+    expect(checkpoint).not.toBeNull();
 
     await f.preservation.request("sandbox_lifetime_expiring");
     expect(f.deps.sockets.send).not.toHaveBeenCalledWith(
@@ -328,12 +330,69 @@ describe("SandboxPreservation", () => {
       expect.objectContaining({ type: "prepare_preservation" })
     );
 
-    f.preservation.endCheckpoint();
+    checkpoint!.finish();
     await f.backgroundTasks.at(-1)!();
     expect(f.deps.sockets.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ type: "prepare_preservation" })
     );
+  });
+
+  it("rejects a checkpoint without capture headroom so final preservation can start", async () => {
+    const f = fixture();
+    await readyFinite(f, 1_000_000);
+
+    expect(f.preservation.beginCheckpoint(GENERATION)).toBeNull();
+    await expect(f.preservation.request("sandbox_lifetime_expiring")).resolves.toBe("owned");
+    expect(f.deps.sockets.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prepare_preservation" })
+    );
+  });
+
+  it("rejects checkpoints until a confirmed generation is ready", () => {
+    const f = fixture();
+    f.preservation.beginGeneration(GENERATION, "confirmed");
+
+    expect(f.preservation.beginCheckpoint(GENERATION)).toBeNull();
+  });
+
+  it("bounds a checkpoint and holds an uncertain provider outcome", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      await readyWithoutDeadline(f);
+      const checkpoint = f.preservation.beginCheckpoint(GENERATION)!;
+      let signal: AbortSignal | undefined;
+      const run = checkpoint.run((value) => {
+        signal = value;
+        return new Promise<never>(() => {});
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+      await expect(run).resolves.toEqual({ outcome: "uncertain" });
+      expect(signal?.aborted).toBe(true);
+      checkpoint.finish();
+      expect(f.store.value).toMatchObject({ phase: "unknown", checkpointInFlight: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an old lease clear a replacement generation checkpoint", async () => {
+    const f = fixture();
+    await readyWithoutDeadline(f);
+    const oldLease = f.preservation.beginCheckpoint(GENERATION)!;
+    const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
+    f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
+    f.sandboxRow.created_at = replacement.createdAt;
+    f.preservation.beginGeneration(replacement, "legacy");
+    oldLease.finish();
+
+    const replacementLease = f.preservation.beginCheckpoint(replacement)!;
+    oldLease.finish();
+    expect(f.store.value).toMatchObject({ generation: replacement, checkpointInFlight: true });
+    replacementLease.finish();
   });
 
   it("settles the active message once when duplicate preservation requests race", async () => {
@@ -378,7 +437,7 @@ describe("SandboxPreservation", () => {
     f.deps.sockets.send.mockClear();
 
     const restarted = new SandboxPreservation({ ...f.deps, store: f.store } as never);
-    expect(await restarted.handleAlarm()).toBe(true);
+    expect(await restarted.handleAlarm()).toBe("hold_watchdogs");
 
     expect(f.deps.sockets.send).toHaveBeenCalledWith(
       expect.anything(),
@@ -403,7 +462,7 @@ describe("SandboxPreservation", () => {
       retireByMs: 1_270_000,
     });
 
-    expect(await f.preservation.handleAlarm()).toBe(true);
+    expect(await f.preservation.handleAlarm()).toBe("hold_watchdogs");
     expect(f.store.value).toMatchObject({
       phase: "unknown",
       error: expect.stringContaining("provider result is unknown"),
@@ -470,7 +529,7 @@ describe("SandboxPreservation", () => {
       savedAtMs: 150_000,
     });
 
-    expect(await f.preservation.handleAlarm()).toBe(true);
+    expect(await f.preservation.handleAlarm()).toBe("hold_watchdogs");
     expect(stopSandbox).toHaveBeenCalledOnce();
     expect(f.store.value?.phase).toBe("saved");
   });
@@ -729,6 +788,75 @@ describe("SandboxPreservation", () => {
     await restarted.recover("restore_saved");
     expect(restarted.recoveryReceipt()?.artifactId).toBe("saved-image");
     expect(f.store.value?.sourceRetired).toBe(true);
+  });
+
+  it("keeps a reserved saved restore actionable until provider invocation", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "saved",
+      sourceRetired: true,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "saved-image",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: "runtime-1",
+      },
+    });
+    const next = { sandboxId: "sandbox-2", createdAt: 2_000 };
+    f.sandboxRow.modal_sandbox_id = next.sandboxId;
+    f.sandboxRow.created_at = next.createdAt;
+    f.preservation.beginGeneration(next, "confirmed");
+
+    expect(f.store.value).toMatchObject({ phase: "restoring", restoreInvoked: false });
+    const restarted = new SandboxPreservation(f.deps as never);
+    expect(restarted.isHolding()).toBe(false);
+    expect(restarted.recoveryReceipt()?.artifactId).toBe("saved-image");
+
+    f.preservation.restoreStarting(next);
+    f.sandboxRow.modal_object_id = "restored-provider-object";
+    const interrupted = new SandboxPreservation(f.deps as never);
+    expect(interrupted.snapshot()).toMatchObject({ phase: "unknown", hasRecoveryPoint: true });
+    await expect(interrupted.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(interrupted.isHolding()).toBe(true);
+    expect(interrupted.recoveryReceipt()).toBeUndefined();
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      providerObjectId: "restored-provider-object",
+      receipt: { artifactId: "saved-image" },
+    });
+    await interrupted.recover("restore_saved");
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      receipt: { artifactId: "saved-image" },
+    });
+  });
+
+  it("accepts readiness for the active restore before the provider returns", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "saved",
+      receipt: {
+        kind: "retained",
+        artifactId: "provider-object-1",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: null,
+      },
+    });
+    const next = { sandboxId: GENERATION.sandboxId, createdAt: 2_000 };
+    f.sandboxRow.created_at = next.createdAt;
+    f.preservation.beginGeneration(next, "legacy");
+    f.preservation.restoreStarting(next, "provider-object-1");
+
+    expect(f.preservation.isHolding()).toBe(false);
+    f.preservation.runtimeReady();
+    await f.preservation.started(next, { kind: "none", observedAtMs: 100_000 });
+    expect(f.store.value).toMatchObject({ phase: "running", runtimeReady: true });
   });
 
   it("ignores failed restore publication and rejects startup from a superseded generation", async () => {

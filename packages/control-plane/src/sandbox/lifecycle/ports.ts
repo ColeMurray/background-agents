@@ -4,6 +4,16 @@ export interface SandboxGeneration {
   createdAt: number;
 }
 
+export type CheckpointRunResult<T> = { outcome: "completed"; value: T } | { outcome: "uncertain" };
+
+export interface SandboxCheckpointLease {
+  readonly id: string;
+  readonly generation: SandboxGeneration;
+  readonly deadlineAtMs: number;
+  run<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<CheckpointRunResult<T>>;
+  finish(): void;
+}
+
 /** Accepts an authenticated runtime observation; false means no transition. */
 export interface SandboxReadiness {
   onRuntimeReady(timestamp: number, harness?: string): boolean;

@@ -162,6 +162,7 @@ function createMockStorage(
 
   return {
     calls,
+    transaction: <T>(callback: () => T) => callback(),
     getSandbox: vi.fn(() => {
       calls.push("getSandbox");
       return sandbox;
@@ -584,14 +585,25 @@ describe("final preservation lifecycle integration", () => {
       createMockIdGenerator(),
       createTestConfig()
     );
+    const beginGeneration = vi.fn();
     const preservation = {
-      beginGeneration: vi.fn(),
+      beginGeneration,
+      reserveGeneration: beginGeneration,
+      generationReserved: vi.fn(),
       restoreStarting: vi.fn(),
       started: vi.fn(async () => {}),
       isHolding: vi.fn(() => false),
       request: vi.fn<SandboxPreservationLifecycle["request"]>(async () => "owned"),
-      beginCheckpoint: vi.fn(() => true),
-      endCheckpoint: vi.fn(),
+      beginCheckpoint: vi.fn((generation: SandboxGeneration) => ({
+        id: "checkpoint-1",
+        generation,
+        deadlineAtMs: Date.now() + 300_000,
+        run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
+          outcome: "completed" as const,
+          value: await operation(new AbortController().signal),
+        }),
+        finish: vi.fn(),
+      })),
       recoveryReceipt: vi.fn<SandboxPreservationLifecycle["recoveryReceipt"]>(() => undefined),
       restoreFailed: vi.fn(),
     };
@@ -3146,6 +3158,7 @@ describe("SandboxLifecycleManager", () => {
         new SandboxPreservation({
           store: { read: () => null, write: vi.fn() },
           provider,
+          sandbox: storage,
         } as never)
       );
 
@@ -3156,6 +3169,56 @@ describe("SandboxLifecycleManager", () => {
       expect(broadcaster.messages).not.toContainEqual(
         expect.objectContaining({ type: "snapshot_saved" })
       );
+    });
+
+    it("passes the checkpoint deadline and signal and always finishes the lease", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      vi.spyOn(broadcaster, "broadcast").mockImplementation((message) => {
+        if ((message as { type: string }).type === "snapshot_saved") throw new Error("broadcast");
+      });
+      const takeSnapshot = vi.fn(async () => ({ success: true, imageId: "snapshot" }));
+      const provider = createMockProvider({ takeSnapshot });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      const finish = vi.fn();
+      manager.setPreservation({
+        beginGeneration: vi.fn(),
+        reserveGeneration: vi.fn(),
+        generationReserved: vi.fn(),
+        restoreStarting: vi.fn(),
+        started: vi.fn(async () => {}),
+        isHolding: () => false,
+        request: vi.fn(async () => "unmanaged" as const),
+        beginCheckpoint: (generation) => ({
+          id: "lease",
+          generation,
+          deadlineAtMs: 123_456,
+          run: async (operation) => ({
+            outcome: "completed",
+            value: await operation(new AbortController().signal),
+          }),
+          finish,
+        }),
+        recoveryReceipt: vi.fn(() => undefined),
+        restoreFailed: vi.fn(),
+      } satisfies SandboxPreservationLifecycle);
+
+      await manager.triggerSnapshot("test");
+
+      expect(takeSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ deadlineAtMs: 123_456, signal: expect.any(AbortSignal) })
+      );
+      expect(finish).toHaveBeenCalledOnce();
     });
   });
 
@@ -3458,6 +3521,7 @@ describe("SandboxLifecycleManager", () => {
         new SandboxPreservation({
           store: { read: () => null, write: vi.fn() },
           provider,
+          sandbox: storage,
         } as never)
       );
 
@@ -5701,14 +5765,25 @@ describe("status writes after a provider await (COL-99)", () => {
         createMockIdGenerator(),
         createTestConfig()
       );
+      const beginGeneration = vi.fn();
       const preservation = {
-        beginGeneration: vi.fn(),
+        beginGeneration,
+        reserveGeneration: beginGeneration,
+        generationReserved: vi.fn(),
         restoreStarting: vi.fn(),
         started: vi.fn(async () => {}),
         isHolding: vi.fn(() => false),
         request: vi.fn(async () => "owned" as const),
-        beginCheckpoint: vi.fn(() => true),
-        endCheckpoint: vi.fn(),
+        beginCheckpoint: vi.fn((generation: SandboxGeneration) => ({
+          id: "checkpoint-1",
+          generation,
+          deadlineAtMs: Date.now() + 300_000,
+          run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
+            outcome: "completed" as const,
+            value: await operation(new AbortController().signal),
+          }),
+          finish: vi.fn(),
+        })),
         recoveryReceipt: vi.fn(() => undefined),
         restoreFailed: vi.fn(),
       } satisfies SandboxPreservationLifecycle;

@@ -75,6 +75,26 @@ describe("SandboxPreservationRepository", () => {
     fixture.db.close();
   });
 
+  it("round-trips a restoring phase only with its actionable receipt", () => {
+    const fixture = repository();
+    const restoring = record({
+      phase: "restoring",
+      restoreInvoked: false,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "image-1",
+        provider: "modal",
+        savedAtMs: 15_000,
+        runtimeVersion: "runtime-1",
+      },
+    });
+
+    fixture.repository.write(restoring);
+    expect(fixture.repository.read()).toEqual(restoring);
+    expect(() => fixture.repository.write({ ...restoring, receipt: undefined })).toThrow();
+    fixture.db.close();
+  });
+
   it("fails closed on malformed persisted state", () => {
     const fixture = repository();
     fixture.sql.exec(

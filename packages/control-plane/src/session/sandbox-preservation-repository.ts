@@ -24,6 +24,7 @@ const stateSchema = sandboxPreservationSchema
     generationReady: z.boolean(),
     runtimeReady: z.boolean().optional(),
     lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
+    restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
@@ -37,7 +38,8 @@ const stateSchema = sandboxPreservationSchema
       (state.lifetimeKind === "finite" &&
         (state.expiresAtMs === null ||
           (state.lifecyclePolicy !== "legacy" && state.drainAtMs === null))) ||
-      ((state.phase === "saved" || state.phase === "retiring") && !state.receipt) ||
+      ((state.phase === "saved" || state.phase === "restoring" || state.phase === "retiring") &&
+        !state.receipt) ||
       (["draining", "prepared", "capturing"].includes(state.phase) &&
         (!state.operationId ||
           state.stopByMs === undefined ||

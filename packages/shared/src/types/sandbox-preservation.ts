@@ -4,6 +4,7 @@ import { z } from "zod";
 export const sandboxPreservationSchema = z.object({
   phase: z.enum([
     "running",
+    "restoring",
     "draining",
     "prepared",
     "capturing",

@@ -1,12 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import {
   DEFAULT_LIFECYCLE_CONFIG,
   SandboxLifecycleManager,
 } from "../../src/sandbox/lifecycle/manager";
-import type { SandboxProvider } from "../../src/sandbox/provider";
+import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sandbox/provider";
+import { EventRepository } from "../../src/session/event-repository";
+import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
+import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
 import { SandboxPreservation } from "../../src/session/sandbox-preservation";
-import { SandboxPreservationRepository } from "../../src/session/sandbox-preservation-repository";
+import {
+  SandboxPreservationRepository,
+  type PreservationStore,
+} from "../../src/session/sandbox-preservation-repository";
+import { SessionCoreRepository } from "../../src/session/session-core-repository";
 import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
@@ -64,7 +71,351 @@ async function readPreservation(stub: DurableObjectStub): Promise<Record<string,
   return JSON.parse(row.state) as Record<string, unknown>;
 }
 
+function realLifecycleHarness(
+  instance: SessionDO,
+  durableState: DurableObjectState,
+  provider: SandboxProvider,
+  options: {
+    store?: PreservationStore;
+    onQueueAdmission?: (decision: string) => void;
+  } = {}
+) {
+  const sandbox = componentsOf(instance).sandboxRepository;
+  const sessions = new SessionCoreRepository(durableState.storage.sql, (callback) =>
+    durableState.storage.transactionSync(callback)
+  );
+  const sessionContext = new LifecycleSessionContext(sessions, {
+    getUserEnvVars: async () => undefined,
+  } as never);
+  const preservationAnnouncements: object[] = [];
+  const lifecycleAnnouncements: object[] = [];
+  const queueAdmissions: string[] = [];
+  const processQueue = async () => {
+    const decision = preservation.admissionDecision();
+    queueAdmissions.push(decision);
+    options.onQueueAdmission?.(decision);
+  };
+  const preservation = new SandboxPreservation({
+    store: options.store ?? new SandboxPreservationRepository(durableState.storage.sql),
+    provider,
+    sandbox,
+    session: sessions,
+    messages: { getProcessingMessage: () => null },
+    failures: { record: () => undefined, deliver: () => undefined },
+    messenger: {
+      broadcast: (message: object) => preservationAnnouncements.push(message),
+    },
+    sockets: {
+      getSandboxSocket: () => null,
+      send: () => false,
+    },
+    alarm: { schedule: async () => undefined },
+    background: {
+      submit: (task: () => Promise<void>) => {
+        void task();
+      },
+    },
+    processQueue,
+    reconcileStatus: async () => undefined,
+    retireAccess: () => undefined,
+  } as never);
+  const manager = new SandboxLifecycleManager(
+    provider,
+    sandbox,
+    sessionContext,
+    { broadcast: (message) => lifecycleAnnouncements.push(message) },
+    {
+      getSandboxWebSocket: () => null,
+      getConnectedClientCount: () => 0,
+      sendToSandbox: () => false,
+      detachSandboxWebSocket: () => undefined,
+    },
+    {
+      schedule: async () => undefined,
+      cancel: async () => undefined,
+      current: async () => null,
+    },
+    { generateId: () => "integration-sandbox-token" },
+    {
+      ...DEFAULT_LIFECYCLE_CONFIG,
+      controlPlaneUrl: "https://control-plane.test",
+      model: "anthropic/claude-sonnet-4-5",
+    }
+  );
+  manager.setPreservation(preservation);
+  return {
+    manager,
+    preservation,
+    preservationAnnouncements,
+    lifecycleAnnouncements,
+    queueAdmissions,
+    processQueue,
+    sandbox,
+    sessions,
+  };
+}
+
 describe("sandbox preservation wiring", () => {
+  it("rolls back the sandbox reservation when the matching preservation write fails", async () => {
+    const { stub } = await initNamedSession(`preservation-reservation-rollback-${Date.now()}`);
+    await seedSandboxAuth(stub, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "stopped",
+    });
+    await runInSessionDO(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(
+        `UPDATE sandbox
+         SET modal_object_id = ?, snapshot_image_id = ?, snapshot_runtime_version = ?`,
+        "old-provider-object",
+        "saved-snapshot",
+        "v62-legacy-runtime"
+      );
+    });
+    await seedPreservation(stub, {
+      phase: "saved",
+      provider: "modal",
+      providerObjectId: "old-provider-object",
+      sourceRetired: true,
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+      generationReady: true,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "saved-snapshot",
+        provider: "modal",
+        savedAtMs: Date.now(),
+        runtimeVersion: "v62-legacy-runtime",
+      },
+    });
+    const [sandboxBefore] = await queryDO<{
+      modal_sandbox_id: string;
+      modal_object_id: string | null;
+      created_at: number;
+      status: string;
+    }>(stub, "SELECT modal_sandbox_id, modal_object_id, created_at, status FROM sandbox");
+    const preservationBefore = await readPreservation(stub);
+
+    const restoreFromSnapshot = vi.fn(async (): Promise<RestoreResult> => {
+      throw new Error("provider must not run when reservation fails");
+    });
+    const provider: SandboxProvider = {
+      name: "modal",
+      capabilities: {
+        supportsSandboxTimeout: true,
+        supportsSnapshots: true,
+        supportsRestore: true,
+        supportsExplicitStop: true,
+      },
+      createSandbox: async () => {
+        throw new Error("fresh provider create must not run");
+      },
+      restoreFromSnapshot,
+    };
+
+    const result = await runInSessionDO(stub, async (instance, durableState) => {
+      const realStore = new SandboxPreservationRepository(durableState.storage.sql);
+      const throwingStore: PreservationStore = {
+        read: () => realStore.read(),
+        write: () => {
+          throw new Error("injected preservation write failure");
+        },
+      };
+      const harness = realLifecycleHarness(instance, durableState, provider, {
+        store: throwingStore,
+      });
+
+      await harness.manager.spawnSandbox();
+      return {
+        preservationAnnouncements: harness.preservationAnnouncements,
+        lifecycleAnnouncements: harness.lifecycleAnnouncements,
+      };
+    });
+
+    expect(restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(
+      await queryDO(
+        stub,
+        "SELECT modal_sandbox_id, modal_object_id, created_at, status FROM sandbox"
+      )
+    ).toEqual([sandboxBefore]);
+    expect(await readPreservation(stub)).toEqual(preservationBefore);
+    expect(result.preservationAnnouncements).toEqual([]);
+    expect(result.lifecycleAnnouncements).not.toContainEqual({
+      type: "sandbox_status",
+      status: "spawning",
+    });
+  });
+
+  it("accepts early ready for a saved restore but gates the queue until provider lifetime settles", async () => {
+    const { stub } = await initNamedSession(`preservation-early-ready-${Date.now()}`);
+    await seedSandboxAuth(stub, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "stopped",
+    });
+    await runInSessionDO(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(
+        `UPDATE sandbox
+         SET modal_object_id = NULL, snapshot_image_id = ?, snapshot_runtime_version = ?`,
+        "saved-snapshot",
+        "v62-legacy-runtime"
+      );
+    });
+    await seedPreservation(stub, {
+      phase: "saved",
+      provider: "modal",
+      providerObjectId: null,
+      sourceRetired: true,
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+      generationReady: true,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "saved-snapshot",
+        provider: "modal",
+        savedAtMs: Date.now(),
+        runtimeVersion: "v62-legacy-runtime",
+      },
+    });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "restore-pending",
+      authorId,
+      content: "Wait for the restore lifetime",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+
+    let resolveRestore!: (result: RestoreResult) => void;
+    const restoreFromSnapshot = vi.fn(
+      (_config: RestoreConfig) =>
+        new Promise<RestoreResult>((resolve) => {
+          resolveRestore = resolve;
+        })
+    );
+    const provider: SandboxProvider = {
+      name: "modal",
+      capabilities: {
+        supportsSandboxTimeout: true,
+        supportsSnapshots: true,
+        supportsRestore: true,
+        supportsExplicitStop: true,
+      },
+      createSandbox: async () => {
+        throw new Error("saved restore must not create a fresh sandbox");
+      },
+      restoreFromSnapshot,
+    };
+
+    const evidence = await runInSessionDO(stub, async (instance, durableState) => {
+      const harness = realLifecycleHarness(instance, durableState, provider, {
+        onQueueAdmission: (decision) => {
+          if (decision === "ready") {
+            durableState.storage.sql.exec(
+              "UPDATE messages SET status = 'processing' WHERE id = ? AND status = 'pending'",
+              "restore-pending"
+            );
+          }
+        },
+      });
+      const restoring = harness.manager.spawnSandbox();
+      await vi.waitFor(() => expect(restoreFromSnapshot).toHaveBeenCalledOnce());
+      const restoreConfig = restoreFromSnapshot.mock.calls[0]?.[0];
+      if (!restoreConfig) throw new Error("Expected deferred snapshot restore config");
+
+      // Runtime readiness arrives while the provider is still resolving the
+      // restored sandbox's authoritative lifetime and provider handle.
+      const runtimeHandler = new SandboxRuntimeEventHandler(
+        harness.sessions,
+        harness.sandbox,
+        new EventRepository(durableState.storage.sql, (callback) =>
+          durableState.storage.transactionSync(callback)
+        ),
+        { broadcast: (message: object) => harness.lifecycleAnnouncements.push(message) } as never,
+        { pinBaselines: () => undefined } as never,
+        ((title: string) => ({ ok: true, title })) as never,
+        () => undefined,
+        () => undefined,
+        async () => undefined,
+        {
+          submit: (task: () => Promise<void>) => {
+            void task();
+          },
+        },
+        { processMessageQueue: harness.processQueue },
+        {
+          debug: () => undefined,
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+          child: () => undefined,
+        } as never,
+        harness.manager,
+        {
+          ready: (version) => harness.preservation.runtimeReady(version),
+          isHolding: () => harness.preservation.isHolding(),
+        }
+      );
+      await runtimeHandler.handleReady(
+        {
+          type: "ready",
+          harness: "opencode",
+          runtimeVersion: "v62-legacy-runtime",
+          sandboxId: restoreConfig.sandboxId,
+          timestamp: Date.now() / 1000,
+        },
+        { now: Date.now(), messageId: null, processingMessage: null }
+      );
+      const statusBeforeProvider = durableState.storage.sql
+        .exec("SELECT status FROM sandbox")
+        .toArray()[0] as { status: string };
+      const messageBeforeProvider = durableState.storage.sql
+        .exec("SELECT status FROM messages WHERE id = ?", "restore-pending")
+        .toArray()[0] as { status: string };
+
+      resolveRestore({
+        success: true,
+        sandboxId: restoreConfig.sandboxId,
+        providerObjectId: "restored-provider-object",
+        lifetime: { kind: "none", observedAtMs: Date.now() },
+      });
+      await restoring;
+
+      return {
+        statusBeforeProvider,
+        messageBeforeProvider,
+        queueAdmissions: harness.queueAdmissions,
+      };
+    });
+
+    expect(evidence.statusBeforeProvider).toEqual({ status: "ready" });
+    expect(evidence.messageBeforeProvider).toEqual({ status: "pending" });
+    expect(evidence.queueAdmissions.slice(0, -1)).toEqual(["held", "held"]);
+    expect(evidence.queueAdmissions.at(-1)).toBe("ready");
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
+      { status: "ready" },
+    ]);
+    expect(
+      await queryDO<{ status: string }>(
+        stub,
+        "SELECT status FROM messages WHERE id = ?",
+        "restore-pending"
+      )
+    ).toEqual([{ status: "processing" }]);
+    expect(await readPreservation(stub)).toMatchObject({
+      phase: "running",
+      runtimeReady: true,
+      providerObjectId: "restored-provider-object",
+    });
+  });
+
   it("rejects push from saved state when no live sandbox is available", async () => {
     const { stub } = await initNamedSession(`preservation-saved-push-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
@@ -177,6 +528,13 @@ describe("sandbox preservation wiring", () => {
       const preservation = new SandboxPreservation({
         store: new SandboxPreservationRepository(durableState.storage.sql),
         provider,
+        sandbox,
+        background: {
+          submit: (task: () => Promise<void>) => {
+            void task();
+          },
+        },
+        processQueue: async () => undefined,
       } as never);
       manager.setPreservation(preservation);
 
