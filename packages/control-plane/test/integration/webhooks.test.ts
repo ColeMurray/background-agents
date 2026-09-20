@@ -384,6 +384,72 @@ describe("POST /webhooks/sentry/:id", () => {
   });
 });
 
+// ─── Marker.io adapter tests ─────────────────────────────────────────────────
+
+describe("POST /webhooks/marker/:id", () => {
+  const markerSecret = "test-marker-webhook-secret";
+  const markerPayload = {
+    type: "issue.created",
+    webhookId: "marker-webhook-1",
+    webhookTimestamp: 1751876876200,
+    data: {
+      id: "marker-issue-1",
+      markerId: "AMG-1",
+      title: "Broken flow",
+      project: { id: "marker-project-1", name: "AMGAS" },
+    },
+  };
+
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await seedActiveUser("test-user");
+  });
+
+  async function createMarkerAutomation(): Promise<AutomationRow> {
+    const automation = makeAutomation({
+      trigger_type: "webhook",
+      event_type: "webhook.received",
+      schedule_cron: null,
+      next_run_at: null,
+    });
+    await new AutomationStore(env.DB).create(automation);
+    return automation;
+  }
+
+  it("authenticates, dispatches, and deduplicates a Marker delivery", async () => {
+    const automation = await createMarkerAutomation();
+    const body = JSON.stringify(markerPayload);
+    const signature = `sha256=${await signSentryPayload(body, markerSecret)}`;
+    const send = () =>
+      SELF.fetch(`https://test.local/webhooks/marker/${automation.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Hub-Signature-256": signature,
+        },
+        body,
+      });
+
+    expect((await send()).status).toBe(200);
+    expect((await send()).status).toBe(200);
+    expect(await fetchRuns(automation.id)).toHaveLength(1);
+  });
+
+  it("rejects a payload without a valid Marker signature", async () => {
+    const automation = await createMarkerAutomation();
+    const response = await SELF.fetch(`https://test.local/webhooks/marker/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Hub-Signature-256": "sha256=invalid",
+      },
+      body: JSON.stringify(markerPayload),
+    });
+
+    expect(response.status).toBe(401);
+  });
+});
+
 // ─── Automation webhook tests ─────────────────────────────────────────────────
 
 describe("POST /webhooks/automation/:id", () => {

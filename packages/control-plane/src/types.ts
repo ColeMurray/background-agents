@@ -39,6 +39,7 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
+  MARKER_WEBHOOK_SECRET?: string; // Marker.io X-Hub-Signature-256 verification
 
   // GitHub App secrets (for git operations)
   GITHUB_APP_ID?: string;

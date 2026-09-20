@@ -214,6 +214,9 @@ module "control_plane_worker" {
     local.use_e2b_backend ? {
       E2B_API_KEY = { value = var.e2b_api_key }
     } : {},
+    trimspace(var.marker_webhook_secret) != "" ? {
+      MARKER_WEBHOOK_SECRET = { value = var.marker_webhook_secret }
+    } : {},
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same
     # token can authorize chat.postMessage from agent tool calls.

@@ -121,6 +121,21 @@ curl -X POST "https://<your-worker-url>/webhooks/automation/<automation-id>" \
   -d '{"event":"deploy.failed","service":"api","environment":"prod"}'
 ```
 
+### Marker.io Adapter
+
+Marker.io cannot attach the generic endpoint's bearer token. For a Marker workspace webhook:
+
+1. Create an **Inbound Webhook** automation and keep its automation ID.
+2. Set `marker_webhook_secret` to the signing secret shown by Marker.io, then deploy the control
+   plane.
+3. Configure Marker to send `issue.created` for the intended project to
+   `https://<your-worker-url>/webhooks/marker/<automation-id>`.
+4. Add JSONPath filters for `$.type = issue.created` and the expected `$.data.project.id`.
+
+The adapter accepts JSON payloads up to 256 KB, verifies `X-Hub-Signature-256` over the raw body,
+deduplicates retried deliveries, and then dispatches the event through the selected inbound-webhook
+automation. The deployment-wide Marker secret matches Open-Inspect's single-tenant model.
+
 ### What the Agent Receives
 
 For each accepted request, Open-Inspect prepends a context block to your instructions that includes:

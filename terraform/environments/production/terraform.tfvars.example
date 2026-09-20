@@ -259,6 +259,10 @@ classification_openai_api_key = ""
 # classification_openai_api_key.
 # classification_model = "claude-haiku-4-5"
 
+# Marker.io webhook signing secret shown when creating the workspace webhook.
+# Configure the webhook URL as https://<control-plane>/webhooks/marker/<automation-id>.
+marker_webhook_secret = ""
+
 # =============================================================================
 # Security Secrets
 # =============================================================================

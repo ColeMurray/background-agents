@@ -405,6 +405,17 @@ variable "classification_openai_api_key" {
 }
 
 # =============================================================================
+# Marker.io Webhook Configuration
+# =============================================================================
+
+variable "marker_webhook_secret" {
+  description = "Marker.io webhook signing secret used to verify X-Hub-Signature-256"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# =============================================================================
 # Security Secrets
 # =============================================================================
 
