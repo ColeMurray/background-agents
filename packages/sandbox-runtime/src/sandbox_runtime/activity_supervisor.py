@@ -189,17 +189,16 @@ class ActivitySupervisor:
             activity.cancellation_event = push_cancellation_event(activity.command)
             if not activity.task.done():
                 activity.task.cancel()
-        try:
-            await self._join_push_operations(deadline)
-            execution_stopped = await stop_execution(
-                max(deadline - asyncio.get_running_loop().time(), 0.0)
-            )
-        finally:
-            # A failed or wedged containment request must still stop the local
-            # prompt owner; selection remains governed by the override above.
-            self.set_prompt_interruption(prompt_error, all_prompts=True, overwrite=True)
-            self._cancel_prompts(all_prompts=True)
+        self._cancel_prompts(all_prompts=True)
+
+        # Settle every admitted local starter before asking the vendor whether
+        # it is idle. A prompt cancelled after the vendor check can otherwise
+        # resume during cancellation cleanup and submit new vendor work after
+        # containment was already reported successful.
         await self._join_operations(deadline)
+        execution_stopped = await stop_execution(
+            max(deadline - asyncio.get_running_loop().time(), 0.0)
+        )
         await asyncio.sleep(0)
         await self._join_deliveries(deadline)
         return execution_stopped
@@ -236,19 +235,6 @@ class ActivitySupervisor:
             if not task.cancelled():
                 task.exception()
         if pending:
-            raise TimeoutError
-
-    async def _join_push_operations(self, deadline: float) -> None:
-        tasks = [activity.task for activity in self._pushes.values()]
-        if not tasks:
-            return
-        _done, pending = await asyncio.wait(
-            tasks,
-            timeout=max(deadline - asyncio.get_running_loop().time(), 0.0),
-        )
-        if pending:
-            for task in pending:
-                task.cancel()
             raise TimeoutError
 
     async def _join_deliveries(self, deadline: float) -> None:
