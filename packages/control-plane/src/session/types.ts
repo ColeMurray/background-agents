@@ -13,7 +13,7 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
-import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
+import type { GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 import { z } from "zod";
 
@@ -144,14 +144,16 @@ export const sessionAttachmentRowSchema = z.object({
 
 export type SessionAttachmentRow = z.infer<typeof sessionAttachmentRowSchema>;
 
-export interface EventRow {
-  id: string;
-  type: EventType;
-  data: string; // JSON
-  message_id: string | null;
-  created_at: number;
-  timeline_sequence?: number;
-}
+export const eventRowSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  data: z.string(), // JSON
+  message_id: z.string().nullable(),
+  created_at: z.number(),
+  timeline_sequence: z.number().optional(),
+});
+
+export type EventRow = z.infer<typeof eventRowSchema>;
 
 export const artifactRowSchema = z.object({
   id: z.string(),
