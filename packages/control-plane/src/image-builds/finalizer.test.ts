@@ -4,7 +4,12 @@ import type { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { FinalizeImageBuildInput } from "./types";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
-import { IMAGE_BUILD_PROVIDER_ATTEMPT_MS, ImageBuildFinalizer } from "./finalizer";
+import {
+  IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
+  IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS,
+  IMAGE_BUILD_PROVIDER_ATTEMPT_MS,
+  ImageBuildFinalizer,
+} from "./finalizer";
 
 const job = { version: 1 as const, buildId: "build-1", completionHash: "a".repeat(64) };
 const correlation = { request_id: "queue-1", trace_id: "queue-1" };
@@ -25,6 +30,9 @@ function row(overrides: Partial<ImageBuildFinalizationRow> = {}): ImageBuildFina
     finalization_lease_expires_at: null,
     provider_session_cleanup_pending: 1,
     callback_token_used_at: 100,
+    provider_operation_ref: null,
+    provider_operation_deadline_at: null,
+    created_at: 1_000,
     ...overrides,
   };
 }
@@ -56,6 +64,15 @@ function harness(initial = row()) {
     }),
     clearSessionCleanup: vi.fn(async () => {
       current = { ...current, provider_session_cleanup_pending: 0 };
+      return true;
+    }),
+    reserveProviderOperation: vi.fn(async ({ ref, deadlineAt }) => {
+      if (current.provider_operation_ref !== null) return false;
+      current = {
+        ...current,
+        provider_operation_ref: ref,
+        provider_operation_deadline_at: deadlineAt,
+      };
       return true;
     }),
   };
@@ -273,5 +290,131 @@ describe("ImageBuildFinalizer", () => {
       })
     );
     expect(finalization.markFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe("ImageBuildFinalizer asynchronous provider operations", () => {
+  it("releases the lease and polls again while the provider's operation settles", async () => {
+    const { finalizer, finalization, adapter } = harness(
+      row({ provider_operation_ref: "oi-image-abc", provider_operation_deadline_at: 900_000 })
+    );
+    adapter.finalizeSuccessfulBuild.mockRejectedValue(
+      new ImageBuildFinalizationAttemptError("snapshot still snapshotting", "pending")
+    );
+
+    await expect(finalizer.process(job, correlation)).resolves.toEqual({
+      type: "retry",
+      delayMs: IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS,
+      reason: "pending_operation",
+    });
+    expect(finalization.clearLease).toHaveBeenCalledOnce();
+    expect(finalization.markFailed).not.toHaveBeenCalled();
+    expect(adapter.cleanupFailedBuild).not.toHaveBeenCalled();
+  });
+
+  it("spends the host's ordinary budget on a pending attempt that reserved nothing", async () => {
+    const { finalizer, finalization, adapter } = harness();
+    adapter.finalizeSuccessfulBuild.mockRejectedValue(
+      new ImageBuildFinalizationAttemptError("build sandbox is still stopping", "pending")
+    );
+
+    // No reservation means no fixed deadline, so this retry must not be the
+    // one the consumer republishes with a fresh delivery budget.
+    await expect(finalizer.process(job, correlation)).resolves.toEqual({
+      type: "retry",
+      delayMs: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
+    });
+    expect(finalization.clearLease).toHaveBeenCalledOnce();
+    expect(finalization.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("hands the adapter the operation a previous delivery reserved", async () => {
+    const { finalizer, adapter } = harness(
+      row({ provider_operation_ref: "oi-image-abc", provider_operation_deadline_at: 900_000 })
+    );
+
+    await finalizer.process(job, correlation);
+
+    expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: { ref: "oi-image-abc", deadlineAt: 900_000 } })
+    );
+  });
+
+  it("reconciles an expired attempt that left an operation instead of failing the build", async () => {
+    const { finalizer, finalization, adapter } = harness(
+      row({
+        finalization_lease_token: "crashed-consumer",
+        finalization_lease_expires_at: 999,
+        provider_operation_ref: "oi-image-abc",
+        provider_operation_deadline_at: 900_000,
+      })
+    );
+
+    await expect(finalizer.process(job, correlation)).resolves.toEqual({ type: "completed" });
+    expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledOnce();
+    expect(finalization.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("fences the reservation on the lease, completion and session it was taken under", async () => {
+    const { finalizer, finalization, adapter } = harness();
+    adapter.finalizeSuccessfulBuild.mockImplementation(
+      async ({ reserveOperation, providerSessionId }: FinalizeImageBuildInput) => {
+        expect(await reserveOperation("oi-image-abc", 900_000)).toBe(true);
+        return { providerImageId: "image-1", providerSessionId };
+      }
+    );
+
+    await finalizer.process(job, correlation);
+
+    expect(finalization.reserveProviderOperation).toHaveBeenCalledWith({
+      buildId: "build-1",
+      provider: "modal",
+      providerSessionId: "session-1",
+      completionHash: job.completionHash,
+      leaseToken: expect.any(String),
+      ref: "oi-image-abc",
+      deadlineAt: 900_000,
+    });
+    expect(finalization.reserveProviderOperation.mock.calls[0][0].leaseToken).toBe(
+      finalization.claimLease.mock.calls[0][0].leaseToken
+    );
+  });
+
+  it("treats a timeout after a reservation as pending, never as an unknown outcome", async () => {
+    vi.useFakeTimers();
+    try {
+      const { finalizer, finalization, adapter } = harness();
+      adapter.finalizeSuccessfulBuild.mockImplementation(
+        async ({ signal, reserveOperation }: FinalizeImageBuildInput) => {
+          await reserveOperation("oi-image-abc", 900_000);
+          return new Promise<never>((_, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("operation aborted")));
+          });
+        }
+      );
+
+      const processing = finalizer.process(job, correlation);
+      await vi.advanceTimersByTimeAsync(IMAGE_BUILD_PROVIDER_ATTEMPT_MS);
+
+      await expect(processing).resolves.toEqual({
+        type: "retry",
+        delayMs: IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS,
+        reason: "pending_operation",
+      });
+      expect(finalization.markFailed).not.toHaveBeenCalled();
+      expect(finalization.clearLease).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never re-enters the provider once an artifact is fenced on the row", async () => {
+    const { finalizer, adapter, store } = harness(
+      row({ provider_image_id: "image-1", provider_operation_ref: null })
+    );
+
+    await expect(finalizer.process(job, correlation)).resolves.toEqual({ type: "completed" });
+    expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
+    expect(store.tryMarkImageBuildReady).toHaveBeenCalledOnce();
   });
 });

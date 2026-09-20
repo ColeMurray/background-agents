@@ -26,7 +26,10 @@
  * Modal repo images reboot their entrypoint on each spawn.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  supportsConfigurableSandboxTimeout,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { createLogger } from "../../logger";
 import {
   buildImageBuildCallbackEnv,
@@ -189,7 +192,7 @@ export class E2BSandboxProvider implements SandboxProvider {
    * image id as the templateID, and are baked by takePrebuiltImageSnapshot.
    */
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: false,
     supportsRestore: false,
     // Stop is a resumable pause; the manager treats it as provider-managed state.

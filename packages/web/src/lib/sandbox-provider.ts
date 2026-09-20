@@ -2,17 +2,21 @@
  * Public sandbox backend helpers for the web app.
  */
 
-/** Every backend the web app knows how to render. */
-const SANDBOX_PROVIDERS = ["modal", "daytona", "vercel", "opencomputer", "e2b"] as const;
+import {
+  isSandboxProviderName,
+  supportsConfigurableSandboxResources as providerSupportsConfigurableSandboxResources,
+  supportsConfigurableSandboxTimeout as providerSupportsConfigurableSandboxTimeout,
+  type SandboxProviderName,
+} from "@open-inspect/shared/types/integrations";
 
-export type PublicSandboxProvider = (typeof SANDBOX_PROVIDERS)[number];
+export type PublicSandboxProvider = SandboxProviderName;
 
 /**
  * Backends that can build and boot prebuilt repo/environment images. Mirrors
  * IMAGE_BUILD_PROVIDERS in the control plane's image-builds/provider-policy.ts —
  * a provider gains image-build support in both places or neither.
  */
-const REPO_IMAGE_PROVIDERS = ["modal", "vercel", "opencomputer", "e2b"] as const;
+const REPO_IMAGE_PROVIDERS = ["modal", "vercel", "opencomputer", "e2b", "daytona"] as const;
 
 /**
  * The single 501 body every image-build route answers with when the deployment's
@@ -39,13 +43,21 @@ export function supportsRepoImages(): boolean {
   return (REPO_IMAGE_PROVIDERS as readonly string[]).includes(getPublicSandboxProvider());
 }
 
+export function supportsConfigurableSandboxResources(): boolean {
+  return providerSupportsConfigurableSandboxResources(getPublicSandboxProvider());
+}
+
+export function supportsConfigurableSandboxTimeout(): boolean {
+  return providerSupportsConfigurableSandboxTimeout(getPublicSandboxProvider());
+}
+
 /** The providers named in the unsupported-provider copy, in display order. */
 export function getRepoImageProviders(): readonly PublicSandboxProvider[] {
   return REPO_IMAGE_PROVIDERS;
 }
 
 function isPublicSandboxProvider(value: string): value is PublicSandboxProvider {
-  return (SANDBOX_PROVIDERS as readonly string[]).includes(value);
+  return isSandboxProviderName(value);
 }
 
 /** "a, b, c, or d" — matches the control plane's wording for the same message. */

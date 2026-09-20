@@ -24,6 +24,7 @@ import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
+  PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
@@ -3815,6 +3816,38 @@ describe("SandboxLifecycleManager", () => {
       expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
       expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
     });
+
+    it("does not retire an image the provider is still waking", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const createSandbox = vi.fn(async () => {
+        throw new PrebuiltImageActivationPendingError("prebuilt snapshot is still inactive");
+      });
+      const { manager, storage } = createRepoSessionManager({
+        imageBuildLookup,
+        provider: createMockProvider({ createSandbox }),
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      await manager.spawnSandbox();
+
+      // Cold storage is not a broken image: retiring it here would cost a
+      // rebuild for an image the next spawn can use.
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
+      expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
+      expect(parseStructuredLogs(warnSpy)).toContainEqual(
+        expect.objectContaining({
+          event: "image_build.spawn_error_transient",
+          image_build_id: "imgb-repo-1",
+          error_type: "transient",
+          error: "prebuilt snapshot is still inactive",
+        })
+      );
+      warnSpy.mockRestore();
+    });
   });
 
   describe("environment image lookup in doSpawn", () => {
@@ -4366,6 +4399,39 @@ describe("SandboxLifecycleManager", () => {
         type: "sandbox_error",
         error: "mock does not support configurable sandbox timeouts",
       });
+    });
+
+    it("ignores legacy resource and timeout settings for Daytona", async () => {
+      const session = createMockSession({
+        spawn_source: "agent",
+        sandbox_settings:
+          '{"cpuCores":2,"memoryMib":4096,"sandboxTimeoutMs":14400000,"terminalEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = {
+        ...createMockProvider({ capabilities: { supportsSandboxTimeout: false } }),
+        name: "daytona",
+      };
+      const mockStorage = createMockStorage(session, sandbox);
+      const manager = new SandboxLifecycleManager(
+        provider,
+        mockStorage,
+        mockStorage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutSeconds: undefined,
+          sandboxSettings: { terminalEnabled: true },
+        })
+      );
     });
 
     it("uses the provider default for child sessions on unsupported providers", async () => {

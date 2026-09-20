@@ -75,6 +75,8 @@ export interface EnvConfig {
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes
   DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES?: string; // Daytona archive interval in minutes
   DAYTONA_TARGET?: string; // Optional Daytona target name
+  DAYTONA_TOOLBOX_API_URL?: string; // Optional explicit Daytona toolbox proxy base URL
+  DAYTONA_PREBUILDS_ENABLED?: string; // Admits new Daytona image builds and prebuilt selection
   OPENCOMPUTER_API_URL?: string; // OpenComputer REST API base URL
   OPENCOMPUTER_TEMPLATE?: string; // Declarative template containing sandbox runtime
   VERCEL_PROJECT_ID?: string; // Vercel project ID used for Sandbox API scope
