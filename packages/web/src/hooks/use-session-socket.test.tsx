@@ -172,6 +172,34 @@ describe("useSessionSocket", () => {
     );
   });
 
+  it("sends a preservation recovery command after subscription", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      result.current.recoverPreservation("retry");
+    });
+    expect(socket.sentMessages).toHaveLength(0);
+
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    act(() => {
+      result.current.recoverPreservation("restore_saved");
+    });
+
+    expect(socket.sentMessages).toContainEqual({
+      type: "recover_preservation",
+      action: "restore_saved",
+    });
+  });
+
   it("keeps sendPrompt pending until the server acknowledges the queued prompt", async () => {
     const { result } = renderHook(() =>
       useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
