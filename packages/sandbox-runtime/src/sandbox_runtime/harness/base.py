@@ -8,9 +8,9 @@ The seam has two halves with one owner each:
 - ``AgentHarness`` is the bridge half. It runs prompts against the vendor and
   yields the runtime-neutral bridge events the control plane understands.
 
-The bridge owns terminalisation: a harness never emits ``execution_complete``.
-It yields events and returns a ``TurnOutcome``; the bridge emits exactly one
-terminal event per prompt from that outcome.
+The runtime ``ActivitySupervisor`` owns terminal selection and delivery: a
+harness never emits ``execution_complete``. It yields events and returns a
+``TurnOutcome`` for the supervisor to settle exactly once.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ class HarnessPrompt:
 
 @dataclass(frozen=True)
 class TurnOutcome:
-    """What one ``run_prompt`` call produced, for the bridge to terminalise."""
+    """What one ``run_prompt`` call produced, for runtime terminal selection."""
 
     success: bool
     error: str | None = None

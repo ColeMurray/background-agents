@@ -38,6 +38,7 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
+from .activity_supervisor import ActivitySupervisor
 from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
@@ -64,6 +65,7 @@ from .harness import (
     parse_harness_id,
 )
 from .log_config import configure_logging, get_logger
+from .preservation import PreservationCoordinator
 from .prompt_budgets import resolve_prompt_limits
 from .push_operation import PushOperation, PushRejected, PushRequest
 from .repo_config import load_repo_manifest
@@ -236,20 +238,7 @@ class AgentBridge:
         self._attach_failure: BaseException | None = None
         self._attach_outcome: str | None = None
 
-        # Track the current prompt task so _handle_stop can cancel it
-        self._current_prompt_task: asyncio.Task[None] | None = None
-        self._prompt_interruption_reasons: dict[asyncio.Task[None], str] = {}
-        # Pushes run outside the WebSocket receive loop so a long git process
-        # cannot prevent a deadline-bound preservation command from arriving.
-        # The lock preserves the existing one-at-a-time execution contract.
-        self._push_lock = asyncio.Lock()
-        self._push_tasks: dict[asyncio.Task[None], dict[str, Any]] = {}
-        # Set only by the authenticated generation command. A reconnect does
-        # not touch this state, which is essential for retained sandboxes.
-        self._sandbox_generation: dict[str, Any] | None = None
-        self._preservation_operation_id: str | None = None
-        self._preservation_in_flight_operation_id: str | None = None
-        self._preservation_results: dict[str, dict[str, Any]] = {}
+        self.preservation = PreservationCoordinator()
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -263,6 +252,12 @@ class AgentBridge:
         # Reconnect-safe event delivery: buffers while the WS is down and
         # re-sends unacknowledged critical events (see event_forwarder.py).
         self.event_forwarder = BufferedEventForwarder(sandbox_id=sandbox_id, log=self.log)
+        self.activity = ActivitySupervisor(
+            send_event=lambda event: self._send_event(event),
+            prompt_finished=lambda: self.diff_refresh.prompt_finished(),
+            refresh_diff=lambda message_id: self.diff_refresh.request(message_id),
+            log=self.log,
+        )
 
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
@@ -400,12 +395,7 @@ class AgentBridge:
                 self._boot_relay_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._boot_relay_task
-            # Cancel any in-flight prompt task before closing resources
-            if self._current_prompt_task and not self._current_prompt_task.done():
-                self._current_prompt_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await self._current_prompt_task
-            await self._cancel_pushes(notify_preservation=False)
+            await self.activity.shutdown()
             # Cleanup failures are logged, never raised: an exception here
             # would replace the one that ended the run, and a deterministic
             # startup failure has to reach main() so the supervisor sees its
@@ -778,7 +768,7 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-            if self._preservation_operation_id is not None:
+            if self.preservation.fenced:
                 await self._send_event(
                     {
                         "type": "execution_complete",
@@ -789,43 +779,7 @@ class AgentBridge:
                 )
                 return None
             self.diff_refresh.prompt_started()
-            task = asyncio.create_task(self._handle_prompt(cmd))
-            self._current_prompt_task = task
-
-            def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
-                # Release the diff worker's idle gate before any refresh request
-                # below so the refresh can start immediately.
-                self.diff_refresh.prompt_finished()
-                if self._current_prompt_task is t:
-                    self._current_prompt_task = None
-                if t.cancelled():
-                    error = self._prompt_interruption_reasons.get(t, "Task was cancelled")
-                    asyncio.create_task(
-                        self._send_terminal_event_and_refresh(
-                            {
-                                "type": "execution_complete",
-                                "messageId": mid,
-                                "success": False,
-                                "error": error,
-                            }
-                        )
-                    )
-                elif exc := t.exception():
-                    asyncio.create_task(
-                        self._send_terminal_event_and_refresh(
-                            {
-                                "type": "execution_complete",
-                                "messageId": mid,
-                                "success": False,
-                                "error": str(exc),
-                            }
-                        )
-                    )
-                else:
-                    self.diff_refresh.request(mid)
-                self._prompt_interruption_reasons.pop(t, None)
-
-            task.add_done_callback(handle_task_exception)
+            self.activity.start_prompt(message_id, lambda: self._handle_prompt(cmd))
             # Don't return the task — prompt tasks must survive WS disconnects.
             # Returning it would add it to background_tasks, which gets cancelled
             # in the _connect_and_run finally block on WS close.
@@ -849,14 +803,14 @@ class AgentBridge:
         elif cmd_type == "git_sync_complete":
             self.git_sync_complete.set()
         elif cmd_type == "push":
-            if self._preservation_operation_id is not None:
+            if self.preservation.fenced:
                 await self._refuse_push_for_preservation(cmd)
             elif booting:
                 await self._refuse_push_while_booting(cmd)
             else:
                 self._start_push(cmd)
         elif cmd_type == "refresh_diff":
-            if self._preservation_operation_id is not None:
+            if self.preservation.fenced:
                 self.log.warn("bridge.command_refused_for_preservation", cmd_type=cmd_type)
             elif booting:
                 self.log.warn("bridge.command_refused_while_booting", cmd_type=cmd_type)
@@ -870,12 +824,8 @@ class AgentBridge:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
-    async def _send_terminal_event_and_refresh(self, event: dict[str, Any]) -> None:
-        await self._send_event(event)
-        self.diff_refresh.request(str(event.get("messageId") or "") or None)
-
-    async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
-        """Handle prompt command - run the turn through the harness and terminalise it."""
+    async def _handle_prompt(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Run a harness turn and return its terminal-event candidate."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
         content = cmd.get("content", "")
         model = cmd.get("model")
@@ -967,12 +917,7 @@ class AgentBridge:
             # The done callback remains a fallback for cancellation before start.
             outcome = "cancelled"
             had_error = True
-            current = asyncio.current_task()
-            error_message = (
-                self._prompt_interruption_reasons.get(current, "Task was cancelled")
-                if current is not None
-                else "Task was cancelled"
-            )
+            error_message = "Task was cancelled"
         except Exception as e:
             outcome = "error"
             had_error = True
@@ -989,15 +934,13 @@ class AgentBridge:
                 duration_ms=duration_ms,
             )
 
-        await self._send_event(
-            {
-                "type": "execution_complete",
-                "messageId": message_id,
-                "success": not had_error,
-                **({"error": error_message} if error_message else {}),
-                **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
-            }
-        )
+        return {
+            "type": "execution_complete",
+            "messageId": message_id,
+            "success": not had_error,
+            **({"error": error_message} if error_message else {}),
+            **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
+        }
 
     async def _prepare_turn(
         self,
@@ -1015,7 +958,7 @@ class AgentBridge:
         running turn.
         """
         try:
-            if self._preservation_operation_id is not None:
+            if self.preservation.fenced:
                 raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 if not self._boot_ready.is_set():
@@ -1046,7 +989,7 @@ class AgentBridge:
             if not self._boot_ready.is_set():
                 raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
             raise RuntimeError(f"prompt could not start within {budget} s") from None
-        if self._preservation_operation_id is not None:
+        if self.preservation.fenced:
             raise RuntimeError("sandbox_lifetime_expiring")
         return harness, attachments
 
@@ -1061,9 +1004,7 @@ class AgentBridge:
     async def _handle_stop(self) -> None:
         """Handle stop command - cancel prompt task and ask the harness to abort."""
         self.log.info("bridge.stop")
-        task = self._current_prompt_task
-        if task and not task.done():
-            task.cancel()
+        self.activity.interrupt_prompt("Task was cancelled")
         # Best-effort: also tell the agent to stop (saves LLM compute cost)
         if self.harness is not None:
             await self.harness.abort()
@@ -1090,109 +1031,37 @@ class AgentBridge:
         if generation is None or generation["sandboxId"] != self.sandbox_id:
             self.log.warn("bridge.sandbox_generation_invalid")
             return
-        if generation != self._sandbox_generation:
-            self._sandbox_generation = generation
-            self._preservation_operation_id = None
-            self._preservation_in_flight_operation_id = None
-            self._preservation_results.clear()
-        await self._send_event({"type": "sandbox_generation_ready", "generation": generation})
+        await self._send_event(self.preservation.establish_generation(generation))
 
     async def _handle_prepare_preservation(self, cmd: dict[str, Any]) -> None:
         """Fence admission and confirm the active harness execution stopped."""
-        operation_id = cmd.get("operationId")
         generation = self._parse_generation(cmd.get("generation"))
-        message_id = cmd.get("messageId")
-        stop_by_ms = cmd.get("stopByMs")
-        if not isinstance(operation_id, str) or not operation_id:
-            return
-
-        cached = self._preservation_results.get(operation_id)
-        if cached is not None:
-            await self._send_event(dict(cached))
-            return
-
-        error: str | None = None
-        if (
-            generation is None
-            or isinstance(stop_by_ms, bool)
-            or not isinstance(stop_by_ms, (int, float))
-            or not math.isfinite(stop_by_ms)
+        if isinstance(cmd.get("stopByMs"), bool) or (
+            isinstance(cmd.get("stopByMs"), (int, float)) and not math.isfinite(cmd["stopByMs"])
         ):
-            error = "invalid_command"
-        elif self._sandbox_generation is None:
-            error = "generation_not_established"
-        elif generation != self._sandbox_generation:
-            error = "generation_mismatch"
-        elif (
-            self._preservation_operation_id is not None
-            and self._preservation_operation_id != operation_id
-            and (
-                self._preservation_in_flight_operation_id is not None
-                or self._preservation_operation_id not in self._preservation_results
+            generation = None
+
+        async def contain_activity(deadline: float) -> bool:
+            harness = self._require_harness()
+            return await self.activity.drain_for_preservation(
+                deadline=deadline,
+                prompt_error="sandbox_lifetime_expiring",
+                push_cancellation_event=self._preservation_push_error_event,
+                stop_execution=harness.stop_execution,
             )
-        ):
-            error = "preservation_in_progress"
 
-        execution_stopped = False
-        if error is None:
-            assert isinstance(stop_by_ms, (int, float))
-            # Fence before the first await. Same-generation reconnects and
-            # duplicate ready commands cannot clear this operation.
-            self._preservation_operation_id = operation_id
-            self._preservation_in_flight_operation_id = operation_id
-            deadline = asyncio.get_running_loop().time() + max(
-                (float(stop_by_ms) - time.time() * 1000) / 1000,
-                0.0,
-            )
-            task = self._current_prompt_task
-            if task is not None and not task.done():
-                self._prompt_interruption_reasons[task] = "sandbox_lifetime_expiring"
-            try:
-                async with asyncio.timeout_at(deadline):
-                    await self._cancel_pushes(notify_preservation=True)
-                    harness = self._require_harness()
-                    # Python task completion is not vendor-idle evidence: an
-                    # earlier user stop or prompt cleanup may have cancelled
-                    # the bridge task while tools continued in the harness.
-                    execution_stopped = await harness.stop_execution(
-                        max(deadline - asyncio.get_running_loop().time(), 0.0)
-                    )
-                    if task is not None and not task.done():
-                        task.cancel()
-                        done, _ = await asyncio.wait(
-                            {task},
-                            timeout=max(deadline - asyncio.get_running_loop().time(), 0.0),
-                        )
-                        if task not in done:
-                            raise TimeoutError
-                        if not task.cancelled() and (task_error := task.exception()) is not None:
-                            raise task_error
-                    await self._persist_rotated_session_id(harness, strict=True)
-            except TimeoutError:
-                error = "stop_deadline_exceeded"
-                if task is not None and not task.done():
-                    task.cancel()
-            except Exception as exc:
-                self.log.warn("bridge.preservation_stop_error", exc=exc)
-                error = "execution_stop_failed"
-            if not execution_stopped and error is None:
-                error = "execution_stop_unconfirmed"
+        async def persist_session() -> None:
+            await self._persist_rotated_session_id(self._require_harness(), strict=True)
 
-        if error is not None:
-            execution_stopped = False
-
-        result = {
-            "type": "preservation_prepared",
-            "operationId": operation_id,
-            "generation": generation or cmd.get("generation"),
-            "executionStopped": execution_stopped,
-            **({"messageId": message_id} if isinstance(message_id, str) else {}),
-            **({"error": error} if error is not None else {}),
-        }
-        self._preservation_results[operation_id] = result
-        if self._preservation_in_flight_operation_id == operation_id:
-            self._preservation_in_flight_operation_id = None
-        await self._send_event(dict(result))
+        result = await self.preservation.prepare(
+            cmd,
+            parsed_generation=generation,
+            contain_activity=contain_activity,
+            persist_session=persist_session,
+            log=self.log,
+        )
+        if result is not None:
+            await self._send_event(result)
 
     async def _handle_snapshot(self) -> None:
         """Handle snapshot command - prepare for snapshot."""
@@ -1207,8 +1076,7 @@ class AgentBridge:
     async def _handle_shutdown(self) -> None:
         """Handle shutdown command - graceful shutdown."""
         self.log.info("bridge.shutdown_requested")
-        if self._current_prompt_task and not self._current_prompt_task.done():
-            self._current_prompt_task.cancel()
+        await self.activity.shutdown()
         await self._end_run("shutdown")
 
     async def _refuse_push_while_booting(self, cmd: dict[str, Any]) -> None:
@@ -1233,66 +1101,44 @@ class AgentBridge:
         )
 
     async def _refuse_push_for_preservation(self, cmd: dict[str, Any]) -> None:
+        await self._send_event(self._preservation_push_error_event(cmd))
+
+    def _preservation_push_error_event(self, cmd: dict[str, Any]) -> dict[str, Any]:
         try:
             request: PushRequest | None = PushRequest.from_push_spec(cmd.get("pushSpec"))
         except PushRejected as rejected:
             request = rejected.request
-        await self._send_event(
-            {
-                "type": "push_error",
-                "error": "Push failed - final sandbox preservation is in progress",
-                "branchName": request.branch_name if request is not None else "",
-                **(request.repo_fields() if request is not None else {}),
-                "timestamp": time.time(),
-            }
-        )
+        return {
+            "type": "push_error",
+            "error": "Push failed - final sandbox preservation is in progress",
+            "branchName": request.branch_name if request is not None else "",
+            **(request.repo_fields() if request is not None else {}),
+            "timestamp": time.time(),
+        }
 
     def _start_push(self, cmd: dict[str, Any]) -> None:
-        task = asyncio.create_task(self._run_push(cmd))
-        self._push_tasks[task] = cmd
+        async def execute() -> dict[str, Any]:
+            if self.preservation.fenced:
+                return self._preservation_push_error_event(cmd)
+            return await self._handle_push(cmd)
 
-        def finish(completed: asyncio.Task[None]) -> None:
-            self._push_tasks.pop(completed, None)
-            if not completed.cancelled() and (error := completed.exception()) is not None:
-                self.log.error("bridge.push_task_error", exc=error)
+        self.activity.start_push(cmd, execute)
 
-        task.add_done_callback(finish)
-
-    async def _run_push(self, cmd: dict[str, Any]) -> None:
-        async with self._push_lock:
-            if self._preservation_operation_id is not None:
-                await self._refuse_push_for_preservation(cmd)
-                return
-            await self._handle_push(cmd)
-
-    async def _cancel_pushes(self, *, notify_preservation: bool) -> None:
-        pending = [(task, cmd) for task, cmd in self._push_tasks.items() if not task.done()]
-        for task, _cmd in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*(task for task, _cmd in pending), return_exceptions=True)
-        if notify_preservation:
-            for task, cmd in pending:
-                if task.cancelled():
-                    await self._refuse_push_for_preservation(cmd)
-
-    async def _handle_push(self, cmd: dict[str, Any]) -> None:
-        """Execute locally, then emit exactly one timestamped result event."""
+    async def _handle_push(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Execute a local push and return its timestamped result candidate."""
         result = await PushOperation(
             repo_path=self.repo_path,
             manifest_path=self.repo_manifest_path,
             logger=self.log,
         ).execute(cmd.get("pushSpec"))
-        await self._send_event(
-            {
-                "type": "push_error" if result.error is not None else "push_complete",
-                **({"error": result.error} if result.error is not None else {}),
-                # Even an empty branch resolves the control plane's pending push.
-                "branchName": result.request.branch_name,
-                **result.request.repo_fields(),
-                "timestamp": time.time(),
-            }
-        )
+        return {
+            "type": "push_error" if result.error is not None else "push_complete",
+            **({"error": result.error} if result.error is not None else {}),
+            # Even an empty branch resolves the control plane's pending push.
+            "branchName": result.request.branch_name,
+            **result.request.repo_fields(),
+            "timestamp": time.time(),
+        }
 
     async def _configure_git_identity(self, user: GitUser | None) -> None:
         """Refresh signing state and configure prompt-scoped author identity."""
