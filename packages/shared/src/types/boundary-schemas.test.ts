@@ -860,6 +860,19 @@ describe("boundary schemas", () => {
   });
 
   describe("clientMessageSchema", () => {
+    it("accepts only supported preservation recovery actions", () => {
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "retry" }).success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "restore_saved" })
+          .success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "resume" }).success
+      ).toBe(false);
+    });
+
     it("parses a valid prompt with attachments and request correlation", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",

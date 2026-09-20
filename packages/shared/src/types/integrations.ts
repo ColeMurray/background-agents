@@ -210,6 +210,12 @@ export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 /** Minimum configurable sandbox session lifetime, in milliseconds. */
 export const MIN_SANDBOX_TIMEOUT_MS = 1000;
 
+/** Default time reserved before provider expiry for final preservation. */
+export const DEFAULT_FINAL_SNAPSHOT_BUFFER_MS = 600_000;
+
+/** Minimum configurable final-preservation buffer, in milliseconds. */
+export const MIN_FINAL_SNAPSHOT_BUFFER_MS = 300_000;
+
 /** Whether a sandbox lifetime is a safe positive whole-second millisecond value. */
 export function isValidSandboxTimeoutMs(value: unknown): value is number {
   return (
@@ -263,6 +269,8 @@ export const sandboxSettingsSchema = z.strictObject({
   memoryMib: z.number().nullable().optional(),
   /** Requested sandbox session lifetime, in milliseconds. */
   sandboxTimeoutMs: z.number().optional(),
+  /** Time reserved before provider expiry for final sandbox preservation. */
+  finalSnapshotBufferMs: z.number().optional(),
   /** Repo-image build timeout (the build sandbox lifetime), in seconds. */
   buildTimeoutSeconds: z.number().optional(),
   /** Maximum OpenCode-reported session cost in USD. */

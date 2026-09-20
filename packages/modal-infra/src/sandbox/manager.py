@@ -555,6 +555,7 @@ class SandboxManager:
     async def take_snapshot(
         self,
         handle: SandboxHandle,
+        timeout_seconds: float = SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS,
     ) -> str:
         """
         Take a filesystem snapshot of a sandbox using Modal's native API.
@@ -578,9 +579,12 @@ class SandboxManager:
         """
         start_time = time.time()
 
-        image = await handle.modal_sandbox.snapshot_filesystem.aio(
-            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
-        )
+        # Modal takes whole seconds. Round down so conversion cannot extend
+        # the caller's deadline, and never pass its unbounded zero sentinel.
+        snapshot_timeout_seconds = min(int(timeout_seconds), SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        if snapshot_timeout_seconds <= 0:
+            raise TimeoutError("Insufficient time remains for a filesystem snapshot")
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(timeout=snapshot_timeout_seconds)
 
         # The image object_id is the unique identifier for this snapshot
         # Modal automatically stores the image and it persists indefinitely
@@ -596,6 +600,11 @@ class SandboxManager:
         )
 
         return image_id
+
+    async def stop_sandbox(self, sandbox_id: str) -> None:
+        """Terminate a provider sandbox by its immutable Modal object id."""
+        sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+        await sandbox.terminate.aio(wait=True)
 
     async def get_sandbox_by_id(self, sandbox_id: str) -> SandboxHandle | None:
         """

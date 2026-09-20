@@ -155,6 +155,15 @@ class AgentHarness(Protocol):
         """Best-effort stop of the in-flight turn; ``True`` when a stop was requested."""
         ...
 
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        """Stop and contain the active turn within ``timeout_seconds``.
+
+        Unlike ``abort``, ``True`` confirms the harness and its owned tool
+        execution are no longer active. Implementations may terminate only
+        their own process domain when a cooperative interrupt is insufficient.
+        """
+        ...
+
 
 @runtime_checkable
 class HarnessProcessOwner(Protocol):
