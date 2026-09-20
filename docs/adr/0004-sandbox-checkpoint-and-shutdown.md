@@ -86,6 +86,11 @@ storage names for compatibility with deployed runtimes and clients; a terminolog
 silently become a protocol or data migration. Persisted recovery receipts remain internal and are
 translated into domain decisions rather than returned as an overloaded artifact identifier.
 
+Internal policies, repositories, collaborators, and their test files use `shutdown` naming,
+including `shutdown-policy.ts` and `sandbox-shutdown-repository.ts`. The shared
+`sandbox-preservation` schema module and runtime protocol definitions retain the deployed protocol
+vocabulary. These compatibility names do not extend to internal lifecycle APIs or UI callbacks.
+
 ## Consequences
 
 - Callers no longer reconstruct shutdown safety from multiple collaborators or cleanup callbacks.

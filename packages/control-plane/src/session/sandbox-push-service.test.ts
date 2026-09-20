@@ -106,7 +106,7 @@ describe("SandboxPushService", () => {
   });
 
   it.each([
-    ["held", "Sandbox preservation is in progress; push is held"],
+    ["held", "Sandbox graceful shutdown is in progress; push is held"],
     ["start_required", "Sandbox must be started before pushing; retry once ready"],
   ] as const)("rejects %s admission before socket fallback", async (admission, error) => {
     const h = createService(() => admission);

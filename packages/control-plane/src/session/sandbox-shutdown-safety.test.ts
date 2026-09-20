@@ -2,20 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
-import type { PreservationRecord, PreservationStore } from "./sandbox-preservation-repository";
+import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const GENERATION = { sandboxId: "sandbox-current", createdAt: 1_000 };
 
-type TestRecord = PreservationRecord;
+type TestRecord = ShutdownRecord;
 
-class MemoryStore implements PreservationStore {
+class MemoryStore implements ShutdownStore {
   constructor(public value: TestRecord | null) {}
 
   read(): TestRecord | null {
     return this.value;
   }
 
-  write(record: PreservationRecord): void {
+  write(record: ShutdownRecord): void {
     this.value = structuredClone(record);
   }
 }
@@ -87,7 +87,7 @@ function fixture(
     runtime_version: "v72-runtime",
     status: "ready",
   };
-  const preservation = new SandboxShutdownCoordinator({
+  const shutdown = new SandboxShutdownCoordinator({
     store,
     provider,
     sandbox: {
@@ -123,7 +123,7 @@ function fixture(
     retireAccess: vi.fn(),
     now: () => options.now ?? 100_000,
   } as never);
-  return { preservation, provider, sandboxRow, stopSandbox, store };
+  return { shutdown, provider, sandboxRow, stopSandbox, store };
 }
 
 describe("sandbox shutdown safety", () => {
@@ -141,13 +141,13 @@ describe("sandbox shutdown safety", () => {
     );
     const h = fixture(runningRecord(), { takeSnapshot });
 
-    const capture = h.preservation.captureCheckpoint(GENERATION, "execution_complete");
+    const capture = h.shutdown.captureCheckpoint(GENERATION, "execution_complete");
     await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
 
-    await expect(h.preservation.handleAlarm()).resolves.toBe("hold_watchdogs");
-    await expect(
-      h.preservation.captureCheckpoint(GENERATION, "inactivity_timeout")
-    ).resolves.toEqual({ outcome: "held" });
+    await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+    await expect(h.shutdown.captureCheckpoint(GENERATION, "inactivity_timeout")).resolves.toEqual({
+      outcome: "held",
+    });
     expect(takeSnapshot).toHaveBeenCalledOnce();
     expect(h.stopSandbox).not.toHaveBeenCalled();
 
@@ -174,24 +174,24 @@ describe("sandbox shutdown safety", () => {
       const takeSnapshot = vi.fn(providerCapture);
       const h = fixture(runningRecord(), { takeSnapshot });
 
-      await expect(
-        h.preservation.captureCheckpoint(GENERATION, "execution_complete")
-      ).resolves.toEqual({ outcome: "unknown" });
+      await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual(
+        { outcome: "unknown" }
+      );
 
       expect(h.store.value).toMatchObject({
         phase: "unknown",
         checkpointInFlight: false,
         error: expect.stringMatching(/checkpoint/i),
       });
-      expect(h.preservation.admissionDecision()).toBe("held");
-      await expect(h.preservation.handleAlarm()).resolves.toBe("hold_watchdogs");
+      expect(h.shutdown.admissionDecision()).toBe("held");
+      await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
       expect(h.stopSandbox).not.toHaveBeenCalled();
-      await expect(h.preservation.recover("retry")).rejects.toThrow("cannot be retried safely");
-      await expect(
-        h.preservation.captureCheckpoint(GENERATION, "execution_complete")
-      ).resolves.toEqual({ outcome: "held" });
+      await expect(h.shutdown.recover("retry")).rejects.toThrow("cannot be retried safely");
+      await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual(
+        { outcome: "held" }
+      );
       expect(takeSnapshot).toHaveBeenCalledOnce();
-      expect(h.preservation.admissionDecision()).toBe("held");
+      expect(h.shutdown.admissionDecision()).toBe("held");
     }
   );
 
@@ -205,22 +205,22 @@ describe("sandbox shutdown safety", () => {
       })
     );
 
-    expect(h.preservation.snapshot()).toMatchObject({
+    expect(h.shutdown.snapshot()).toMatchObject({
       phase: "saved",
       continuationPaused: true,
     });
-    expect(h.preservation.admissionDecision()).toBe("held");
-    expect(h.preservation.startupDecision()).toMatchObject({ kind: "hold" });
+    expect(h.shutdown.admissionDecision()).toBe("held");
+    expect(h.shutdown.startupDecision()).toMatchObject({ kind: "hold" });
 
-    await h.preservation.recover("restore_saved");
+    await h.shutdown.recover("restore_saved");
 
     expect(h.store.value).toMatchObject({
       phase: "saved",
       continuationPaused: false,
       messageId: "interrupted-before-continuation-flag",
     });
-    expect(h.preservation.snapshot()).toMatchObject({ continuationPaused: false });
-    expect(h.preservation.admissionDecision()).toBe("restore_required");
+    expect(h.shutdown.snapshot()).toMatchObject({ continuationPaused: false });
+    expect(h.shutdown.admissionDecision()).toBe("restore_required");
   });
 
   it.each([
@@ -234,7 +234,7 @@ describe("sandbox shutdown safety", () => {
         stopResult: { success: false, error: "provider stop not confirmed" },
       });
 
-      await h.preservation.recover("restore_saved");
+      await h.shutdown.recover("restore_saved");
 
       expect(h.stopSandbox).toHaveBeenCalledOnce();
       expect(h.store.value).toMatchObject({
@@ -242,14 +242,14 @@ describe("sandbox shutdown safety", () => {
         sourceRetired: false,
         receipt: { artifactId: "saved-snapshot" },
       });
-      expect(h.preservation.admissionDecision()).toBe("held");
+      expect(h.shutdown.admissionDecision()).toBe("held");
     }
   );
 
   it("accepts authoritative provider expiry as retirement proof", async () => {
     const h = fixture(recoveryRecord({ lifetimeSource: "provider" }), { now: 100_000 });
 
-    await h.preservation.recover("restore_saved");
+    await h.shutdown.recover("restore_saved");
 
     expect(h.stopSandbox).not.toHaveBeenCalled();
     expect(h.store.value).toMatchObject({

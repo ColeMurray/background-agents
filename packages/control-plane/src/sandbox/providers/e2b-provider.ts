@@ -483,7 +483,7 @@ export class E2BSandboxProvider implements SandboxProvider {
           if (config.intent === "preserve") {
             return {
               success: false,
-              error: "Sandbox disappeared before preservation was verified",
+              error: "Sandbox disappeared before graceful shutdown was verified",
             };
           }
           return { success: true };
@@ -501,7 +501,7 @@ export class E2BSandboxProvider implements SandboxProvider {
             if (verificationError instanceof E2BNotFoundError) {
               return {
                 success: false,
-                error: "Sandbox disappeared before preservation was verified",
+                error: "Sandbox disappeared before graceful shutdown was verified",
               };
             }
             throw verificationError;

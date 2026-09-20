@@ -4,7 +4,7 @@ import type { E2BSandboxDetail } from "../e2b-rest-client";
 import { E2BConflictError, E2BNotFoundError } from "../e2b-rest-client";
 import { baseCreateConfig, mockClient, providerConfig } from "./e2b-provider.test-helpers";
 
-describe("E2BSandboxProvider preservation", () => {
+describe("E2BSandboxProvider graceful shutdown", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("returns created ownership with unknown lifetime when the post-start metadata read fails", async () => {
@@ -95,7 +95,7 @@ describe("E2BSandboxProvider preservation", () => {
     expect(client.killSandbox).not.toHaveBeenCalled();
   });
 
-  it("does not claim preservation when the sandbox is missing", async () => {
+  it("does not claim graceful shutdown when the sandbox is missing", async () => {
     const client = mockClient({
       pauseSandbox: vi.fn(async () => {
         throw new E2BNotFoundError("gone");
@@ -111,7 +111,7 @@ describe("E2BSandboxProvider preservation", () => {
     ).resolves.toMatchObject({ success: false });
   });
 
-  it("verifies a pause conflict under the preservation deadline signal", async () => {
+  it("verifies a pause conflict under the graceful shutdown deadline signal", async () => {
     const client = mockClient({
       pauseSandbox: vi.fn(async () => {
         throw new E2BConflictError("already transitioning");

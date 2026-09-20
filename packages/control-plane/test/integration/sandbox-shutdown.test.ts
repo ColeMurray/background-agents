@@ -12,9 +12,9 @@ import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-ada
 import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
-  SandboxPreservationRepository,
-  type PreservationStore,
-} from "../../src/session/sandbox-preservation-repository";
+  SandboxShutdownRepository,
+  type ShutdownStore,
+} from "../../src/session/sandbox-shutdown-repository";
 import { SessionAttachmentRepository } from "../../src/session/session-attachment-repository";
 import { SessionCoreRepository } from "../../src/session/session-core-repository";
 import { cleanD1Tables } from "./cleanup";
@@ -40,7 +40,7 @@ interface SandboxGeneration {
   createdAt: number;
 }
 
-async function seedPreservation(
+async function seedShutdown(
   stub: DurableObjectStub,
   overrides: Record<string, unknown> = {}
 ): Promise<SandboxGeneration> {
@@ -67,7 +67,7 @@ async function seedPreservation(
   return generation;
 }
 
-async function readPreservation(stub: DurableObjectStub): Promise<Record<string, unknown>> {
+async function readShutdown(stub: DurableObjectStub): Promise<Record<string, unknown>> {
   const [row] = await queryDO<{ state: string }>(
     stub,
     "SELECT state FROM sandbox_preservation WHERE singleton = 1"
@@ -80,7 +80,7 @@ function realLifecycleHarness(
   durableState: DurableObjectState,
   provider: SandboxProvider,
   options: {
-    store?: PreservationStore;
+    store?: ShutdownStore;
     onQueueAdmission?: (decision: string) => void;
   } = {}
 ) {
@@ -100,7 +100,7 @@ function realLifecycleHarness(
     options.onQueueAdmission?.(decision);
   };
   const preservation = new SandboxShutdownCoordinator({
-    store: options.store ?? new SandboxPreservationRepository(durableState.storage.sql),
+    store: options.store ?? new SandboxShutdownRepository(durableState.storage.sql),
     provider,
     sandbox,
     session: sessions,
@@ -159,7 +159,7 @@ function realLifecycleHarness(
   };
 }
 
-describe("sandbox preservation wiring", () => {
+describe("sandbox graceful shutdown wiring", () => {
   it("rolls back the sandbox reservation when the matching preservation write fails", async () => {
     const { stub } = await initNamedSession(`preservation-reservation-rollback-${Date.now()}`);
     await seedSandboxAuth(stub, {
@@ -176,7 +176,7 @@ describe("sandbox preservation wiring", () => {
         "v62-legacy-runtime"
       );
     });
-    await seedPreservation(stub, {
+    await seedShutdown(stub, {
       phase: "saved",
       provider: "modal",
       providerObjectId: "old-provider-object",
@@ -199,7 +199,7 @@ describe("sandbox preservation wiring", () => {
       created_at: number;
       status: string;
     }>(stub, "SELECT modal_sandbox_id, modal_object_id, created_at, status FROM sandbox");
-    const preservationBefore = await readPreservation(stub);
+    const preservationBefore = await readShutdown(stub);
 
     const restoreFromSnapshot = vi.fn(async (): Promise<RestoreResult> => {
       throw new Error("provider must not run when reservation fails");
@@ -219,8 +219,8 @@ describe("sandbox preservation wiring", () => {
     };
 
     const result = await runInSessionDO(stub, async (instance, durableState) => {
-      const realStore = new SandboxPreservationRepository(durableState.storage.sql);
-      const throwingStore: PreservationStore = {
+      const realStore = new SandboxShutdownRepository(durableState.storage.sql);
+      const throwingStore: ShutdownStore = {
         read: () => realStore.read(),
         write: () => {
           throw new Error("injected preservation write failure");
@@ -244,7 +244,7 @@ describe("sandbox preservation wiring", () => {
         "SELECT modal_sandbox_id, modal_object_id, created_at, status FROM sandbox"
       )
     ).toEqual([sandboxBefore]);
-    expect(await readPreservation(stub)).toEqual(preservationBefore);
+    expect(await readShutdown(stub)).toEqual(preservationBefore);
     expect(result.preservationAnnouncements).toEqual([]);
     expect(result.lifecycleAnnouncements).not.toContainEqual({
       type: "sandbox_status",
@@ -267,7 +267,7 @@ describe("sandbox preservation wiring", () => {
         "v62-legacy-runtime"
       );
     });
-    await seedPreservation(stub, {
+    await seedShutdown(stub, {
       phase: "saved",
       provider: "modal",
       providerObjectId: null,
@@ -410,7 +410,7 @@ describe("sandbox preservation wiring", () => {
         "restore-pending"
       )
     ).toEqual([{ status: "processing" }]);
-    expect(await readPreservation(stub)).toMatchObject({
+    expect(await readShutdown(stub)).toMatchObject({
       phase: "running",
       runtimeReady: true,
       providerObjectId: "restored-provider-object",
@@ -420,7 +420,7 @@ describe("sandbox preservation wiring", () => {
   it("rejects push from saved state when no live sandbox is available", async () => {
     const { stub } = await initNamedSession(`preservation-saved-push-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
-    await seedPreservation(stub, {
+    await seedShutdown(stub, {
       phase: "saved",
       provider: "modal",
       providerObjectId: "provider-1",
@@ -505,7 +505,7 @@ describe("sandbox preservation wiring", () => {
       };
       const sandbox = componentsOf(instance).sandboxRepository;
       const preservation = new SandboxShutdownCoordinator({
-        store: new SandboxPreservationRepository(durableState.storage.sql),
+        store: new SandboxShutdownRepository(durableState.storage.sql),
         provider,
         sandbox,
         session: {
@@ -560,7 +560,7 @@ describe("sandbox preservation wiring", () => {
     const name = `preservation-generation-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
-    const generation = await seedPreservation(stub);
+    const generation = await seedShutdown(stub);
     const [{ id: authorId }] = await queryDO<{ id: string }>(
       stub,
       "SELECT id FROM participants LIMIT 1"
@@ -631,7 +631,7 @@ describe("sandbox preservation wiring", () => {
       sandboxId: SANDBOX_ID,
       status: "connecting",
     });
-    await seedPreservation(stub, {
+    await seedShutdown(stub, {
       lifecyclePolicy: "legacy",
       lifetimeKind: "none",
       expiresAtMs: null,
@@ -671,7 +671,7 @@ describe("sandbox preservation wiring", () => {
     expect(await delivered).toContainEqual(
       expect.objectContaining({ type: "prompt", messageId: "legacy-pending" })
     );
-    expect(await readPreservation(stub)).toMatchObject({
+    expect(await readShutdown(stub)).toMatchObject({
       phase: "running",
       lifecyclePolicy: "legacy",
       runtimeReady: true,
@@ -693,7 +693,7 @@ describe("sandbox preservation wiring", () => {
         "v72-runtime"
       );
     });
-    const generation = await seedPreservation(stub, {
+    const generation = await seedShutdown(stub, {
       provider: "modal",
       providerObjectId: "provider-current",
       sourceRetired: false,
@@ -779,7 +779,7 @@ describe("sandbox preservation wiring", () => {
         async () => undefined
       );
       const coordinator = new SandboxShutdownCoordinator({
-        store: new SandboxPreservationRepository(sql),
+        store: new SandboxShutdownRepository(sql),
         provider,
         sandbox: componentsOf(instance).sandboxRepository,
         session: sessions,
@@ -795,7 +795,7 @@ describe("sandbox preservation wiring", () => {
       } as never);
 
       await expect(coordinator.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe("owned");
-      const draining = new SandboxPreservationRepository(sql).read();
+      const draining = new SandboxShutdownRepository(sql).read();
       expect(draining).toMatchObject({
         phase: "draining",
         messageId: "interrupted-active",
@@ -810,7 +810,7 @@ describe("sandbox preservation wiring", () => {
         timestamp: Date.now() / 1_000,
       });
       await vi.waitFor(() =>
-        expect(new SandboxPreservationRepository(sql).read()).toMatchObject({
+        expect(new SandboxShutdownRepository(sql).read()).toMatchObject({
           phase: "saved",
           continuationPaused: true,
           sourceRetired: true,
@@ -841,7 +841,7 @@ describe("sandbox preservation wiring", () => {
       createdAt: now + 1,
     });
     const restartEvidence = await runInSessionDO(stub, async (instance, durableState) => {
-      const store = new SandboxPreservationRepository(durableState.storage.sql);
+      const store = new SandboxShutdownRepository(durableState.storage.sql);
       const admissions: string[] = [];
       const restarted = new SandboxShutdownCoordinator({
         store,
@@ -882,7 +882,7 @@ describe("sandbox preservation wiring", () => {
     const anonymous = await openClientWs(name);
     anonymous.ws.send(JSON.stringify({ type: "recover_preservation", action: "restore_saved" }));
     await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(await readPreservation(stub)).toMatchObject({ continuationPaused: true });
+    expect(await readShutdown(stub)).toMatchObject({ continuationPaused: true });
     anonymous.ws.close();
 
     const authenticated = await openClientWs(name, { subscribe: true });
@@ -890,7 +890,7 @@ describe("sandbox preservation wiring", () => {
       JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
     );
     await vi.waitFor(async () => {
-      expect(await readPreservation(stub)).not.toMatchObject({ continuationPaused: true });
+      expect(await readShutdown(stub)).not.toMatchObject({ continuationPaused: true });
     });
     authenticated.ws.close();
 
@@ -920,7 +920,7 @@ describe("sandbox preservation wiring", () => {
     const name = `preservation-drain-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
-    const generation = await seedPreservation(stub, {
+    const generation = await seedShutdown(stub, {
       drainAtMs: Date.now() - 1,
       generationReady: true,
       runtimeReady: true,
@@ -1001,7 +1001,7 @@ describe("sandbox preservation wiring", () => {
       })
     );
     expect(await staleAck).toContainEqual({ type: "ack", ackId: "stale-prepared" });
-    expect(await readPreservation(stub)).toMatchObject({ phase: "draining" });
+    expect(await readShutdown(stub)).toMatchObject({ phase: "draining" });
 
     const matchingAck = collectMessages(ws!, {
       until: (message) => message.type === "ack" && message.ackId === "matching-prepared",
@@ -1019,7 +1019,7 @@ describe("sandbox preservation wiring", () => {
       })
     );
     expect(await matchingAck).toContainEqual({ type: "ack", ackId: "matching-prepared" });
-    expect(await readPreservation(stub)).toMatchObject({ phase: "failed" });
+    expect(await readShutdown(stub)).toMatchObject({ phase: "failed" });
     ws!.close();
   });
 });

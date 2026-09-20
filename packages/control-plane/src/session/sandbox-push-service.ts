@@ -46,7 +46,7 @@ export class SandboxPushService {
     const admission = this.pushAdmission();
     if (admission !== "ready" && admission !== "unmanaged") {
       if (admission === "held") {
-        return { success: false, error: "Sandbox preservation is in progress; push is held" };
+        return { success: false, error: "Sandbox graceful shutdown is in progress; push is held" };
       }
       return {
         success: false,

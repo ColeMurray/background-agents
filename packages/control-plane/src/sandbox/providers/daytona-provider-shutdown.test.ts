@@ -17,7 +17,7 @@ function createProvider(client: Partial<DaytonaRestClient>): DaytonaSandboxProvi
   });
 }
 
-describe("DaytonaSandboxProvider preservation", () => {
+describe("DaytonaSandboxProvider graceful shutdown", () => {
   it("verifies retained state under the deadline signal", async () => {
     const client = {
       stopSandbox: vi.fn(async () => {}),
@@ -35,7 +35,7 @@ describe("DaytonaSandboxProvider preservation", () => {
     expect(client.getSandbox).toHaveBeenCalledWith("daytona-sandbox-id", expect.any(AbortSignal));
   });
 
-  it("does not claim preservation when the sandbox is missing", async () => {
+  it("does not claim graceful shutdown when the sandbox is missing", async () => {
     const client = {
       stopSandbox: vi.fn(async () => {
         throw new DaytonaNotFoundError("not found");

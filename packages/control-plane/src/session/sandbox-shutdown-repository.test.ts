@@ -2,13 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { initSchema } from "./schema";
-import {
-  SandboxPreservationRepository,
-  type PreservationRecord,
-} from "./sandbox-preservation-repository";
+import { SandboxShutdownRepository, type ShutdownRecord } from "./sandbox-shutdown-repository";
 import { SessionStorageIntegrityError } from "./types";
 
-function record(overrides: Partial<PreservationRecord> = {}): PreservationRecord {
+function record(overrides: Partial<ShutdownRecord> = {}): ShutdownRecord {
   return {
     phase: "running",
     generation: { sandboxId: "sandbox-1", createdAt: 1_000 },
@@ -25,10 +22,10 @@ function repository() {
   const db = new DatabaseSync(":memory:");
   const { sql } = createNodeSqlStorage(db);
   initSchema(sql);
-  return { db, sql, repository: new SandboxPreservationRepository(sql) };
+  return { db, sql, repository: new SandboxShutdownRepository(sql) };
 }
 
-describe("SandboxPreservationRepository", () => {
+describe("SandboxShutdownRepository", () => {
   it("distinguishes missing state from a stored running generation", () => {
     const fixture = repository();
     expect(fixture.repository.read()).toBeNull();

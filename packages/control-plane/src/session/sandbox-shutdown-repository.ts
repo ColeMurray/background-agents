@@ -47,20 +47,20 @@ const stateSchema = sandboxPreservationSchema
           state.captureByMs === undefined ||
           state.retireByMs === undefined)) ||
       (state.phase === "retiring" && (!state.operationId || state.retireByMs === undefined));
-    if (incomplete) context.addIssue({ code: "custom", message: "Incomplete preservation phase" });
+    if (incomplete) context.addIssue({ code: "custom", message: "Incomplete shutdown phase" });
   });
 
-export type PreservationRecord = z.infer<typeof stateSchema>;
-export type PreservationReceipt = z.infer<typeof receiptSchema>;
-export interface PreservationStore {
-  read(): PreservationRecord | null;
-  write(record: PreservationRecord): void;
+export type ShutdownRecord = z.infer<typeof stateSchema>;
+export type ShutdownRecoveryReceipt = z.infer<typeof receiptSchema>;
+export interface ShutdownStore {
+  read(): ShutdownRecord | null;
+  write(record: ShutdownRecord): void;
 }
 
-export class SandboxPreservationRepository implements PreservationStore {
+export class SandboxShutdownRepository implements ShutdownStore {
   constructor(private readonly sql: SqlStorage) {}
 
-  read(): PreservationRecord | null {
+  read(): ShutdownRecord | null {
     const row = this.sql
       .exec("SELECT state FROM sandbox_preservation WHERE singleton = 1")
       .toArray()[0];
@@ -69,11 +69,11 @@ export class SandboxPreservationRepository implements PreservationStore {
       const persisted = z.object({ state: z.string() }).parse(row);
       return stateSchema.parse(JSON.parse(persisted.state));
     } catch {
-      throw new SessionStorageIntegrityError("Malformed sandbox preservation state");
+      throw new SessionStorageIntegrityError("Malformed sandbox graceful shutdown state");
     }
   }
 
-  write(record: PreservationRecord): void {
+  write(record: ShutdownRecord): void {
     this.sql.exec(
       `INSERT INTO sandbox_preservation (singleton, state) VALUES (1, ?)
        ON CONFLICT(singleton) DO UPDATE SET state = excluded.state`,

@@ -14,27 +14,27 @@ import type {
   SandboxStartupDecision,
   SandboxWorkAdmission,
 } from "../sandbox/lifecycle/ports";
-import type { PreservationLifecyclePolicy } from "../sandbox/lifecycle/preservation-policy";
+import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
-import type { SandboxPreservationStorage } from "./sandbox-ports";
+import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { MessageFailureService } from "./message-failure-service";
 import type { SessionMessenger } from "./messenger";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { PreservationRecord, PreservationStore } from "./sandbox-preservation-repository";
+import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const STOP_MS = 60_000;
 const CAPTURE_MS = 300_000;
 const RETIRE_MS = 30_000;
 const MARGIN_MS = 30_000;
 
-class PreservationDeadlineError extends Error {}
+class ShutdownDeadlineError extends Error {}
 
-interface PreservationDeps {
-  store: PreservationStore;
+interface ShutdownDependencies {
+  store: ShutdownStore;
   provider: SandboxProvider;
-  sandbox: SandboxPreservationStorage;
+  sandbox: SandboxShutdownStorage;
   session: SessionCoreRepository;
   messages: MessageRepository;
   failures: MessageFailureService;
@@ -53,13 +53,13 @@ interface PreservationDeps {
 /** One durable owner of planned stopping. Provider side effects never imply a saved receipt. */
 export class SandboxShutdownCoordinator {
   private activeOperation: string | null = null;
-  private checkpointLeaseId: string | null = null;
+  private checkpointOperationId: string | null = null;
   private checkpointGeneration: SandboxGeneration | null = null;
   private retiringOperation: string | null = null;
   private activeRestoreGeneration: SandboxGeneration | null = null;
   private readonly now: () => number;
 
-  constructor(private readonly deps: PreservationDeps) {
+  constructor(private readonly deps: ShutdownDependencies) {
     this.now = deps.now ?? Date.now;
   }
 
@@ -75,7 +75,7 @@ export class SandboxShutdownCoordinator {
       : null;
   }
 
-  private current(state: PreservationRecord): boolean {
+  private current(state: ShutdownRecord): boolean {
     const row = this.deps.sandbox.getSandbox();
     return (
       row?.modal_sandbox_id === state.generation.sandboxId &&
@@ -83,12 +83,12 @@ export class SandboxShutdownCoordinator {
     );
   }
 
-  private publish(state: PreservationRecord): void {
+  private publish(state: ShutdownRecord): void {
     this.deps.store.write(state);
     this.announce(state);
   }
 
-  private announce(state: PreservationRecord): void {
+  private announce(state: ShutdownRecord): void {
     this.deps.log?.info("sandbox.preservation", {
       event: "sandbox.preservation",
       phase: state.phase,
@@ -112,7 +112,7 @@ export class SandboxShutdownCoordinator {
   /** Atomically reserves the sandbox row and shutdown ownership before provider work. */
   reserveStartup(
     createdAt: number,
-    lifecyclePolicy: PreservationLifecyclePolicy,
+    lifecyclePolicy: ShutdownLifecyclePolicy,
     persistSandboxRow: () => void
   ): void {
     const previous = this.deps.store.read();
@@ -120,7 +120,7 @@ export class SandboxShutdownCoordinator {
       !!previous?.receipt &&
       (previous.phase === "saved" ||
         (previous.phase === "restoring" && previous.restoreInvoked !== true));
-    let next!: PreservationRecord;
+    let next!: ShutdownRecord;
     this.deps.session.transaction(() => {
       persistSandboxRow();
       const row = this.deps.sandbox.getSandbox();
@@ -185,7 +185,7 @@ export class SandboxShutdownCoordinator {
     const buffer = settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS;
     const expiresAtMs = lifetime.kind === "finite" ? lifetime.expiresAtMs : null;
     const legacy = state.lifecyclePolicy === "legacy";
-    const next: PreservationRecord = {
+    const next: ShutdownRecord = {
       ...state,
       phase: state.phase === "restoring" ? "running" : state.phase,
       restoreInvoked: undefined,
@@ -231,14 +231,14 @@ export class SandboxShutdownCoordinator {
       this.fail(
         next,
         "failed",
-        "This sandbox runtime does not support confirmed preservation. Upgrade the runtime before resuming work."
+        "This sandbox runtime does not support confirmed graceful shutdown. Upgrade the runtime before resuming work."
       );
       return;
     }
     this.bindGeneration(next);
   }
 
-  private bindGeneration(state: PreservationRecord): void {
+  private bindGeneration(state: ShutdownRecord): void {
     const socket = this.deps.sockets.getSandboxSocket();
     if (socket && state.protocolVersion === 1) {
       this.deps.sockets.send(socket, { type: "sandbox_generation", generation: state.generation });
@@ -266,7 +266,7 @@ export class SandboxShutdownCoordinator {
       return state.checkpointInFlight ? "held" : "ready";
     }
     // A provider-create failure with no connected runtime/receipt still uses
-    // the existing fresh-spawn retry policy. Unknown preservation never does.
+    // the existing fresh-spawn retry policy. Unknown shutdown state never does.
     if (
       !state.runtimeReady &&
       !state.receipt &&
@@ -370,7 +370,7 @@ export class SandboxShutdownCoordinator {
     }
     if (!state.receipt || state.receipt.provider !== this.deps.provider.name)
       throw new Error("No saved recovery point for the configured provider is available.");
-    const next: PreservationRecord = {
+    const next: ShutdownRecord = {
       ...state,
       phase: "retiring",
       reason: "restore_saved_state",
@@ -402,7 +402,7 @@ export class SandboxShutdownCoordinator {
     generation: SandboxGeneration,
     reason: string
   ): Promise<SandboxCheckpointOutcome> {
-    if (this.checkpointLeaseId || generation.sandboxId === null) return { outcome: "held" };
+    if (this.checkpointOperationId || generation.sandboxId === null) return { outcome: "held" };
     const checkpointGeneration = { ...generation, sandboxId: generation.sandboxId };
     const now = this.now();
     let state = this.deps.store.read();
@@ -444,7 +444,7 @@ export class SandboxShutdownCoordinator {
     );
     const id = crypto.randomUUID();
     this.deps.store.write({ ...state, checkpointInFlight: true });
-    this.checkpointLeaseId = id;
+    this.checkpointOperationId = id;
     this.checkpointGeneration = checkpointGeneration;
     const row = this.deps.sandbox.getSandbox();
     const session = this.deps.session.getSession();
@@ -471,7 +471,7 @@ export class SandboxShutdownCoordinator {
       );
       const current = this.deps.sandbox.getSandbox();
       if (
-        this.checkpointLeaseId !== id ||
+        this.checkpointOperationId !== id ||
         current?.modal_sandbox_id !== checkpointGeneration.sandboxId ||
         current.created_at !== checkpointGeneration.createdAt ||
         !this.deps.sandbox.recordSandboxSnapshot(
@@ -514,8 +514,8 @@ export class SandboxShutdownCoordinator {
   }
 
   private endCheckpoint(id: string, uncertain: boolean): void {
-    if (this.checkpointLeaseId !== id) return;
-    this.checkpointLeaseId = null;
+    if (this.checkpointOperationId !== id) return;
+    this.checkpointOperationId = null;
     const state = this.deps.store.read();
     const generation = this.checkpointGeneration;
     this.checkpointGeneration = null;
@@ -553,7 +553,7 @@ export class SandboxShutdownCoordinator {
     // A shorter buffer reduces capture time, not the prompt-stop allowance.
     // Always leave room for source retirement and the final safety margin.
     const stopByMs = Math.min(now + STOP_MS, end - RETIRE_MS - MARGIN_MS);
-    const next: PreservationRecord = {
+    const next: ShutdownRecord = {
       ...state,
       phase: "draining",
       reason,
@@ -595,7 +595,7 @@ export class SandboxShutdownCoordinator {
       this.fail(
         state,
         "failed",
-        event.error ?? "Active execution did not stop before the preservation deadline."
+        event.error ?? "Active execution did not stop before the graceful shutdown deadline."
       );
       return;
     }
@@ -608,7 +608,7 @@ export class SandboxShutdownCoordinator {
     const state = this.normalizeInterruptedRestore();
     if (!state) return "continue";
     if (state.phase === "running") {
-      if (state.checkpointInFlight && !this.checkpointLeaseId) {
+      if (state.checkpointInFlight && !this.checkpointOperationId) {
         this.fail(state, "unknown", "Checkpoint result was lost during a control-plane restart.");
         return "hold_watchdogs";
       }
@@ -633,13 +633,13 @@ export class SandboxShutdownCoordinator {
         this.fail(
           state,
           "failed",
-          "Could not confirm prompt/tool shutdown before the preservation deadline."
+          "Could not confirm prompt/tool shutdown before the graceful shutdown deadline."
         );
         return;
       }
       await this.deps.alarm.schedule(state.stopByMs!);
       if (state.checkpointInFlight) {
-        if (!this.checkpointLeaseId)
+        if (!this.checkpointOperationId)
           this.fail(state, "unknown", "An earlier checkpoint has an unknown result.");
         return;
       }
@@ -660,7 +660,7 @@ export class SandboxShutdownCoordinator {
         this.fail(
           state,
           "unknown",
-          "Preservation was interrupted; the provider result is unknown. No destructive retry was made."
+          "Graceful shutdown was interrupted; the provider result is unknown. No destructive retry was made."
         );
       return;
     }
@@ -668,7 +668,7 @@ export class SandboxShutdownCoordinator {
     else if (state.phase === "retiring") await this.retire(state);
   }
 
-  private normalizeInterruptedRestore(): PreservationRecord | null {
+  private normalizeInterruptedRestore(): ShutdownRecord | null {
     const state = this.deps.store.read();
     if (
       state?.phase !== "restoring" ||
@@ -678,7 +678,7 @@ export class SandboxShutdownCoordinator {
     )
       return state;
     const row = this.deps.sandbox.getSandbox();
-    const unknown: PreservationRecord = {
+    const unknown: ShutdownRecord = {
       ...state,
       phase: "unknown",
       providerObjectId: row?.modal_object_id ?? state.providerObjectId,
@@ -689,7 +689,7 @@ export class SandboxShutdownCoordinator {
     return unknown;
   }
 
-  private async capture(state: PreservationRecord): Promise<void> {
+  private async capture(state: ShutdownRecord): Promise<void> {
     const { provider } = this.deps;
     if (!state.providerObjectId || this.now() >= state.captureByMs!) {
       this.fail(state, "failed", "No time or provider handle remains for a final snapshot.");
@@ -718,7 +718,7 @@ export class SandboxShutdownCoordinator {
           provider.stopSandbox!({ ...common, intent: "preserve", signal })
         );
         if (!result.success)
-          throw new Error(result.error ?? "Provider did not confirm preservation");
+          throw new Error(result.error ?? "Provider did not confirm graceful shutdown");
       } else {
         const result = await this.captureSnapshot(
           state.providerObjectId,
@@ -737,7 +737,7 @@ export class SandboxShutdownCoordinator {
         savedAtMs: this.now(),
         runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
       };
-      const retiring: PreservationRecord = {
+      const retiring: ShutdownRecord = {
         ...capturing,
         phase: "retiring",
         receipt,
@@ -757,16 +757,16 @@ export class SandboxShutdownCoordinator {
         this.fail(
           capturing,
           "unknown",
-          error instanceof PreservationDeadlineError
-            ? "Provider preservation deadline exceeded; result unknown."
-            : "The provider did not confirm final preservation. The previous recovery point is unchanged."
+          error instanceof ShutdownDeadlineError
+            ? "Provider graceful shutdown deadline exceeded; result unknown."
+            : "The provider did not confirm final graceful shutdown. The previous recovery point is unchanged."
         );
     } finally {
       this.activeOperation = null;
     }
   }
 
-  private async retire(state: PreservationRecord): Promise<void> {
+  private async retire(state: ShutdownRecord): Promise<void> {
     if (this.retiringOperation === state.operationId) return;
     if (!state.receipt || !state.providerObjectId) return;
     if (this.now() >= state.retireByMs!) {
@@ -804,7 +804,7 @@ export class SandboxShutdownCoordinator {
     }
   }
 
-  private finish(state: PreservationRecord): void {
+  private finish(state: ShutdownRecord): void {
     this.deps.sandbox.updateSandboxStatus("stopped");
     this.deps.retireAccess();
     this.publish({ ...state, phase: "saved", sourceRetired: true });
@@ -812,15 +812,15 @@ export class SandboxShutdownCoordinator {
     this.notifyLifecycleChange();
   }
 
-  private fail(state: PreservationRecord, phase: "failed" | "unknown", error: string): void {
+  private fail(state: ShutdownRecord, phase: "failed" | "unknown", error: string): void {
     this.publish({ ...state, phase, error });
     this.deps.messenger.broadcast({
       type: "sandbox_warning",
-      message: `Sandbox preservation ${phase}: ${error}`,
+      message: `Sandbox graceful shutdown ${phase}: ${error}`,
     });
   }
 
-  private owns(state: PreservationRecord): boolean {
+  private owns(state: ShutdownRecord): boolean {
     const current = this.deps.store.read();
     return (
       this.current(state) &&
@@ -830,14 +830,14 @@ export class SandboxShutdownCoordinator {
     );
   }
 
-  private matches(state: PreservationRecord, generation: SandboxGeneration): boolean {
+  private matches(state: ShutdownRecord, generation: SandboxGeneration): boolean {
     return (
       state.generation.sandboxId === generation.sandboxId &&
       state.generation.createdAt === generation.createdAt
     );
   }
 
-  private providerMatches(state: PreservationRecord): boolean {
+  private providerMatches(state: ShutdownRecord): boolean {
     if (!state.provider || state.provider === this.deps.provider.name) return true;
     if (state.phase !== "unknown")
       this.fail(
@@ -849,7 +849,7 @@ export class SandboxShutdownCoordinator {
   }
 
   /** Old interrupted records lacked the explicit flag but retained the message marker. */
-  private continuationPaused(state: PreservationRecord): boolean {
+  private continuationPaused(state: ShutdownRecord): boolean {
     return state.continuationPaused ?? state.messageId !== undefined;
   }
 
@@ -874,7 +874,9 @@ export class SandboxShutdownCoordinator {
         () => {
           controller.abort();
           reject(
-            new PreservationDeadlineError("Provider preservation deadline exceeded; result unknown")
+            new ShutdownDeadlineError(
+              "Provider graceful shutdown deadline exceeded; result unknown"
+            )
           );
         },
         Math.max(0, deadline - this.now())

@@ -589,7 +589,7 @@ export async function seedSandboxAuth(
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     // This helper replaces the failed test spawn with a legacy fixture.
-    // Preservation-aware tests seed their matching generation explicitly.
+    // Shutdown-aware tests seed their matching generation explicitly.
     state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
       "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
