@@ -342,7 +342,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.id || config.providerObjectId,
-        lifetime: this.lifetimeFromSandbox(await this.client.getSandbox(config.providerObjectId)),
+        lifetime: await this.readLifetimeAfterResume(config.providerObjectId),
         codeServerUrl,
         codeServerPassword,
         vncAccess,
@@ -414,6 +414,23 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     return Number.isFinite(expiresAtMs)
       ? ({ kind: "finite", expiresAtMs, observedAtMs, source: "provider" } as const)
       : ({ kind: "unknown", observedAtMs, reason: "Invalid OpenComputer endAt" } as const);
+  }
+
+  private async readLifetimeAfterResume(providerObjectId: string) {
+    try {
+      return this.lifetimeFromSandbox(await this.client.getSandbox(providerObjectId));
+    } catch (error) {
+      log.warn("opencomputer.lifetime_read_failed", {
+        sandbox_id: providerObjectId,
+        operation: "resume",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        kind: "unknown",
+        observedAtMs: Date.now(),
+        reason: "Failed to read OpenComputer lifetime after successful resume",
+      } as const;
+    }
   }
 
   private async waitUntilReady(

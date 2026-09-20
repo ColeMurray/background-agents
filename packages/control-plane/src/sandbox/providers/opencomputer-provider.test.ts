@@ -1028,6 +1028,37 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
   });
 
+  it("returns resumed ownership with unknown lifetime when the post-resume metadata read fails", async () => {
+    const getSandbox = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "oc-sandbox-1", state: "hibernated" })
+      .mockRejectedValueOnce(new Error("metadata unavailable"));
+    const client = createMockClient({ getSandbox });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+    });
+
+    const result = await provider.resumeSandbox({
+      providerObjectId: "oc-sandbox-1",
+      sessionId: "session-1",
+      sandboxId: "sandbox-acme-repo-1",
+      codeServerEnabled: false,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      providerObjectId: "oc-sandbox-1",
+      lifetime: {
+        kind: "unknown",
+        reason: "Failed to read OpenComputer lifetime after successful resume",
+      },
+    });
+    expect(result.lifetime?.observedAtMs).toEqual(expect.any(Number));
+    expect(client.wakeSandbox).toHaveBeenCalledWith("oc-sandbox-1");
+    expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
+  });
+
   it("applies an explicit timeout when waking a hibernated sandbox", async () => {
     const client = createMockClient({
       getSandbox: vi.fn(async () => ({

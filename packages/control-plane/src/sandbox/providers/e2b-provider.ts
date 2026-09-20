@@ -250,7 +250,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
-      const detail = await this.client.getSandbox(sandbox.sandboxID);
+      const lifetime = await this.readLifetime(sandbox.sandboxID, "create");
 
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
@@ -264,7 +264,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.sandboxID,
         createdAt: Date.now(),
-        lifetime: this.lifetimeFromDetail(detail),
+        lifetime,
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -437,7 +437,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.sandboxID,
-        lifetime: this.lifetimeFromDetail(await this.client.getSandbox(config.providerObjectId)),
+        lifetime: await this.readLifetime(config.providerObjectId, "resume"),
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -522,6 +522,23 @@ export class E2BSandboxProvider implements SandboxProvider {
     return Number.isFinite(expiresAtMs)
       ? ({ kind: "finite", expiresAtMs, observedAtMs, source: "provider" } as const)
       : ({ kind: "unknown", observedAtMs, reason: "E2B detail omitted a valid endAt" } as const);
+  }
+
+  private async readLifetime(providerObjectId: string, operation: "create" | "resume") {
+    try {
+      return this.lifetimeFromDetail(await this.client.getSandbox(providerObjectId));
+    } catch (error) {
+      log.warn("e2b.lifetime_read_failed", {
+        sandbox_id: providerObjectId,
+        operation,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        kind: "unknown",
+        observedAtMs: Date.now(),
+        reason: `Failed to read E2B lifetime after successful ${operation}`,
+      } as const;
+    }
   }
 
   /**

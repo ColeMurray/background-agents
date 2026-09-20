@@ -121,6 +121,29 @@ describe("E2BSandboxProvider", () => {
     });
   });
 
+  it("returns created ownership with unknown lifetime when the post-start metadata read fails", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => {
+        throw new Error("metadata unavailable");
+      }),
+    });
+
+    const result = await new E2BSandboxProvider(client, providerConfig).createSandbox(
+      baseCreateConfig
+    );
+
+    expect(result).toMatchObject({
+      providerObjectId: "e2b-id",
+      lifetime: {
+        kind: "unknown",
+        reason: "Failed to read E2B lifetime after successful create",
+      },
+    });
+    expect(result.lifetime?.observedAtMs).toEqual(expect.any(Number));
+    expect(client.startProcess).toHaveBeenCalled();
+    expect(client.killSandbox).not.toHaveBeenCalled();
+  });
+
   it("re-reads endAt after resume and verifies an explicit preserve pause", async () => {
     const getSandbox = vi
       .fn()
@@ -155,6 +178,31 @@ describe("E2BSandboxProvider", () => {
     ).resolves.toEqual({ success: true });
     expect(client.pauseSandbox).toHaveBeenCalled();
     expect(getSandbox).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns resumed ownership with unknown lifetime when the post-resume metadata read fails", async () => {
+    const getSandbox = vi
+      .fn()
+      .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })
+      .mockRejectedValueOnce(new Error("metadata unavailable"));
+    const client = mockClient({ getSandbox });
+
+    const result = await new E2BSandboxProvider(client, providerConfig).resumeSandbox({
+      providerObjectId: "e2b-id",
+      sessionId: "sess-1",
+      sandboxId: "sandbox-logical",
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      providerObjectId: "e2b-id",
+      lifetime: {
+        kind: "unknown",
+        reason: "Failed to read E2B lifetime after successful resume",
+      },
+    });
+    expect(result.lifetime?.observedAtMs).toEqual(expect.any(Number));
+    expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
   });
 
   it("injects and returns VNC access without including its port in generic tunnels", async () => {
