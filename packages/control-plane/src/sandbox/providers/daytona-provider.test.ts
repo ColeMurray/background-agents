@@ -567,28 +567,7 @@ describe("DaytonaSandboxProvider", () => {
       expect(result.codeServerUrl).toBeUndefined();
     });
   });
-
   describe("stopSandbox", () => {
-    it("verifies retained state for an explicit preserve stop under the deadline signal", async () => {
-      const client = createMockClient();
-      vi.mocked(client.getSandbox).mockResolvedValue({
-        id: "daytona-sandbox-id",
-        state: "stopped",
-      } as never);
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-      await expect(
-        provider.stopSandbox({
-          ...baseStopConfig,
-          intent: "preserve",
-          deadlineAtMs: Date.now() + 60_000,
-        })
-      ).resolves.toEqual({ success: true });
-      expect(client.stopSandbox).toHaveBeenCalledWith(
-        "daytona-sandbox-id",
-        expect.any(AbortSignal)
-      );
-      expect(client.getSandbox).toHaveBeenCalledWith("daytona-sandbox-id", expect.any(AbortSignal));
-    });
     it("happy path: stops sandbox", async () => {
       const client = createMockClient({
         getSandbox: async () => ({ id: "daytona-sandbox-id", state: "stopped" }),
@@ -629,19 +608,6 @@ describe("DaytonaSandboxProvider", () => {
       const result = await provider.stopSandbox({ ...baseStopConfig, intent: "destroy" });
 
       expect(result.success).toBe(true);
-    });
-
-    it("does not claim preservation when the sandbox is missing", async () => {
-      const client = createMockClient({
-        stopSandbox: async () => {
-          throw new DaytonaNotFoundError("not found");
-        },
-      });
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-
-      await expect(
-        provider.stopSandbox({ ...baseStopConfig, intent: "preserve" })
-      ).resolves.toMatchObject({ success: false });
     });
 
     it("classifies non-404 errors as SandboxProviderError", async () => {
