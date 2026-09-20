@@ -1580,7 +1580,7 @@ export class SandboxLifecycleManager
         }
         return { kind: "boot_budget_exceeded", reason: decision.reason };
 
-      case "timeout":
+      case "inactivity_timeout":
         this.log.info("Inactivity timeout", {
           event: "sandbox.timeout",
           last_activity: sandbox.last_activity,
@@ -1627,13 +1627,11 @@ export class SandboxLifecycleManager
           connected_clients: connectedClients,
           extension_ms: decision.extensionMs,
         });
-        if (decision.shouldWarn) {
-          this.broadcaster.broadcast({
-            type: "sandbox_warning",
-            message:
-              "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
-          });
-        }
+        this.broadcaster.broadcast({
+          type: "sandbox_warning",
+          message:
+            "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
+        });
         await this.alarmScheduler.schedule(now + decision.extensionMs);
         return "no_action";
 

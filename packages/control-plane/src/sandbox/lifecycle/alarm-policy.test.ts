@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { evaluateAlarmPolicy, type AlarmPolicyConfig, type AlarmSandbox } from "./alarm-policy";
-import type { InactivityAction } from "./decisions";
+import {
+  evaluateAlarmPolicy,
+  type AlarmDecision,
+  type AlarmPolicyConfig,
+  type AlarmSandbox,
+} from "./alarm-policy";
 
 const now = 10_000_000;
 const config: AlarmPolicyConfig = {
@@ -47,7 +51,7 @@ describe("evaluateAlarmPolicy", () => {
     );
     expect(
       evaluateAlarmPolicy({ ...expired, status: "ready", last_heartbeat: now }, config, now, 0)
-    ).toEqual({ action: "timeout", shouldSnapshot: true });
+    ).toEqual({ action: "inactivity_timeout" });
     // A ready sandbox with both deadlines expired still takes the heartbeat exit.
     expect(
       evaluateAlarmPolicy({ ...expired, status: "ready", last_heartbeat: 0 }, config, now, 0).action
@@ -166,16 +170,16 @@ describe("evaluateAlarmPolicy", () => {
     ).toBe("heartbeat_stale");
   });
 
-  it.each<[number | null, number, InactivityAction]>([
+  it.each<[number | null, number, AlarmDecision]>([
     [null, 0, schedule],
     [now - 300_000, 0, { action: "schedule", nextCheckMs: 300_000 }],
     [now - 599_999, 0, schedule],
-    [now - 600_000, 0, { action: "timeout", shouldSnapshot: true }],
-    [now - 600_001, 0, { action: "timeout", shouldSnapshot: true }],
-    [now - 600_000, 2, { action: "extend", extensionMs: 300_000, shouldWarn: true }],
-    [now - 600_000, 1, { action: "extend", extensionMs: 300_000, shouldWarn: true }],
+    [now - 600_000, 0, { action: "inactivity_timeout" }],
+    [now - 600_001, 0, { action: "inactivity_timeout" }],
+    [now - 600_000, 2, { action: "extend", extensionMs: 300_000 }],
+    [now - 600_000, 1, { action: "extend", extensionMs: 300_000 }],
     [now - 599_999, 1, schedule],
-    [0, 0, { action: "timeout", shouldSnapshot: true }],
+    [0, 0, { action: "inactivity_timeout" }],
   ])("evaluates inactivity with activity %s and %i clients", (last_activity, clients, expected) => {
     expect(
       evaluateAlarmPolicy(
@@ -199,7 +203,7 @@ describe("evaluateAlarmPolicy", () => {
 
   it("still checks inactivity without a heartbeat on a ready row", () => {
     expect(evaluateAlarmPolicy(row({ status: "ready", last_activity: 0 }), config, now, 0)).toEqual(
-      { action: "timeout", shouldSnapshot: true }
+      { action: "inactivity_timeout" }
     );
   });
 
@@ -216,7 +220,6 @@ describe("evaluateAlarmPolicy", () => {
     expect(evaluateAlarmPolicy(idle, custom, now, 1)).toEqual({
       action: "extend",
       extensionMs: 80,
-      shouldWarn: true,
     });
     expect(evaluateAlarmPolicy({ ...idle, last_activity: now - 99 }, custom, now, 0)).toEqual({
       action: "schedule",

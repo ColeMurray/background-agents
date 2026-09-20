@@ -12,7 +12,6 @@ import {
   type BootBudgetConfig,
   type ConnectingTimeoutConfig,
   type HeartbeatConfig,
-  type InactivityAction,
   type InactivityConfig,
 } from "./decisions";
 
@@ -32,7 +31,9 @@ export type AlarmDecision =
   | { action: "connecting_timeout"; elapsedMs: number }
   | { action: "heartbeat_stale"; ageMs: number; isBooting: boolean }
   | { action: "boot_budget_exceeded"; elapsedMs: number; reason: string }
-  | InactivityAction;
+  | { action: "inactivity_timeout" }
+  | { action: "extend"; extensionMs: number }
+  | { action: "schedule"; nextCheckMs: number };
 
 /** Ordered policy only; storage, socket and provider effects belong to the manager. */
 export function evaluateAlarmPolicy(
@@ -59,7 +60,7 @@ export function evaluateAlarmPolicy(
     // A stale boot counts toward the breaker and must never become a restore point.
     return {
       action: "heartbeat_stale",
-      ageMs: heartbeat.ageMs ?? 0,
+      ageMs: heartbeat.ageMs,
       isBooting: sandbox.status === "spawning" || sandbox.status === "connecting",
     };
   }
@@ -76,11 +77,12 @@ export function evaluateAlarmPolicy(
     };
   }
 
-  return evaluateInactivityTimeout(
+  const inactivity = evaluateInactivityTimeout(
     { lastActivity: sandbox.last_activity, status: sandbox.status, connectedClientCount },
     config.inactivity,
     now
   );
+  return inactivity.action === "timeout" ? { action: "inactivity_timeout" } : inactivity;
 }
 
 /** Name the script where possible so operators know which boot step to inspect. */

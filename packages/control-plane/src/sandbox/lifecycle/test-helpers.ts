@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import {
+  SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
   type SandboxGeneration,
   type SandboxStorage,
@@ -373,4 +374,26 @@ export function createTestConfig(): SandboxLifecycleConfig {
     controlPlaneUrl: "https://test.workers.dev",
     model: "anthropic/claude-sonnet-4-5",
   };
+}
+
+export function createAlarmFixture(
+  sandbox: ReturnType<typeof createMockSandbox> | null,
+  provider = createMockProvider(),
+  clientCount = 0
+) {
+  const storage = createMockStorage(createMockSession(), sandbox);
+  const broadcaster = createMockBroadcaster();
+  const wsManager = createMockWebSocketManager(false, clientCount);
+  const alarmScheduler = createMockAlarmScheduler();
+  const manager = new SandboxLifecycleManager(
+    provider,
+    storage,
+    storage,
+    broadcaster,
+    wsManager,
+    alarmScheduler,
+    createMockIdGenerator(),
+    createTestConfig()
+  );
+  return { manager, storage, broadcaster, wsManager, alarmScheduler, provider };
 }
