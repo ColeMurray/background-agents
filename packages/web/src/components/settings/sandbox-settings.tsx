@@ -7,10 +7,7 @@ import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import {
-  omitUnsupportedSandboxSettings,
-  type SandboxSettings,
-} from "@open-inspect/shared/types/integrations";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -150,6 +147,12 @@ export function SandboxSettingsEditor({
   const sandboxProvider = getPublicSandboxProvider();
   const configurableResources = supportsConfigurableSandboxResources();
   const configurableTimeout = supportsConfigurableSandboxTimeout();
+  const hiddenFields = new Set<keyof SandboxSettings>();
+  if (!configurableResources) {
+    hiddenFields.add("cpuCores");
+    hiddenFields.add("memoryMib");
+  }
+  if (!configurableTimeout) hiddenFields.add("sandboxTimeoutMs");
   const isGlobal = scope === "global";
   const canManage = hasPermission(
     scope === "global"
@@ -171,6 +174,7 @@ export function SandboxSettingsEditor({
     ownSettings,
     baseDefaults,
     draft,
+    hiddenFields,
   });
   const rows = values.tunnelPorts;
 
@@ -208,10 +212,9 @@ export function SandboxSettingsEditor({
 
     setSaving(true);
     try {
-      const supportedSettings = omitUnsupportedSandboxSettings(result.settings, sandboxProvider);
       const body = isGlobal
-        ? { settings: { defaults: supportedSettings, enabledRepos } }
-        : { settings: supportedSettings };
+        ? { settings: { defaults: result.settings, enabledRepos } }
+        : { settings: result.settings };
 
       const res = await browserApiFetch(apiUrl, {
         method: "PUT",

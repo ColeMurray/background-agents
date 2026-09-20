@@ -41,6 +41,11 @@ describe("sandbox provider settings capabilities", () => {
     expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
   });
 
+  it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
+  });
+
   it("drops unsupported Daytona settings while preserving supported settings", () => {
     expect(
       omitUnsupportedSandboxSettings(

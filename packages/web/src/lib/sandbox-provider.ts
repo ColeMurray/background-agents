@@ -3,14 +3,13 @@
  */
 
 import {
+  isSandboxProviderName,
   supportsConfigurableSandboxResources as providerSupportsConfigurableSandboxResources,
   supportsConfigurableSandboxTimeout as providerSupportsConfigurableSandboxTimeout,
+  type SandboxProviderName,
 } from "@open-inspect/shared/types/integrations";
 
-/** Every backend the web app knows how to render. */
-const SANDBOX_PROVIDERS = ["modal", "daytona", "vercel", "opencomputer", "e2b"] as const;
-
-export type PublicSandboxProvider = (typeof SANDBOX_PROVIDERS)[number];
+export type PublicSandboxProvider = SandboxProviderName;
 
 /**
  * Backends that can build and boot prebuilt repo/environment images. Mirrors
@@ -58,7 +57,7 @@ export function getRepoImageProviders(): readonly PublicSandboxProvider[] {
 }
 
 function isPublicSandboxProvider(value: string): value is PublicSandboxProvider {
-  return (SANDBOX_PROVIDERS as readonly string[]).includes(value);
+  return isSandboxProviderName(value);
 }
 
 /** "a, b, c, or d" — matches the control plane's wording for the same message. */

@@ -107,7 +107,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     }
   });
 
-  it("hides unsupported Daytona controls and removes legacy values when saving", async () => {
+  it("hides unsupported Daytona controls and preserves stored intent when saving", async () => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
@@ -158,10 +158,10 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
       expect(body.settings.defaults).toMatchObject({
         terminalEnabled: true,
         buildTimeoutSeconds: 2400,
+        cpuCores: 2,
+        memoryMib: 4096,
+        sandboxTimeoutMs: 7_200_000,
       });
-      expect(body.settings.defaults).not.toHaveProperty("cpuCores");
-      expect(body.settings.defaults).not.toHaveProperty("memoryMib");
-      expect(body.settings.defaults).not.toHaveProperty("sandboxTimeoutMs");
     });
   });
 

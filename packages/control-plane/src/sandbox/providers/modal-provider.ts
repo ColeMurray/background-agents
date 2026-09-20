@@ -8,6 +8,7 @@
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
+import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
@@ -87,7 +88,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,

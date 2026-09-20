@@ -74,6 +74,39 @@ describe("resolveSandboxSettingsDraft", () => {
     expect(resolved.hasChanges).toBe(false);
   });
 
+  it("preserves hidden fields without validating their stored representation", () => {
+    const resolved = resolveSandboxSettingsDraft({
+      isGlobal: true,
+      ownSettings: { cpuCores: 1e-7, memoryMib: 2048, sandboxTimeoutMs: 7_200_000 },
+      draft: { terminalEnabled: true },
+      hiddenFields: new Set(["cpuCores", "memoryMib", "sandboxTimeoutMs"]),
+    });
+
+    expect(resolved.result).toEqual({
+      settings: {
+        tunnelPorts: [],
+        terminalEnabled: true,
+        maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
+        maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+        cpuCores: 1e-7,
+        memoryMib: 2048,
+        sandboxTimeoutMs: 7_200_000,
+      },
+    });
+  });
+
+  it("preserves hidden repo inheritance masks without pinning inherited values", () => {
+    const resolved = resolveSandboxSettingsDraft({
+      isGlobal: false,
+      ownSettings: { cpuCores: null },
+      baseDefaults: { cpuCores: 4, memoryMib: 4096, sandboxTimeoutMs: 7_200_000 },
+      draft: { terminalEnabled: true },
+      hiddenFields: new Set(["cpuCores", "memoryMib", "sandboxTimeoutMs"]),
+    });
+
+    expect(resolved.result).toEqual({ settings: { terminalEnabled: true, cpuCores: null } });
+  });
+
   it("clears optional numbers to inheritance and resources to explicit null", () => {
     const draft = {
       codeServerPort: "",
