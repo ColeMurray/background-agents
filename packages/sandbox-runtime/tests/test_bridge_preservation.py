@@ -118,6 +118,78 @@ async def test_prepare_deadline_reports_unconfirmed_and_keeps_fence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prepare_deadline_is_not_swallowed_by_prompt_cancellation_cleanup() -> None:
+    prompt_entered = asyncio.Event()
+    first_cancel = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def prompt_blocking_cancellation_cleanup() -> None:
+        prompt_entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            first_cancel.set()
+            await release_cleanup.wait()
+
+    bridge = make_bridge(PreservationHarness())
+    await establish_generation(bridge)
+    bridge._persist_rotated_session_id = AsyncMock()
+    task = asyncio.create_task(prompt_blocking_cancellation_cleanup())
+    bridge._current_prompt_task = task
+    await prompt_entered.wait()
+
+    try:
+        await bridge._handle_command(prepare_command(stopByMs=time.time() * 1000 + 20))
+
+        assert first_cancel.is_set()
+        result = bridge._send_event.await_args_list[-1].args[0]
+        assert result["executionStopped"] is False
+        assert result["error"] == "stop_deadline_exceeded"
+        bridge._persist_rotated_session_id.assert_not_awaited()
+        assert bridge._preservation_operation_id == "operation-1"
+    finally:
+        release_cleanup.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_prepare_propagates_outer_cancellation_while_joining_prompt() -> None:
+    prompt_entered = asyncio.Event()
+    first_cancel = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def prompt_blocking_cancellation_cleanup() -> None:
+        prompt_entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            first_cancel.set()
+            await release_cleanup.wait()
+
+    bridge = make_bridge(PreservationHarness())
+    await establish_generation(bridge)
+    task = asyncio.create_task(prompt_blocking_cancellation_cleanup())
+    bridge._current_prompt_task = task
+    await prompt_entered.wait()
+    preparing = asyncio.create_task(bridge._handle_command(prepare_command()))
+
+    try:
+        await first_cancel.wait()
+        preparing.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await preparing
+        assert not task.done()
+    finally:
+        release_cleanup.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_prepare_confirms_vendor_idle_after_user_stop_cancelled_bridge_task() -> None:
     class BusyAfterAbortHarness(PreservationHarness):
         async def abort(self) -> bool:

@@ -1159,10 +1159,14 @@ class AgentBridge:
                     )
                     if task is not None and not task.done():
                         task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await task
-                    if task is not None and not task.done():
-                        execution_stopped = False
+                        done, _ = await asyncio.wait(
+                            {task},
+                            timeout=max(deadline - asyncio.get_running_loop().time(), 0.0),
+                        )
+                        if task not in done:
+                            raise TimeoutError
+                        if not task.cancelled() and (task_error := task.exception()) is not None:
+                            raise task_error
                     await self._persist_rotated_session_id(harness, strict=True)
             except TimeoutError:
                 error = "stop_deadline_exceeded"
