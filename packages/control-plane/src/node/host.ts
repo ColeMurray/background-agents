@@ -68,10 +68,10 @@ import type { FetchClient } from "../platform-ports";
 export const GLOBAL_STORE_FILE = "global.db";
 
 function configuredBotClient(
+  url: string | undefined,
   config: EnvConfig,
   bot: "SLACK_BOT" | "LINEAR_BOT"
 ): FetchClient | undefined {
-  const url = config[`${bot}_URL`];
   if (!url) return undefined;
   if (!config[`SERVICE_AUTH_SECRET_${bot}`]) {
     throw new Error(`${bot}_URL requires SERVICE_AUTH_SECRET_${bot}`);
@@ -148,8 +148,8 @@ async function boot(
   const startedAtMs = Date.now();
 
   // Validate before creating data files; omitted bot deployments stay optional.
-  const slackBot = configuredBotClient(config, "SLACK_BOT");
-  const linearBot = configuredBotClient(config, "LINEAR_BOT");
+  const slackBot = configuredBotClient(settings.slackBotUrl, config, "SLACK_BOT");
+  const linearBot = configuredBotClient(settings.linearBotUrl, config, "LINEAR_BOT");
 
   ensurePrivateDirectory(settings.dataDir);
 

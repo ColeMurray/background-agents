@@ -92,13 +92,17 @@ describe("startNodeHost", () => {
     ...overrides,
   });
 
-  const start = (overrides: Partial<NodeHostOptions> = {}): Promise<NodeHost> => {
+  const start = (
+    overrides: Omit<Partial<NodeHostOptions>, "settings"> & {
+      settings?: Partial<NodeHostSettings>;
+    } = {}
+  ): Promise<NodeHost> => {
     dataDir ??= mkdtempSync(join(tmpdir(), "node-host-"));
     return startNodeHost({
       config: CONFIG,
-      settings: settings(),
       objectStorage: OBJECT_STORAGE,
       ...overrides,
+      settings: settings(overrides.settings),
     });
   };
 
@@ -126,6 +130,8 @@ describe("startNodeHost", () => {
         authorization: NO_AUTHORIZATION,
       }),
       async (c) => {
+        expect(c.env).not.toHaveProperty("SLACK_BOT_URL");
+        expect(c.env).not.toHaveProperty("LINEAR_BOT_URL");
         if (c.env.SLACK_BOT)
           await c.env.SLACK_BOT.fetch("https://internal/callbacks/complete", {
             method: "POST",
@@ -144,12 +150,13 @@ describe("startNodeHost", () => {
     vi.stubGlobal("fetch", outbound);
     host = await start({
       routes: [routes],
+      settings: configured
+        ? { slackBotUrl: "https://slack.example", linearBotUrl: "https://linear.example" }
+        : {},
       config: {
         ...CONFIG,
         ...(configured
           ? {
-              SLACK_BOT_URL: "https://slack.example",
-              LINEAR_BOT_URL: "https://linear.example",
               SERVICE_AUTH_SECRET_SLACK_BOT: "slack-key",
               SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-key",
             }
@@ -173,11 +180,14 @@ describe("startNodeHost", () => {
   });
 
   it.each([
-    { SLACK_BOT_URL: "https://slack.example" },
-    { LINEAR_BOT_URL: "https://linear.example" },
-    { SLACK_BOT_URL: "http://remote.example", SERVICE_AUTH_SECRET_SLACK_BOT: "key" },
-  ])("rejects invalid or unsigned bot configuration before opening stores: %j", async (config) => {
-    await expect(start({ config: { ...CONFIG, ...config } })).rejects.toThrow(/BOT_URL/);
+    { settings: { slackBotUrl: "https://slack.example" }, config: CONFIG },
+    { settings: { linearBotUrl: "https://linear.example" }, config: CONFIG },
+    {
+      settings: { slackBotUrl: "http://remote.example" },
+      config: { ...CONFIG, SERVICE_AUTH_SECRET_SLACK_BOT: "key" },
+    },
+  ])("rejects invalid or unsigned bot configuration before opening stores: %j", async (options) => {
+    await expect(start(options)).rejects.toThrow(/BOT_URL/);
     expect(existsSync(join(dataDir, GLOBAL_STORE_FILE))).toBe(false);
     expect(existsSync(join(dataDir, JOB_STORE_FILE))).toBe(false);
   });

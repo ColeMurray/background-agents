@@ -27,7 +27,7 @@ origin; neither protocol needs a new signing scheme or key.
    constant. The transport preserves caller cancellation through response-body handling and adds no
    deadline or retries of its own. Jobs and scheduler helpers retain ownership of retry policy. No
    new HTTP framework, SDK or dependency.
-4. Add optional `SLACK_BOT_URL` and `LINEAR_BOT_URL` to EnvConfig, the Node config inventory and
+4. Add optional `SLACK_BOT_URL` and `LINEAR_BOT_URL` to Node host settings, its config inventory and
    `.env.example`. In Node boot, build configured clients before opening data files; require the
    corresponding existing service secret when a URL is supplied. Unset URLs leave optional clients
    absent. Cloudflare wiring remains unchanged. Strip clients from session environments as COL-52
