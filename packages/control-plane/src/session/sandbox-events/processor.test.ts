@@ -32,7 +32,7 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
   };
 }
 
-function createProcessor(preservation?: {
+function createProcessor(shutdown?: {
   generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
   prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
 }) {
@@ -167,7 +167,7 @@ function createProcessor(preservation?: {
       { onRuntimeReady: vi.fn(() => false) }
     ),
     pushService,
-    preservation
+    shutdown
   );
 
   return {
@@ -868,18 +868,18 @@ describe("SessionSandboxEventProcessor", () => {
           ackId: "preservation_prepared:2",
         } satisfies SandboxEvent,
       },
-    ])("rejects $event.type without preservation handlers and does not ACK", async ({ event }) => {
+    ])("rejects $event.type without shutdown handlers and does not ACK", async ({ event }) => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;
       h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
       await expect(h.processor.processSandboxEvent(event)).rejects.toThrow(
-        "Sandbox preservation event handlers are not configured"
+        "Sandbox graceful shutdown event handlers are not configured"
       );
       expect(h.wsManager.send).not.toHaveBeenCalled();
     });
 
-    it("ACKs a preservation event only after its configured handler succeeds", async () => {
+    it("ACKs a shutdown event only after its configured handler succeeds", async () => {
       const prepared = vi.fn();
       const h = createProcessor({ generationReady: vi.fn(), prepared });
       const sandboxWs = {} as WebSocket;
@@ -906,7 +906,7 @@ describe("SessionSandboxEventProcessor", () => {
       });
     });
 
-    it("does not ACK when a configured preservation handler throws", async () => {
+    it("does not ACK when a configured shutdown handler throws", async () => {
       const h = createProcessor({
         generationReady: vi.fn(() => {
           throw new Error("generation rejected");

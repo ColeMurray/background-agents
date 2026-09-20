@@ -27,7 +27,7 @@ import {
   type ImageBuildScope,
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
-import { supportsConfirmedPreservation } from "./preservation-policy";
+import { supportsConfirmedShutdown } from "./shutdown-policy";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -104,7 +104,7 @@ export async function evaluateImageBuildForSpawn(
   if (
     runtimeVersion === null ||
     runtimeVersion < minimumRuntimeVersion ||
-    !supportsConfirmedPreservation(image.runtime_version)
+    !supportsConfirmedShutdown(image.runtime_version)
   ) {
     return { outcome: "miss", reason: "runtime_below_floor", imageBuildId: image.id };
   }

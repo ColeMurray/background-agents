@@ -21,8 +21,8 @@ export interface SandboxRuntimeFacts {
   updateSandboxGitSyncStatus(status: GitSyncStatus): void;
 }
 
-/** Persistence used by final preservation without exposing the repository aggregate. */
-export interface SandboxPreservationStorage extends SandboxStateReader {
+/** Persistence used by final graceful shutdown without exposing the repository aggregate. */
+export interface SandboxShutdownStorage extends SandboxStateReader {
   recordSandboxSnapshot(
     sandboxId: string | null,
     snapshotId: string,

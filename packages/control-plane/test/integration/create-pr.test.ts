@@ -434,14 +434,14 @@ describe("POST /internal/create-pr", () => {
   it.each([
     {
       phase: "draining",
-      expectedError: "Sandbox preservation is in progress; push is held",
+      expectedError: "Sandbox graceful shutdown is in progress; push is held",
     },
     {
       phase: "saved",
       expectedError: "Sandbox must be started before pushing; retry once ready",
     },
   ])(
-    "refuses PR creation while sandbox preservation is $phase before creating a provider PR",
+    "refuses PR creation while sandbox graceful shutdown is $phase before creating a provider PR",
     async ({ phase, expectedError }) => {
       const { stub } = await initSession({ userId: "user-1" });
       await waitForSandboxStatus(stub, "failed");

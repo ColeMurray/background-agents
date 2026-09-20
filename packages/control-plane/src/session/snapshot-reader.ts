@@ -34,7 +34,7 @@ export interface SessionSnapshotEnrichment {
 }
 
 export interface SessionSnapshotReaderDeps {
-  getPreservation?: () => SandboxPreservationState | null;
+  getShutdown?: () => SandboxPreservationState | null;
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxStateReader;
   messageRepository: MessageRepository;
@@ -114,7 +114,7 @@ export class SessionSnapshotReader {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
-      sandboxPreservation: this.deps.getPreservation?.() ?? null,
+      sandboxPreservation: this.deps.getShutdown?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,
       harness: getValidHarnessOrDefault(session.harness),

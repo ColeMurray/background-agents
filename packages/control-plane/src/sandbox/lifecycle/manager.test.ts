@@ -48,7 +48,7 @@ import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { hashToken } from "../../auth/crypto";
 import type * as AuthCrypto from "../../auth/crypto";
 import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
-import type { PreservationRecord } from "../../session/sandbox-preservation-repository";
+import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 
 // Gate for the #1589 admission-race suite: hashToken passes through to the
 // real implementation, but a test can hold the next call open to keep the
@@ -150,7 +150,7 @@ const ACCESS_FIELDS = {
   ttyd: { url: "ttyd_url", secret: "ttyd_token" },
 } as const;
 
-function createUnmanagedPreservation() {
+function createUnmanagedShutdown() {
   return {
     reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
     markRecoveryInvoked: vi.fn(),
@@ -176,17 +176,17 @@ function createUnmanagedPreservation() {
   } satisfies SandboxShutdownLifecycle;
 }
 
-function createCheckpointPreservation(
+function createCheckpointShutdown(
   provider: SandboxProvider,
   storage: SandboxStorage & SessionContextReader,
   messenger: SandboxBroadcaster,
   onLifecycleChange: () => Promise<void> = async () => {}
 ): SandboxShutdownLifecycle {
-  let state: PreservationRecord | null = null;
+  let state: ShutdownRecord | null = null;
   const coordinator = new SandboxShutdownCoordinator({
     store: {
       read: () => (state ? structuredClone(state) : null),
-      write: (next: PreservationRecord) => {
+      write: (next: ShutdownRecord) => {
         state = structuredClone(next);
       },
     },
@@ -205,7 +205,7 @@ function createCheckpointPreservation(
     retireAccess: vi.fn(),
   } as never);
   return {
-    ...createUnmanagedPreservation(),
+    ...createUnmanagedShutdown(),
     captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
   } satisfies SandboxShutdownLifecycle;
 }
@@ -590,7 +590,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
     wsManager,
     alarmScheduler,
     createMockIdGenerator(),
-    createUnmanagedPreservation(),
+    createUnmanagedShutdown(),
     createTestConfig()
   );
 
@@ -628,15 +628,15 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
 
 // ==================== Tests ====================
 
-describe("final preservation lifecycle integration", () => {
+describe("final graceful shutdown lifecycle integration", () => {
   function fixture(
     provider = createMockProvider(),
     sandbox = createMockSandbox({ status: "stopped" })
   ) {
     const storage = createMockStorage(createMockSession(), sandbox);
     const sockets = createMockWebSocketManager();
-    const preservation = {
-      ...createUnmanagedPreservation(),
+    const shutdown = {
+      ...createUnmanagedShutdown(),
       requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "owned"),
     };
     const manager = new SandboxLifecycleManager(
@@ -647,15 +647,15 @@ describe("final preservation lifecycle integration", () => {
       sockets,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      preservation,
+      shutdown,
       createTestConfig()
     );
-    return { manager, preservation, storage, provider, sockets };
+    return { manager, shutdown, storage, provider, sockets };
   }
 
   function withSavedState(f: ReturnType<typeof fixture>, kind: "snapshot" | "retained") {
     const row = f.storage.getSandbox()!;
-    let state: PreservationRecord = {
+    let state: ShutdownRecord = {
       phase: "saved",
       generation: { sandboxId: row.modal_sandbox_id!, createdAt: row.created_at! },
       provider: f.provider.name,
@@ -672,10 +672,10 @@ describe("final preservation lifecycle integration", () => {
         savedAtMs: Date.now(),
       },
     };
-    const preservation = new SandboxShutdownCoordinator({
+    const shutdown = new SandboxShutdownCoordinator({
       store: {
         read: () => structuredClone(state),
-        write: (next: PreservationRecord) => {
+        write: (next: ShutdownRecord) => {
           state = structuredClone(next);
         },
       },
@@ -699,10 +699,10 @@ describe("final preservation lifecycle integration", () => {
       f.sockets,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      preservation,
+      shutdown,
       createTestConfig()
     );
-    return { preservation, read: () => state };
+    return { shutdown, read: () => state };
   }
 
   it("allows explicit saved-state retry after restore preflight fails without provider I/O", async () => {
@@ -719,7 +719,7 @@ describe("final preservation lifecycle integration", () => {
     await f.manager.spawnSandbox();
     expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
 
-    await saved.preservation.recover("restore_saved");
+    await saved.shutdown.recover("restore_saved");
     expect(saved.read().phase).toBe("saved");
     await f.manager.spawnSandbox();
     expect(f.provider.restoreFromSnapshot).toHaveBeenCalledOnce();
@@ -751,7 +751,7 @@ describe("final preservation lifecycle integration", () => {
     await f.manager.spawnSandbox();
     expect(resumeSandbox).toHaveBeenCalledOnce();
 
-    await saved.preservation.recover("restore_saved");
+    await saved.shutdown.recover("restore_saved");
     expect(stopSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
         providerObjectId: "modal-obj-123",
@@ -774,7 +774,7 @@ describe("final preservation lifecycle integration", () => {
 
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: false });
-    await saved.preservation.recover("restore_saved");
+    await saved.shutdown.recover("restore_saved");
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({
       phase: "unknown",
@@ -784,7 +784,7 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("does not run generic termination or replacement while preservation owns the source", async () => {
+  it("does not run generic termination or replacement while shutdown owns the source", async () => {
     const f = fixture(
       createMockProvider({
         stopSandbox: vi.fn(async () => ({ success: true })),
@@ -792,8 +792,8 @@ describe("final preservation lifecycle integration", () => {
       }),
       createMockSandbox()
     );
-    f.preservation.isHolding.mockReturnValue(true);
-    f.preservation.startupDecision.mockReturnValue({
+    f.shutdown.isHolding.mockReturnValue(true);
+    f.shutdown.startupDecision.mockReturnValue({
       kind: "hold",
       reason: "shutdown in progress",
     });
@@ -805,25 +805,25 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("routes destructive ordinary snapshots through confirmed preservation", async () => {
+  it("routes destructive ordinary snapshots through confirmed graceful shutdown", async () => {
     const f = fixture(createMockProvider({ capabilities: { snapshotStopsSandbox: true } }));
     await f.manager.triggerSnapshot("execution_complete");
-    expect(f.preservation.requestShutdown).toHaveBeenCalledWith("execution_complete");
+    expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("execution_complete");
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
   });
 
-  it("does not fall through to a destructive checkpoint when preservation declines it", async () => {
+  it("does not fall through to a destructive checkpoint when shutdown declines it", async () => {
     const sandbox = createMockSandbox({ status: "ready" });
     const f = fixture(
       createMockProvider({ capabilities: { snapshotStopsSandbox: true } }),
       sandbox
     );
-    f.preservation.requestShutdown.mockResolvedValue("held");
+    f.shutdown.requestShutdown.mockResolvedValue("held");
 
     await f.manager.triggerSnapshot("execution_complete");
 
-    expect(f.preservation.requestShutdown).toHaveBeenCalledWith("execution_complete");
-    expect(f.preservation.captureCheckpoint).not.toHaveBeenCalled();
+    expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("execution_complete");
+    expect(f.shutdown.captureCheckpoint).not.toHaveBeenCalled();
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
     expect(sandbox.status).toBe("ready");
   });
@@ -835,7 +835,7 @@ describe("final preservation lifecycle integration", () => {
         capabilities: { supportsPersistentResume: true },
       })
     );
-    f.preservation.startupDecision.mockReturnValue({
+    f.shutdown.startupDecision.mockReturnValue({
       kind: "restore_snapshot",
       snapshotId: "final-image",
       runtimeVersion: "v62-compatible",
@@ -846,7 +846,7 @@ describe("final preservation lifecycle integration", () => {
     );
     expect(f.provider.resumeSandbox).not.toHaveBeenCalled();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+    expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
       expect.any(Number),
       "legacy",
       expect.any(Function)
@@ -855,7 +855,7 @@ describe("final preservation lifecycle integration", () => {
 
   it.each([
     ["v62-compatible", "legacy"],
-    ["v70-before-preservation", "legacy"],
+    ["v70-before-shutdown", "legacy"],
     [`v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`, "confirmed"],
   ] as const)("restores snapshot runtime %s with %s policy", async (runtimeVersion, policy) => {
     const f = fixture(
@@ -872,7 +872,7 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.restoreFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ snapshotImageId: "existing-image" })
     );
-    expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+    expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
       expect.any(Number),
       policy,
       expect.any(Function)
@@ -882,7 +882,7 @@ describe("final preservation lifecycle integration", () => {
 
   it.each([
     [null, "legacy"],
-    ["v70-before-preservation", "legacy"],
+    ["v70-before-shutdown", "legacy"],
     [`v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`, "confirmed"],
   ] as const)("resumes retained runtime %s with %s policy", async (runtimeVersion, policy) => {
     const f = fixture(
@@ -902,7 +902,7 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.resumeSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ providerObjectId: "retained-source" })
     );
-    expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+    expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
       expect.any(Number),
       policy,
       expect.any(Function)
@@ -921,24 +921,24 @@ describe("final preservation lifecycle integration", () => {
         capabilities: { supportsPersistentResume: true },
       })
     );
-    f.preservation.startupDecision.mockReturnValue({
+    f.shutdown.startupDecision.mockReturnValue({
       kind: "resume_retained",
       providerObjectId: "retained-source",
       runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
     });
     await f.manager.spawnSandbox();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.holdFailedRecovery).toHaveBeenCalledWith(
+    expect(f.shutdown.holdFailedRecovery).toHaveBeenCalledWith(
       "missing",
       expect.objectContaining({
-        createdAt: f.preservation.reserveStartup.mock.calls[0][0],
+        createdAt: f.shutdown.reserveStartup.mock.calls[0][0],
       })
     );
   });
 
   it("does not silently create a fresh sandbox when retained final resume is unsupported", async () => {
     const f = fixture(createMockProvider({ capabilities: { supportsPersistentResume: true } }));
-    f.preservation.startupDecision.mockReturnValue({
+    f.shutdown.startupDecision.mockReturnValue({
       kind: "resume_retained",
       providerObjectId: "retained-source",
       runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
@@ -947,25 +947,25 @@ describe("final preservation lifecycle integration", () => {
     await f.manager.spawnSandbox();
 
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.holdFailedRecovery).toHaveBeenCalledWith(
+    expect(f.shutdown.holdFailedRecovery).toHaveBeenCalledWith(
       expect.stringContaining("cannot resume")
     );
   });
 
   it("retains incompatible and foreign-provider receipts without fresh fallback", async () => {
     const f = fixture();
-    f.preservation.startupDecision.mockReturnValue({
+    f.shutdown.startupDecision.mockReturnValue({
       kind: "hold",
       reason: "provider mismatch",
     });
     await f.manager.spawnSandbox();
-    f.preservation.startupDecision.mockReturnValue({
+    f.shutdown.startupDecision.mockReturnValue({
       kind: "restore_snapshot",
       snapshotId: "final-image",
       runtimeVersion: "0.0.0",
     });
     await f.manager.spawnSandbox();
-    expect(f.preservation.holdFailedRecovery).toHaveBeenCalledOnce();
+    expect(f.shutdown.holdFailedRecovery).toHaveBeenCalledOnce();
     expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
@@ -990,11 +990,11 @@ describe("final preservation lifecycle integration", () => {
       createMockSandbox({ status: "pending" })
     );
     await f.manager.spawnSandbox();
-    const generation = f.preservation.recordProviderStartup.mock.calls[0]?.[0];
+    const generation = f.shutdown.recordProviderStartup.mock.calls[0]?.[0];
     expect(generation).toEqual(
       expect.objectContaining({ sandboxId: expect.any(String), createdAt: expect.any(Number) })
     );
-    expect(f.preservation.recordProviderStartup).toHaveBeenCalledWith(generation, lifetime);
+    expect(f.shutdown.recordProviderStartup).toHaveBeenCalledWith(generation, lifetime);
   });
 
   it.each([null, "0.0.0"])(
@@ -1009,7 +1009,7 @@ describe("final preservation lifecycle integration", () => {
         })
       );
       f.storage.getSandbox()!.runtime_version = `v${MIN_PRESERVATION_RUNTIME_GENERATION}-different-row`;
-      f.preservation.startupDecision.mockReturnValue({
+      f.shutdown.startupDecision.mockReturnValue({
         kind: "resume_retained",
         providerObjectId: "retained-source",
         runtimeVersion,
@@ -1018,19 +1018,19 @@ describe("final preservation lifecycle integration", () => {
       expect(f.provider.resumeSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ providerObjectId: "retained-source" })
       );
-      expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+      expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
         expect.any(Number),
         "legacy",
         expect.any(Function)
       );
       expect(f.storage.getSandbox()!.runtime_version).toBe(runtimeVersion);
-      expect(f.preservation.holdFailedRecovery).not.toHaveBeenCalled();
+      expect(f.shutdown.holdFailedRecovery).not.toHaveBeenCalled();
       expect(f.provider.createSandbox).not.toHaveBeenCalled();
     }
   );
 
   it.each(["returned", "thrown"] as const)(
-    "does not report an ordinary snapshot restore failure as final preservation when %s",
+    "does not report an ordinary snapshot restore failure as final graceful shutdown when %s",
     async (failureKind) => {
       const restoreFromSnapshot =
         failureKind === "returned"
@@ -1050,11 +1050,11 @@ describe("final preservation lifecycle integration", () => {
       await f.manager.spawnSandbox();
 
       expect(restoreFromSnapshot).toHaveBeenCalled();
-      expect(f.preservation.holdFailedRecovery).not.toHaveBeenCalled();
+      expect(f.shutdown.holdFailedRecovery).not.toHaveBeenCalled();
     }
   );
 
-  it("does not report an ordinary retained resume failure as final preservation", async () => {
+  it("does not report an ordinary retained resume failure as final graceful shutdown", async () => {
     const resumeSandbox = vi.fn(async () => ({
       success: false as const,
       error: "ordinary resume failed",
@@ -1073,7 +1073,7 @@ describe("final preservation lifecycle integration", () => {
     await f.manager.spawnSandbox();
 
     expect(resumeSandbox).toHaveBeenCalled();
-    expect(f.preservation.holdFailedRecovery).not.toHaveBeenCalled();
+    expect(f.shutdown.holdFailedRecovery).not.toHaveBeenCalled();
   });
 });
 
@@ -1093,7 +1093,7 @@ describe("lifecycle-owned runtime readiness and cancellation", () => {
       ws,
       alarms,
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
     return { manager, row, storage, broadcaster, ws, provider, alarms };
@@ -1186,8 +1186,8 @@ describe("SandboxLifecycleManager", () => {
     const sandbox = createMockSandbox({ status: "pending" });
     const storage = createMockStorage(createMockSession(), sandbox);
     const provider = createMockProvider();
-    const preservation = {
-      ...createUnmanagedPreservation(),
+    const shutdown = {
+      ...createUnmanagedShutdown(),
       startupDecision: vi.fn(() => ({ kind: "hold" as const, reason: "shutdown held" })),
     } satisfies SandboxShutdownLifecycle;
     const callbacks = {
@@ -1203,17 +1203,17 @@ describe("SandboxLifecycleManager", () => {
       createMockWebSocketManager(false),
       { ...createMockAlarmScheduler(), schedule: callbacks.schedule },
       createMockIdGenerator(),
-      preservation,
+      shutdown,
       createTestConfig()
     );
 
-    expect(preservation.startupDecision).not.toHaveBeenCalled();
+    expect(shutdown.startupDecision).not.toHaveBeenCalled();
     expect(callbacks.broadcast).not.toHaveBeenCalled();
     expect(callbacks.schedule).not.toHaveBeenCalled();
 
     await manager.spawnSandbox();
 
-    expect(preservation.startupDecision).toHaveBeenCalledOnce();
+    expect(shutdown.startupDecision).toHaveBeenCalledOnce();
     expect(provider.createSandbox).not.toHaveBeenCalled();
     expect(callbacks.broadcast).not.toHaveBeenCalled();
     expect(callbacks.schedule).not.toHaveBeenCalled();
@@ -1237,7 +1237,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         idGenerator,
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1294,7 +1294,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           alarmScheduler,
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
 
@@ -1356,7 +1356,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -1411,7 +1411,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(false),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -1462,7 +1462,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1492,7 +1492,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1532,7 +1532,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1567,7 +1567,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
       const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1603,7 +1603,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -1630,7 +1630,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1656,7 +1656,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -1685,7 +1685,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         idGenerator,
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1726,7 +1726,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         {
           ...createTestConfig(),
           mcpServerLookup,
@@ -1773,7 +1773,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
       await manager.spawnSandbox();
@@ -1800,7 +1800,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1837,7 +1837,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1870,7 +1870,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1899,7 +1899,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1929,7 +1929,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -1956,7 +1956,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2001,7 +2001,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2050,7 +2050,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
       const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -2095,7 +2095,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2134,7 +2134,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -2177,7 +2177,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -2221,7 +2221,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -2253,7 +2253,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -2285,7 +2285,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2312,7 +2312,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2338,7 +2338,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2371,7 +2371,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2411,7 +2411,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2445,7 +2445,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2475,7 +2475,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2507,7 +2507,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2535,7 +2535,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2562,7 +2562,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2596,7 +2596,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2625,7 +2625,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2653,7 +2653,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2679,7 +2679,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2702,7 +2702,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2727,7 +2727,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2749,7 +2749,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2773,7 +2773,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(true),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
 
@@ -2795,7 +2795,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -2824,7 +2824,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
       return { storage, broadcaster, wsManager, provider, manager };
@@ -3050,7 +3050,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(true),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
 
@@ -3088,7 +3088,7 @@ describe("SandboxLifecycleManager", () => {
           createMockWebSocketManager(true),
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
         // The user came back after the window and this attempt began then.
@@ -3120,7 +3120,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3162,7 +3162,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3191,7 +3191,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3223,7 +3223,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3258,7 +3258,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3290,7 +3290,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3308,7 +3308,7 @@ describe("SandboxLifecycleManager", () => {
         capabilities: { snapshotStopsSandbox: true },
         takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
       });
-      const preservation = createCheckpointPreservation(provider, storage, broadcaster);
+      const shutdown = createCheckpointShutdown(provider, storage, broadcaster);
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3317,7 +3317,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        preservation,
+        shutdown,
         createTestConfig()
       );
 
@@ -3339,8 +3339,8 @@ describe("SandboxLifecycleManager", () => {
       });
       const takeSnapshot = vi.fn(async () => ({ success: true, imageId: "snapshot" }));
       const provider = createMockProvider({ takeSnapshot });
-      const preservation = {
-        ...createUnmanagedPreservation(),
+      const shutdown = {
+        ...createUnmanagedShutdown(),
         captureCheckpoint: vi.fn(async () => ({
           outcome: "saved" as const,
           imageId: "snapshot",
@@ -3355,13 +3355,13 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        preservation,
+        shutdown,
         createTestConfig()
       );
 
       await manager.triggerSnapshot("test");
 
-      expect(preservation.captureCheckpoint).toHaveBeenCalledWith(
+      expect(shutdown.captureCheckpoint).toHaveBeenCalledWith(
         expect.objectContaining({ sandboxId: sandbox.modal_sandbox_id }),
         "test"
       );
@@ -3413,7 +3413,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
 
@@ -3448,7 +3448,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3483,7 +3483,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3515,7 +3515,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3550,7 +3550,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3580,7 +3580,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3613,7 +3613,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3662,7 +3662,7 @@ describe("SandboxLifecycleManager", () => {
         }),
       });
       const broadcaster = createMockBroadcaster();
-      const preservation = createCheckpointPreservation(provider, storage, broadcaster);
+      const shutdown = createCheckpointShutdown(provider, storage, broadcaster);
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3671,7 +3671,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        preservation,
+        shutdown,
         createTestConfig()
       );
 
@@ -3698,17 +3698,12 @@ describe("SandboxLifecycleManager", () => {
           capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
           stopSandbox,
         });
-        const preservation = createCheckpointPreservation(
-          provider,
-          storage,
-          broadcaster,
-          async () => {
-            sandbox.modal_sandbox_id = "replacement-sandbox";
-            sandbox.modal_object_id = "replacement-provider-object";
-            sandbox.created_at += 1;
-            sandbox.status = "connecting";
-          }
-        );
+        const shutdown = createCheckpointShutdown(provider, storage, broadcaster, async () => {
+          sandbox.modal_sandbox_id = "replacement-sandbox";
+          sandbox.modal_object_id = "replacement-provider-object";
+          sandbox.created_at += 1;
+          sandbox.status = "connecting";
+        });
         const manager = new SandboxLifecycleManager(
           provider,
           storage,
@@ -3717,7 +3712,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          preservation,
+          shutdown,
           createTestConfig()
         );
 
@@ -3759,7 +3754,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointPreservation(provider, storage, broadcaster),
+        createCheckpointShutdown(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3801,7 +3796,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3846,7 +3841,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3876,7 +3871,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3914,7 +3909,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3949,7 +3944,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -3978,7 +3973,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4011,7 +4006,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4038,7 +4033,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4073,7 +4068,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
 
@@ -4104,7 +4099,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
       const terminating = manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
@@ -4148,7 +4143,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4183,7 +4178,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4212,7 +4207,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4249,7 +4244,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4287,7 +4282,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(true),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4323,7 +4318,7 @@ describe("SandboxLifecycleManager", () => {
           wsManager,
           createMockAlarmScheduler(),
           createMockIdGenerator(),
-          createUnmanagedPreservation(),
+          createUnmanagedShutdown(),
           createTestConfig()
         );
 
@@ -4355,7 +4350,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4388,7 +4383,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -4420,7 +4415,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4444,7 +4439,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4468,7 +4463,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4494,7 +4489,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -4520,7 +4515,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         alarmScheduler,
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
 
@@ -4577,7 +4572,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig(),
         overrides?.imageBuildLookup
       );
@@ -4888,7 +4883,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         overrides?.alarmScheduler ?? createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig(),
         overrides?.environmentImageLookup
       );
@@ -5127,7 +5122,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         { ...createTestConfig(), mcpServerLookup: overrides?.mcpServerLookup },
         overrides?.imageBuildLookup
       );
@@ -5248,7 +5243,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5278,7 +5273,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5311,7 +5306,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5338,7 +5333,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5362,7 +5357,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5392,7 +5387,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5425,7 +5420,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5454,7 +5449,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5481,7 +5476,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5508,7 +5503,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5537,7 +5532,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5566,7 +5561,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5595,7 +5590,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5634,7 +5629,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5666,7 +5661,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5697,7 +5692,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5738,7 +5733,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         createTestConfig()
       );
 
@@ -5771,7 +5766,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createUnmanagedShutdown(),
         config
       );
       return { manager, provider };
@@ -5952,7 +5947,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
     return { storage, broadcaster, manager };
@@ -6002,8 +5997,8 @@ describe("status writes after a provider await (COL-99)", () => {
           })
       );
       const stopSandbox = vi.fn(async () => ({ success: true }));
-      const preservation = {
-        ...createUnmanagedPreservation(),
+      const shutdown = {
+        ...createUnmanagedShutdown(),
         reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
         requestShutdown: vi.fn(async () => "owned" as const),
       } satisfies SandboxShutdownLifecycle;
@@ -6019,7 +6014,7 @@ describe("status writes after a provider await (COL-99)", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        preservation,
+        shutdown,
         createTestConfig()
       );
 
@@ -6047,7 +6042,7 @@ describe("status writes after a provider await (COL-99)", () => {
       expect(sandbox.fenced).toBe(1);
       expect(sandbox.modal_object_id).toBeNull();
       expect(sandbox.code_server_url).toBeNull();
-      expect(preservation.recordProviderStartup).not.toHaveBeenCalled();
+      expect(shutdown.recordProviderStartup).not.toHaveBeenCalled();
       expect(stopSandbox).toHaveBeenCalledOnce();
       expect(stopSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -6111,7 +6106,7 @@ describe("status writes after a provider await (COL-99)", () => {
       wsManager,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
 
@@ -6164,7 +6159,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(false),
       alarmScheduler,
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
 
@@ -6211,7 +6206,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
 
@@ -6255,7 +6250,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createCheckpointPreservation(provider, storage, broadcaster),
+      createCheckpointShutdown(provider, storage, broadcaster),
       createTestConfig()
     );
 
@@ -6293,7 +6288,7 @@ describe("SandboxLifecycleManager log context", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       { ...createTestConfig(), getSessionId: () => currentId }
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -6325,7 +6320,7 @@ describe("SandboxLifecycleManager log context", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -6356,7 +6351,7 @@ describe("spawn admission race (#1589)", () => {
       createMockWebSocketManager(false),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createUnmanagedShutdown(),
       createTestConfig()
     );
     return { storage, manager };

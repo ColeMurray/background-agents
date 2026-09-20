@@ -1128,7 +1128,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.hibernateSandbox).toHaveBeenCalledWith("oc-sandbox-1");
   });
 
-  it("does not claim preservation when the sandbox is missing", async () => {
+  it("does not claim graceful shutdown when the sandbox is missing", async () => {
     const client = createMockClient();
     vi.mocked(client.hibernateSandbox).mockRejectedValueOnce(new OpenComputerNotFoundError("gone"));
     const provider = new OpenComputerSandboxProvider(client, {

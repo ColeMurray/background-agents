@@ -39,7 +39,7 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
-      // Preservation must not wait behind a remote index projection or a
+      // Graceful shutdown must not wait behind a remote index projection or a
       // generic stop timeout. Recheck below if projection I/O crosses D.
       await deps.preserveBeforeWatchdogs?.();
       let projectionFailure: { error: unknown } | undefined;

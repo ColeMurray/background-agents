@@ -97,7 +97,7 @@ import { SessionBudgetService } from "./budget-service";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import { MessageFailureService } from "./message-failure-service";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
-import { SandboxPreservationRepository } from "./sandbox-preservation-repository";
+import { SandboxShutdownRepository } from "./sandbox-shutdown-repository";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
@@ -433,9 +433,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     recordTerminalMessage
   );
-  const preservation = new SandboxShutdownCoordinator({
+  const shutdown = new SandboxShutdownCoordinator({
     log,
-    store: new SandboxPreservationRepository(sql),
+    store: new SandboxShutdownRepository(sql),
     provider: sandboxProvider,
     sandbox: sandboxRepository,
     session: sessionCoreRepository,
@@ -449,11 +449,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // composition function has constructed and returned the complete graph.
     onLifecycleChange: () => messageQueue.processMessageQueue(),
     reconcileStatus: () => statusService.reconcileAfterExecution(false),
-    retireAccess: () => lifecycleManager.retirePreservedAccess(),
+    retireAccess: () => lifecycleManager.retireShutdownAccess(),
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
-    preservation,
+    shutdown,
     env,
     db,
     getSessionId: getPublicSessionId,
@@ -773,7 +773,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Tier 9 — the read models, connection admission, and the server stack.
   const snapshotReader = new SessionSnapshotReader({
-    getPreservation: () => lifecycleManager.shutdownSnapshot(),
+    getShutdown: () => lifecycleManager.shutdownSnapshot(),
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
@@ -983,7 +983,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 }
 
 interface LifecycleManagerDeps {
-  preservation: SandboxShutdownLifecycle;
+  shutdown: SandboxShutdownLifecycle;
   provider: SandboxProvider;
   env: Env;
   db: SqlDatabase;
@@ -1003,7 +1003,7 @@ interface LifecycleManagerDeps {
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
     provider,
-    preservation,
+    shutdown,
     env,
     db,
     getSessionId,
@@ -1114,7 +1114,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     lifecycleWsManager,
     alarmScheduler,
     idGenerator,
-    preservation,
+    shutdown,
     config,
     imageBuildLookup
   );

@@ -160,7 +160,7 @@ describe("createAlarmHandler", () => {
     );
   });
 
-  it("flushes the terminal projection while preservation holds watchdogs", async () => {
+  it("flushes the terminal projection while shutdown holds watchdogs", async () => {
     const preserve = vi.fn(async () => "hold_watchdogs" as const);
     const { handler, executionStop, lifecycleManager, terminalMessageProjection } =
       createHandler(preserve);
@@ -173,7 +173,7 @@ describe("createAlarmHandler", () => {
     expect(lifecycleManager.handleAlarm).not.toHaveBeenCalled();
   });
 
-  it("holds watchdogs when preservation starts while the projection flushes", async () => {
+  it("holds watchdogs when shutdown starts while the projection flushes", async () => {
     const preserve = vi
       .fn<() => Promise<"continue" | "hold_watchdogs">>()
       .mockResolvedValueOnce("continue")
@@ -188,7 +188,7 @@ describe("createAlarmHandler", () => {
     expect(lifecycleManager.handleAlarm).not.toHaveBeenCalled();
   });
 
-  it("propagates projection failures even while preservation holds watchdogs", async () => {
+  it("propagates projection failures even while shutdown holds watchdogs", async () => {
     const preserve = vi.fn(async () => "hold_watchdogs" as const);
     const { handler, terminalMessageProjection } = createHandler(preserve);
     const error = new Error("projection failed");

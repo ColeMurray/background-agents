@@ -90,10 +90,7 @@ import type {
   SandboxWorkAdmission,
   SandboxPushAdmission,
 } from "./ports";
-import {
-  preservationPolicyForLaunch,
-  type PreservationLifecyclePolicy,
-} from "./preservation-policy";
+import { shutdownPolicyForLaunch, type ShutdownLifecyclePolicy } from "./shutdown-policy";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { ImageBuildLookup } from "./image-selection";
@@ -112,7 +109,7 @@ export interface SandboxShutdownLifecycle {
   /** Atomically reserves the sandbox row and shutdown ownership, then announces after commit. */
   reserveStartup(
     createdAt: number,
-    policy: PreservationLifecyclePolicy,
+    policy: ShutdownLifecyclePolicy,
     persistSandboxRow: () => void
   ): void;
   /** Durably marks the provider-I/O boundary so restart recovery cannot repeat it blindly. */
@@ -497,7 +494,7 @@ export class SandboxLifecycleManager
   private isSpawningSandbox = false;
   private isTerminatingSandbox = false;
   private providerStartupPending = false;
-  retirePreservedAccess(): void {
+  retireShutdownAccess(): void {
     this.clearSandboxAccessState();
     this.wsManager.detachSandboxWebSocket(1000, "Sandbox state preserved");
   }
@@ -531,7 +528,7 @@ export class SandboxLifecycleManager
     private readonly wsManager: WebSocketManager,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
-    private readonly preservation: SandboxShutdownLifecycle,
+    private readonly shutdown: SandboxShutdownLifecycle,
     private readonly config: SandboxLifecycleConfig,
     private readonly imageBuildLookup?: ImageBuildLookup
   ) {}
@@ -545,7 +542,7 @@ export class SandboxLifecycleManager
    * - Fresh spawn if all conditions pass
    */
   async spawnSandbox(): Promise<void> {
-    const startup = this.preservation.startupDecision();
+    const startup = this.shutdown.startupDecision();
     if (startup.kind === "hold") return;
     if (startup.kind === "restore_snapshot" || startup.kind === "resume_retained") {
       if (this.isSpawningSandbox || this.isTerminatingSandbox) return;
@@ -553,14 +550,14 @@ export class SandboxLifecycleManager
         startup.kind === "restore_snapshot" &&
         (!startup.runtimeVersion || !isSnapshotRuntimeCompatible(startup.runtimeVersion))
       ) {
-        this.preservation.holdFailedRecovery("The saved sandbox runtime is incompatible");
+        this.shutdown.holdFailedRecovery("The saved sandbox runtime is incompatible");
         return;
       }
       if (startup.kind === "resume_retained")
         await this.resumeSandbox(startup.providerObjectId, startup.runtimeVersion, true);
       else if (this.provider.restoreFromSnapshot)
         await this.restoreFromSnapshot(startup.snapshotId, startup.runtimeVersion!, true);
-      else this.preservation.holdFailedRecovery("This provider cannot restore the saved snapshot");
+      else this.shutdown.holdFailedRecovery("This provider cannot restore the saved snapshot");
       return;
     }
     const sandboxState = this.storage.getSandboxWithCircuitBreaker();
@@ -673,12 +670,12 @@ export class SandboxLifecycleManager
     generation: SandboxGeneration & { sandboxId: string },
     opts: {
       preserveProviderObjectId: boolean;
-      preservationPolicy: PreservationLifecyclePolicy;
+      shutdownPolicy: ShutdownLifecyclePolicy;
     }
   ): Promise<{ sandboxAuthToken: string; expectedSandboxId: string }> {
     const sandboxAuthToken = this.idGenerator.generateId();
     const { sandboxId: expectedSandboxId, createdAt } = generation;
-    await this.enterProviderStartup("spawning", createdAt, opts.preservationPolicy, () =>
+    await this.enterProviderStartup("spawning", createdAt, opts.shutdownPolicy, () =>
       this.storage.updateSandboxForSpawn({
         status: "spawning",
         createdAt,
@@ -735,7 +732,7 @@ export class SandboxLifecycleManager
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
-        preservationPolicy: preservationPolicyForLaunch("new", null),
+        shutdownPolicy: shutdownPolicyForLaunch("new", null),
       });
 
       await this.stopPriorProviderSandbox();
@@ -837,7 +834,7 @@ export class SandboxLifecycleManager
         generation = retry;
         ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
           preserveProviderObjectId: false,
-          preservationPolicy: preservationPolicyForLaunch("new", null),
+          shutdownPolicy: shutdownPolicyForLaunch("new", null),
         }));
         result = await this.provider.createSandbox({
           ...createConfig,
@@ -1159,10 +1156,10 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
-      const preservationPolicy = preservationPolicyForLaunch("existing", snapshotRuntimeVersion);
+      const shutdownPolicy = shutdownPolicyForLaunch("existing", snapshotRuntimeVersion);
       const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
-        preservationPolicy,
+        shutdownPolicy,
       });
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
@@ -1183,7 +1180,7 @@ export class SandboxLifecycleManager
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
-      if (restoringSavedState) this.preservation.markRecoveryInvoked(generation);
+      if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -1256,7 +1253,7 @@ export class SandboxLifecycleManager
         });
         this.failAttempt(generation, "spawning", result.error || "Failed to restore from snapshot");
         if (restoringSavedState)
-          this.preservation.holdFailedRecovery(
+          this.shutdown.holdFailedRecovery(
             result.error || "Failed to restore from snapshot",
             generation
           );
@@ -1280,7 +1277,7 @@ export class SandboxLifecycleManager
       });
       this.failAttempt(generation, "spawning", errorMessage);
       if (restoringSavedState)
-        this.preservation.holdFailedRecovery(errorMessage, generation ?? undefined);
+        this.shutdown.holdFailedRecovery(errorMessage, generation ?? undefined);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -1297,7 +1294,7 @@ export class SandboxLifecycleManager
   ): Promise<void> {
     if (!this.provider.resumeSandbox) {
       if (restoringSavedState) {
-        this.preservation.holdFailedRecovery("Current provider cannot resume the saved sandbox");
+        this.shutdown.holdFailedRecovery("Current provider cannot resume the saved sandbox");
         return;
       }
       await this.doSpawn();
@@ -1318,9 +1315,9 @@ export class SandboxLifecycleManager
 
       const now = Date.now();
       generation = { sandboxId: sandbox.modal_sandbox_id, createdAt: now };
-      const preservationPolicy = preservationPolicyForLaunch("existing", sourceRuntimeVersion);
+      const shutdownPolicy = shutdownPolicyForLaunch("existing", sourceRuntimeVersion);
       this.storage.setLastSpawnError(null, null);
-      await this.enterProviderStartup("connecting", now, preservationPolicy, () => {
+      await this.enterProviderStartup("connecting", now, shutdownPolicy, () => {
         this.storage.updateSandboxForResume({
           status: "connecting",
           createdAt: now,
@@ -1331,7 +1328,7 @@ export class SandboxLifecycleManager
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
 
-      if (restoringSavedState) this.preservation.markRecoveryInvoked(generation, providerObjectId);
+      if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation, providerObjectId);
       const result = await this.provider.resumeSandbox({
         providerObjectId,
         sessionId: session.session_name || session.id,
@@ -1372,7 +1369,7 @@ export class SandboxLifecycleManager
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.failAttempt(generation, "connecting", errorMessage);
       if (restoringSavedState)
-        this.preservation.holdFailedRecovery(errorMessage, generation ?? undefined);
+        this.shutdown.holdFailedRecovery(errorMessage, generation ?? undefined);
       this.log.error("Sandbox resume failed", {
         error: error instanceof Error ? error : String(error),
       });
@@ -1386,11 +1383,11 @@ export class SandboxLifecycleManager
    * Trigger a filesystem snapshot of the sandbox.
    */
   async triggerSnapshot(reason: string): Promise<void> {
-    if (this.preservation.isHolding()) return;
+    if (this.shutdown.isHolding()) return;
     // A Vercel snapshot stops the source. It requires the same preparation
     // and replacement ordering as a final snapshot, even after a prompt.
     if (this.provider.capabilities.snapshotStopsSandbox) {
-      const ownership = await this.preservation.requestShutdown(reason);
+      const ownership = await this.shutdown.requestShutdown(reason);
       if (ownership !== "unmanaged") return;
     }
     if (!this.provider.takeSnapshot) {
@@ -1415,7 +1412,7 @@ export class SandboxLifecycleManager
       sandboxId: sandbox.modal_sandbox_id,
       createdAt: sandbox.created_at,
     };
-    const result = await this.preservation.captureCheckpoint(generation, reason);
+    const result = await this.shutdown.captureCheckpoint(generation, reason);
     if (result.outcome === "unknown")
       this.log.error("Snapshot result is unknown", {
         event: "sandbox.snapshot_deadline_exceeded",
@@ -1534,7 +1531,7 @@ export class SandboxLifecycleManager
    * Handle alarm for inactivity and heartbeat monitoring.
    */
   async handleAlarm(): Promise<SandboxAlarmResult> {
-    if (this.preservation.isHolding()) return "no_action";
+    if (this.shutdown.isHolding()) return "no_action";
     const sandbox = this.storage.getSandbox();
     if (!sandbox) {
       this.log.debug("Alarm fired: no sandbox found");
@@ -1672,7 +1669,7 @@ export class SandboxLifecycleManager
       } else {
         if (this.canStopProviderSandbox()) {
           await this.triggerSnapshot("heartbeat_timeout");
-          if (this.preservation.isHolding()) return "no_action";
+          if (this.shutdown.isHolding()) return "no_action";
           if (!alarmGenerationIsCurrent()) return "no_action";
           try {
             await this.stopProviderSandbox(
@@ -1731,7 +1728,7 @@ export class SandboxLifecycleManager
     switch (inactivityDecision.action) {
       case "timeout":
         {
-          const ownership = await this.preservation.requestShutdown("inactivity_timeout");
+          const ownership = await this.shutdown.requestShutdown("inactivity_timeout");
           if (ownership !== "unmanaged") return "no_action";
         }
         this.log.info("Inactivity timeout", {
@@ -1759,7 +1756,7 @@ export class SandboxLifecycleManager
           }
         } else {
           await this.triggerSnapshot("inactivity_timeout");
-          if (this.preservation.isHolding()) return "no_action";
+          if (this.shutdown.isHolding()) return "no_action";
           if (!alarmGenerationIsCurrent()) return "no_action";
           this.wsManager.sendToSandbox({ type: "shutdown" });
           if (this.canStopProviderSandbox()) {
@@ -1862,7 +1859,7 @@ export class SandboxLifecycleManager
   }
 
   async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
-    if (this.preservation.isHolding()) return;
+    if (this.shutdown.isHolding()) return;
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status)) {
       return;
@@ -1906,7 +1903,7 @@ export class SandboxLifecycleManager
    * boot that dies the same way every time stops being replaced.
    */
   async terminateFailedSandbox(reason: string): Promise<boolean> {
-    if (this.preservation.isHolding()) return false;
+    if (this.shutdown.isHolding()) return false;
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status) || this.isTerminatingSandbox) {
       return false;
@@ -1974,8 +1971,8 @@ export class SandboxLifecycleManager
    * and arms inactivity afterward, preserving their existing ordering.
    */
   onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean {
-    this.preservation.runtimeReady(protocolVersion);
-    if (this.preservation.isHolding()) return false;
+    this.shutdown.runtimeReady(protocolVersion);
+    if (this.shutdown.isHolding()) return false;
     const row = this.storage.getSandbox();
     if (!row) return false;
     const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
@@ -1989,16 +1986,16 @@ export class SandboxLifecycleManager
   onShutdownGenerationReady(
     event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>
   ): void {
-    this.preservation.generationReady(event);
+    this.shutdown.generationReady(event);
   }
 
   onShutdownPrepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void {
-    this.preservation.prepared(event);
+    this.shutdown.prepared(event);
   }
 
   mayProcessQueuedWork(): boolean {
     if (this.providerStartupPending) return false;
-    switch (this.preservation.admissionDecision()) {
+    switch (this.shutdown.admissionDecision()) {
       case "unmanaged":
       case "ready":
       case "restore_required":
@@ -2011,7 +2008,7 @@ export class SandboxLifecycleManager
 
   pushAdmissionDecision(): SandboxPushAdmission {
     if (this.providerStartupPending) return "start_required";
-    switch (this.preservation.admissionDecision()) {
+    switch (this.shutdown.admissionDecision()) {
       case "ready":
         return "ready";
       case "unmanaged":
@@ -2025,15 +2022,15 @@ export class SandboxLifecycleManager
   }
 
   handleShutdownAlarm(): Promise<"continue" | "hold_watchdogs"> {
-    return this.preservation.handleAlarm();
+    return this.shutdown.handleAlarm();
   }
 
   recoverShutdown(action: "retry" | "restore_saved"): Promise<void> {
-    return this.preservation.recover(action);
+    return this.shutdown.recover(action);
   }
 
   shutdownSnapshot(): SandboxPreservationState | null {
-    return this.preservation.snapshot();
+    return this.shutdown.snapshot();
   }
 
   /** Session cancellation preserves its existing shutdown-before-status policy. */
@@ -2191,7 +2188,7 @@ export class SandboxLifecycleManager
     }
 
     if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
-    await this.preservation.recordProviderStartup(generation, lifetime);
+    await this.shutdown.recordProviderStartup(generation, lifetime);
 
     if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
@@ -2232,10 +2229,10 @@ export class SandboxLifecycleManager
   private async enterProviderStartup(
     status: "spawning" | "connecting",
     createdAt: number,
-    preservationPolicy: PreservationLifecyclePolicy,
+    shutdownPolicy: ShutdownLifecyclePolicy,
     persist: () => void
   ): Promise<void> {
-    this.preservation.reserveStartup(createdAt, preservationPolicy, persist);
+    this.shutdown.reserveStartup(createdAt, shutdownPolicy, persist);
     this.broadcaster.broadcast({ type: "sandbox_status", status });
     // The bridge replaces this with its inactivity alarm when it connects.
     await this.alarmScheduler.schedule(createdAt + this.config.connectingTimeout.timeoutMs);

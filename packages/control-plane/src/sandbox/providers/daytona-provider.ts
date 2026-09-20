@@ -265,7 +265,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           if (config.intent === "preserve") {
             return {
               success: false,
-              error: "Sandbox disappeared before preservation was verified",
+              error: "Sandbox disappeared before graceful shutdown was verified",
             };
           }
           return { success: true };

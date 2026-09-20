@@ -2,16 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
-import type { PreservationRecord, PreservationStore } from "./sandbox-preservation-repository";
+import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
 
-class MemoryStore implements PreservationStore {
-  value: PreservationRecord | null = null;
+class MemoryStore implements ShutdownStore {
+  value: ShutdownRecord | null = null;
   read() {
     return this.value;
   }
-  write(record: PreservationRecord) {
+  write(record: ShutdownRecord) {
     this.value = structuredClone(record);
   }
 }
@@ -88,9 +88,9 @@ function fixture(providerValue = provider()) {
     retireAccess: vi.fn(() => calls.push("access-retired")),
     now: () => now,
   };
-  const preservation = new SandboxShutdownCoordinator(deps as never);
+  const shutdown = new SandboxShutdownCoordinator(deps as never);
   return {
-    preservation,
+    shutdown,
     deps,
     store,
     calls,
@@ -104,14 +104,14 @@ function fixture(providerValue = provider()) {
 
 async function readyFinite(f: ReturnType<typeof fixture>, expiresAtMs = 1_300_000) {
   reserveGeneration(f, GENERATION, "confirmed");
-  await f.preservation.recordProviderStartup(GENERATION, {
+  await f.shutdown.recordProviderStartup(GENERATION, {
     kind: "finite",
     expiresAtMs,
     observedAtMs: 100_000,
     source: "provider",
   });
-  f.preservation.runtimeReady(1);
-  f.preservation.generationReady({
+  f.shutdown.runtimeReady(1);
+  f.shutdown.generationReady({
     type: "sandbox_generation_ready",
     generation: GENERATION,
     sandboxId: GENERATION.sandboxId,
@@ -121,9 +121,9 @@ async function readyFinite(f: ReturnType<typeof fixture>, expiresAtMs = 1_300_00
 
 async function readyWithoutDeadline(f: ReturnType<typeof fixture>) {
   reserveGeneration(f, GENERATION, "confirmed");
-  await f.preservation.recordProviderStartup(GENERATION, { kind: "none", observedAtMs: 100_000 });
-  f.preservation.runtimeReady(1);
-  f.preservation.generationReady({
+  await f.shutdown.recordProviderStartup(GENERATION, { kind: "none", observedAtMs: 100_000 });
+  f.shutdown.runtimeReady(1);
+  f.shutdown.generationReady({
     type: "sandbox_generation_ready",
     generation: GENERATION,
     sandboxId: GENERATION.sandboxId,
@@ -136,14 +136,14 @@ function reserveGeneration(
   generation: typeof GENERATION,
   policy: "confirmed" | "legacy"
 ) {
-  f.preservation.reserveStartup(generation.createdAt, policy, () => {
+  f.shutdown.reserveStartup(generation.createdAt, policy, () => {
     f.sandboxRow.modal_sandbox_id = generation.sandboxId;
     f.sandboxRow.created_at = generation.createdAt;
   });
 }
 
 function preparedEvent(
-  state: PreservationRecord
+  state: ShutdownRecord
 ): Extract<SandboxEvent, { type: "preservation_prepared" }> {
   return {
     type: "preservation_prepared",
@@ -158,27 +158,27 @@ function preparedEvent(
 describe("SandboxShutdownCoordinator", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("distinguishes unmanaged and held preservation requests", async () => {
+  it("distinguishes unmanaged and held shutdown requests", async () => {
     const f = fixture();
 
-    await expect(f.preservation.requestShutdown("checkpoint")).resolves.toBe("unmanaged");
+    await expect(f.shutdown.requestShutdown("checkpoint")).resolves.toBe("unmanaged");
 
     await readyFinite(f);
     f.sandboxRow.modal_sandbox_id = "replacement-sandbox";
-    await expect(f.preservation.requestShutdown("checkpoint")).resolves.toBe("held");
+    await expect(f.shutdown.requestShutdown("checkpoint")).resolves.toBe("held");
     expect(f.store.value).toMatchObject({ phase: "running", generation: GENERATION });
   });
 
   it("keeps a reconstructed legacy generation usable but checkpoint-gated", async () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "legacy");
-    await f.preservation.recordProviderStartup(GENERATION, {
+    await f.shutdown.recordProviderStartup(GENERATION, {
       kind: "finite",
       expiresAtMs: 1_300_000,
       observedAtMs: 100_000,
       source: "provider",
     });
-    f.preservation.runtimeReady();
+    f.shutdown.runtimeReady();
 
     const restarted = new SandboxShutdownCoordinator(f.deps as never);
     expect(restarted.admissionDecision()).not.toBe("held");
@@ -195,26 +195,24 @@ describe("SandboxShutdownCoordinator", () => {
   it("fails closed when a confirmed fresh runtime omits the protocol", async () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "confirmed");
-    await f.preservation.recordProviderStartup(GENERATION, { kind: "none", observedAtMs: 100_000 });
+    await f.shutdown.recordProviderStartup(GENERATION, { kind: "none", observedAtMs: 100_000 });
 
-    f.preservation.runtimeReady();
+    f.shutdown.runtimeReady();
 
     expect(f.store.value).toMatchObject({
       phase: "failed",
       lifecyclePolicy: "confirmed",
       runtimeReady: true,
     });
-    expect(f.preservation.admissionDecision()).toBe("held");
+    expect(f.shutdown.admissionDecision()).toBe("held");
   });
 
   it("derives one absolute stop/capture/retire budget and sends a correlated command", async () => {
     const f = fixture();
     await readyFinite(f);
-    expect(f.preservation.admissionDecision()).not.toBe("held");
+    expect(f.shutdown.admissionDecision()).not.toBe("held");
 
-    await expect(f.preservation.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe(
-      "owned"
-    );
+    await expect(f.shutdown.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe("owned");
 
     expect(f.store.value).toMatchObject({
       phase: "draining",
@@ -231,34 +229,34 @@ describe("SandboxShutdownCoordinator", () => {
         stopByMs: 160_000,
       })
     );
-    expect(f.preservation.admissionDecision()).toBe("held");
+    expect(f.shutdown.admissionDecision()).toBe("held");
   });
 
   it("requires a matching generation acknowledgement and ignores a late generation", async () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "confirmed");
-    await f.preservation.recordProviderStartup(GENERATION, {
+    await f.shutdown.recordProviderStartup(GENERATION, {
       kind: "none",
       observedAtMs: 100_000,
     });
-    f.preservation.runtimeReady(1);
-    expect(f.preservation.admissionDecision()).toBe("held");
+    f.shutdown.runtimeReady(1);
+    expect(f.shutdown.admissionDecision()).toBe("held");
 
-    f.preservation.generationReady({
+    f.shutdown.generationReady({
       type: "sandbox_generation_ready",
       generation: { ...GENERATION, createdAt: 999 },
       sandboxId: GENERATION.sandboxId,
       timestamp: 1,
     });
-    expect(f.preservation.admissionDecision()).toBe("held");
+    expect(f.shutdown.admissionDecision()).toBe("held");
 
-    f.preservation.generationReady({
+    f.shutdown.generationReady({
       type: "sandbox_generation_ready",
       generation: GENERATION,
       sandboxId: GENERATION.sandboxId,
       timestamp: 1,
     });
-    expect(f.preservation.admissionDecision()).not.toBe("held");
+    expect(f.shutdown.admissionDecision()).not.toBe("held");
   });
 
   it.each([
@@ -284,7 +282,7 @@ describe("SandboxShutdownCoordinator", () => {
       expect(f.store.value?.drainAtMs).toBe(expiresAtMs - bufferMs);
       const alarmAtMs = expiresAtMs - bufferMs + alarmDelayMs;
       f.setNow(alarmAtMs);
-      await f.preservation.handleAlarm();
+      await f.shutdown.handleAlarm();
 
       const state = f.store.value!;
       expect(state.phase).toBe("draining");
@@ -294,8 +292,8 @@ describe("SandboxShutdownCoordinator", () => {
       expect(state.retireByMs).toBe(expiresAtMs - 30_000);
 
       f.setNow(state.stopByMs! - 1);
-      f.preservation.prepared(preparedEvent(state));
-      await f.preservation.handleAlarm();
+      f.shutdown.prepared(preparedEvent(state));
+      await f.shutdown.handleAlarm();
       expect(takeSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({ deadlineAtMs: state.captureByMs })
       );
@@ -308,7 +306,7 @@ describe("SandboxShutdownCoordinator", () => {
     await readyFinite(f);
     f.store.write({ ...f.store.value!, provider: "e2b" });
 
-    expect(f.preservation.admissionDecision()).toBe("held");
+    expect(f.shutdown.admissionDecision()).toBe("held");
     expect(f.store.value).toMatchObject({
       phase: "unknown",
       error: expect.stringContaining("provider changed"),
@@ -326,7 +324,7 @@ describe("SandboxShutdownCoordinator", () => {
       providerObjectId: null,
       lifetimeKind: "unknown",
     });
-    expect(f.preservation.admissionDecision()).not.toBe("held");
+    expect(f.shutdown.admissionDecision()).not.toBe("held");
   });
 
   it("serializes final preparation behind an ordinary checkpoint", async () => {
@@ -339,9 +337,9 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyFinite(f);
-    const checkpoint = f.preservation.captureCheckpoint(GENERATION, "checkpoint");
+    const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
 
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     expect(f.deps.sockets.send).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ type: "prepare_preservation" })
@@ -356,16 +354,14 @@ describe("SandboxShutdownCoordinator", () => {
     );
   });
 
-  it("rejects a checkpoint without capture headroom so final preservation can start", async () => {
+  it("rejects a checkpoint without capture headroom so final graceful shutdown can start", async () => {
     const f = fixture();
     await readyFinite(f, 1_000_000);
 
-    await expect(f.preservation.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
+    await expect(f.shutdown.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
       outcome: "held",
     });
-    await expect(f.preservation.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe(
-      "owned"
-    );
+    await expect(f.shutdown.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe("owned");
     expect(f.deps.sockets.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ type: "prepare_preservation" })
@@ -376,7 +372,7 @@ describe("SandboxShutdownCoordinator", () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "confirmed");
 
-    await expect(f.preservation.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
+    await expect(f.shutdown.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
       outcome: "held",
     });
   });
@@ -394,7 +390,7 @@ describe("SandboxShutdownCoordinator", () => {
         })
       );
       await readyWithoutDeadline(f);
-      const run = f.preservation.captureCheckpoint(GENERATION, "checkpoint");
+      const run = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
 
       await vi.advanceTimersByTimeAsync(300_000);
       await expect(run).resolves.toEqual({ outcome: "unknown" });
@@ -415,7 +411,7 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyWithoutDeadline(f);
-    const oldCapture = f.preservation.captureCheckpoint(GENERATION, "checkpoint");
+    const oldCapture = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
     const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
     f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
     f.sandboxRow.created_at = replacement.createdAt;
@@ -425,14 +421,14 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value).toMatchObject({ generation: replacement });
   });
 
-  it("settles the active message once when duplicate preservation requests race", async () => {
+  it("settles the active message once when duplicate shutdown requests race", async () => {
     const f = fixture();
     f.deps.messages.getProcessingMessage.mockReturnValue({ id: "message-1" });
     f.deps.failures.record.mockReturnValue({ id: "failure-1" });
     await readyFinite(f);
 
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
 
     expect(f.deps.failures.record).toHaveBeenCalledOnce();
     expect(f.deps.failures.record).toHaveBeenCalledWith(
@@ -448,12 +444,12 @@ describe("SandboxShutdownCoordinator", () => {
   it("ignores duplicate prepared evidence after the durable phase transition", async () => {
     const f = fixture();
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     const event = preparedEvent(f.store.value!);
     f.backgroundTasks.length = 0;
 
-    f.preservation.prepared(event);
-    f.preservation.prepared(event);
+    f.shutdown.prepared(event);
+    f.shutdown.prepared(event);
 
     expect(f.store.value?.phase).toBe("prepared");
     expect(f.backgroundTasks).toHaveLength(1);
@@ -462,7 +458,7 @@ describe("SandboxShutdownCoordinator", () => {
   it("replays the same correlated preparation after restart while draining", async () => {
     const f = fixture();
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     const operationId = f.store.value!.operationId;
     f.deps.sockets.send.mockClear();
 
@@ -492,7 +488,7 @@ describe("SandboxShutdownCoordinator", () => {
       retireByMs: 1_270_000,
     });
 
-    expect(await f.preservation.handleAlarm()).toBe("hold_watchdogs");
+    expect(await f.shutdown.handleAlarm()).toBe("hold_watchdogs");
     expect(f.store.value).toMatchObject({
       phase: "unknown",
       error: expect.stringContaining("provider result is unknown"),
@@ -518,10 +514,10 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-    f.preservation.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
 
-    await f.preservation.handleAlarm();
+    await f.shutdown.handleAlarm();
 
     expect(f.store.value).toMatchObject({
       phase: "saved",
@@ -559,13 +555,13 @@ describe("SandboxShutdownCoordinator", () => {
       savedAtMs: 150_000,
     });
 
-    expect(await f.preservation.handleAlarm()).toBe("hold_watchdogs");
+    expect(await f.shutdown.handleAlarm()).toBe("hold_watchdogs");
     expect(stopSandbox).toHaveBeenCalledOnce();
     expect(f.store.value?.phase).toBe("saved");
   });
 
   it.each(["e2b", "daytona"])(
-    "uses retained-object preservation for %s without fabricating a snapshot id",
+    "uses retained-object shutdown for %s without fabricating a snapshot id",
     async (name) => {
       const stopSandbox = vi.fn(async () => ({ success: true }));
       const takeSnapshot = vi.fn();
@@ -585,10 +581,10 @@ describe("SandboxShutdownCoordinator", () => {
       );
       if (name === "daytona") await readyWithoutDeadline(f);
       else await readyFinite(f);
-      await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-      f.preservation.prepared(preparedEvent(f.store.value!));
+      await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+      f.shutdown.prepared(preparedEvent(f.store.value!));
 
-      await f.preservation.handleAlarm();
+      await f.shutdown.handleAlarm();
 
       expect(stopSandbox).toHaveBeenCalledTimes(1);
       expect(takeSnapshot).not.toHaveBeenCalled();
@@ -618,10 +614,10 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-    f.preservation.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
 
-    await f.preservation.handleAlarm();
+    await f.shutdown.handleAlarm();
 
     expect(stopSandbox).not.toHaveBeenCalled();
     expect(f.store.value?.phase).toBe("saved");
@@ -649,10 +645,10 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     await readyWithoutDeadline(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-    f.preservation.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
 
-    await f.preservation.handleAlarm();
+    await f.shutdown.handleAlarm();
 
     expect(takeSnapshot).toHaveBeenCalledOnce();
     expect(stopSandbox).toHaveBeenCalledOnce();
@@ -677,9 +673,9 @@ describe("SandboxShutdownCoordinator", () => {
     });
     const f = fixture(provider({ takeSnapshot: vi.fn(() => capture) }));
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-    f.preservation.prepared(preparedEvent(f.store.value!));
-    const advancing = f.preservation.handleAlarm();
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    const advancing = f.shutdown.handleAlarm();
     await vi.waitFor(() => expect(f.store.value?.phase).toBe("capturing"));
 
     const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
@@ -704,11 +700,11 @@ describe("SandboxShutdownCoordinator", () => {
         })
       );
       await readyFinite(f);
-      await f.preservation.requestShutdown("sandbox_lifetime_expiring");
-      f.preservation.prepared(preparedEvent(f.store.value!));
+      await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+      f.shutdown.prepared(preparedEvent(f.store.value!));
       f.setNow(f.store.value!.captureByMs! - 1);
 
-      const advancing = f.preservation.handleAlarm();
+      const advancing = f.shutdown.handleAlarm();
       await vi.advanceTimersByTimeAsync(1);
       await advancing;
 
@@ -725,9 +721,9 @@ describe("SandboxShutdownCoordinator", () => {
   it("retries only a confirmed pre-capture failure with a new operation", async () => {
     const f = fixture();
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     const firstOperation = f.store.value!.operationId;
-    f.preservation.prepared({
+    f.shutdown.prepared({
       ...preparedEvent(f.store.value!),
       executionStopped: false,
       error: "execution_stop_unconfirmed",
@@ -735,7 +731,7 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value?.phase).toBe("failed");
     f.deps.sockets.send.mockClear();
 
-    await f.preservation.recover("retry");
+    await f.shutdown.recover("retry");
 
     expect(f.store.value).toMatchObject({ phase: "draining", error: undefined });
     expect(f.store.value?.operationId).not.toBe(firstOperation);
@@ -751,11 +747,11 @@ describe("SandboxShutdownCoordinator", () => {
   it("refuses to repeat capture after an unknown provider result", async () => {
     const f = fixture();
     await readyFinite(f);
-    await f.preservation.requestShutdown("sandbox_lifetime_expiring");
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     f.store.write({ ...f.store.value!, phase: "unknown", error: "capture outcome unknown" });
     f.deps.provider.takeSnapshot = vi.fn();
 
-    await expect(f.preservation.recover("retry")).rejects.toThrow(
+    await expect(f.shutdown.recover("retry")).rejects.toThrow(
       "unknown provider result cannot be retried"
     );
     expect(f.deps.provider.takeSnapshot).not.toHaveBeenCalled();
@@ -780,7 +776,7 @@ describe("SandboxShutdownCoordinator", () => {
     });
     f.deps.background.submit.mockClear();
 
-    await f.preservation.recover("restore_saved");
+    await f.shutdown.recover("restore_saved");
 
     expect(stopSandbox).toHaveBeenCalledOnce();
     expect(f.store.value).toMatchObject({
@@ -809,7 +805,7 @@ describe("SandboxShutdownCoordinator", () => {
     const next = { ...GENERATION, createdAt: GENERATION.createdAt + 1 };
     f.sandboxRow.created_at = next.createdAt;
     reserveGeneration(f, next, "confirmed");
-    f.preservation.holdFailedRecovery("preflight failed", next);
+    f.shutdown.holdFailedRecovery("preflight failed", next);
 
     const restarted = new SandboxShutdownCoordinator(f.deps as never);
     expect(restarted.isHolding()).toBe(true);
@@ -848,7 +844,7 @@ describe("SandboxShutdownCoordinator", () => {
       snapshotId: "saved-image",
     });
 
-    f.preservation.markRecoveryInvoked(next);
+    f.shutdown.markRecoveryInvoked(next);
     f.sandboxRow.modal_object_id = "restored-provider-object";
     const interrupted = new SandboxShutdownCoordinator(f.deps as never);
     expect(interrupted.snapshot()).toMatchObject({ phase: "unknown", hasRecoveryPoint: true });
@@ -884,11 +880,11 @@ describe("SandboxShutdownCoordinator", () => {
     const next = { sandboxId: GENERATION.sandboxId, createdAt: 2_000 };
     f.sandboxRow.created_at = next.createdAt;
     reserveGeneration(f, next, "legacy");
-    f.preservation.markRecoveryInvoked(next, "provider-object-1");
+    f.shutdown.markRecoveryInvoked(next, "provider-object-1");
 
-    expect(f.preservation.isHolding()).toBe(false);
-    f.preservation.runtimeReady();
-    await f.preservation.recordProviderStartup(next, { kind: "none", observedAtMs: 100_000 });
+    expect(f.shutdown.isHolding()).toBe(false);
+    f.shutdown.runtimeReady();
+    await f.shutdown.recordProviderStartup(next, { kind: "none", observedAtMs: 100_000 });
     expect(f.store.value).toMatchObject({ phase: "running", runtimeReady: true });
   });
 
@@ -910,15 +906,15 @@ describe("SandboxShutdownCoordinator", () => {
     reserveGeneration(f, next, "confirmed");
     const state = structuredClone(f.store.value);
 
-    f.preservation.holdFailedRecovery("late provider failure", GENERATION);
-    expect(() => f.preservation.markRecoveryInvoked(GENERATION)).toThrow("superseded");
+    f.shutdown.holdFailedRecovery("late provider failure", GENERATION);
+    expect(() => f.shutdown.markRecoveryInvoked(GENERATION)).toThrow("superseded");
     expect(f.store.value).toEqual(state);
   });
 
   it("keeps provider ownership but holds dispatch for an explicit unknown lifetime", async () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "confirmed");
-    await f.preservation.recordProviderStartup(GENERATION, {
+    await f.shutdown.recordProviderStartup(GENERATION, {
       kind: "unknown",
       observedAtMs: 100_000,
       reason: "metadata unavailable",
@@ -928,6 +924,6 @@ describe("SandboxShutdownCoordinator", () => {
       providerObjectId: "provider-object-1",
       sourceRetired: false,
     });
-    expect(f.preservation.admissionDecision()).toBe("held");
+    expect(f.shutdown.admissionDecision()).toBe("held");
   });
 });

@@ -1,19 +1,19 @@
 import { parseRuntimeVersionNumber } from "../../image-builds/model";
 import { MIN_PRESERVATION_RUNTIME_GENERATION } from "../runtime-manifest";
 
-export type PreservationLifecyclePolicy = "confirmed" | "legacy";
-export type PreservationLaunchSource = "new" | "existing";
+export type ShutdownLifecyclePolicy = "confirmed" | "legacy";
+export type ShutdownLaunchSource = "new" | "existing";
 
-export function supportsConfirmedPreservation(runtimeVersion: string | null): boolean {
+export function supportsConfirmedShutdown(runtimeVersion: string | null): boolean {
   const generation = runtimeVersion === null ? null : parseRuntimeVersionNumber(runtimeVersion);
   return generation !== null && generation >= MIN_PRESERVATION_RUNTIME_GENERATION;
 }
 
 /** Existing state may retain its legacy lifecycle; new launches always fail closed. */
-export function preservationPolicyForLaunch(
-  source: PreservationLaunchSource,
+export function shutdownPolicyForLaunch(
+  source: ShutdownLaunchSource,
   runtimeVersion: string | null
-): PreservationLifecyclePolicy {
+): ShutdownLifecyclePolicy {
   if (source === "new") return "confirmed";
-  return supportsConfirmedPreservation(runtimeVersion) ? "confirmed" : "legacy";
+  return supportsConfirmedShutdown(runtimeVersion) ? "confirmed" : "legacy";
 }
