@@ -521,7 +521,7 @@ async def api_snapshot_sandbox(
 
         deadline_at_ms = request.get("deadline_at_ms")
         if deadline_at_ms is not None:
-            if not isinstance(deadline_at_ms, (int, float)):
+            if isinstance(deadline_at_ms, bool) or not isinstance(deadline_at_ms, (int, float)):
                 raise HTTPException(status_code=400, detail="deadline_at_ms must be a number")
             timeout_seconds = (deadline_at_ms / 1000) - time.time()
             if timeout_seconds <= 0:

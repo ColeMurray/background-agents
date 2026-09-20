@@ -89,26 +89,22 @@ class BufferedEventForwarder:
     async def bind(self, ws: ClientConnection) -> None:
         """Attach a live control-plane connection and recover the backlog.
 
-        The connection is attached before the lock is acquired on purpose: a
-        drain loop currently holding the lock re-reads the bound connection
-        every iteration, so it migrates onto the new connection instead of
-        stalling recovery on the dead one.
+        Pending ackIds are captured before publishing the connection, so a
+        drain already holding the lock cannot first send a buffered critical
+        through this connection and then have this bind replay it. Publishing
+        before acquiring the lock still lets that drain migrate to the new
+        connection.
 
-        Recovery order (under the lock): snapshot the ackIds that were
-        already pending, flush the event buffer (which starts tracking any
-        criticals it sends), then re-send only the snapshotted entries that
-        are still pending. The snapshot is what keeps a critical event
-        flushed from the buffer from being sent a second time on the same
-        reconnect — and it is taken inside the lock so a drain that pends a
-        critical while we wait cannot get that event re-sent here.
+        Under the lock, flush the event buffer and then re-send only pre-bind
+        candidates that are still pending.
         """
+        pending_before_bind = [
+            ack_id for ack_id in self._pending_acks if ack_id not in self._in_flight_acks
+        ]
         self._ws = ws
         async with self._recovery_lock:
-            pending_before_flush = [
-                ack_id for ack_id in self._pending_acks if ack_id not in self._in_flight_acks
-            ]
             await self._flush_buffer()
-            await self._resend_pending(pending_before_flush)
+            await self._resend_pending(pending_before_bind)
 
     def unbind(self) -> None:
         """Detach the connection; subsequent sends buffer until the next bind."""
