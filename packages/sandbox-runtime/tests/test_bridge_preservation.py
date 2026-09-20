@@ -407,6 +407,34 @@ async def test_prepare_never_reports_stopped_when_rotated_session_id_save_fails(
 
 
 @pytest.mark.asyncio
+async def test_prepare_never_reports_stopped_when_session_id_read_fails() -> None:
+    bridge = make_bridge(PreservationHarness())
+    await establish_generation(bridge)
+    bridge._read_persisted_session_id = MagicMock(
+        side_effect=PermissionError("session id is unreadable")
+    )
+
+    await bridge._handle_command(prepare_command())
+
+    result = bridge._send_event.await_args_list[-1].args[0]
+    assert result["error"] == "execution_stop_failed"
+    assert result["executionStopped"] is False
+    assert bridge.preservation.fenced
+
+
+@pytest.mark.asyncio
+async def test_nonstrict_session_id_read_failure_is_logged_and_ignored() -> None:
+    harness = PreservationHarness()
+    bridge = make_bridge(harness)
+    error = PermissionError("session id is unreadable")
+    bridge._read_persisted_session_id = MagicMock(side_effect=error)
+
+    await bridge._persist_rotated_session_id(harness)
+
+    bridge.log.error.assert_called_once_with("agent.session.load_error", exc=error)
+
+
+@pytest.mark.asyncio
 async def test_preservation_push_refusal_keeps_invalid_request_correlation() -> None:
     bridge = make_bridge(PreservationHarness())
     await establish_generation(bridge)

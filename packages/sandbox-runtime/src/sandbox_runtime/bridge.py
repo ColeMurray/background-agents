@@ -1184,6 +1184,8 @@ class AgentBridge:
             persisted = self._read_persisted_session_id()
         except Exception as e:
             self.log.error("agent.session.load_error", exc=e)
+            if strict:
+                raise
             return
         if harness.session_id and harness.session_id != persisted:
             await self._save_session_id(harness, strict=strict)
