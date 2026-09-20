@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
+import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
   initNamedSession,
@@ -12,6 +13,9 @@ import { runInSessionDO } from "./session-do-access";
 
 const AUTH_TOKEN = "preservation-integration-token";
 const SANDBOX_ID = "preservation-sandbox";
+
+beforeEach(cleanD1Tables);
+afterEach(cleanD1Tables);
 
 interface SandboxGeneration {
   sandboxId: string;
