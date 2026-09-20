@@ -59,6 +59,7 @@ const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
 const RESERVED_VNC_ENV_KEYS = ["VNC_PASSWORD", "NOVNC_PORT"] as const;
 const RESTORE_READY_TIMEOUT_MS = 90_000;
 const RESTORE_READY_POLL_MS = 1_000;
+const SNAPSHOT_TIMEOUT_MS = 300_000;
 
 export interface OpenComputerProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -232,8 +233,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
+    const deadlineAtMs = config.deadlineAtMs ?? Date.now() + SNAPSHOT_TIMEOUT_MS;
     try {
-      const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
+      const signal = signalUntilDeadline(deadlineAtMs, config.signal);
       const checkpoint = await this.client.createCheckpoint(
         config.providerObjectId,
         this.buildCheckpointName(config.sessionId, config.reason),
@@ -246,7 +248,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
       let current = checkpoint;
       while (current.status === "processing" || current.status === "pending") {
-        if (config.deadlineAtMs !== undefined && Date.now() >= config.deadlineAtMs) {
+        if (Date.now() >= deadlineAtMs) {
           return { success: false, error: "Checkpoint was not ready before the deadline" };
         }
         if (signal?.aborted) throw signal.reason;
@@ -273,6 +275,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       }
       return { success: true, imageId: current.id };
     } catch (error) {
+      if (Date.now() >= deadlineAtMs) {
+        return { success: false, error: "Checkpoint was not ready before the deadline" };
+      }
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to checkpoint OpenComputer sandbox", error);
     }

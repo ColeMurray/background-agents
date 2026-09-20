@@ -744,7 +744,8 @@ describe("OpenComputerSandboxProvider", () => {
       {
         kind: OPENCOMPUTER_CHECKPOINT_KIND,
         retentionPolicy: OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
-      }
+      },
+      expect.any(AbortSignal)
     );
   });
 
@@ -776,6 +777,39 @@ describe("OpenComputerSandboxProvider", () => {
     vi.useRealTimers();
   });
 
+  it("bounds checkpoint polling when the caller omits a deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const processing = {
+        id: "checkpoint-1",
+        sandboxId: "oc-sandbox-1",
+        status: "processing",
+      } as const;
+      const client = createMockClient({
+        createCheckpoint: vi.fn(async () => processing),
+        listCheckpoints: vi.fn(async () => [processing]),
+      });
+      const provider = new OpenComputerSandboxProvider(client, {
+        scmProvider: "github",
+        sandboxAccessPasswordSecret: "secret",
+      });
+
+      const snapshot = provider.takeSnapshot({
+        providerObjectId: "oc-sandbox-1",
+        sessionId: "session-1",
+        reason: "execution_complete",
+      });
+      await vi.advanceTimersByTimeAsync(300_001);
+
+      await expect(snapshot).resolves.toEqual({
+        success: false,
+        error: "Checkpoint was not ready before the deadline",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("creates checkpoints for execution-complete snapshots", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
@@ -797,7 +831,8 @@ describe("OpenComputerSandboxProvider", () => {
       {
         kind: OPENCOMPUTER_CHECKPOINT_KIND,
         retentionPolicy: OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
-      }
+      },
+      expect.any(AbortSignal)
     );
   });
 
