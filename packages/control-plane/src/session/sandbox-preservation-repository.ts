@@ -20,6 +20,7 @@ const stateSchema = sandboxPreservationSchema
     // Proof about the current source, not the artifact's original source.
     sourceRetired: z.boolean().optional(),
     lifetimeKind: z.enum(["finite", "none", "unknown"]),
+    lifetimeSource: z.enum(["provider", "conservative_start_bound"]).optional(),
     protocolVersion: z.literal(1).optional(),
     generationReady: z.boolean(),
     runtimeReady: z.boolean().optional(),

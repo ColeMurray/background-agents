@@ -40,8 +40,7 @@ export class SandboxRuntimeEventHandler {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
     private readonly log: Logger,
-    private readonly lifecycle: SandboxReadiness,
-    private readonly preservation?: { ready(version?: 1): void; isHolding(): boolean }
+    private readonly lifecycle: SandboxReadiness
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -84,12 +83,13 @@ export class SandboxRuntimeEventHandler {
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
 
-    this.preservation?.ready(event.preservationProtocolVersion);
-    if (this.preservation?.isHolding()) return;
-
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (!this.lifecycle.onRuntimeReady(context.now, event.harness)) return;
+    if (
+      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
+    ) {
+      return;
+    }
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });

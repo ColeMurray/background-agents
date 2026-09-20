@@ -1,8 +1,8 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../logger";
+import type { SandboxPushAdmission } from "../sandbox/lifecycle/manager";
 import type { GitPushSpec } from "../source-control";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { PreservationAdmissionDecision } from "./sandbox-preservation";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 export type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
@@ -29,7 +29,7 @@ export class SandboxPushService {
   constructor(
     private readonly log: Logger,
     private readonly wsManager: SessionWebSocketManager,
-    private readonly preservationAdmission: () => PreservationAdmissionDecision = () => "unmanaged"
+    private readonly pushAdmission: () => SandboxPushAdmission = () => "unmanaged"
   ) {}
 
   /**
@@ -43,7 +43,7 @@ export class SandboxPushService {
   async pushBranchToRemote(
     pushSpec: GitPushSpec
   ): Promise<{ success: true } | { success: false; error: string }> {
-    const admission = this.preservationAdmission();
+    const admission = this.pushAdmission();
     if (admission !== "ready" && admission !== "unmanaged") {
       if (admission === "held") {
         return { success: false, error: "Sandbox preservation is in progress; push is held" };

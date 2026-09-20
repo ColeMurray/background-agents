@@ -19,6 +19,8 @@ export const sandboxPreservationSchema = z.object({
   savedAtMs: z.number().optional(),
   error: z.string().optional(),
   hasRecoveryPoint: z.boolean().optional(),
+  /** Queued work requires an explicit user resume after an active prompt was interrupted. */
+  continuationPaused: z.boolean().optional(),
 });
 
 export type SandboxPreservationState = z.infer<typeof sandboxPreservationSchema>;

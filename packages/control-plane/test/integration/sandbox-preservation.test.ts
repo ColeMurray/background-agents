@@ -6,18 +6,22 @@ import {
 } from "../../src/sandbox/lifecycle/manager";
 import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sandbox/provider";
 import { EventRepository } from "../../src/session/event-repository";
+import { MessageFailureService } from "../../src/session/message-failure-service";
+import { MessageRepository } from "../../src/session/message-repository";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
-import { SandboxPreservation } from "../../src/session/sandbox-preservation";
+import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
   SandboxPreservationRepository,
   type PreservationStore,
 } from "../../src/session/sandbox-preservation-repository";
+import { SessionAttachmentRepository } from "../../src/session/session-attachment-repository";
 import { SessionCoreRepository } from "../../src/session/session-core-repository";
 import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
   initNamedSession,
+  openClientWs,
   openSandboxWs,
   queryDO,
   seedMessage,
@@ -95,7 +99,7 @@ function realLifecycleHarness(
     queueAdmissions.push(decision);
     options.onQueueAdmission?.(decision);
   };
-  const preservation = new SandboxPreservation({
+  const preservation = new SandboxShutdownCoordinator({
     store: options.store ?? new SandboxPreservationRepository(durableState.storage.sql),
     provider,
     sandbox,
@@ -115,7 +119,7 @@ function realLifecycleHarness(
         void task();
       },
     },
-    processQueue,
+    onLifecycleChange: processQueue,
     reconcileStatus: async () => undefined,
     retireAccess: () => undefined,
   } as never);
@@ -357,11 +361,7 @@ describe("sandbox preservation wiring", () => {
           error: () => undefined,
           child: () => undefined,
         } as never,
-        harness.manager,
-        {
-          ready: (version) => harness.preservation.runtimeReady(version),
-          isHolding: () => harness.preservation.isHolding(),
-        }
+        harness.manager
       );
       await runtimeHandler.handleReady(
         {
@@ -397,7 +397,8 @@ describe("sandbox preservation wiring", () => {
 
     expect(evidence.statusBeforeProvider).toEqual({ status: "ready" });
     expect(evidence.messageBeforeProvider).toEqual({ status: "pending" });
-    expect(evidence.queueAdmissions.slice(0, -1)).toEqual(["held", "held"]);
+    expect(evidence.queueAdmissions.slice(0, -1).length).toBeGreaterThanOrEqual(2);
+    expect(new Set(evidence.queueAdmissions.slice(0, -1))).toEqual(new Set(["held"]));
     expect(evidence.queueAdmissions.at(-1)).toBe("ready");
     expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
       { status: "ready" },
@@ -503,16 +504,21 @@ describe("sandbox preservation wiring", () => {
         },
       };
       const sandbox = componentsOf(instance).sandboxRepository;
-      const preservation = new SandboxPreservation({
+      const preservation = new SandboxShutdownCoordinator({
         store: new SandboxPreservationRepository(durableState.storage.sql),
         provider,
         sandbox,
+        session: {
+          getSession: () => ({ id: "session-1", session_name: "legacy-session" }),
+        },
+        messenger: { broadcast: () => undefined },
         background: {
           submit: (task: () => Promise<void>) => {
             void task();
           },
         },
-        processQueue: async () => undefined,
+        onLifecycleChange: async () => undefined,
+        retireAccess: () => undefined,
       } as never);
       const manager = new SandboxLifecycleManager(
         provider,
@@ -674,6 +680,240 @@ describe("sandbox preservation wiring", () => {
       { status: "ready" },
     ]);
     ws!.close();
+  });
+
+  it("keeps interrupted continuation paused across restart until an authenticated restore", async () => {
+    const name = `preservation-paused-continuation-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    await runInSessionDO(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, runtime_version = ?",
+        "provider-current",
+        "v72-runtime"
+      );
+    });
+    const generation = await seedPreservation(stub, {
+      provider: "modal",
+      providerObjectId: "provider-current",
+      sourceRetired: false,
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    const now = Date.now();
+    await seedMessage(stub, {
+      id: "interrupted-active",
+      authorId,
+      content: "Preserve this partial execution",
+      source: "web",
+      status: "processing",
+      createdAt: now - 2_000,
+      startedAt: now - 1_000,
+    });
+    await seedMessage(stub, {
+      id: "pending-before-restart",
+      authorId,
+      content: "Run only after explicit resume",
+      source: "web",
+      status: "pending",
+      createdAt: now,
+    });
+
+    const takeSnapshot = vi.fn(async () => ({
+      success: true as const,
+      imageId: "paused-continuation-snapshot",
+      sourceStopped: true,
+    }));
+    const provider: SandboxProvider = {
+      name: "modal",
+      capabilities: {
+        supportsSandboxTimeout: true,
+        supportsSnapshots: true,
+        supportsRestore: true,
+        supportsExplicitStop: true,
+      },
+      createSandbox: async () => {
+        throw new Error("fresh creation is not part of the interruption fixture");
+      },
+      takeSnapshot,
+    };
+
+    await runInSessionDO(stub, async (instance, durableState) => {
+      const sql = durableState.storage.sql;
+      const transaction = <T>(callback: () => T) => durableState.storage.transactionSync(callback);
+      const sessions = new SessionCoreRepository(sql, transaction);
+      const events = new EventRepository(sql, transaction);
+      const messages = new MessageRepository(
+        sql,
+        transaction,
+        new SessionAttachmentRepository(sql),
+        events
+      );
+      const background = {
+        submit: (task: () => Promise<void>) => {
+          void task();
+        },
+      };
+      const messenger = {
+        broadcast: () => undefined,
+        sendToSandbox: async () => undefined,
+      };
+      const failures = new MessageFailureService(
+        background,
+        {
+          debug: () => undefined,
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+          child: () => undefined,
+        } as never,
+        messages,
+        messenger,
+        { notifyComplete: async () => undefined } as never,
+        async () => undefined
+      );
+      const coordinator = new SandboxShutdownCoordinator({
+        store: new SandboxPreservationRepository(sql),
+        provider,
+        sandbox: componentsOf(instance).sandboxRepository,
+        session: sessions,
+        messages,
+        failures,
+        messenger,
+        sockets: { getSandboxSocket: () => null, send: () => false },
+        alarm: { schedule: async () => undefined },
+        background,
+        onLifecycleChange: async () => undefined,
+        reconcileStatus: async () => undefined,
+        retireAccess: () => undefined,
+      } as never);
+
+      await expect(coordinator.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe("owned");
+      const draining = new SandboxPreservationRepository(sql).read();
+      expect(draining).toMatchObject({
+        phase: "draining",
+        messageId: "interrupted-active",
+        continuationPaused: true,
+      });
+      coordinator.prepared({
+        type: "preservation_prepared",
+        operationId: draining!.operationId!,
+        generation,
+        executionStopped: true,
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1_000,
+      });
+      await vi.waitFor(() =>
+        expect(new SandboxPreservationRepository(sql).read()).toMatchObject({
+          phase: "saved",
+          continuationPaused: true,
+          sourceRetired: true,
+          receipt: { artifactId: "paused-continuation-snapshot" },
+        })
+      );
+    });
+
+    expect(takeSnapshot).toHaveBeenCalledOnce();
+    expect(
+      await queryDO<{ id: string; status: string }>(
+        stub,
+        "SELECT id, status FROM messages WHERE id IN (?, ?) ORDER BY id",
+        "interrupted-active",
+        "pending-before-restart"
+      )
+    ).toEqual([
+      { id: "interrupted-active", status: "failed" },
+      { id: "pending-before-restart", status: "pending" },
+    ]);
+
+    await seedMessage(stub, {
+      id: "pending-after-restart",
+      authorId,
+      content: "Also remain queued until explicit resume",
+      source: "web",
+      status: "pending",
+      createdAt: now + 1,
+    });
+    const restartEvidence = await runInSessionDO(stub, async (instance, durableState) => {
+      const store = new SandboxPreservationRepository(durableState.storage.sql);
+      const admissions: string[] = [];
+      const restarted = new SandboxShutdownCoordinator({
+        store,
+        provider,
+        sandbox: componentsOf(instance).sandboxRepository,
+        messenger: { broadcast: () => undefined },
+        sockets: { getSandboxSocket: () => null, send: () => false },
+        alarm: { schedule: async () => undefined },
+        background: {
+          submit: (task: () => Promise<void>) => {
+            void task();
+          },
+        },
+        onLifecycleChange: async () => {
+          admissions.push(restarted.admissionDecision());
+        },
+      } as never);
+
+      expect(restarted.startupDecision()).toMatchObject({ kind: "hold" });
+      expect(restarted.admissionDecision()).toBe("held");
+      restarted.runtimeReady(1);
+      restarted.generationReady({
+        type: "sandbox_generation_ready",
+        generation,
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now() / 1_000,
+      });
+      await expect(restarted.handleAlarm()).resolves.toBe("hold_watchdogs");
+      await vi.waitFor(() => expect(admissions).not.toEqual([]));
+      return { admissions, state: store.read() };
+    });
+    expect(restartEvidence.admissions).toEqual(["held"]);
+    expect(restartEvidence.state).toMatchObject({
+      phase: "saved",
+      continuationPaused: true,
+    });
+
+    const anonymous = await openClientWs(name);
+    anonymous.ws.send(JSON.stringify({ type: "recover_preservation", action: "restore_saved" }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(await readPreservation(stub)).toMatchObject({ continuationPaused: true });
+    anonymous.ws.close();
+
+    const authenticated = await openClientWs(name, { subscribe: true });
+    authenticated.ws.send(
+      JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
+    );
+    await vi.waitFor(async () => {
+      expect(await readPreservation(stub)).not.toMatchObject({ continuationPaused: true });
+    });
+    authenticated.ws.close();
+
+    expect(
+      await queryDO<{ id: string; status: string }>(
+        stub,
+        "SELECT id, status FROM messages WHERE id IN (?, ?, ?) ORDER BY id",
+        "interrupted-active",
+        "pending-before-restart",
+        "pending-after-restart"
+      )
+    ).toEqual([
+      { id: "interrupted-active", status: "failed" },
+      { id: "pending-after-restart", status: "pending" },
+      { id: "pending-before-restart", status: "pending" },
+    ]);
+    expect(
+      await queryDO<{ count: number }>(
+        stub,
+        "SELECT COUNT(*) AS count FROM events WHERE type = 'execution_complete' AND message_id = ?",
+        "interrupted-active"
+      )
+    ).toEqual([{ count: 1 }]);
   });
 
   it("drains once, holds pending work, and acknowledges only matching preparation state", async () => {

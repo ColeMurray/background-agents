@@ -28,10 +28,6 @@ export class LifecycleSessionContext implements SessionContextReader {
     return this.sessions.getSession();
   }
 
-  transaction<T>(callback: () => T): T {
-    return this.sessions.transaction(callback);
-  }
-
   getSessionRepositories(): SessionRepositoryInfo[] {
     return this.sessions.getSessionRepositories().map((entry) => ({
       repoOwner: entry.repoOwner,

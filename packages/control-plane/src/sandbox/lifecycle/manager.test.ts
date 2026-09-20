@@ -16,7 +16,7 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type SandboxLifecycleConfig,
-  type SandboxPreservationLifecycle,
+  type SandboxShutdownLifecycle,
   type McpServerLookup,
   type ImageBuildLookup,
   type SlackAgentNotifyLookup,
@@ -47,7 +47,7 @@ import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/ty
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { hashToken } from "../../auth/crypto";
 import type * as AuthCrypto from "../../auth/crypto";
-import { SandboxPreservation } from "../../session/sandbox-preservation";
+import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
 import type { PreservationRecord } from "../../session/sandbox-preservation-repository";
 
 // Gate for the #1589 admission-race suite: hashToken passes through to the
@@ -150,28 +150,64 @@ const ACCESS_FIELDS = {
   ttyd: { url: "ttyd_url", secret: "ttyd_token" },
 } as const;
 
-function createUnmanagedPreservation(): SandboxPreservationLifecycle {
+function createUnmanagedPreservation() {
   return {
-    beginGeneration: vi.fn(),
-    reserveGeneration: vi.fn(),
-    generationReserved: vi.fn(),
-    restoreStarting: vi.fn(),
-    started: vi.fn(async () => {}),
+    reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
+    markRecoveryInvoked: vi.fn(),
+    recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
     isHolding: vi.fn(() => false),
-    request: vi.fn<SandboxPreservationLifecycle["request"]>(async () => "unmanaged"),
-    beginCheckpoint: vi.fn<SandboxPreservationLifecycle["beginCheckpoint"]>((generation) => ({
-      id: "checkpoint",
-      generation,
-      deadlineAtMs: Date.now() + 300_000,
-      run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
-        outcome: "completed" as const,
-        value: await operation(new AbortController().signal),
-      }),
-      finish: vi.fn(),
+    requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
+    captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
+      outcome: "saved",
+      imageId: "snapshot-img-123",
+      sourceStopped: false,
     })),
-    recoveryReceipt: vi.fn(() => undefined),
-    restoreFailed: vi.fn(),
-  };
+    startupDecision: vi.fn<SandboxShutdownLifecycle["startupDecision"]>(() => ({
+      kind: "normal",
+    })),
+    holdFailedRecovery: vi.fn(),
+    runtimeReady: vi.fn(),
+    generationReady: vi.fn(),
+    prepared: vi.fn(),
+    admissionDecision: vi.fn(() => "unmanaged" as const),
+    handleAlarm: vi.fn(async () => "continue" as const),
+    recover: vi.fn(async () => undefined),
+    snapshot: vi.fn(() => null),
+  } satisfies SandboxShutdownLifecycle;
+}
+
+function createCheckpointPreservation(
+  provider: SandboxProvider,
+  storage: SandboxStorage & SessionContextReader,
+  messenger: SandboxBroadcaster,
+  onLifecycleChange: () => Promise<void> = async () => {}
+): SandboxShutdownLifecycle {
+  let state: PreservationRecord | null = null;
+  const coordinator = new SandboxShutdownCoordinator({
+    store: {
+      read: () => (state ? structuredClone(state) : null),
+      write: (next: PreservationRecord) => {
+        state = structuredClone(next);
+      },
+    },
+    provider,
+    sandbox: storage,
+    session: {
+      getSession: () => storage.getSession(),
+      transaction: <T>(operation: () => T): T => operation(),
+    },
+    messenger,
+    sockets: { getSandboxSocket: () => null },
+    alarm: createMockAlarmScheduler(),
+    background: { submit: vi.fn((task: () => Promise<void>) => void task()) },
+    onLifecycleChange: vi.fn(onLifecycleChange),
+    reconcileStatus: vi.fn(async () => {}),
+    retireAccess: vi.fn(),
+  } as never);
+  return {
+    ...createUnmanagedPreservation(),
+    captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+  } satisfies SandboxShutdownLifecycle;
 }
 
 function createMockStorage(
@@ -186,7 +222,6 @@ function createMockStorage(
 
   return {
     calls,
-    transaction: <T>(callback: () => T) => callback(),
     getSandbox: vi.fn(() => {
       calls.push("getSandbox");
       return sandbox;
@@ -600,27 +635,9 @@ describe("final preservation lifecycle integration", () => {
   ) {
     const storage = createMockStorage(createMockSession(), sandbox);
     const sockets = createMockWebSocketManager();
-    const beginGeneration = vi.fn();
     const preservation = {
-      beginGeneration,
-      reserveGeneration: beginGeneration,
-      generationReserved: vi.fn(),
-      restoreStarting: vi.fn(),
-      started: vi.fn(async () => {}),
-      isHolding: vi.fn(() => false),
-      request: vi.fn<SandboxPreservationLifecycle["request"]>(async () => "owned"),
-      beginCheckpoint: vi.fn((generation: SandboxGeneration) => ({
-        id: "checkpoint-1",
-        generation,
-        deadlineAtMs: Date.now() + 300_000,
-        run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
-          outcome: "completed" as const,
-          value: await operation(new AbortController().signal),
-        }),
-        finish: vi.fn(),
-      })),
-      recoveryReceipt: vi.fn<SandboxPreservationLifecycle["recoveryReceipt"]>(() => undefined),
-      restoreFailed: vi.fn(),
+      ...createUnmanagedPreservation(),
+      requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "owned"),
     };
     const manager = new SandboxLifecycleManager(
       provider,
@@ -655,7 +672,7 @@ describe("final preservation lifecycle integration", () => {
         savedAtMs: Date.now(),
       },
     };
-    const preservation = new SandboxPreservation({
+    const preservation = new SandboxShutdownCoordinator({
       store: {
         read: () => structuredClone(state),
         write: (next: PreservationRecord) => {
@@ -664,7 +681,10 @@ describe("final preservation lifecycle integration", () => {
       },
       provider: f.provider,
       sandbox: f.storage,
-      session: f.storage,
+      session: {
+        getSession: () => f.storage.getSession(),
+        transaction: <T>(operation: () => T): T => operation(),
+      },
       messenger: createMockBroadcaster(),
       sockets: { getSandboxSocket: () => null },
       alarm: createMockAlarmScheduler(),
@@ -773,6 +793,10 @@ describe("final preservation lifecycle integration", () => {
       createMockSandbox()
     );
     f.preservation.isHolding.mockReturnValue(true);
+    f.preservation.startupDecision.mockReturnValue({
+      kind: "hold",
+      reason: "shutdown in progress",
+    });
     await f.manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
     expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
     expect(await f.manager.handleAlarm()).toBe("no_action");
@@ -784,7 +808,7 @@ describe("final preservation lifecycle integration", () => {
   it("routes destructive ordinary snapshots through confirmed preservation", async () => {
     const f = fixture(createMockProvider({ capabilities: { snapshotStopsSandbox: true } }));
     await f.manager.triggerSnapshot("execution_complete");
-    expect(f.preservation.request).toHaveBeenCalledWith("execution_complete");
+    expect(f.preservation.requestShutdown).toHaveBeenCalledWith("execution_complete");
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
   });
 
@@ -794,12 +818,12 @@ describe("final preservation lifecycle integration", () => {
       createMockProvider({ capabilities: { snapshotStopsSandbox: true } }),
       sandbox
     );
-    f.preservation.request.mockResolvedValue("held");
+    f.preservation.requestShutdown.mockResolvedValue("held");
 
     await f.manager.triggerSnapshot("execution_complete");
 
-    expect(f.preservation.request).toHaveBeenCalledWith("execution_complete");
-    expect(f.preservation.beginCheckpoint).not.toHaveBeenCalled();
+    expect(f.preservation.requestShutdown).toHaveBeenCalledWith("execution_complete");
+    expect(f.preservation.captureCheckpoint).not.toHaveBeenCalled();
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
     expect(sandbox.status).toBe("ready");
   });
@@ -811,10 +835,9 @@ describe("final preservation lifecycle integration", () => {
         capabilities: { supportsPersistentResume: true },
       })
     );
-    f.preservation.recoveryReceipt.mockReturnValue({
-      kind: "snapshot",
-      provider: "mock",
-      artifactId: "final-image",
+    f.preservation.startupDecision.mockReturnValue({
+      kind: "restore_snapshot",
+      snapshotId: "final-image",
       runtimeVersion: "v62-compatible",
     });
     await f.manager.spawnSandbox();
@@ -823,7 +846,11 @@ describe("final preservation lifecycle integration", () => {
     );
     expect(f.provider.resumeSandbox).not.toHaveBeenCalled();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), "legacy");
+    expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+      expect.any(Number),
+      "legacy",
+      expect.any(Function)
+    );
   });
 
   it.each([
@@ -845,7 +872,11 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.restoreFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ snapshotImageId: "existing-image" })
     );
-    expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), policy);
+    expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+      expect.any(Number),
+      policy,
+      expect.any(Function)
+    );
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
@@ -871,7 +902,11 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.resumeSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ providerObjectId: "retained-source" })
     );
-    expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), policy);
+    expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+      expect.any(Number),
+      policy,
+      expect.any(Function)
+    );
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
@@ -886,54 +921,51 @@ describe("final preservation lifecycle integration", () => {
         capabilities: { supportsPersistentResume: true },
       })
     );
-    f.preservation.recoveryReceipt.mockReturnValue({
-      kind: "retained",
-      provider: "mock",
-      artifactId: "retained-source",
+    f.preservation.startupDecision.mockReturnValue({
+      kind: "resume_retained",
+      providerObjectId: "retained-source",
       runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
     });
     await f.manager.spawnSandbox();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.restoreFailed).toHaveBeenCalledWith(
+    expect(f.preservation.holdFailedRecovery).toHaveBeenCalledWith(
       "missing",
-      f.preservation.beginGeneration.mock.calls[0][0]
+      expect.objectContaining({
+        createdAt: f.preservation.reserveStartup.mock.calls[0][0],
+      })
     );
   });
 
   it("does not silently create a fresh sandbox when retained final resume is unsupported", async () => {
     const f = fixture(createMockProvider({ capabilities: { supportsPersistentResume: true } }));
-    f.preservation.recoveryReceipt.mockReturnValue({
-      kind: "retained",
-      provider: "mock",
-      artifactId: "retained-source",
+    f.preservation.startupDecision.mockReturnValue({
+      kind: "resume_retained",
+      providerObjectId: "retained-source",
       runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
     });
 
     await f.manager.spawnSandbox();
 
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.restoreFailed).toHaveBeenCalledWith(
+    expect(f.preservation.holdFailedRecovery).toHaveBeenCalledWith(
       expect.stringContaining("cannot resume")
     );
   });
 
   it("retains incompatible and foreign-provider receipts without fresh fallback", async () => {
     const f = fixture();
-    f.preservation.recoveryReceipt.mockReturnValue({
-      kind: "snapshot",
-      provider: "other-provider",
-      artifactId: "final-image",
-      runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    f.preservation.startupDecision.mockReturnValue({
+      kind: "hold",
+      reason: "provider mismatch",
     });
     await f.manager.spawnSandbox();
-    f.preservation.recoveryReceipt.mockReturnValue({
-      kind: "snapshot",
-      provider: "mock",
-      artifactId: "final-image",
+    f.preservation.startupDecision.mockReturnValue({
+      kind: "restore_snapshot",
+      snapshotId: "final-image",
       runtimeVersion: "0.0.0",
     });
     await f.manager.spawnSandbox();
-    expect(f.preservation.restoreFailed).toHaveBeenCalledTimes(2);
+    expect(f.preservation.holdFailedRecovery).toHaveBeenCalledOnce();
     expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
@@ -958,11 +990,11 @@ describe("final preservation lifecycle integration", () => {
       createMockSandbox({ status: "pending" })
     );
     await f.manager.spawnSandbox();
-    const generation = f.preservation.beginGeneration.mock.calls[0]?.[0];
+    const generation = f.preservation.recordProviderStartup.mock.calls[0]?.[0];
     expect(generation).toEqual(
       expect.objectContaining({ sandboxId: expect.any(String), createdAt: expect.any(Number) })
     );
-    expect(f.preservation.started).toHaveBeenCalledWith(generation, lifetime);
+    expect(f.preservation.recordProviderStartup).toHaveBeenCalledWith(generation, lifetime);
   });
 
   it.each([null, "0.0.0"])(
@@ -977,19 +1009,22 @@ describe("final preservation lifecycle integration", () => {
         })
       );
       f.storage.getSandbox()!.runtime_version = `v${MIN_PRESERVATION_RUNTIME_GENERATION}-different-row`;
-      f.preservation.recoveryReceipt.mockReturnValue({
-        kind: "retained",
-        provider: "mock",
-        artifactId: "retained-source",
+      f.preservation.startupDecision.mockReturnValue({
+        kind: "resume_retained",
+        providerObjectId: "retained-source",
         runtimeVersion,
       });
       await f.manager.spawnSandbox();
       expect(f.provider.resumeSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ providerObjectId: "retained-source" })
       );
-      expect(f.preservation.beginGeneration).toHaveBeenCalledWith(expect.any(Object), "legacy");
+      expect(f.preservation.reserveStartup).toHaveBeenCalledWith(
+        expect.any(Number),
+        "legacy",
+        expect.any(Function)
+      );
       expect(f.storage.getSandbox()!.runtime_version).toBe(runtimeVersion);
-      expect(f.preservation.restoreFailed).not.toHaveBeenCalled();
+      expect(f.preservation.holdFailedRecovery).not.toHaveBeenCalled();
       expect(f.provider.createSandbox).not.toHaveBeenCalled();
     }
   );
@@ -1015,7 +1050,7 @@ describe("final preservation lifecycle integration", () => {
       await f.manager.spawnSandbox();
 
       expect(restoreFromSnapshot).toHaveBeenCalled();
-      expect(f.preservation.restoreFailed).not.toHaveBeenCalled();
+      expect(f.preservation.holdFailedRecovery).not.toHaveBeenCalled();
     }
   );
 
@@ -1038,7 +1073,7 @@ describe("final preservation lifecycle integration", () => {
     await f.manager.spawnSandbox();
 
     expect(resumeSandbox).toHaveBeenCalled();
-    expect(f.preservation.restoreFailed).not.toHaveBeenCalled();
+    expect(f.preservation.holdFailedRecovery).not.toHaveBeenCalled();
   });
 });
 
@@ -1153,8 +1188,8 @@ describe("SandboxLifecycleManager", () => {
     const provider = createMockProvider();
     const preservation = {
       ...createUnmanagedPreservation(),
-      isHolding: vi.fn(() => true),
-    } satisfies SandboxPreservationLifecycle;
+      startupDecision: vi.fn(() => ({ kind: "hold" as const, reason: "shutdown held" })),
+    } satisfies SandboxShutdownLifecycle;
     const callbacks = {
       broadcast: vi.fn(),
       schedule: vi.fn(async () => undefined),
@@ -1172,13 +1207,13 @@ describe("SandboxLifecycleManager", () => {
       createTestConfig()
     );
 
-    expect(preservation.isHolding).not.toHaveBeenCalled();
+    expect(preservation.startupDecision).not.toHaveBeenCalled();
     expect(callbacks.broadcast).not.toHaveBeenCalled();
     expect(callbacks.schedule).not.toHaveBeenCalled();
 
     await manager.spawnSandbox();
 
-    expect(preservation.isHolding).toHaveBeenCalledOnce();
+    expect(preservation.startupDecision).toHaveBeenCalledOnce();
     expect(provider.createSandbox).not.toHaveBeenCalled();
     expect(callbacks.broadcast).not.toHaveBeenCalled();
     expect(callbacks.schedule).not.toHaveBeenCalled();
@@ -2209,15 +2244,16 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
+      const broadcaster = createMockBroadcaster();
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
         storage,
-        createMockBroadcaster(),
+        broadcaster,
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -2788,7 +2824,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
       return { storage, broadcaster, wsManager, provider, manager };
@@ -3084,7 +3120,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3126,7 +3162,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3155,7 +3191,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3187,7 +3223,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3222,7 +3258,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3254,7 +3290,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3272,11 +3308,7 @@ describe("SandboxLifecycleManager", () => {
         capabilities: { snapshotStopsSandbox: true },
         takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
       });
-      const preservation = new SandboxPreservation({
-        store: { read: () => null, write: vi.fn() },
-        provider,
-        sandbox: storage,
-      } as never);
+      const preservation = createCheckpointPreservation(provider, storage, broadcaster);
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3298,7 +3330,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("passes the checkpoint deadline and signal and always finishes the lease", async () => {
+    it("delegates checkpoint capture and publishes the saved outcome", async () => {
       const sandbox = createMockSandbox({ status: "ready" });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -3307,20 +3339,14 @@ describe("SandboxLifecycleManager", () => {
       });
       const takeSnapshot = vi.fn(async () => ({ success: true, imageId: "snapshot" }));
       const provider = createMockProvider({ takeSnapshot });
-      const finish = vi.fn();
       const preservation = {
         ...createUnmanagedPreservation(),
-        beginCheckpoint: (generation: SandboxGeneration) => ({
-          id: "lease",
-          generation,
-          deadlineAtMs: 123_456,
-          run: async <T>(operation: (signal: AbortSignal) => Promise<T>) => ({
-            outcome: "completed" as const,
-            value: await operation(new AbortController().signal),
-          }),
-          finish,
-        }),
-      } satisfies SandboxPreservationLifecycle;
+        captureCheckpoint: vi.fn(async () => ({
+          outcome: "saved" as const,
+          imageId: "snapshot",
+          sourceStopped: false,
+        })),
+      } satisfies SandboxShutdownLifecycle;
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -3335,10 +3361,10 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.triggerSnapshot("test");
 
-      expect(takeSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ deadlineAtMs: 123_456, signal: expect.any(AbortSignal) })
+      expect(preservation.captureCheckpoint).toHaveBeenCalledWith(
+        expect.objectContaining({ sandboxId: sandbox.modal_sandbox_id }),
+        "test"
       );
-      expect(finish).toHaveBeenCalledOnce();
     });
   });
 
@@ -3554,7 +3580,7 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3571,6 +3597,7 @@ describe("SandboxLifecycleManager", () => {
         last_activity: now - 11 * 60 * 1000,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
       const wsManager = createMockWebSocketManager(false, 0);
       const stopSandbox = vi.fn(async () => ({ success: true }));
       const provider = createMockProvider({
@@ -3582,11 +3609,11 @@ describe("SandboxLifecycleManager", () => {
         provider,
         storage,
         storage,
-        createMockBroadcaster(),
+        broadcaster,
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -3634,16 +3661,13 @@ describe("SandboxLifecycleManager", () => {
           return { success: true };
         }),
       });
-      const preservation = new SandboxPreservation({
-        store: { read: () => null, write: vi.fn() },
-        provider,
-        sandbox: storage,
-      } as never);
+      const broadcaster = createMockBroadcaster();
+      const preservation = createCheckpointPreservation(provider, storage, broadcaster);
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
         storage,
-        createMockBroadcaster(),
+        broadcaster,
         createMockWebSocketManager(false, 0),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
@@ -3657,6 +3681,60 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.snapshot_image_id).toBe("legacy-vercel-snapshot");
     });
 
+    it.each(["heartbeat", "inactivity"] as const)(
+      "does not stop or detach a replacement admitted after %s checkpoint completion",
+      async (reason) => {
+        const now = Date.now();
+        const sandbox = createMockSandbox({
+          status: "ready",
+          last_heartbeat: reason === "heartbeat" ? now - 100_000 : now - 10_000,
+          last_activity: reason === "inactivity" ? now - 11 * 60 * 1000 : now,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const broadcaster = createMockBroadcaster();
+        const wsManager = createMockWebSocketManager(false, 0);
+        const stopSandbox = vi.fn(async () => ({ success: true }));
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
+          stopSandbox,
+        });
+        const preservation = createCheckpointPreservation(
+          provider,
+          storage,
+          broadcaster,
+          async () => {
+            sandbox.modal_sandbox_id = "replacement-sandbox";
+            sandbox.modal_object_id = "replacement-provider-object";
+            sandbox.created_at += 1;
+            sandbox.status = "connecting";
+          }
+        );
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          broadcaster,
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          preservation,
+          createTestConfig()
+        );
+
+        await expect(manager.handleAlarm()).resolves.toBe("no_action");
+
+        expect(provider.takeSnapshot).toHaveBeenCalledOnce();
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(wsManager.sendToSandbox).not.toHaveBeenCalledWith({ type: "shutdown" });
+        expect(wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+        expect(sandbox).toMatchObject({
+          modal_sandbox_id: "replacement-sandbox",
+          modal_object_id: "replacement-provider-object",
+          status: "connecting",
+        });
+      }
+    );
+
     it("does not explicitly stop providers when the capability is disabled", async () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
@@ -3665,6 +3743,7 @@ describe("SandboxLifecycleManager", () => {
         last_activity: now - 11 * 60 * 1000,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
       const wsManager = createMockWebSocketManager(false, 0);
       const stopSandbox = vi.fn(async () => ({ success: true }));
       const provider = createMockProvider({
@@ -3676,11 +3755,11 @@ describe("SandboxLifecycleManager", () => {
         provider,
         storage,
         storage,
-        createMockBroadcaster(),
+        broadcaster,
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedPreservation(),
+        createCheckpointPreservation(provider, storage, broadcaster),
         createTestConfig()
       );
 
@@ -5923,13 +6002,11 @@ describe("status writes after a provider await (COL-99)", () => {
           })
       );
       const stopSandbox = vi.fn(async () => ({ success: true }));
-      const beginGeneration = vi.fn();
       const preservation = {
         ...createUnmanagedPreservation(),
-        beginGeneration,
-        reserveGeneration: beginGeneration,
-        request: vi.fn(async () => "owned" as const),
-      } satisfies SandboxPreservationLifecycle;
+        reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
+        requestShutdown: vi.fn(async () => "owned" as const),
+      } satisfies SandboxShutdownLifecycle;
       const manager = new SandboxLifecycleManager(
         createMockProvider({
           capabilities: { supportsExplicitStop: true },
@@ -5970,7 +6047,7 @@ describe("status writes after a provider await (COL-99)", () => {
       expect(sandbox.fenced).toBe(1);
       expect(sandbox.modal_object_id).toBeNull();
       expect(sandbox.code_server_url).toBeNull();
-      expect(preservation.started).not.toHaveBeenCalled();
+      expect(preservation.recordProviderStartup).not.toHaveBeenCalled();
       expect(stopSandbox).toHaveBeenCalledOnce();
       expect(stopSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -6178,7 +6255,7 @@ describe("status writes after a provider await (COL-99)", () => {
       createMockWebSocketManager(),
       createMockAlarmScheduler(),
       createMockIdGenerator(),
-      createUnmanagedPreservation(),
+      createCheckpointPreservation(provider, storage, broadcaster),
       createTestConfig()
     );
 

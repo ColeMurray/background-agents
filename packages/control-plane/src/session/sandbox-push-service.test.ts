@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SandboxPushAdmission } from "../sandbox/lifecycle/manager";
 import type { GitPushSpec } from "../source-control";
-import { SandboxPreservation, type PreservationAdmissionDecision } from "./sandbox-preservation";
-import type { PreservationRecord } from "./sandbox-preservation-repository";
 import { SandboxPushService } from "./sandbox-push-service";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
 
@@ -17,7 +16,7 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
   };
 }
 
-function createService(admission: () => PreservationAdmissionDecision = () => "unmanaged") {
+function createService(admission: () => SandboxPushAdmission = () => "unmanaged") {
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
     getSandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
@@ -41,19 +40,6 @@ function createService(admission: () => PreservationAdmissionDecision = () => "u
   return { service, wsManager, log };
 }
 
-function realPreservation(record: PreservationRecord): SandboxPreservation {
-  return new SandboxPreservation({
-    store: { read: () => record, write: () => undefined },
-    provider: { name: "modal" },
-    sandbox: {
-      getSandbox: () => ({
-        modal_sandbox_id: record.generation.sandboxId,
-        created_at: record.generation.createdAt,
-      }),
-    },
-  } as never);
-}
-
 describe("SandboxPushService", () => {
   it("assumes a manual push when no sandbox is attached at all", async () => {
     const h = createService();
@@ -70,25 +56,7 @@ describe("SandboxPushService", () => {
   });
 
   it("rejects a saved managed sandbox instead of assuming a manual push", async () => {
-    const preservation = realPreservation({
-      phase: "saved",
-      generation: { sandboxId: "sandbox-1", createdAt: 1_000 },
-      provider: "modal",
-      providerObjectId: "provider-1",
-      sourceRetired: true,
-      lifetimeKind: "none",
-      expiresAtMs: null,
-      drainAtMs: null,
-      generationReady: true,
-      receipt: {
-        kind: "snapshot",
-        artifactId: "snapshot-1",
-        provider: "modal",
-        savedAtMs: 2_000,
-        runtimeVersion: "v71-runtime",
-      },
-    });
-    const h = createService(() => preservation.admissionDecision());
+    const h = createService(() => "start_required");
     h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
 
     const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
@@ -103,20 +71,7 @@ describe("SandboxPushService", () => {
   it.each(["confirmed", "legacy"] as const)(
     "does not fake a %s managed push while its ready runtime is disconnected",
     async (lifecyclePolicy) => {
-      const preservation = realPreservation({
-        phase: "running",
-        generation: { sandboxId: "sandbox-1", createdAt: 1_000 },
-        provider: "modal",
-        providerObjectId: "provider-1",
-        sourceRetired: false,
-        lifetimeKind: "none",
-        expiresAtMs: null,
-        drainAtMs: null,
-        generationReady: true,
-        runtimeReady: true,
-        lifecyclePolicy,
-      });
-      const h = createService(() => preservation.admissionDecision());
+      const h = createService(() => "ready");
       h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
 
       const result = await h.service.pushBranchToRemote(
@@ -132,21 +87,7 @@ describe("SandboxPushService", () => {
   );
 
   it("pushes through an acknowledged live managed sandbox", async () => {
-    const preservation = realPreservation({
-      phase: "running",
-      generation: { sandboxId: "sandbox-1", createdAt: 1_000 },
-      provider: "modal",
-      providerObjectId: "provider-1",
-      sourceRetired: false,
-      lifetimeKind: "none",
-      expiresAtMs: null,
-      drainAtMs: null,
-      generationReady: true,
-      runtimeReady: true,
-      protocolVersion: 1,
-      lifecyclePolicy: "confirmed",
-    });
-    const h = createService(() => preservation.admissionDecision());
+    const h = createService(() => "ready");
 
     const pushing = h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/live"));
     h.service.settlePush({
@@ -166,7 +107,7 @@ describe("SandboxPushService", () => {
 
   it.each([
     ["held", "Sandbox preservation is in progress; push is held"],
-    ["spawn_required", "Sandbox must be started before pushing; retry once ready"],
+    ["start_required", "Sandbox must be started before pushing; retry once ready"],
   ] as const)("rejects %s admission before socket fallback", async (admission, error) => {
     const h = createService(() => admission);
     h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
