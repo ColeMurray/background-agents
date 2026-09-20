@@ -53,7 +53,9 @@ describe("initializeSession", () => {
     ],
   };
 
+  const settingsFirstMock = vi.fn();
   const ctx = {
+    db: { prepare: () => ({ bind: () => ({ first: settingsFirstMock }) }) },
     trace_id: "trace-abc",
     request_id: "req-xyz",
     metrics: { queries: [], totalQueryDurationMs: 0 },
@@ -73,6 +75,7 @@ describe("initializeSession", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    settingsFirstMock.mockResolvedValue(null);
 
     createMock = vi.fn().mockResolvedValue(undefined);
     updateStatusMock = vi.fn().mockResolvedValue(true);
@@ -114,7 +117,41 @@ describe("initializeSession", () => {
     expect(body.sandboxSettings).toEqual({
       buildTimeoutSeconds: 2400,
       terminalEnabled: true,
+      dockerEnabled: false,
     });
+  });
+
+  it.each(["user", "automation", "agent"] as const)(
+    "denies unavailable Docker before D1/runtime writes for %s",
+    async (spawnSource) => {
+      await expect(
+        initializeSession(
+          createEnv(),
+          { ...baseInput, spawnSource, dockerEnabled: true },
+          ctx as never
+        )
+      ).rejects.toMatchObject({ code: "docker_not_available" });
+      expect(createMock).not.toHaveBeenCalled();
+      expect(stubFetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not turn malformed persisted Docker requirements into a default Session", async () => {
+    settingsFirstMock.mockResolvedValue({ settings: '{"defaults":{"dockerEnabled":"true"}}' });
+    await expect(initializeSession(createEnv(), baseInput, ctx as never)).rejects.toMatchObject({
+      code: "invalid_sandbox_execution",
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(stubFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not create a Session when strict settings reads fail", async () => {
+    settingsFirstMock.mockRejectedValue(new Error("database unavailable"));
+    await expect(initializeSession(createEnv(), baseInput, ctx as never)).rejects.toMatchObject({
+      code: "invalid_sandbox_execution",
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(stubFetchMock).not.toHaveBeenCalled();
   });
 
   it("requires exactly one resolved or inherited managed skills manifest", async () => {
@@ -298,7 +335,8 @@ describe("initializeSession", () => {
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
     expect(body.vncEnabled).toBe(true);
-    expect(body.sandboxSettings).toEqual({});
+    expect(body.sandboxSettings).toEqual({ dockerEnabled: false });
+    expect(body.sandboxExecution).toEqual({ profile: "default" });
     expect(body.parentSessionId).toBeNull();
     expect(body.spawnSource).toBe("user");
     expect(body.spawnDepth).toBe(0);

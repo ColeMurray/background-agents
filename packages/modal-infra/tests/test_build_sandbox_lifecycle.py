@@ -218,6 +218,7 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
     assert kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
     assert kwargs["env"]["VCS_CLONE_TOKEN"] == "clone-token"
     assert json.loads(kwargs["env"]["SESSION_CONFIG"]) == {
+        "sandbox_execution": {"profile": "default"},
         "branch": "main",
         "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
     }
@@ -327,7 +328,9 @@ async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
 
     assert image_id == "im-snapshot-1"
     snapshot_filesystem.assert_not_called()
-    snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+    snapshot_filesystem.aio.assert_awaited_once_with(
+        timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None
+    )
 
 
 @pytest.mark.asyncio

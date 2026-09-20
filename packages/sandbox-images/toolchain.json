@@ -1,5 +1,27 @@
 {
   "schemaVersion": 1,
+  "docker": {
+    "engine": {
+      "file": "docker-ce_29.8.1-1~debian.12~bookworm_amd64.deb",
+      "sha256": "3e38704938b78358563164cf419d00598e32a2119efc7cea80bdec2249efaf63"
+    },
+    "cli": {
+      "file": "docker-ce-cli_29.8.1-1~debian.12~bookworm_amd64.deb",
+      "sha256": "ff812c5853c52ef120ec73132320805d179a376e42785085e2053ce7f2479860"
+    },
+    "containerd": {
+      "file": "containerd.io_2.3.5-1~debian.12~bookworm_amd64.deb",
+      "sha256": "f821adc67b4bd1bc8da06288ec3aa81e029cbb264bd6db569c7cdab7f8bb0701"
+    },
+    "buildx": {
+      "file": "docker-buildx-plugin_0.37.1-1~debian.12~bookworm_amd64.deb",
+      "sha256": "cf36da1a4c31287fef2c0cb5413aa660f56d4ec183b4d24dc47cd83ebef0a2c6"
+    },
+    "compose": {
+      "file": "docker-compose-plugin_5.5.1-1~debian.12~bookworm_amd64.deb",
+      "sha256": "0455e6a54bcc07b1bcb5d92d9e6e77dedc485433c87c1b75572e6d837a96e459"
+    }
+  },
   "osRefresh": "2026-09-06",
   "chrome": {
     "version": "152.0.7977.82",

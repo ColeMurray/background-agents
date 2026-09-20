@@ -5,6 +5,7 @@ import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { normalizeSandboxSettings } from "../../../sandbox/settings";
+import { sessionSandboxExecutionSchema } from "@open-inspect/shared/types/sandbox-execution";
 import { DEFAULT_BASE_BRANCH } from "../../../repos/default-branch";
 import { validateReasoningEffort } from "../../reasoning-effort";
 import type { SessionCoreRepository } from "../../session-core-repository";
@@ -74,6 +75,7 @@ const initRequestSchema = z.object({
    * SandboxSettings later, so the shape is validated at the use site instead.
    */
   sandboxSettings: z.unknown().optional(),
+  sandboxExecution: sessionSandboxExecutionSchema.optional(),
 });
 
 type InitRequest = z.infer<typeof initRequestSchema>;
@@ -188,9 +190,25 @@ export class SessionInitHandler {
       );
     }
 
-    const normalizedSandboxSettings = body.sandboxSettings
-      ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
-      : null;
+    let normalizedSandboxSettings;
+    const sandboxExecution = body.sandboxExecution ?? { profile: "default" as const };
+    try {
+      normalizedSandboxSettings =
+        body.sandboxSettings === undefined
+          ? null
+          : normalizeSandboxSettings(body.sandboxSettings, {
+              invalid: "omit",
+              strictExecution: true,
+            });
+      if (
+        (normalizedSandboxSettings?.dockerEnabled ?? false) !==
+        (sandboxExecution.profile === "docker-v1")
+      ) {
+        throw new Error("Sandbox execution conflicts with dockerEnabled");
+      }
+    } catch {
+      return Response.json({ error: "Invalid sandbox execution configuration" }, { status: 400 });
+    }
 
     this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
@@ -213,6 +231,7 @@ export class SessionInitHandler {
         sandboxSettings: normalizedSandboxSettings
           ? JSON.stringify(normalizedSandboxSettings)
           : null,
+        sandboxExecution: JSON.stringify(sandboxExecution),
         maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
         createdAt: now,

@@ -25,6 +25,7 @@ module "modal_app" {
   modal_environment_web_suffix = var.modal_environment_web_suffix
   deploy_path                  = "${var.project_root}/packages/modal-infra"
   deploy_module                = "deploy"
+  provision_modal_vm_sandboxes = var.provision_modal_vm_sandboxes
   source_hash                  = data.external.modal_source_hash[0].result.hash
 
   secrets = [

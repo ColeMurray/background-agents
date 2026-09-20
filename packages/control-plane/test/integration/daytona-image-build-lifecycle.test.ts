@@ -174,6 +174,10 @@ it.each(["probe-unavailable", "probe-exited", "stdin-response-lost"])(
     const finalizer = new ImageBuildFinalizer(store, factory);
     const repositories = [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }];
     const planner: ImageBuildPlannerPort = {
+      resolveExecutionIntent: async () => ({
+        sandboxExecution: { profile: "default" },
+        buildTimeoutMs: 1800_000,
+      }),
       resolveTarget: async () => ({
         kind: "environment" as const,
         repositories,

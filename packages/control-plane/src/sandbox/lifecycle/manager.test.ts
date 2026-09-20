@@ -26,6 +26,7 @@ import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
+  SnapshotArtifactUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
   type CreateSandboxConfig,
@@ -238,14 +239,31 @@ function createMockStorage(
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
     recordSandboxSnapshot: vi.fn(
-      (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {
+      (generation: SandboxGeneration, imageId: string, runtimeVersion: string | null) => {
         calls.push(`recordSandboxSnapshot:${imageId}:${runtimeVersion}`);
-        if (!sandbox || sandbox.modal_sandbox_id !== sandboxId) return false;
+        if (
+          !sandbox ||
+          sandbox.modal_sandbox_id !== generation.sandboxId ||
+          sandbox.created_at !== generation.createdAt
+        )
+          return false;
         sandbox.snapshot_image_id = imageId;
         sandbox.snapshot_runtime_version = runtimeVersion;
         return true;
       }
     ),
+    setSnapshotRecoveryError: vi.fn((generation, code) => {
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt
+      )
+        return false;
+      sandbox.snapshot_recovery_error_code = code;
+      sandbox.status = "failed";
+      sandbox.fenced = 1;
+      return true;
+    }),
     updateSandboxLastActivity: vi.fn((timestamp: number) => {
       calls.push("updateSandboxLastActivity");
       if (sandbox) sandbox.last_activity = timestamp;
@@ -636,6 +654,119 @@ describe("lifecycle-owned runtime readiness and cancellation", () => {
 });
 
 describe("SandboxLifecycleManager", () => {
+  describe("Docker snapshot recovery", () => {
+    const execution = { profile: "docker-v1", provider: "modal", cpuCores: 2, memoryMib: 4096 };
+    function setup(snapshotProfile: string | null, runtime = "v72-test") {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "im-preserved",
+        snapshot_execution_profile: snapshotProfile,
+        snapshot_runtime_version: runtime,
+      });
+      const session = createMockSession({ sandbox_execution: JSON.stringify(execution) });
+      const storage = createMockStorage(session, sandbox);
+      const provider = { ...createMockProvider(), name: "modal" };
+      const broadcaster = createMockBroadcaster();
+      const create = () =>
+        new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          broadcaster,
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+      return { session, sandbox, storage, provider, broadcaster, create };
+    }
+    it.each([null, "default", "unknown"])(
+      "preserves incompatible %s snapshots across manager recreation",
+      async (profile) => {
+        const { sandbox, provider, create } = setup(profile);
+        await create().spawnSandbox();
+        expect(sandbox.status).toBe("failed");
+        expect(sandbox.snapshot_image_id).toBe("im-preserved");
+        expect(sandbox.snapshot_recovery_error_code).toBeTruthy();
+        await create().spawnSandbox();
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      }
+    );
+    it("restores with immutable Docker resources rather than current settings", async () => {
+      const { provider, create } = setup("docker-v1");
+      await create().spawnSandbox();
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ sandboxExecution: execution, snapshotImageId: "im-preserved" })
+      );
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+    it("requires explicit retry and leaves the latch until runtime readiness", async () => {
+      const { sandbox, provider, create } = setup("docker-v1");
+      sandbox.snapshot_recovery_error_code = "artifact_missing";
+      const manager = create();
+      await manager.spawnSandbox();
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(await manager.retrySnapshotRestore()).toBe(true);
+      expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
+      expect(await manager.retrySnapshotRestore()).toBe(false);
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledTimes(1);
+    });
+    it.each(["cancelled", "archived"] as const)(
+      "does not retry after the session becomes %s",
+      async (status) => {
+        const { session, sandbox, storage, provider, create } = setup("docker-v1");
+        sandbox.snapshot_recovery_error_code = "artifact_missing";
+        const manager = create();
+        session.status = status;
+        expect(await manager.retrySnapshotRestore()).toBe(false);
+        expect(storage.calls).not.toContain("updateSandboxForSpawn");
+        expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+        expect(sandbox.snapshot_image_id).toBe("im-preserved");
+      }
+    );
+    it("does not retry unrecognized persisted recovery codes", async () => {
+      const { sandbox, provider, create } = setup("docker-v1");
+      sandbox.snapshot_recovery_error_code = "future_code";
+      expect(await create().retrySnapshotRestore()).toBe(false);
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    });
+    it("latches a missing artifact but retains its identity across later automatic attempts", async () => {
+      const { sandbox, provider, create } = setup("docker-v1");
+      vi.mocked(provider.restoreFromSnapshot!).mockRejectedValue(
+        new SnapshotArtifactUnavailableError("missing")
+      );
+      await create().spawnSandbox();
+      expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
+      expect(sandbox.snapshot_image_id).toBe("im-preserved");
+      await create().spawnSandbox();
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledTimes(1);
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+    it("does not turn a transient restore failure into permanent missing-artifact state", async () => {
+      const { sandbox, provider, create } = setup("docker-v1");
+      vi.mocked(provider.restoreFromSnapshot!).mockRejectedValue(
+        new Error("503 temporarily unavailable")
+      );
+      await create().spawnSandbox();
+      expect(sandbox.snapshot_recovery_error_code).toBeFalsy();
+      expect(sandbox.snapshot_image_id).toBe("im-preserved");
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+    });
+    it("retains cancellation's verdict when an explicit retry reports late artifact loss", async () => {
+      const { session, sandbox, provider, create } = setup("docker-v1");
+      sandbox.snapshot_recovery_error_code = "artifact_missing";
+      vi.mocked(provider.restoreFromSnapshot!).mockImplementation(async () => {
+        session.status = "cancelled";
+        sandbox.status = "stopped";
+        throw new SnapshotArtifactUnavailableError("missing");
+      });
+      await create().retrySnapshotRestore();
+      expect(sandbox.status).toBe("stopped");
+      expect(sandbox.snapshot_image_id).toBe("im-preserved");
+      expect(sandbox.snapshot_recovery_error_code).toBe("artifact_missing");
+    });
+  });
   describe("spawnSandbox", () => {
     it("spawns when all conditions pass", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -3708,10 +3839,13 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "repo",
-        id: "testowner/testrepo",
-      });
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "repo",
+          id: "testowner/testrepo",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           prebuiltImageId: "img-abc123",
@@ -3759,10 +3893,13 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "repo",
-        id: "testowner/testrepo",
-      });
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "repo",
+          id: "testowner/testrepo",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
@@ -4013,10 +4150,13 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "environment",
-        id: "env-1",
-      });
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "environment",
+          id: "env-1",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           prebuiltImageId: "im-env-123",
@@ -4063,10 +4203,13 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(environmentImageLookup.getLatestReady).toHaveBeenCalledTimes(1);
-      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "environment",
-        id: "env-1",
-      });
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "environment",
+          id: "env-1",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );

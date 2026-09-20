@@ -21,6 +21,7 @@ import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
+import { SandboxExecutionError } from "../sandbox/execution";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
@@ -266,6 +267,7 @@ export async function handleCreateSession(
     codeServerEnabled,
     vncEnabled,
     sandboxSettings,
+    dockerEnabled: body.dockerEnabled,
     spawnSource,
     managedSkillsManifest,
     providerAuth,
@@ -274,6 +276,8 @@ export async function handleCreateSession(
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (e instanceof SandboxExecutionError)
+      return json({ error: e.message, code: e.code }, e.status);
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,
@@ -291,6 +295,21 @@ export async function handleCreateSession(
 }
 
 export const sessionCreateRoutes = new Hono<ControlPlaneHonoEnv>();
+
+sessionCreateRoutes.get(
+  "/session-capabilities",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.create"),
+  }),
+  (c) =>
+    dispatch(c, async (_request, env) =>
+      json({
+        dockerAvailable:
+          (env.SANDBOX_PROVIDER ?? "modal") === "modal" && env.ENABLE_MODAL_VM_SANDBOXES === "true",
+      })
+    )
+);
 
 sessionCreateRoutes.post(
   "/sessions",

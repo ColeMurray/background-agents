@@ -6,6 +6,7 @@ import {
 } from "../background-tasks.test-support";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
+import { IntegrationSettingsStore } from "../db/integration-settings";
 import { imageBuildRoutes } from "./image-builds";
 import type { Env } from "../types";
 import type { RepositoryAccessResult } from "../source-control";
@@ -331,20 +332,22 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
 
   it("resolves the repo's sandbox settings without an environment layer and clamps the timeout", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
-    integrationSettings.resolveSandboxSettings.mockResolvedValue({ buildTimeoutSeconds: 5000 });
+    const settingsRead = vi
+      .spyOn(IntegrationSettingsStore.prototype, "getResolvedConfig")
+      .mockResolvedValueOnce({
+        settings: { buildTimeoutSeconds: 5000 },
+        enabledRepos: null,
+      } as Awaited<ReturnType<IntegrationSettingsStore["getResolvedConfig"]>>);
 
     const response = await callTrigger(createModalEnv());
 
     expect(response.status).toBe(200);
-    expect(integrationSettings.resolveSandboxSettings).toHaveBeenCalledWith(
-      expect.anything(),
-      "acme",
-      "repo"
-    );
+    expect(settingsRead).toHaveBeenCalledWith("sandbox", "acme/repo", undefined);
     expect(modalClient.createImageBuildSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ providerSessionTimeoutSeconds: 4200 }),
       expect.any(Object)
     );
+    settingsRead.mockRestore();
   });
 
   it("reports the in-flight build instead of stacking another", async () => {

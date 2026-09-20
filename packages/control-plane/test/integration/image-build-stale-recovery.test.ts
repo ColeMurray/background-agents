@@ -31,6 +31,10 @@ function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
   const adapter = { async startBuild() {} } as unknown as ImageBuildAdapter;
   const factory = { create: () => adapter } as ImageBuildAdapterFactory;
   const planner = {
+    resolveExecutionIntent: async () => ({
+      sandboxExecution: { profile: "default" },
+      buildTimeoutMs: 1800_000,
+    }),
     resolveTarget: async () => ({
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-heal",

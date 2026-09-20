@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
@@ -154,6 +156,114 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     supervisor.managed_skills.materialize.assert_not_awaited()
     opencode_server.start.assert_not_awaited()
     agent_bridge.start.assert_not_awaited()
+
+
+def _docker(supervisor, events):
+    service = MagicMock()
+    service.stopping = False
+    exited = asyncio.Event()
+    service.start = AsyncMock(side_effect=lambda: events.append("docker:start"))
+    service.wait = AsyncMock(side_effect=exited.wait)
+    service.stop = AsyncMock(side_effect=lambda: events.append("docker:stop"))
+
+    async def prepare():
+        events.append("docker:prepare")
+        service.stopping = True
+        exited.set()
+
+    service.prepare_for_snapshot = AsyncMock(side_effect=prepare)
+    supervisor.docker_service = service
+    supervisor._report_fatal_error = AsyncMock()
+    return service, exited
+
+
+async def test_docker_build_prepares_before_success_without_restarting(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _supervisor(tmp_path, events)
+    service, _ = _docker(supervisor, events)
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock(report_failure=AsyncMock())
+
+    async def success(**_kwargs):
+        assert supervisor._docker_watch_task is None
+        events.append("success")
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=success)
+    assert await supervisor.run(callback) is True
+    assert events == [
+        "docker:start",
+        "repository:build",
+        "docker:prepare",
+        "success",
+        "docker:stop",
+    ]
+    service.start.assert_awaited_once()
+    callback.report_failure.assert_not_awaited()
+
+
+@pytest.mark.parametrize("error", [RuntimeError("unclean stop"), TimeoutError("inner deadline")])
+async def test_docker_prepare_failure_never_reports_success(tmp_path, monkeypatch, error):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    service, _ = _docker(supervisor, [])
+    service.prepare_for_snapshot.side_effect = error
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock(report_success=AsyncMock(), report_failure=AsyncMock())
+    assert await supervisor.run(callback) is False
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_awaited_once_with(str(error))
+    service.stop.assert_awaited_once()
+
+
+async def test_docker_exit_cancels_blocked_hook_and_reports_one_failure(tmp_path, monkeypatch):
+    supervisor, repository, *_ = _supervisor(tmp_path, [])
+    service, exited = _docker(supervisor, [])
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def hook(*_args):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    repository.boot.side_effect = hook
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock(report_success=AsyncMock(), report_failure=AsyncMock())
+    task = asyncio.create_task(supervisor.run(callback))
+    await asyncio.wait_for(entered.wait(), 1)
+    exited.set()
+    assert await asyncio.wait_for(task, 1) is False
+    assert cancelled.is_set()
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_awaited_once()
+    supervisor._report_fatal_error.assert_awaited_once()
+    service.stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize("phase", ["start", "prepare_for_snapshot"])
+async def test_requested_shutdown_during_docker_boot_is_not_build_failure(
+    tmp_path, monkeypatch, phase
+):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    service, _ = _docker(supervisor, [])
+    entered = asyncio.Event()
+
+    async def block():
+        entered.set()
+        await asyncio.Event().wait()
+
+    getattr(service, phase).side_effect = block
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock(report_success=AsyncMock(), report_failure=AsyncMock())
+    task = asyncio.create_task(supervisor.run(callback))
+    await asyncio.wait_for(entered.wait(), 1)
+    supervisor.shutdown_event.set()
+    assert await asyncio.wait_for(task, 1) is True
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_not_awaited()
+    service.stop.assert_awaited_once()
 
 
 async def test_graceful_bridge_exit_requests_shutdown(tmp_path):

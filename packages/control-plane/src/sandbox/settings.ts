@@ -13,6 +13,8 @@ type InvalidSandboxSettingsBehavior = "throw" | "omit";
 
 export interface NormalizeSandboxSettingsOptions {
   invalid?: InvalidSandboxSettingsBehavior;
+  /** Admission reads must not silently drop invalid execution/resource requirements. */
+  strictExecution?: boolean;
   createError?: (message: string) => Error;
   /** Defer cross-field defaults until repo/environment overrides are merged. */
   partial?: boolean;
@@ -44,8 +46,8 @@ export function normalizeSandboxSettings(
   const invalidBehavior = options.invalid ?? "throw";
   const createError =
     options.createError ?? ((message: string) => new SandboxSettingsValidationError(message));
-  const reject = (message: string): false => {
-    if (invalidBehavior === "throw") {
+  const reject = (message: string, strict = false): false => {
+    if (invalidBehavior === "throw" || strict) {
       throw createError(message);
     }
     return false;
@@ -60,6 +62,13 @@ export function normalizeSandboxSettings(
 
   const settings = input as Record<string, unknown>;
   const result: SandboxSettings = {};
+
+  if (settings.dockerEnabled !== undefined) {
+    if (typeof settings.dockerEnabled !== "boolean") {
+      throw createError("dockerEnabled must be a boolean");
+    }
+    result.dockerEnabled = settings.dockerEnabled;
+  }
 
   if (settings.terminalEnabled !== undefined) {
     if (typeof settings.terminalEnabled !== "boolean") {
@@ -117,7 +126,7 @@ export function normalizeSandboxSettings(
       !Number.isFinite(settings.cpuCores) ||
       settings.cpuCores <= 0
     ) {
-      reject("cpuCores must be a positive number");
+      reject("cpuCores must be a positive number", options.strictExecution);
     } else {
       result.cpuCores = settings.cpuCores;
     }
@@ -131,7 +140,7 @@ export function normalizeSandboxSettings(
       !Number.isInteger(settings.memoryMib) ||
       settings.memoryMib <= 0
     ) {
-      reject("memoryMib must be a positive integer");
+      reject("memoryMib must be a positive integer", options.strictExecution);
     } else {
       result.memoryMib = settings.memoryMib;
     }

@@ -75,6 +75,11 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
 
     if tools.get("schemaVersion") != 1:
         raise ValueError("Unsupported image toolchain schema")
+    for pin in tools["docker"].values():
+        if not re.fullmatch(r"[a-z0-9_.~+-]+_amd64\.deb", pin["file"]):
+            raise ValueError("Docker packages must be pinned Debian amd64 artifacts")
+        if not re.fullmatch(r"[a-f0-9]{64}", pin["sha256"]):
+            raise ValueError("Docker packages must have a SHA-256 pin")
     if version(tools["opencode"]) < version(tools["opencodeMinimum"]):
         raise ValueError("OpenCode is below the image toolchain minimum")
     for name in ("agentBrowser", "pnpm", "bun", "zod", "python"):
@@ -196,6 +201,9 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             "AGENT_BROWSER_VERSION": toolchain["agentBrowser"],
             "AGENT_BROWSER_SHA256": toolchain["agentBrowserSha256"],
         }
+        for name, pin in toolchain["docker"].items():
+            variables[f"DOCKER_{name.upper()}_FILE"] = pin["file"]
+            variables[f"DOCKER_{name.upper()}_SHA256"] = pin["sha256"]
         for name, key in (
             ("NODE", "node"),
             ("UV", "uv"),

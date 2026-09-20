@@ -473,6 +473,7 @@ async function handleGetResolvedConfig(
       repo,
       config: {
         tunnelPorts: sandboxSettings.tunnelPorts ?? [],
+        dockerEnabled: sandboxSettings.dockerEnabled ?? false,
         terminalEnabled: sandboxSettings.terminalEnabled ?? false,
         maxConcurrentChildSessions:
           sandboxSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,

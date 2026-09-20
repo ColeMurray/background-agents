@@ -27,6 +27,11 @@ import {
   type ImageBuildScope,
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
+import type {
+  SessionSandboxExecution,
+  SandboxExecutionProfile,
+} from "@open-inspect/shared/types/sandbox-execution";
+import { snapshotExecutionIssue } from "../snapshot-execution";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -39,6 +44,7 @@ export interface ImageBuildSpawnRow {
   repositories_fingerprint: string;
   repository_shas: string;
   runtime_version: string;
+  execution_profile?: string;
 }
 
 /**
@@ -47,7 +53,10 @@ export interface ImageBuildSpawnRow {
  */
 export interface ImageBuildLookup {
   /** Latest ready image for the scope on the active provider, enablement-gated. */
-  getLatestReady(scope: ImageBuildScope): Promise<ImageBuildSpawnRow | null>;
+  getLatestReady(
+    scope: ImageBuildScope,
+    profile?: SandboxExecutionProfile
+  ): Promise<ImageBuildSpawnRow | null>;
   /**
    * Fail a ready image whose provider artifact could not be restored, so the
    * rebuild cron sees no ready image and rebuilds it.
@@ -71,6 +80,7 @@ export interface SelectedImageBuild {
 
 type ImageBuildMissReason =
   | "no_ready_image"
+  | "execution_profile_mismatch"
   | "missing_artifact"
   | "runtime_below_floor"
   | "fingerprint_mismatch";
@@ -87,10 +97,14 @@ export type ImageBuildSelectionResult =
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
   sessionRepositories: FingerprintRepositoryInput[],
-  harness: HarnessId = DEFAULT_HARNESS
+  harness: HarnessId = DEFAULT_HARNESS,
+  execution: SessionSandboxExecution = { profile: "default" }
 ): Promise<ImageBuildSelectionResult> {
   if (!image) {
     return { outcome: "miss", reason: "no_ready_image" };
+  }
+  if (snapshotExecutionIssue(execution, image.execution_profile, image.runtime_version)) {
+    return { outcome: "miss", reason: "execution_profile_mismatch", imageBuildId: image.id };
   }
   if (!image.provider_image_id) {
     // Ready rows always record their artifact at mark-ready time; defensive

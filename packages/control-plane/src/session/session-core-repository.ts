@@ -25,6 +25,7 @@ export interface UpsertSessionData {
   codeServerEnabled?: boolean;
   vncEnabled?: boolean;
   sandboxSettings?: string | null;
+  sandboxExecution?: string | null;
   maxCostUsd?: number | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
@@ -85,8 +86,8 @@ export class SessionCoreRepository {
       // max_cost_usd is seeded on insert but absent from the update clause: once
       // setSessionBudget has written a live limit, it is working state like
       // branch_name and total_cost, and a repeated init must not reset it.
-      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, sandbox_execution, environment_id, max_cost_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          session_name = excluded.session_name,
          title = excluded.title,
@@ -124,6 +125,7 @@ export class SessionCoreRepository {
       data.codeServerEnabled ? 1 : 0,
       data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
+      data.sandboxExecution ?? null,
       data.environmentId ?? null,
       data.maxCostUsd ?? null,
       data.createdAt,

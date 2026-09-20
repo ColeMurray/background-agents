@@ -1,6 +1,7 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
 import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
+import type { SessionSandboxExecution } from "@open-inspect/shared/types/sandbox-execution";
 
 export type ImageBuildWorkflowContext = CorrelationContext;
 
@@ -32,6 +33,7 @@ export type ImageBuildCloneAuth =
  * Every supported provider uses the same create-bind-launch session contract.
  */
 export interface ImageBuildPlan {
+  sandboxExecution?: SessionSandboxExecution;
   buildId: string;
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];

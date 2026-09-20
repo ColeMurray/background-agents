@@ -68,8 +68,32 @@ export class SessionLifecycleHandler {
     private readonly titleService: SessionTitleService,
     private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
-    private readonly cancelSession: () => Promise<void>
+    private readonly cancelSession: () => Promise<void>,
+    private readonly retrySnapshotRestore: () => Promise<boolean>
   ) {}
+
+  async retrySnapshot(request: Request): Promise<Response> {
+    const session = this.sessionCoreRepository.getSession();
+    if (!session) return Response.json({ error: "Session not found" }, { status: 404 });
+    if (session.status === "archived" || session.status === "cancelled") {
+      return Response.json({ error: "Session is not active" }, { status: 409 });
+    }
+    const body = await request.text();
+    try {
+      z.strictObject({}).parse(body ? JSON.parse(body) : {});
+    } catch {
+      return Response.json({ error: "Snapshot retry does not accept overrides" }, { status: 400 });
+    }
+    try {
+      const started = await this.retrySnapshotRestore();
+      return Response.json({ started }, { status: started ? 202 : 409 });
+    } catch {
+      return Response.json(
+        { error: "Snapshot recovery remains blocked; snapshot preserved" },
+        { status: 409 }
+      );
+    }
+  }
 
   getState(): Response {
     const session = this.sessionCoreRepository.getSession();

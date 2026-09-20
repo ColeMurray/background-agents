@@ -141,6 +141,58 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
     }
 
 
+@pytest.mark.parametrize("docker_exit", [0, 1])
+def test_dual_image_publication_is_atomic_and_always_cleans_verifiers(
+    monkeypatch, tmp_path, docker_exit
+):
+    from sandbox_images import native
+
+    monkeypatch.setattr(deploy.modal.App, "lookup", Mock(return_value=object()))
+    monkeypatch.setattr(deploy, "base_image", Mock(object_id="im-standard"))
+    monkeypatch.setattr(deploy, "docker_image", Mock(object_id="im-docker"))
+    monkeypatch.setattr(deploy, "base_image_plan", {"buildHash": "new", "runtimeEnv": {}})
+    default = Mock()
+    default.exec.return_value = Mock(returncode=0)
+    docker = Mock()
+    docker.exec.return_value = Mock(returncode=docker_exit)
+    create = Mock(side_effect=[default, docker])
+    monkeypatch.setattr(deploy.modal.Sandbox, "create", create)
+    path = tmp_path / "selected.json"
+    path.write_text('{"imageId":"im-previous","buildHash":"old"}')
+    monkeypatch.setattr(deploy, "image_reference_path", lambda: path)
+    publish = Mock()
+    monkeypatch.setattr(native, "write_build_result", publish)
+    if docker_exit:
+        with pytest.raises(RuntimeError, match="Docker image verification failed"):
+            deploy.build_sandbox_image(with_docker=True)
+        assert json.loads(path.read_text())["imageId"] == "im-previous"
+        publish.assert_not_called()
+    else:
+        deploy.build_sandbox_image(with_docker=True)
+        assert json.loads(path.read_text()) == {
+            "imageId": "im-standard",
+            "dockerImageId": "im-docker",
+            "schemaVersion": 2,
+            "buildHash": "new",
+        }
+        publish.assert_called_once_with("im-standard")
+        assert docker.exec.call_count == 2
+    assert "experimental_options" not in create.call_args_list[0].kwargs
+    assert create.call_args_list[1].kwargs["experimental_options"] == {"vm_runtime": True}
+    default.terminate.assert_called_once()
+    docker.terminate.assert_called_once()
+
+
+def test_admission_rollback_retains_independently_provisioned_docker_image(monkeypatch):
+    monkeypatch.setenv("ENABLE_MODAL_VM_SANDBOXES", "false")
+    monkeypatch.setenv("BUILD_MODAL_VM_IMAGE", "true")
+    monkeypatch.setattr(sys, "argv", ["deploy.py", "--build-sandbox-image"])
+    build = Mock()
+    monkeypatch.setattr(deploy, "build_sandbox_image", build)
+    deploy.main()
+    build.assert_called_once_with(with_docker=True)
+
+
 def test_local_base_image_retains_its_packed_plan(monkeypatch, tmp_path) -> None:
     from src.images import base
 

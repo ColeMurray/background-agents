@@ -100,6 +100,7 @@ module "control_plane_worker" {
       APP_NAME                      = { value = var.app_name }
       GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
       SANDBOX_PROVIDER              = { value = var.sandbox_provider }
+      ENABLE_MODAL_VM_SANDBOXES     = { value = tostring(var.enable_modal_vm_sandboxes) }
       SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
       SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
     },

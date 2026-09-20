@@ -35,6 +35,7 @@ resource "null_resource" "modal_secrets" {
 # Deploy Modal app
 resource "null_resource" "modal_deploy" {
   triggers = {
+    provision_modal_vm_sandboxes = tostring(var.provision_modal_vm_sandboxes)
     # Re-deploy when source files change
     source_hash = var.source_hash
     # Re-deploy when app name changes
@@ -50,12 +51,13 @@ resource "null_resource" "modal_deploy" {
     interpreter = ["bash"]
 
     environment = {
-      MODAL_TOKEN_ID     = var.modal_token_id
-      MODAL_TOKEN_SECRET = var.modal_token_secret
-      MODAL_ENVIRONMENT  = var.modal_environment
-      APP_NAME           = var.app_name
-      DEPLOY_PATH        = var.deploy_path
-      DEPLOY_MODULE      = var.deploy_module
+      MODAL_TOKEN_ID       = var.modal_token_id
+      MODAL_TOKEN_SECRET   = var.modal_token_secret
+      MODAL_ENVIRONMENT    = var.modal_environment
+      APP_NAME             = var.app_name
+      DEPLOY_PATH          = var.deploy_path
+      DEPLOY_MODULE        = var.deploy_module
+      BUILD_MODAL_VM_IMAGE = tostring(var.provision_modal_vm_sandboxes)
     }
   }
 

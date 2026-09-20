@@ -14,7 +14,7 @@ The control plane must include an Authorization header with a valid token.
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Self
@@ -25,6 +25,7 @@ from modal.exception import TimeoutError as ModalTimeoutError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
+from sandbox_runtime.execution import DefaultSandboxExecution, SandboxExecution
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
 
 from .app import (
@@ -48,6 +49,61 @@ class _ModalRequestModel(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
 
+class TerminateSandboxRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    provider_object_id: str = Field(pattern=r"^sb-[a-zA-Z0-9]+$")
+    session_id: str = Field(min_length=1)
+    sandbox_id: str = Field(min_length=1)
+
+
+class DeleteImageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    image_id: str = Field(pattern=r"^im-[a-zA-Z0-9]+$")
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_terminate_sandbox(request: dict, authorization: str | None = Header(None)) -> dict:
+    """Compensate only an allocation belonging to the expected Session generation."""
+    import modal
+
+    require_auth(authorization)
+    parsed = _parse_request(TerminateSandboxRequest, request)
+    try:
+        sandbox = await modal.Sandbox.from_id.aio(parsed.provider_object_id)
+        tags = await sandbox.get_tags.aio()
+        if (
+            tags.get("openinspect_kind") != "session"
+            or tags.get("openinspect_session_id") != parsed.session_id
+            or tags.get("openinspect_sandbox_id") != parsed.sandbox_id
+        ):
+            raise HTTPException(status_code=409, detail="Sandbox allocation identity mismatch")
+        await sandbox.terminate.aio()
+    except modal.exception.NotFoundError:
+        pass
+    return {"success": True}
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_delete_image(request: dict, authorization: str | None = Header(None)) -> dict:
+    """Delete a retired snapshot; caller owns reference checks and durable retry obligations."""
+    import modal
+    import modal.experimental
+
+    from .images.base import base_image, docker_image
+
+    require_auth(authorization)
+    parsed = _parse_request(DeleteImageRequest, request)
+    if parsed.image_id in {
+        image.object_id for image in (base_image, docker_image) if image is not None
+    }:
+        raise HTTPException(status_code=409, detail="Cannot delete a deployed base image")
+    with suppress(modal.exception.NotFoundError):
+        await modal.experimental.image_delete.aio(parsed.image_id)
+    return {"success": True}
+
+
 NonEmptyString = Annotated[str, Field(min_length=1)]
 
 
@@ -64,6 +120,7 @@ class BuildRepositoryRequest(_ModalRequestModel):
 
 
 class CreateBuildSandboxRequest(_ModalRequestModel):
+    sandbox_execution: DefaultSandboxExecution = Field(default_factory=DefaultSandboxExecution)
     scope_kind: NonEmptyString
     scope_id: NonEmptyString
     build_id: NonEmptyString
@@ -114,6 +171,8 @@ class _RepositoryContextModel(_ModalRequestModel):
 
 
 class CreateSandboxRequest(_RepositoryContextModel):
+    sandbox_execution: DefaultSandboxExecution = Field(default_factory=DefaultSandboxExecution)
+    bridge_early_connect: bool = False
     session_id: NonEmptyString
     sandbox_id: str | None = None
     control_plane_url: NonEmptyString
@@ -157,6 +216,7 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
 
 
 class RestoreSandboxRequest(_ModalRequestModel):
+    sandbox_execution: DefaultSandboxExecution = Field(default_factory=DefaultSandboxExecution)
     snapshot_image_id: NonEmptyString
     session_config: RestoreSessionConfigRequest
     sandbox_id: str | None = None
@@ -168,6 +228,31 @@ class RestoreSandboxRequest(_ModalRequestModel):
     vnc_enabled: bool | None = None
     agent_slack_notify_enabled: bool = False
     sandbox_settings: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_execution_consistency(self) -> Self:
+        nested = self.session_config.model_dump(exclude_unset=True)
+        if (
+            "sandbox_execution" in nested
+            and nested["sandbox_execution"] != self.sandbox_execution.model_dump()
+        ):
+            raise ValueError("Nested sandbox execution conflicts with the launch contract")
+        return self
+
+
+class CreateSandboxV2Request(CreateSandboxRequest):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sandbox_execution: SandboxExecution = Field(...)
+
+
+class RestoreSandboxV2Request(RestoreSandboxRequest):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sandbox_execution: SandboxExecution = Field(...)
+
+
+class CreateBuildSandboxV2Request(CreateBuildSandboxRequest):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sandbox_execution: SandboxExecution = Field(...)
 
 
 @dataclass
@@ -209,6 +294,11 @@ async def _execute_endpoint(
         execution.outcome = "error"
         raise
     except Exception as e:
+        from .sandbox.manager import SnapshotImageUnavailableError
+
+        if isinstance(e, SnapshotImageUnavailableError):
+            execution.http_status = 410
+            raise HTTPException(status_code=410, detail="snapshot_artifact_missing") from e
         execution.http_status = 500
         execution.outcome = "error"
         log.error(
@@ -355,18 +445,15 @@ def _session_config_from_create_request(
     return SessionConfig(**fields)
 
 
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret],
-)
-@fastapi_endpoint(method="POST")
-async def api_create_sandbox(
+async def _create_sandbox(
     request: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
+    *,
+    versioned: bool = False,
 ) -> dict:
     """
     HTTP endpoint to create a sandbox.
@@ -393,7 +480,9 @@ async def api_create_sandbox(
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
     ):
-        parsed_request = _parse_request(CreateSandboxRequest, request)
+        parsed_request = _parse_request(
+            CreateSandboxV2Request if versioned else CreateSandboxRequest, request
+        )
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -408,7 +497,9 @@ async def api_create_sandbox(
         repo_owner = parsed_request.repo_owner
         repo_name = parsed_request.repo_name
         session_config = _session_config_from_create_request(
-            request, repo_owner=repo_owner, repo_name=repo_name
+            {**request, "sandbox_execution": parsed_request.sandbox_execution.model_dump()},
+            repo_owner=repo_owner,
+            repo_name=repo_name,
         )
 
         config = SandboxConfig(
@@ -448,6 +539,11 @@ async def api_create_sandbox(
                 "modal_object_id": handle.modal_object_id,  # Modal's internal ID for snapshot API
                 "status": handle.status.value,
                 "created_at": handle.created_at,
+                **(
+                    {"execution_profile": parsed_request.sandbox_execution.profile}
+                    if versioned
+                    else {}
+                ),
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,
@@ -613,15 +709,15 @@ async def api_snapshot_build_sandbox(
         }
 
 
-@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
-@fastapi_endpoint(method="POST")
-async def api_restore_sandbox(
+async def _restore_sandbox(
     request: dict,
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
     x_session_id: str | None = Header(None),
     x_sandbox_id: str | None = Header(None),
+    *,
+    versioned: bool = False,
 ) -> dict:
     """
     Create a new sandbox from a filesystem snapshot.
@@ -664,7 +760,9 @@ async def api_restore_sandbox(
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
     ):
-        parsed_request = _parse_request(RestoreSandboxRequest, request)
+        parsed_request = _parse_request(
+            RestoreSandboxV2Request if versioned else RestoreSandboxRequest, request
+        )
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -674,6 +772,7 @@ async def api_restore_sandbox(
         )
 
         session_config = parsed_request.session_config.model_dump(exclude_unset=True)
+        session_config["sandbox_execution"] = parsed_request.sandbox_execution.model_dump()
         repo_owner = parsed_request.session_config.repo_owner
         repo_name = parsed_request.session_config.repo_name
 
@@ -710,6 +809,11 @@ async def api_restore_sandbox(
                 "sandbox_id": handle.sandbox_id,
                 "modal_object_id": handle.modal_object_id,
                 "status": handle.status.value,
+                **(
+                    {"execution_profile": parsed_request.sandbox_execution.profile}
+                    if versioned
+                    else {}
+                ),
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,
@@ -720,16 +824,13 @@ async def api_restore_sandbox(
         }
 
 
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret],
-)
-@fastapi_endpoint(method="POST")
-async def api_create_build_sandbox(
+async def _create_build_sandbox(
     request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
+    *,
+    versioned: bool = False,
 ) -> dict:
     """Create a dormant provider-session build sandbox."""
     async with _execute_endpoint(
@@ -746,7 +847,9 @@ async def api_create_build_sandbox(
             ModalBuildSessionService,
         )
 
-        parsed_request = _parse_request(CreateBuildSandboxRequest, request)
+        parsed_request = _parse_request(
+            CreateBuildSandboxV2Request if versioned else CreateBuildSandboxRequest, request
+        )
         build_id = parsed_request.build_id
         execution.log_fields["build_id"] = build_id
         scope_kind = parsed_request.scope_kind
@@ -790,11 +893,23 @@ async def api_create_build_sandbox(
             user_env_vars=parsed_request.user_env_vars or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,
+            **(
+                {"sandbox_execution": parsed_request.sandbox_execution.model_dump()}
+                if versioned
+                else {}
+            ),
         )
         execution.log_fields["sandbox_id"] = provider_session_id
         return {
             "success": True,
-            "data": {"provider_session_id": provider_session_id},
+            "data": {
+                "provider_session_id": provider_session_id,
+                **(
+                    {"execution_profile": parsed_request.sandbox_execution.profile}
+                    if versioned
+                    else {}
+                ),
+            },
         }
 
 
@@ -899,3 +1014,101 @@ def _validated_build_repositories(
         }
         for repository in repositories
     ]
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_create_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    return await _create_sandbox(
+        request,
+        authorization,
+        x_trace_id,
+        x_request_id,
+        x_session_id,
+        x_sandbox_id,
+        versioned=False,
+    )
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_create_sandbox_v2(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    return await _create_sandbox(
+        request, authorization, x_trace_id, x_request_id, x_session_id, x_sandbox_id, versioned=True
+    )
+
+
+@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_restore_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    return await _restore_sandbox(
+        request,
+        authorization,
+        x_trace_id,
+        x_request_id,
+        x_session_id,
+        x_sandbox_id,
+        versioned=False,
+    )
+
+
+@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_restore_sandbox_v2(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    return await _restore_sandbox(
+        request, authorization, x_trace_id, x_request_id, x_session_id, x_sandbox_id, versioned=True
+    )
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_create_build_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    return await _create_build_sandbox(
+        request, authorization, x_trace_id, x_request_id, versioned=False
+    )
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_create_build_sandbox_v2(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    return await _create_build_sandbox(
+        request, authorization, x_trace_id, x_request_id, versioned=True
+    )

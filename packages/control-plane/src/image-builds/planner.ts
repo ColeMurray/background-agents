@@ -1,4 +1,3 @@
-import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
@@ -13,14 +12,14 @@ import {
 import type { ImageBuildScope } from "./model";
 import {
   loadScopeBuildSecrets,
-  resolveScopeSandboxSettings,
+  resolveScopeExecutionIntent,
+  type ImageBuildExecutionIntent,
   resolveScopeTarget,
   type ResolvedImageBuildTarget,
 } from "./scope";
 import type { ImageBuildCloneAuth, ImageBuildPlan } from "./types";
 
 const logger = createLogger("image-builds:planner");
-const MS_PER_SECOND = 1000;
 
 /** The single-use callback token every build authenticates with (planner mints, workflow verifies). */
 export interface PlannedCallbackAuth {
@@ -33,6 +32,7 @@ export type { ResolvedImageBuildTarget } from "./scope";
 
 /** Inputs for planBuild; the target is resolved before registration, secrets after. */
 export interface ImageBuildPlanRequest {
+  executionIntent: ImageBuildExecutionIntent;
   buildId: string;
   scope: ImageBuildScope;
   callbackUrl: string;
@@ -44,6 +44,10 @@ export interface ImageBuildPlanRequest {
 
 /** The planning operations the workflow sequences a build through. */
 export interface ImageBuildPlannerPort {
+  resolveExecutionIntent(
+    scope: ImageBuildScope,
+    target: ResolvedImageBuildTarget
+  ): Promise<ImageBuildExecutionIntent>;
   resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget>;
   createCallbackAuth(): Promise<PlannedCallbackAuth>;
   planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan>;
@@ -72,6 +76,13 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
     return resolveScopeTarget(this.env, this.db, scope);
   }
 
+  async resolveExecutionIntent(
+    scope: ImageBuildScope,
+    target: ResolvedImageBuildTarget
+  ): Promise<ImageBuildExecutionIntent> {
+    return resolveScopeExecutionIntent(this.env, this.db, scope, target);
+  }
+
   async createCallbackAuth(): Promise<PlannedCallbackAuth> {
     const token = generateImageBuildCallbackToken();
     return {
@@ -83,10 +94,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
 
   async planBuild(params: ImageBuildPlanRequest): Promise<ImageBuildPlan> {
     const { repositories, repositoriesFingerprint } = params.target;
-    const primary = repositories[0];
-
-    const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
-      resolveScopeSandboxSettings(this.db, params.scope, primary),
+    const [userEnvVars, cloneAuth] = await Promise.all([
       loadScopeBuildSecrets(this.env, this.db, params.scope, params.target),
       this.resolveCloneAuth(params.scope),
     ]);
@@ -98,7 +106,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
       repositoriesFingerprint,
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
-      buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
+      ...params.executionIntent,
       userEnvVars: userEnvVars
         ? prepareLegacyManagedProviderEnv({
             exposedSecrets: userEnvVars,

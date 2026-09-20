@@ -179,6 +179,7 @@ describe("SessionInitHandler", () => {
       codeServerEnabled: false,
       vncEnabled: true,
       sandboxSettings: null,
+      sandboxExecution: JSON.stringify({ profile: "default" }),
       maxCostUsd: null,
       environmentId: null,
       createdAt: 1234,

@@ -82,6 +82,15 @@ import type {
   SandboxAlarmResult,
 } from "./ports";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
+import {
+  parseSessionSandboxExecution,
+  snapshotRecoveryErrorCodeSchema,
+  type SandboxExecutionProfile,
+  type SessionSandboxExecution,
+  type SnapshotRecoveryErrorCode,
+} from "@open-inspect/shared/types/sandbox-execution";
+import { snapshotExecutionIssue } from "../snapshot-execution";
+import { SnapshotArtifactUnavailableError } from "../provider";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
@@ -94,6 +103,12 @@ const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 
 // ==================== Dependency Interfaces ====================
 
+interface SnapshotIdentity {
+  imageId: string;
+  runtimeVersion: string | null;
+  executionProfile: string | null;
+}
+
 /**
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
  */
@@ -104,6 +119,8 @@ interface SandboxCircuitBreakerInfo {
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
+  snapshot_execution_profile?: string | null;
+  snapshot_recovery_error_code?: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -196,9 +213,15 @@ export interface SandboxStorage {
    * an image of the sandbox it replaced.
    */
   recordSandboxSnapshot(
-    sandboxId: string | null,
+    generation: SandboxGeneration,
     imageId: string,
-    runtimeVersion: string | null
+    runtimeVersion: string | null,
+    executionProfile: SandboxExecutionProfile
+  ): boolean;
+  setSnapshotRecoveryError(
+    generation: SandboxGeneration,
+    code: SnapshotRecoveryErrorCode,
+    snapshot: SnapshotIdentity
   ): boolean;
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
@@ -383,6 +406,7 @@ export interface SlackAgentNotifyLookup {
  */
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
+  getSnapshotRecoveryError(): string | null;
   updateLastActivity(timestamp: number): void;
   onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
@@ -477,6 +501,26 @@ export class SandboxLifecycleManager
     const sandboxState = this.storage.getSandboxWithCircuitBreaker();
     const now = Date.now();
 
+    // This latch is independent of the circuit breaker and survives eviction.
+    if (sandboxState?.snapshot_recovery_error_code) return;
+    try {
+      const execution = this.sessionExecution();
+      if (sandboxState?.snapshot_image_id && isDeadSandboxStatus(sandboxState.status)) {
+        const issue = snapshotExecutionIssue(
+          execution,
+          sandboxState.snapshot_execution_profile,
+          sandboxState.snapshot_runtime_version
+        );
+        if (issue) {
+          this.blockSnapshotRecovery(issue);
+          return;
+        }
+      }
+    } catch (error) {
+      this.reportSandboxError(error instanceof Error ? error.message : "Invalid sandbox execution");
+      return;
+    }
+
     // Extract circuit breaker state
     const circuitBreakerState = {
       failureCount: sandboxState?.spawn_failure_count || 0,
@@ -566,6 +610,76 @@ export class SandboxLifecycleManager
         await this.doSpawn();
         return;
     }
+  }
+
+  private sessionExecution(): SessionSandboxExecution {
+    const execution = parseSessionSandboxExecution(
+      this.sessionContext.getSession()?.sandbox_execution
+    );
+    if (execution.profile === "docker-v1" && this.provider.name !== execution.provider) {
+      throw new Error("This Docker session requires its original Modal provider");
+    }
+    return execution;
+  }
+
+  getSnapshotRecoveryError(): string | null {
+    const code = this.storage.getSandbox()?.snapshot_recovery_error_code;
+    if (!code) return null;
+    const parsed = snapshotRecoveryErrorCodeSchema.safeParse(code);
+    return `Snapshot recovery required (${parsed.success ? parsed.data : "invalid_snapshot_metadata"}). The original snapshot reference is retained; retry recovery after operator repair or create a separate new session.`;
+  }
+
+  private blockSnapshotRecovery(
+    code: SnapshotRecoveryErrorCode,
+    generation?: SandboxGeneration,
+    snapshot?: SnapshotIdentity
+  ): void {
+    const sandbox = this.storage.getSandbox();
+    if (!sandbox?.snapshot_image_id) return;
+    const expected = generation ?? {
+      sandboxId: sandbox.modal_sandbox_id,
+      createdAt: sandbox.created_at,
+    };
+    const artifact = snapshot ?? {
+      imageId: sandbox.snapshot_image_id,
+      runtimeVersion: sandbox.snapshot_runtime_version,
+      executionProfile: sandbox.snapshot_execution_profile ?? null,
+    };
+    if (!this.storage.setSnapshotRecoveryError(expected, code, artifact)) return;
+    this.wsManager.detachSandboxWebSocket(1011, "snapshot recovery required");
+    this.reportSandboxError(this.getSnapshotRecoveryError()!, code);
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+  }
+
+  /** Explicit authenticated retry; never accepts a replacement artifact or profile. */
+  async retrySnapshotRestore(): Promise<boolean> {
+    const session = this.sessionContext.getSession();
+    if (!session || session.status === "cancelled" || session.status === "archived") return false;
+    const sandbox = this.storage.getSandbox();
+    if (
+      !sandbox?.snapshot_recovery_error_code ||
+      !sandbox.snapshot_image_id ||
+      this.isSpawningSandbox ||
+      this.isTerminatingSandbox ||
+      sandbox.status === "spawning" ||
+      sandbox.status === "connecting"
+    )
+      return false;
+    const execution = this.sessionExecution();
+    if (!snapshotRecoveryErrorCodeSchema.safeParse(sandbox.snapshot_recovery_error_code).success)
+      return false;
+    const issue = snapshotExecutionIssue(
+      execution,
+      sandbox.snapshot_execution_profile,
+      sandbox.snapshot_runtime_version
+    );
+    if (issue) {
+      this.blockSnapshotRecovery(issue);
+      return false;
+    }
+    if (!sandbox.snapshot_runtime_version || !this.provider.restoreFromSnapshot) return false;
+    await this.restoreFromSnapshot(sandbox.snapshot_image_id, sandbox.snapshot_runtime_version);
+    return true;
   }
 
   /**
@@ -684,6 +798,7 @@ export class SandboxLifecycleManager
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
+        sandboxExecution: this.sessionExecution(),
         sessionId,
         sandboxId: expectedSandboxId,
         repoOwner: session.repo_owner,
@@ -838,8 +953,9 @@ export class SandboxLifecycleManager
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
-      const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
+      const execution = this.sessionExecution();
+      const image = await this.imageBuildLookup.getLatestReady(scope, execution.profile);
+      const result = await evaluateImageBuildForSpawn(image, repositories, harness, execution);
       if (result.outcome === "selected") {
         this.log.info("Using prebuilt image", {
           event: "image_build.spawn_selected",
@@ -950,7 +1066,7 @@ export class SandboxLifecycleManager
    * sandbox failed themselves, but the circuit breaker reports a reason without
    * changing state, and that distinction is theirs to make.
    */
-  reportSandboxError(reason: string): void {
+  reportSandboxError(reason: string, snapshotRecoveryError?: SnapshotRecoveryErrorCode): void {
     // Persisting is best effort. `setLastSpawnError` is a bare synchronous
     // sql.exec, so a storage failure would otherwise also cost the broadcast —
     // the one signal an already-open tab gets — and, from the message queue's
@@ -964,7 +1080,11 @@ export class SandboxLifecycleManager
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    this.broadcaster.broadcast({ type: "sandbox_error", error: reason });
+    this.broadcaster.broadcast({
+      type: "sandbox_error",
+      error: reason,
+      ...(snapshotRecoveryError ? { snapshotRecoveryError } : {}),
+    });
   }
 
   /**
@@ -1037,7 +1157,16 @@ export class SandboxLifecycleManager
     snapshotImageId: string,
     snapshotRuntimeVersion: string
   ): Promise<void> {
+    const snapshot: SnapshotIdentity = {
+      imageId: snapshotImageId,
+      runtimeVersion: snapshotRuntimeVersion,
+      executionProfile: this.storage.getSandbox()?.snapshot_execution_profile ?? null,
+    };
     if (!this.provider.restoreFromSnapshot) {
+      if (this.sessionExecution().profile === "docker-v1") {
+        this.blockSnapshotRecovery("profile_mismatch");
+        return;
+      }
       this.log.info("Provider does not support restore, falling back to fresh spawn");
       // Fall back to fresh spawn
       await this.doSpawn();
@@ -1085,6 +1214,7 @@ export class SandboxLifecycleManager
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const result = await this.provider.restoreFromSnapshot({
+        sandboxExecution: this.sessionExecution(),
         snapshotImageId,
         sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
@@ -1163,6 +1293,12 @@ export class SandboxLifecycleManager
         return;
       }
       const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
+      if (error instanceof SnapshotArtifactUnavailableError && generation) {
+        const status = this.sessionContext.getSession()?.status;
+        if (status === "cancelled" || status === "archived") return;
+        this.blockSnapshotRecovery("artifact_missing", generation, snapshot);
+        return;
+      }
       this.log.error("Sandbox restore completed", {
         event: "sandbox.restore",
         outcome: "error",
@@ -1280,6 +1416,9 @@ export class SandboxLifecycleManager
       return;
     }
 
+    const execution = this.sessionExecution();
+    if (sandbox.snapshot_recovery_error_code) return;
+
     // Don't snapshot if already snapshotting
     if (sandbox.status === "snapshotting") {
       this.log.debug("Already snapshotting, skipping");
@@ -1321,7 +1460,12 @@ export class SandboxLifecycleManager
         // sandbox it was taken of; a replacement reserved during the provider
         // call keeps its own restore image.
         if (
-          this.storage.recordSandboxSnapshot(generation.sandboxId, result.imageId, runtimeVersion)
+          this.storage.recordSandboxSnapshot(
+            generation,
+            result.imageId,
+            runtimeVersion,
+            execution.profile
+          )
         ) {
           this.log.info("Snapshot saved", {
             event: "sandbox.snapshot_saved",
@@ -1457,6 +1601,7 @@ export class SandboxLifecycleManager
     signal?: AbortSignal,
     providerObjectId?: string
   ): Promise<void> {
+    this.sessionExecution();
     if (!this.provider.stopSandbox) {
       return;
     }

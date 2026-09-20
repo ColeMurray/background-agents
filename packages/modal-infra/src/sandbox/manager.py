@@ -34,10 +34,12 @@ from sandbox_runtime.constants import (
     VNC_PORT,
 )
 from sandbox_runtime.log_config import get_logger
+from sandbox_runtime.process_output import finish_cancellation_cleanup
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
+from .execution import resolve_execution, select_base_image, vm_create_kwargs
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
@@ -60,6 +62,10 @@ _RESERVED_LAUNCH_ENV_VARS = {
 
 class RepositoryImageUnavailableError(RuntimeError):
     """The selected repository image no longer exists in Modal."""
+
+
+class SnapshotImageUnavailableError(RuntimeError):
+    """The selected session snapshot no longer exists in Modal."""
 
 
 def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
@@ -360,6 +366,14 @@ class SandboxManager:
     async def _launch_sandbox(self, spec: _SandboxLaunchSpec) -> SandboxHandle:
         """Launch a Modal sandbox from a normalized create or restore specification."""
         config = spec.config
+        session_config = (
+            config.session_config.model_dump()
+            if isinstance(config.session_config, SessionConfig)
+            else dict(config.session_config or {})
+        )
+        execution = resolve_execution(session_config, config.settings)
+        # Always override baked/user SESSION_CONFIG, including the default arm.
+        session_config["sandbox_execution"] = execution.model_dump()
         has_repository = bool(config.repo_owner)
         sandbox_id = config.sandbox_id
         if not sandbox_id:
@@ -389,7 +403,7 @@ class SandboxManager:
         include_github_cli_aliases = False
         snapshot_id: str | None = None
         if isinstance(spec.source, _BaseImageSource):
-            image = base_image
+            image = select_base_image(execution, base_image)
         elif isinstance(spec.source, _RepositoryImageSource):
             try:
                 image = modal.Image.from_id(spec.source.image_id)
@@ -398,18 +412,16 @@ class SandboxManager:
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = spec.source.sha or ""
         else:
-            image = modal.Image.from_id(spec.source.image_id)
+            try:
+                image = modal.Image.from_id(spec.source.image_id)
+            except modal.exception.NotFoundError as e:
+                raise SnapshotImageUnavailableError("snapshot artifact is unavailable") from e
             env_vars["RESTORED_FROM_SNAPSHOT"] = "true"
             clone_token = spec.source.clone_token
             include_github_cli_aliases = True
             snapshot_id = spec.source.image_id
 
-        if config.session_config is not None:
-            env_vars["SESSION_CONFIG"] = (
-                json.dumps(config.session_config)
-                if isinstance(config.session_config, dict)
-                else config.session_config.model_dump_json()
-            )
+        env_vars["SESSION_CONFIG"] = json.dumps(session_config)
 
         inject_vcs_env_vars(
             env_vars,
@@ -461,7 +473,14 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
             **_resource_kwargs(config.settings),
+            **vm_create_kwargs(execution),
         }
+        if execution.profile == "docker-v1":
+            create_kwargs["tags"] = {
+                "openinspect_kind": "session",
+                "openinspect_session_id": str(session_config.get("session_id", "")),
+                "openinspect_sandbox_id": sandbox_id,
+            }
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
@@ -475,24 +494,51 @@ class SandboxManager:
         except modal.exception.NotFoundError as e:
             if isinstance(spec.source, _RepositoryImageSource):
                 raise RepositoryImageUnavailableError("repository image is unavailable") from e
+            if isinstance(spec.source, _SnapshotImageSource):
+                # A create-time NotFound may name a Secret or App. Confirm the
+                # artifact itself is absent before emitting the durable 410.
+                try:
+                    # Public build resolves a from_id loader via ImageFromId;
+                    # unlike hydrate(), it supports images and allocates nothing.
+                    await modal.Image.from_id(spec.source.image_id).build.aio(app)
+                except modal.exception.NotFoundError:
+                    raise SnapshotImageUnavailableError("snapshot artifact is unavailable") from e
             raise
         modal_object_id = sandbox.object_id
-        (
-            code_server_url,
-            vnc_url,
-            ttyd_url,
-            extra_tunnel_urls,
-        ) = await self._resolve_and_setup_tunnels(
-            sandbox,
-            sandbox_id,
-            config.code_server_enabled,
-            config.vnc_enabled,
-            terminal_enabled,
-            tunnel_ports,
-            code_server_port,
-            novnc_port,
-            ttyd_proxy_port,
-        )
+        try:
+            (
+                code_server_url,
+                vnc_url,
+                ttyd_url,
+                extra_tunnel_urls,
+            ) = await self._resolve_and_setup_tunnels(
+                sandbox,
+                sandbox_id,
+                config.code_server_enabled,
+                config.vnc_enabled,
+                terminal_enabled,
+                tunnel_ports,
+                code_server_port,
+                novnc_port,
+                ttyd_proxy_port,
+            )
+        except BaseException:
+
+            async def terminate_failed_allocation() -> None:
+                async with asyncio.timeout(30):
+                    await sandbox.terminate.aio()
+
+            cleanup = asyncio.create_task(terminate_failed_allocation())
+            try:
+                await finish_cancellation_cleanup(cleanup)
+            except Exception:
+                log.error(
+                    "sandbox.allocation_cleanup_required",
+                    modal_object_id=modal_object_id,
+                    sandbox_id=sandbox_id,
+                )
+                raise
+            raise
 
         return SandboxHandle(
             sandbox_id=sandbox_id,
@@ -584,7 +630,9 @@ class SandboxManager:
         snapshot_timeout_seconds = min(int(timeout_seconds), SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
         if snapshot_timeout_seconds <= 0:
             raise TimeoutError("Insufficient time remains for a filesystem snapshot")
-        image = await handle.modal_sandbox.snapshot_filesystem.aio(timeout=snapshot_timeout_seconds)
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(
+            timeout=snapshot_timeout_seconds, ttl=None
+        )
 
         # The image object_id is the unique identifier for this snapshot
         # Modal automatically stores the image and it persists indefinitely

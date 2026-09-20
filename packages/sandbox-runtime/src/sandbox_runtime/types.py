@@ -3,7 +3,9 @@
 from enum import StrEnum
 from typing import TypedDict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from .execution import DefaultSandboxExecution, SandboxExecution
 
 
 class SandboxStatus(StrEnum):
@@ -63,6 +65,7 @@ class SessionConfig(BaseModel):
     """
 
     session_id: str
+    sandbox_execution: SandboxExecution = Field(default_factory=DefaultSandboxExecution)
     repo_owner: str | None = None
     repo_name: str | None = None
     branch: str | None = None

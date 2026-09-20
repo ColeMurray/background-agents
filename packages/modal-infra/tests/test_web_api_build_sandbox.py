@@ -643,7 +643,7 @@ async def test_generic_snapshot_maps_modal_provider_timeout_to_deadline_expired(
     assert exc.value.status_code == 408
     assert exc.value.detail == "snapshot deadline expired"
     get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
-    snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=10, ttl=None)
 
 
 @pytest.mark.asyncio
@@ -705,4 +705,4 @@ async def test_generic_snapshot_passes_ordinary_deadline_to_real_manager(
 
     assert result["data"]["image_id"] == "im-session-1"
     get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
-    snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=10, ttl=None)

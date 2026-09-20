@@ -92,7 +92,10 @@ export function supportsEnvironmentSettings(
 }
 
 export class IntegrationSettingsStore {
-  constructor(private readonly db: SqlDatabase) {}
+  constructor(
+    private readonly db: SqlDatabase,
+    private readonly options: { strictSandboxExecution?: boolean } = {}
+  ) {}
 
   async getGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K
@@ -344,7 +347,10 @@ export class IntegrationSettingsStore {
 
     const resolvedSettings =
       integrationId === "sandbox"
-        ? normalizeSandboxSettings(settings, { invalid: "omit" })
+        ? normalizeSandboxSettings(settings, {
+            invalid: "omit",
+            strictExecution: this.options.strictSandboxExecution,
+          })
         : settings;
 
     return { enabledRepos, settings: resolvedSettings } as ResolvedIntegrationConfig<
@@ -359,7 +365,10 @@ export class IntegrationSettingsStore {
     if (integrationId !== "sandbox" || !settings.defaults) return settings;
     return {
       ...settings,
-      defaults: normalizeSandboxSettings(settings.defaults, { invalid: "omit" }),
+      defaults: normalizeSandboxSettings(settings.defaults, {
+        invalid: "omit",
+        strictExecution: this.options.strictSandboxExecution,
+      }),
     } as IntegrationSettingsMap[K]["global"];
   }
 
@@ -371,6 +380,7 @@ export class IntegrationSettingsStore {
     return normalizeSandboxSettings(settings, {
       invalid: "omit",
       partial: true,
+      strictExecution: this.options.strictSandboxExecution,
     }) as IntegrationSettingsMap[K]["repo"];
   }
 

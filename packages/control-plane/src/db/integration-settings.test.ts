@@ -1103,6 +1103,27 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings).toEqual({ terminalEnabled: true });
     });
 
+    it("preserves inherited final snapshot buffers during strict Docker admission", async () => {
+      const strictStore = new IntegrationSettingsStore(db as unknown as D1Database, {
+        strictSandboxExecution: true,
+      });
+      await strictStore.setGlobal("sandbox", { defaults: { finalSnapshotBufferMs: 300_000 } });
+      await strictStore.setRepoSettings("sandbox", "acme/app", {
+        sandboxTimeoutMs: 500_000,
+        dockerEnabled: true,
+      });
+
+      expect(await strictStore.getRepoSettings("sandbox", "acme/app")).toEqual({
+        sandboxTimeoutMs: 500_000,
+        dockerEnabled: true,
+      });
+      expect((await strictStore.getResolvedConfig("sandbox", "acme/app")).settings).toEqual({
+        sandboxTimeoutMs: 500_000,
+        finalSnapshotBufferMs: 300_000,
+        dockerEnabled: true,
+      });
+    });
+
     it("round-trips fractional cpuCores and small memoryMib", async () => {
       await store.setRepoSettings("sandbox", "acme/app", { cpuCores: 0.5, memoryMib: 64 });
 

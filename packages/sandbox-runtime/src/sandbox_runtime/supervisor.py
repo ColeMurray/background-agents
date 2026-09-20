@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .boot_events import BootEventLog
     from .browser_desktop import BrowserDesktop
     from .code_server import CodeServer
+    from .docker_service import DockerService
     from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
     from .repository_boot import RepositoryBoot, RepositoryBootResult
@@ -66,6 +67,7 @@ class SandboxSupervisor:
         log: Any,
         *,
         boot_events: BootEventLog | None = None,
+        docker_service: DockerService | None = None,
     ) -> None:
         self.config = config
         self.repository_boot = repository_boot
@@ -96,6 +98,36 @@ class SandboxSupervisor:
         # Set when bridge supervision itself failed. The boot then ends as a
         # failure rather than as a requested shutdown.
         self._bridge_watch_failure: BaseException | None = None
+        self.docker_service = docker_service
+        self._docker_watch_task: asyncio.Task[None] | None = None
+        self._docker_watch_failure: Exception | None = None
+
+    async def _start_docker(self) -> None:
+        if self.docker_service is None:
+            if self.config.docker_enabled:
+                raise RuntimeError("Required Docker service is not configured")
+            return
+        await self.docker_service.start()
+        self._docker_watch_task = asyncio.create_task(self._watch_docker())
+
+    async def _watch_docker(self) -> None:
+        assert self.docker_service is not None
+        try:
+            await self.docker_service.wait()
+            if not self.docker_service.stopping:
+                raise RuntimeError("Required Docker daemon exited unexpectedly")
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._docker_watch_failure = error
+            self.shutdown_event.set()
+
+    async def _stop_docker_watch(self) -> None:
+        task, self._docker_watch_task = self._docker_watch_task, None
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _report_fatal_error(
         self, message: str, failure: BootPhaseError | None = None
@@ -446,7 +478,7 @@ class SandboxSupervisor:
         A failure is raised as itself so ``run`` reports it fatally; a
         requested shutdown is a clean end to the boot.
         """
-        failure = self._bridge_watch_failure
+        failure = self._docker_watch_failure or self._bridge_watch_failure
         if failure is not None:
             return failure
         return BootExecutionCancelled()
@@ -476,12 +508,22 @@ class SandboxSupervisor:
         self, expected_tunnel_ports: list[int]
     ) -> RepositoryBootResult:
         timeout_seconds = self._image_build_execution_timeout_seconds()
+        deadline = asyncio.timeout(timeout_seconds)
         try:
-            async with asyncio.timeout(timeout_seconds):
-                return await self._run_until_shutdown(
+            async with deadline:
+                await self._run_until_shutdown(self._start_docker)
+                result = await self._run_until_shutdown(
                     lambda: self.repository_boot.boot(BootMode.BUILD, expected_tunnel_ports)
                 )
+                if self.docker_service is not None:
+                    await self._run_until_shutdown(self.docker_service.prepare_for_snapshot)
+                    await self._stop_docker_watch()
+                    if self._docker_watch_failure is not None:
+                        raise self._docker_watch_failure
+                return result
         except TimeoutError as error:
+            if not deadline.expired():
+                raise
             raise RuntimeError(
                 f"image build exceeded its {timeout_seconds}-second execution timeout"
             ) from error
@@ -582,6 +624,8 @@ class SandboxSupervisor:
                 await self.agent_bridge.start(early_connect=True)
                 self._bridge_watch_task = asyncio.create_task(self._watch_bridge_during_boot())
 
+            await self._run_until_shutdown(self._start_docker)
+
             try:
                 await self.browser_desktop.start()
             except Exception as error:
@@ -624,6 +668,8 @@ class SandboxSupervisor:
             if self._bridge_watch_failure is not None:
                 raise self._bridge_watch_failure
             await self.monitor_processes()
+            if self._docker_watch_failure is not None:
+                raise self._docker_watch_failure
         except BootExecutionCancelled:
             event = (
                 "image_build.cancelled"
@@ -634,24 +680,37 @@ class SandboxSupervisor:
             return True
         except Exception as error:
             self.log.error("supervisor.error", exc=error)
-            if self.boot_mode is BootMode.BUILD and self.shutdown_event.is_set():
+            if (
+                self.boot_mode is BootMode.BUILD
+                and self.shutdown_event.is_set()
+                and self._docker_watch_failure is None
+            ):
                 self.log.info("image_build.cancelled", reason="shutdown_requested")
                 return True
             if self.boot_mode is BootMode.BUILD and repo_image_callback:
                 try:
                     error_message = str(error)
-                    await self._run_until_shutdown(
-                        lambda: repo_image_callback.report_failure(error_message)
-                    )
+                    if self._docker_watch_failure is not None:
+                        # The fatal watch set shutdown_event to interrupt hooks;
+                        # it is not user cancellation and must still report failure.
+                        async with asyncio.timeout(FATAL_ERROR_REPORT_TIMEOUT_SECONDS):
+                            await repo_image_callback.report_failure(error_message)
+                    else:
+                        await self._run_until_shutdown(
+                            lambda: repo_image_callback.report_failure(error_message)
+                        )
                 except BootExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
                     return True
+                except Exception:
+                    self.log.error("image_build.failure_report_failed")
             await self._report_fatal_error(
                 str(error), error if isinstance(error, BootPhaseError) else None
             )
             return False
         finally:
             await self._stop_bridge_watch()
+            await self._stop_docker_watch()
             await self.shutdown()
         return True
 
@@ -670,4 +729,6 @@ class SandboxSupervisor:
         await self.code_server.stop()
         await self.browser_desktop.stop()
         await self.harness_process.stop()
+        if self.docker_service is not None:
+            await self.docker_service.stop()
         self.log.info("supervisor.shutdown_complete")

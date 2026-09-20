@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import Link from "next/link";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { useSessionSkills } from "@/hooks/use-session-skills";
 import { SessionTimeline } from "@/components/session-timeline";
@@ -86,6 +87,7 @@ export default function SessionPage() {
     connectionError,
     sessionState,
     sandboxError,
+    snapshotRecoveryError,
     boot,
     events,
     participants,
@@ -435,6 +437,53 @@ export default function SessionPage() {
       />
 
       {/* Connection error banner */}
+      {sessionState?.sandboxExecution?.profile === "docker-v1" && (
+        <div className="px-4 py-1 text-xs text-muted-foreground">
+          Docker · Modal VM · {sessionState.sandboxExecution.cpuCores} CPU ·{" "}
+          {sessionState.sandboxExecution.memoryMib} MiB
+        </div>
+      )}
+      {snapshotRecoveryError && (
+        <div role="alert" className="border-b border-border px-4 py-3 text-sm">
+          <p>
+            Snapshot recovery required ({snapshotRecoveryError}). The original snapshot reference is
+            retained; no fresh sandbox will replace it. Contact your operator to repair
+            availability. Deleted or expired artifacts may be unrecoverable.
+          </p>
+          {capabilities.lifecycle && (
+            <button
+              type="button"
+              className="mt-2 underline"
+              disabled={
+                sessionState?.sandboxStatus === "spawning" ||
+                sessionState?.sandboxStatus === "connecting"
+              }
+              onClick={async () => {
+                try {
+                  const response = await browserApiFetch(
+                    `/api/sessions/${sessionId}/retry-snapshot`,
+                    { method: "POST" }
+                  );
+                  if (response.ok) return;
+                } catch {
+                  /* A lost response does not authorize another artifact or clean launch. */
+                }
+                window.alert(
+                  "Recovery remains blocked. The snapshot reference is retained; contact your operator."
+                );
+              }}
+            >
+              Retry the existing snapshot
+            </button>
+          )}
+          <p className="mt-2">
+            <Link href="/" className="underline">
+              Create a separate new session
+            </Link>{" "}
+            to start clean, without the original workspace or volumes.
+          </p>
+        </div>
+      )}
       {capabilities.read && (authError || connectionError) && (
         <div className="bg-destructive-muted border-b border-destructive-border px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-destructive">{authError || connectionError}</p>

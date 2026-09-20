@@ -34,6 +34,34 @@ import { computeRepositoriesFingerprint } from "./fingerprint";
 import { parseRepoScopeId, repoImageBuildScope, type ImageBuildScope } from "./model";
 import type { ImageBuildRepository } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
+import { readSandboxExecutionSettings, resolveSandboxExecution } from "../sandbox/execution";
+import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
+import type { SessionSandboxExecution } from "@open-inspect/shared/types/sandbox-execution";
+
+/** Non-secret build intent, frozen before registration and secret reads. */
+export interface ImageBuildExecutionIntent {
+  sandboxExecution: SessionSandboxExecution;
+  buildTimeoutMs: number;
+}
+
+export async function resolveScopeExecutionIntent(
+  env: Env,
+  db: SqlDatabase,
+  scope: ImageBuildScope,
+  target: ResolvedImageBuildTarget
+): Promise<ImageBuildExecutionIntent> {
+  const primary = target.repositories[0];
+  if (!primary) throw new ImageBuildPlanningError("Build requires a repository");
+  const { settings, scopeAllowed } = await readSandboxExecutionSettings(
+    db,
+    `${primary.repoOwner}/${primary.repoName}`,
+    scope.kind === "environment" ? scope.id : undefined
+  );
+  return {
+    sandboxExecution: resolveSandboxExecution(env, settings, scopeAllowed),
+    buildTimeoutMs: resolveBuildTimeoutSeconds(settings) * 1000,
+  };
+}
 
 const logger = createLogger("image-builds:scope");
 

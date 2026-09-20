@@ -13,6 +13,12 @@ import type {
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
 import type { SqlDatabase } from "./sql-database";
 import { parseRepositoryShasJson } from "../image-builds/provenance";
+import { minimumRebuildGenerationForProfile } from "../sandbox/runtime-manifest";
+import {
+  sessionSandboxExecutionSchema,
+  type SessionSandboxExecution,
+  type SandboxExecutionProfile,
+} from "@open-inspect/shared/types/sandbox-execution";
 
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
@@ -56,6 +62,7 @@ const STALE_BUILD_TIMEOUT_MESSAGE = "build timed out (no callback received)";
 
 /** Registration input for a new building row. */
 export interface ImageBuildRegistration {
+  sandboxExecution?: SessionSandboxExecution;
   id: string;
   scope: ImageBuildScope;
   provider: ImageBuildProvider;
@@ -102,6 +109,8 @@ function toImageBuildRecordView(row: ImageBuildStatusRow): ImageBuildRecordView 
  * `ImageBuildStatusRow`, and status reads project exactly its columns.
  */
 export interface ImageBuildRow extends ImageBuildStatusRow {
+  execution_profile: SandboxExecutionProfile;
+  sandbox_execution: string;
   provider_image_id: string | null;
   provider_session_id: string | null;
   provider_operation_ref: string | null;
@@ -282,6 +291,9 @@ export class ImageBuildStore {
    * building row already existed and nothing was inserted.
    */
   async registerBuild(build: ImageBuildRegistration): Promise<boolean> {
+    const execution = sessionSandboxExecutionSchema.parse(
+      build.sandboxExecution ?? { profile: "default" }
+    );
     const result = await this.db
       .prepare(
         `INSERT INTO image_builds (
@@ -289,6 +301,8 @@ export class ImageBuildStore {
            scope_kind,
            scope_id,
            provider,
+           execution_profile,
+           sandbox_execution,
            repositories_fingerprint,
            repository_shas,
            runtime_version,
@@ -297,7 +311,7 @@ export class ImageBuildStore {
            callback_token_expires_at,
            created_at
          )
-         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM image_builds
            WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
@@ -308,6 +322,8 @@ export class ImageBuildStore {
         build.scope.kind,
         build.scope.id,
         build.provider,
+        execution.profile,
+        JSON.stringify(execution),
         build.repositoriesFingerprint,
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
@@ -472,16 +488,26 @@ export class ImageBuildStore {
   async hasReadyImageForFingerprint(
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
-    repositoriesFingerprint: string
+    repositoriesFingerprint: string,
+    executionProfile: SandboxExecutionProfile = "default"
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
         `SELECT 1 AS present FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
            AND repositories_fingerprint = ?
+           AND execution_profile = ?
+           AND runtime_version GLOB 'v[0-9]*' AND CAST(substr(runtime_version, 2) AS INTEGER) >= ?
          LIMIT 1`
       )
-      .bind(scope.kind, scope.id, provider, repositoriesFingerprint)
+      .bind(
+        scope.kind,
+        scope.id,
+        provider,
+        repositoriesFingerprint,
+        executionProfile,
+        minimumRebuildGenerationForProfile(executionProfile)
+      )
       .first<{ present: number }>();
     return row !== null;
   }
@@ -526,6 +552,7 @@ export class ImageBuildStore {
              WHERE newer.scope_kind = ?
                AND newer.scope_id = ?
                AND newer.provider = ?
+               AND newer.execution_profile = image_builds.execution_profile
                AND newer.status = 'ready'
                AND (
                  newer.created_at > ?
@@ -576,6 +603,7 @@ export class ImageBuildStore {
            AND provider = ?
            AND status = 'ready'
            AND id <> ?
+           AND execution_profile = (SELECT execution_profile FROM image_builds WHERE id = ?)
            AND (
              created_at < ?
              OR (created_at = ? AND id < ?)
@@ -586,6 +614,7 @@ export class ImageBuildStore {
         build.scope_kind,
         build.scope_id,
         provider,
+        buildId,
         buildId,
         build.created_at,
         build.created_at,
@@ -647,6 +676,7 @@ export class ImageBuildStore {
              WHERE newer.scope_kind = ?
                AND newer.scope_id = ?
                AND newer.provider = ?
+               AND newer.execution_profile = image_builds.execution_profile
                AND newer.status = 'ready'
                AND (
                  newer.created_at > ?
@@ -778,15 +808,17 @@ export class ImageBuildStore {
    */
   async getLatestReadyForSpawn(
     scope: ImageBuildScope,
-    provider: ImageBuildProvider
+    provider: ImageBuildProvider,
+    executionProfile: SandboxExecutionProfile = "default"
   ): Promise<ImageBuildRow | null> {
     return await this.db
       .prepare(
         `SELECT * FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
+           AND execution_profile = ?
          ORDER BY created_at DESC LIMIT 1`
       )
-      .bind(scope.kind, scope.id, provider)
+      .bind(scope.kind, scope.id, provider, executionProfile)
       .first<ImageBuildRow>();
   }
 
@@ -809,16 +841,17 @@ export class ImageBuildStore {
    */
   async getReconciliationStatus(
     scope: ImageBuildScope,
-    provider: ImageBuildProvider
+    provider: ImageBuildProvider,
+    executionProfile: SandboxExecutionProfile = "default"
   ): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
         `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ?
-           AND status IN ('building', 'ready')
+           AND (status = 'building' OR (status = 'ready' AND execution_profile = ?))
          ORDER BY created_at DESC`
       )
-      .bind(scope.kind, scope.id, provider)
+      .bind(scope.kind, scope.id, provider, executionProfile)
       .all<ImageBuildStatusRow>();
 
     return (result.results || []).map(toImageBuildRecordView);

@@ -697,7 +697,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     durableObjectId,
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
-    }
+    },
+    () => lifecycleManager.retrySnapshotRestore()
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()
@@ -824,6 +825,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     budget: (request) => sessionBudgetHandler.update(request),
     archive: () => sessionLifecycleHandler.archive(),
     unarchive: () => sessionLifecycleHandler.unarchive(),
+    retrySnapshot: (request) => sessionLifecycleHandler.retrySnapshot(request),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),

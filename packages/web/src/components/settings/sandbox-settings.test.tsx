@@ -322,7 +322,10 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("Save Settings").closest("button")).toBeEnabled();
     await user.click(screen.getByText("Save Settings"));
     expect(screen.getByText("Invalid port numbers: abc")).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ method: "PUT" })
+    );
   });
 
   it("shows validation error for mixed valid and invalid ports", async () => {

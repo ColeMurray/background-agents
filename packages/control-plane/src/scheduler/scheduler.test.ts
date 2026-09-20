@@ -1144,7 +1144,11 @@ describe("Scheduler", () => {
       const initBody = await getInitBody(fetchMock);
       expect(initBody.codeServerEnabled).toBe(true);
       expect(initBody.vncEnabled).toBe(true);
-      expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [5173], terminalEnabled: true });
+      expect(initBody.sandboxSettings).toEqual({
+        tunnelPorts: [5173],
+        terminalEnabled: true,
+        dockerEnabled: false,
+      });
     });
 
     it("moves the run's deadline out to the sandbox timeout its session is launched with", async () => {

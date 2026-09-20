@@ -521,7 +521,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       return new URL(request.url).pathname === SessionInternalPaths.init;
     })?.[0] as Request;
     const initBody = await initRequest.json<{ sandboxSettings: Record<string, unknown> }>();
-    expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [3000] });
+    expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [3000], dockerEnabled: false });
   });
 
   it("creates repo-less children for repo-less parents", async () => {

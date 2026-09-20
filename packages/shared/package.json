@@ -90,6 +90,10 @@
       "import": "./dist/types/integrations.js",
       "types": "./dist/types/integrations.d.ts"
     },
+    "./types/sandbox-execution": {
+      "import": "./dist/types/sandbox-execution.js",
+      "types": "./dist/types/sandbox-execution.d.ts"
+    },
     "./sign-in-provider": {
       "import": "./dist/sign-in-provider.js",
       "types": "./dist/sign-in-provider.d.ts"

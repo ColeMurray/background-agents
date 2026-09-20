@@ -33,7 +33,7 @@ function_image = (
         "pydantic>=2.0",
         "httpx",
         "fastapi",
-        "modal",  # Required for sandbox.manager imports
+        "modal==1.5.5",  # Keep identical to the locked deploy SDK; snapshot TTL is explicit.
         "PyJWT[crypto]",  # For GitHub App token generation
     )
     # Bundle sandbox_runtime so modal-infra shims can import from it at runtime

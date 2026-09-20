@@ -23,6 +23,7 @@ from sandbox_runtime.repo_image_callback import (
 
 from ..app import app
 from ..images.base import base_image
+from .execution import resolve_execution, select_base_image, vm_create_kwargs
 from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from .vcs_env import inject_vcs_env_vars
 
@@ -70,8 +71,16 @@ class ModalBuildSessionService:
         user_env_vars: dict[str, str] | None = None,
         build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
+        sandbox_execution: dict | None = None,
     ) -> str:
         start_time = time.time()
+        execution = resolve_execution(
+            {
+                "sandbox_execution": {"profile": "default"}
+                if sandbox_execution is None
+                else sandbox_execution
+            }
+        )
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
         for name in RESERVED_USER_ENV_KEYS:
@@ -87,6 +96,7 @@ class ModalBuildSessionService:
                     {
                         "branch": primary["branch"],
                         "repositories": repositories,
+                        "sandbox_execution": execution.model_dump(),
                     }
                 ),
                 IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR: str(build_execution_timeout_seconds),
@@ -113,13 +123,14 @@ class ModalBuildSessionService:
 
         sandbox = await modal.Sandbox.create.aio(
             *command,
-            image=base_image,
+            image=select_base_image(execution, base_image),
             app=app,
             secrets=[],
             timeout=timeout_seconds,
             workdir="/workspace",
             env=cast("dict[str, str | None]", env_vars),
             tags=tags,
+            **vm_create_kwargs(execution),
         )
         log.info(
             "sandbox.create_build",
@@ -182,7 +193,9 @@ class ModalBuildSessionService:
 
     async def snapshot(self, *, build_id: str, provider_session_id: str) -> str:
         sandbox, _tags = await self._resolve(build_id, provider_session_id)
-        image = await sandbox.snapshot_filesystem.aio(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        image = await sandbox.snapshot_filesystem.aio(
+            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None
+        )
         log.info(
             "sandbox.snapshot_build",
             build_id=build_id,

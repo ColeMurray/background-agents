@@ -43,6 +43,7 @@ export interface SessionSocketState {
    * it never outlives the failure it explains.
    */
   sandboxError: string | null;
+  snapshotRecoveryError?: SessionSnapshot["snapshotRecoveryError"];
   /**
    * The latest sandbox boot: its last reported phase and the durations of
    * its completed phases. Seeded by the snapshot, advanced by live
@@ -67,6 +68,7 @@ export const initialSessionSocketState: SessionSocketState = {
   cursor: null,
   promptQueue: [],
   sandboxError: null,
+  snapshotRecoveryError: null,
   boot: null,
 };
 
@@ -115,6 +117,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
     sandboxError: snapshot.spawnError ?? null,
+    snapshotRecoveryError: snapshot.snapshotRecoveryError ?? null,
     boot: seedSandboxBoot(snapshot),
   };
 }
@@ -212,6 +215,7 @@ function reduceServerMessage(
         loadingHistory: false,
         promptQueue: message.promptQueue,
         sandboxError: message.spawnError ?? null,
+        snapshotRecoveryError: message.snapshotRecoveryError ?? null,
         boot: seedSandboxBoot(message),
       };
     }
@@ -267,6 +271,7 @@ function reduceServerMessage(
       return updateSessionState(
         {
           ...state,
+          ...(message.status === "ready" ? { snapshotRecoveryError: null } : {}),
           ...(message.status === "failed" ? {} : { sandboxError: null }),
           boot: startsAttempt ? null : keepsPhase ? state.boot : endBootPhase(state.boot),
         },
@@ -280,11 +285,18 @@ function reduceServerMessage(
     }
 
     case "sandbox_error":
-      return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({
-        ...prev,
-        sandboxStatus: "failed",
-        ...CLEARED_SANDBOX_RUNTIME_STATE,
-      }));
+      return updateSessionState(
+        {
+          ...state,
+          sandboxError: message.error,
+          snapshotRecoveryError: message.snapshotRecoveryError ?? state.snapshotRecoveryError,
+        },
+        (prev) => ({
+          ...prev,
+          sandboxStatus: "failed",
+          ...CLEARED_SANDBOX_RUNTIME_STATE,
+        })
+      );
 
     case "tunnel_urls":
       return updateSessionState(state, (prev) => ({ ...prev, tunnelUrls: message.urls }));

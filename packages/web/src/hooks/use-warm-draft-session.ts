@@ -11,6 +11,7 @@ import { retireWarmDraftSession } from "@/lib/warm-session";
 import type { InteractiveProviderRoutingIdentity } from "@/lib/provider-selection";
 
 export type WarmDraftSessionRequest = SessionTargetRequestFields & {
+  dockerEnabled?: boolean;
   harness: HarnessId;
   model: string;
   reasoningEffort?: string;
@@ -48,6 +49,7 @@ export function useWarmDraftSession(
   const sessionIdRef = useRef<string | null>(null);
   const creationRef = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const failureReasonRef = useRef<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isWarming, setIsWarming] = useState(false);
 
@@ -58,6 +60,7 @@ export function useWarmDraftSession(
 
   useLayoutEffect(() => {
     abortControllerRef.current?.abort();
+    failureReasonRef.current = null;
     abortControllerRef.current = null;
     creationRef.current = null;
     setIsWarming(false);
@@ -86,6 +89,7 @@ export function useWarmDraftSession(
     if (!launchRequest || !launchIdentity) return null;
 
     const abortController = new AbortController();
+    failureReasonRef.current = null;
     abortControllerRef.current = abortController;
     setIsWarming(true);
 
@@ -97,7 +101,23 @@ export function useWarmDraftSession(
           body: JSON.stringify(launchRequest),
           signal: abortController.signal,
         });
-        if (!response.ok) return null;
+        if (!response.ok) {
+          const body: unknown = await response.json().catch(() => null);
+          if (
+            identityRef.current === launchIdentity &&
+            body &&
+            typeof body === "object" &&
+            "code" in body &&
+            "error" in body &&
+            typeof body.error === "string" &&
+            ["docker_not_available", "docker_not_allowed", "invalid_sandbox_execution"].includes(
+              String(body.code)
+            )
+          ) {
+            failureReasonRef.current = body.error.slice(0, 500);
+          }
+          return null;
+        }
 
         const parsed = createSessionResponseSchema.safeParse(
           await response.json().catch(() => null)
@@ -136,5 +156,6 @@ export function useWarmDraftSession(
     setSessionId(null);
   }, []);
 
-  return { sessionId, isWarming, warm, consume };
+  const getFailureReason = useCallback(() => failureReasonRef.current, []);
+  return { sessionId, isWarming, warm, consume, getFailureReason };
 }

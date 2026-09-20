@@ -260,6 +260,16 @@ async function readTitleBody(request: Request): Promise<{ title?: string; reject
 function lifecycleProxy(internalPath: SessionInternalPath): ProxyHandler {
   return async (request, _env, params, ctx) => {
     let body = {};
+    if (internalPath === SessionInternalPaths.retrySnapshot) {
+      const text = await request.text();
+      try {
+        const parsed: unknown = text ? JSON.parse(text) : {};
+        if (!isObjectBody(parsed) || Object.keys(parsed).length !== 0)
+          return error("Snapshot retry does not accept overrides", 400);
+      } catch {
+        return error("Invalid request body", 400);
+      }
+    }
     if (internalPath === SessionInternalPaths.updateTitle) {
       const { title, rejection } = await readTitleBody(request);
       if (rejection) return rejection;
@@ -435,6 +445,9 @@ sessionRuntimeProxyRoutes.post("/sessions/:id/archive", LIFECYCLE, (c) =>
 );
 sessionRuntimeProxyRoutes.post("/sessions/:id/unarchive", LIFECYCLE, (c) =>
   dispatchSession(c, lifecycleProxy(SessionInternalPaths.unarchive))
+);
+sessionRuntimeProxyRoutes.post("/sessions/:id/retry-snapshot", LIFECYCLE, (c) =>
+  dispatchSession(c, lifecycleProxy(SessionInternalPaths.retrySnapshot))
 );
 sessionRuntimeProxyRoutes.patch(
   "/sessions/:id/budget",

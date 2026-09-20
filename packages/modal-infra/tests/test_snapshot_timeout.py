@@ -37,7 +37,9 @@ async def test_take_snapshot_passes_explicit_timeout():
 
     assert image_id == "im-session"
     snapshot_filesystem.assert_not_called()
-    snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+    snapshot_filesystem.aio.assert_awaited_once_with(
+        timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, ttl=None
+    )
 
 
 @pytest.mark.asyncio
@@ -67,7 +69,7 @@ async def test_take_snapshot_bounds_whole_second_timeout(budget, expected):
 
     await SandboxManager().take_snapshot(handle, timeout_seconds=budget)
 
-    snapshot_filesystem.aio.assert_awaited_once_with(timeout=expected)
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=expected, ttl=None)
 
 
 @pytest.mark.asyncio

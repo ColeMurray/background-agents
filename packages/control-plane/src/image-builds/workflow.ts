@@ -19,6 +19,7 @@ import {
   ImageBuildWorkflowUnavailableError,
 } from "./errors";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
+import type { ImageBuildExecutionIntent } from "./scope";
 import type { ImageBuildProvider, ImageBuildScope } from "./model";
 import {
   ImageBuildPlanner,
@@ -210,16 +211,19 @@ export class ImageBuildWorkflow {
     // secret-change supersede can only see builds that have a row, so the
     // row is registered BEFORE secrets are decrypted (planBuild below).
     let target: ResolvedImageBuildTarget;
+    let executionIntent: ImageBuildExecutionIntent;
     let callbackAuth;
     try {
       target = options.target ?? (await planner.resolveTarget(scope));
+      executionIntent = await planner.resolveExecutionIntent(scope, target);
 
       if (
         options.onlyIfStale &&
         (await this.store.hasReadyImageForFingerprint(
           scope,
           provider,
-          target.repositoriesFingerprint
+          target.repositoriesFingerprint,
+          executionIntent.sandboxExecution.profile
         ))
       ) {
         return { type: "up_to_date" };
@@ -252,6 +256,7 @@ export class ImageBuildWorkflow {
         scope,
         provider,
         repositoriesFingerprint: target.repositoriesFingerprint,
+        sandboxExecution: executionIntent.sandboxExecution,
         ...callbackAuthRegistration(callbackAuth),
       });
       if (!registered) {
@@ -272,6 +277,7 @@ export class ImageBuildWorkflow {
         failureCallbackUrl,
         correlation: ctx,
         target,
+        executionIntent,
         callbackAuth,
       });
 

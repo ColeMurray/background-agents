@@ -1,4 +1,5 @@
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
+import { parseSessionSandboxExecution } from "@open-inspect/shared/types/sandbox-execution";
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import { z } from "zod";
@@ -93,6 +94,7 @@ export class ChildSessionsHandler {
       reasoningEffort: session.reasoning_effort ?? null,
       baseBranch: session.base_branch,
       sandboxTimeoutMs,
+      sandboxExecution: parseSessionSandboxExecution(session.sandbox_execution),
       promptAuthor: {
         userId: promptAuthor.user_id,
         ...(promptAuthor.canonical_user_id

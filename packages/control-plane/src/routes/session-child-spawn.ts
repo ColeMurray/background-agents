@@ -25,6 +25,7 @@ import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
+import { SandboxExecutionError } from "../sandbox/execution";
 import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
@@ -266,6 +267,7 @@ export async function handleSpawnChild(
     codeServerEnabled: childCodeServerEnabled,
     vncEnabled: childVncEnabled,
     sandboxSettings: childSandboxSettings,
+    sandboxExecution: spawnContext.sandboxExecution,
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
@@ -291,6 +293,8 @@ export async function handleSpawnChild(
     await initializeSession(env, input, ctx);
   } catch (e) {
     await sessionStore.releaseChildAdmissionLease(admissionLease);
+    if (e instanceof SandboxExecutionError)
+      return json({ error: e.message, code: e.code }, e.status);
     logger.error("Failed to initialize child session", {
       error: e instanceof Error ? e.message : String(e),
       parent_id: parentId,

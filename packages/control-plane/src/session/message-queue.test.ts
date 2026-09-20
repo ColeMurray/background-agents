@@ -228,6 +228,7 @@ function buildQueue() {
   };
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
+    getSnapshotRecoveryError: vi.fn((): string | null => null),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     onPromptDispatched: vi.fn(() => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
@@ -608,6 +609,31 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "fails pending work and callbacks when snapshot recovery is blocked (already latched: %s)",
+    async (latched) => {
+      const h = buildQueue();
+      const message = createMessage();
+      const reason = "Snapshot recovery required (artifact_missing). Original reference retained.";
+      h.repository.getNextPendingMessage.mockReturnValueOnce(message).mockReturnValue(null);
+      h.repository.getMessageById.mockReturnValue(message);
+      h.sandboxLifecycle.getSnapshotRecoveryError.mockReturnValue(latched ? reason : null);
+      h.sandboxLifecycle.spawnSandbox.mockImplementation(async () => {
+        h.sandboxLifecycle.getSnapshotRecoveryError.mockReturnValue(reason);
+      });
+      await h.queue.processMessageQueue();
+      await h.backgroundTasks.settle();
+      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "msg-1", success: false, error: reason }),
+        expect.any(Number),
+        "pending"
+      );
+      expect(h.callbackService.notifyComplete).toHaveBeenCalledWith("msg-1", false, reason);
+      expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(latched ? 0 : 1);
+      expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    }
+  );
 
   it("does not spawn or dispatch while the session budget is exhausted", async () => {
     const h = buildQueue();

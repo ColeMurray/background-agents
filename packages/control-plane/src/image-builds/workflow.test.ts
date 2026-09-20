@@ -140,9 +140,15 @@ function createWorkflow(options: {
       expiresAt: 9_999_999_999_999,
     });
   const provider = options.provider === undefined ? "modal" : options.provider;
-  const planner = { planBuild, resolveTarget, createCallbackAuth } as unknown as NonNullable<
-    ConstructorParameters<typeof ImageBuildWorkflow>[3]
-  >["planner"];
+  const resolveExecutionIntent = vi
+    .fn()
+    .mockResolvedValue({ sandboxExecution: { profile: "default" }, buildTimeoutMs: 1800_000 });
+  const planner = {
+    planBuild,
+    resolveTarget,
+    createCallbackAuth,
+    resolveExecutionIntent,
+  } as unknown as NonNullable<ConstructorParameters<typeof ImageBuildWorkflow>[3]>["planner"];
   const workflow = new ImageBuildWorkflow(
     options.env ?? createEnv(),
     store as unknown as ImageBuildStore,
@@ -180,6 +186,7 @@ describe("ImageBuildWorkflow", () => {
       if (result.type !== "triggered") throw new Error("unreachable");
       expect(result.buildId).toMatch(/^imgb-env_1-\d+-/);
       expect(store.registerBuild).toHaveBeenCalledWith({
+        sandboxExecution: { profile: "default" },
         id: result.buildId,
         scope: ENV_SCOPE,
         provider: "modal",
@@ -447,7 +454,12 @@ describe("ImageBuildWorkflow", () => {
       const result = await workflow.triggerBuildIfStale(ENV_SCOPE, ctx);
 
       expect(result).toEqual({ type: "up_to_date" });
-      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(ENV_SCOPE, "modal", "fp-1");
+      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(
+        ENV_SCOPE,
+        "modal",
+        "fp-1",
+        "default"
+      );
       expect(store.registerBuild).not.toHaveBeenCalled();
       // A no-op save must not decrypt secrets or mint clone tokens.
       expect(planBuild).not.toHaveBeenCalled();

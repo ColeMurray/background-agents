@@ -8,7 +8,7 @@ import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from ".
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
 import { ImageBuildReaper } from "./reaper";
-import { listEnabledScopes, resolveScopeTarget } from "./scope";
+import { listEnabledScopes, resolveScopeTarget, resolveScopeExecutionIntent } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
 import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
@@ -241,7 +241,12 @@ export class ImageBuildScheduler {
     for (const scope of scopes) {
       try {
         const target = await this.resolveTarget(this.env, this.db, scope);
-        const rows = await this.store.getReconciliationStatus(scope, provider);
+        const intent = await resolveScopeExecutionIntent(this.env, this.db, scope, target);
+        const rows = await this.store.getReconciliationStatus(
+          scope,
+          provider,
+          intent.sandboxExecution.profile
+        );
         const decision = evaluateImageBuildRebuildPolicy(
           {
             scope,
@@ -249,7 +254,8 @@ export class ImageBuildScheduler {
             repositoriesFingerprint: target.repositoriesFingerprint,
           },
           rows,
-          provider
+          provider,
+          intent.sandboxExecution.profile
         );
 
         let rebuild = decision.type === "rebuild";

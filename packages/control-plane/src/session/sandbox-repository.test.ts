@@ -218,26 +218,46 @@ describe("SandboxRepository", () => {
   });
 
   describe("recordSandboxSnapshot", () => {
-    const query = `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
-       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`;
+    const query = `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?, snapshot_execution_profile = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ? AND created_at = ?
+         AND snapshot_recovery_error_code IS NULL`;
 
     it("stamps the snapshot with the runtime that produced it, for the sandbox it was taken of", () => {
       mock.setRowsWritten(query, 1);
 
-      expect(repository.recordSandboxSnapshot("modal-sb-1", "img-123", "v59-runtime")).toBe(true);
+      expect(
+        repository.recordSandboxSnapshot(
+          { sandboxId: "modal-sb-1", createdAt: 1 },
+          "img-123",
+          "v59-runtime",
+          "default"
+        )
+      ).toBe(true);
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(query);
-      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "default", "modal-sb-1", 1]);
     });
 
     it("records a null runtime when the sandbox never reported one", () => {
-      repository.recordSandboxSnapshot("modal-sb-1", "img-123", null);
+      repository.recordSandboxSnapshot(
+        { sandboxId: "modal-sb-1", createdAt: 1 },
+        "img-123",
+        null,
+        "default"
+      );
 
-      expect(mock.calls[0].params).toEqual(["img-123", null, "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["img-123", null, "default", "modal-sb-1", 1]);
     });
 
     it("reports a replaced sandbox instead of stamping its successor", () => {
-      expect(repository.recordSandboxSnapshot("modal-sb-old", "img-123", null)).toBe(false);
+      expect(
+        repository.recordSandboxSnapshot(
+          { sandboxId: "modal-sb-old", createdAt: 1 },
+          "img-123",
+          null,
+          "default"
+        )
+      ).toBe(false);
     });
   });
 
@@ -458,6 +478,44 @@ describe("SandboxRepository boot state (SQLite)", () => {
       set("status = 'connecting', modal_sandbox_id = NULL");
 
       expect(repository.markSandboxReady({ sandboxId: null, createdAt: 1000 })).toBe(true);
+    });
+  });
+
+  it("retains a latched snapshot through replacement and clears recovery only on fenced ready", () => {
+    const { repository, set } = createSqliteRepository();
+    set("modal_sandbox_id = 'sb-old', status = 'ready'");
+    const old = { sandboxId: "sb-old", createdAt: 1000 };
+    expect(repository.recordSandboxSnapshot(old, "im-data", "v71-test", "docker-v1")).toBe(true);
+    const snapshot = {
+      imageId: "im-data",
+      runtimeVersion: "v71-test",
+      executionProfile: "docker-v1",
+    };
+    expect(
+      repository.setSnapshotRecoveryError(old, "artifact_missing", {
+        ...snapshot,
+        imageId: "im-wrong",
+      })
+    ).toBe(false);
+    expect(repository.setSnapshotRecoveryError(old, "artifact_missing", snapshot)).toBe(true);
+    expect(repository.markSandboxReady(old)).toBe(false);
+    repository.updateSandboxForSpawn({
+      modalSandboxId: "sb-new",
+      status: "spawning",
+      createdAt: 2000,
+    });
+    expect(repository.getSandbox()).toMatchObject({
+      snapshot_image_id: "im-data",
+      snapshot_execution_profile: "docker-v1",
+      snapshot_recovery_error_code: "artifact_missing",
+    });
+    expect(repository.recordSandboxSnapshot(old, "im-stale", "v71-test", "docker-v1")).toBe(false);
+    expect(repository.setSnapshotRecoveryError(old, "profile_mismatch", snapshot)).toBe(false);
+    expect(repository.markSandboxReady(old)).toBe(false);
+    expect(repository.markSandboxReady({ sandboxId: "sb-new", createdAt: 2000 })).toBe(true);
+    expect(repository.getSandbox()).toMatchObject({
+      snapshot_image_id: "im-data",
+      snapshot_recovery_error_code: null,
     });
   });
 

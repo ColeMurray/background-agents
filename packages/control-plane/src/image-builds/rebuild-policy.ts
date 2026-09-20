@@ -3,6 +3,8 @@ import { parseRuntimeVersionNumber, type ImageBuildProvider } from "./model";
 import { repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
 import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
+import { minimumRebuildGenerationForProfile } from "../sandbox/runtime-manifest";
+import type { SandboxExecutionProfile } from "@open-inspect/shared/types/sandbox-execution";
 
 // Runtime generations are one sequence shared by every image-build provider.
 // The minimum compatible generation carries the generic provider-account token
@@ -20,7 +22,8 @@ export type ImageBuildRebuildDecision =
 export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
   rows: ImageBuildRecordView[],
-  provider: ImageBuildProvider
+  provider: ImageBuildProvider,
+  executionProfile: SandboxExecutionProfile = "default"
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
   if (providerRows.some((row) => row.status === "building")) {
@@ -35,7 +38,10 @@ export function evaluateImageBuildRebuildPolicy(
   const runtimeVersion = parseRuntimeVersionNumber(ready.runtimeVersion);
   // Rebuild old images to the current toolchain without invalidating images
   // that remain safe to boot during the rollout gap.
-  if (runtimeVersion === null || runtimeVersion < MIN_REBUILD_RUNTIME_VERSION) {
+  if (
+    runtimeVersion === null ||
+    runtimeVersion < minimumRebuildGenerationForProfile(executionProfile)
+  ) {
     return { type: "rebuild", reason: "runtime_incompatible" };
   }
 

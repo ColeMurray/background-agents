@@ -249,6 +249,8 @@ export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
  * uses the provider default instead of inheriting a global resource default.
  */
 export const sandboxSettingsSchema = z.strictObject({
+  /** Require Docker support. Absence inherits; false explicitly opts out. */
+  dockerEnabled: z.boolean().optional(),
   /** Extra ports to expose via tunnels (e.g., dev server ports 3000, 5173). */
   tunnelPorts: z.array(z.number()).optional(),
   /** Enable a browser-based terminal (ttyd) in sandbox sessions. */

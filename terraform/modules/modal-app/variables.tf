@@ -53,6 +53,12 @@ variable "deploy_module" {
   default     = "deploy"
 }
 
+variable "provision_modal_vm_sandboxes" {
+  description = "Build and natively verify the Docker VM image; independent of new-session admission"
+  type        = bool
+  default     = false
+}
+
 variable "source_hash" {
   description = "Hash of source files to trigger redeployment on changes"
   type        = string

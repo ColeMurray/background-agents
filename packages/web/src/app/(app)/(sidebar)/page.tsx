@@ -1,6 +1,8 @@
 "use client";
 
 import { useAuthSession } from "@/lib/auth-session";
+import { DockerSessionSelector } from "@/components/docker-session-selector";
+import type { ReactNode } from "react";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
@@ -109,6 +111,7 @@ export default function Home() {
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
+  const [dockerEnabled, setDockerEnabled] = useState<boolean | undefined>(undefined);
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -229,6 +232,7 @@ export default function Home() {
     targetRequestFields
       ? {
           ...targetRequestFields,
+          dockerEnabled,
           harness,
           model: selectedModel,
           reasoningEffort,
@@ -245,6 +249,7 @@ export default function Home() {
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
+    getFailureReason: getSessionCreationFailure,
     consume: consumeWarmSession,
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
@@ -346,7 +351,7 @@ export default function Home() {
       }
 
       if (!sessionId) {
-        setError("Failed to create session");
+        setError(getSessionCreationFailure() ?? "Failed to create session");
         return;
       }
 
@@ -391,6 +396,9 @@ export default function Home() {
 
   return (
     <HomeContent
+      executionSelector={
+        <DockerSessionSelector value={dockerEnabled} onChange={setDockerEnabled} />
+      }
       isAuthenticated={!!session}
       canCreateSession={canCreateSession}
       picker={picker}
@@ -429,6 +437,7 @@ export default function Home() {
 }
 
 function HomeContent({
+  executionSelector,
   isAuthenticated,
   canCreateSession,
   picker,
@@ -457,6 +466,7 @@ function HomeContent({
   onProviderSelectionChange,
   providerAccounts,
 }: {
+  executionSelector: ReactNode;
   isAuthenticated: boolean;
   canCreateSession: boolean;
   picker: SessionTargetSelection;
@@ -555,6 +565,7 @@ function HomeContent({
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
                 <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+                {executionSelector}
               </div>
 
               <div

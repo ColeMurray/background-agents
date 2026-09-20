@@ -63,6 +63,7 @@ export interface EnvConfig {
   UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+  ENABLE_MODAL_VM_SANDBOXES?: string; // Admission only; exactly "true" enables new Docker workloads.
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs

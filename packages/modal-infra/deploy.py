@@ -10,7 +10,9 @@ Run the eager image build before deploying:
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import modal
@@ -22,15 +24,15 @@ if __name__ == "__main__":
     # The eager builder must run before a verified image reference exists. Import
     # only build modules, without src.__init__ registering deployable functions.
     from app_config import APP_NAME
-    from images.base import base_image, base_image_plan, image_reference_path
+    from images.base import base_image, base_image_plan, docker_image, image_reference_path
 else:
     # Modal imports this module to discover the fully registered application.
     from src.app import app
     from src.app_config import APP_NAME
-    from src.images.base import base_image, base_image_plan, image_reference_path
+    from src.images.base import base_image, base_image_plan, docker_image, image_reference_path
 
 
-def build_sandbox_image() -> None:
+def build_sandbox_image(*, with_docker: bool = False) -> None:
     """Build the image used by dynamic sandboxes before requests can create them."""
     if base_image_plan is None:
         raise RuntimeError("Modal sandbox image build requires a local packed image plan")
@@ -59,7 +61,6 @@ def build_sandbox_image() -> None:
         process.wait()
         if process.returncode != 0:
             raise RuntimeError(f"Modal image verification failed: {process.stderr.read()}")
-        write_build_result(base_image.object_id)
     finally:
         sandbox.terminate()
     # Publish the function image reference only after fresh-artifact verification.
@@ -67,17 +68,61 @@ def build_sandbox_image() -> None:
         "imageId": base_image.object_id,
         "buildHash": base_image_plan["buildHash"],
     }
+    if with_docker:
+        if docker_image is None:
+            raise RuntimeError("Docker image recipe is unavailable")
+        with modal.enable_output():
+            docker_image.build(deployed_app)
+        sandbox = modal.Sandbox.create(
+            "sleep",
+            "infinity",
+            app=deployed_app,
+            image=modal.Image.from_id(docker_image.object_id),
+            env=base_image_plan["runtimeEnv"],
+            timeout=300,
+            cpu=2,
+            memory=4096,
+            experimental_options={"vm_runtime": True},
+        )
+        try:
+            for script in ("smoke_test.py", "docker_smoke.py"):
+                process = sandbox.exec(
+                    "/opt/openinspect/python/bin/python",
+                    f"/app/verify/{script}",
+                    *(["verify"] if script == "smoke_test.py" else []),
+                    timeout=240,
+                )
+                process.stdout.read()
+                process.wait()
+                if process.returncode != 0:
+                    raise RuntimeError(f"Docker image verification failed: {process.stderr.read()}")
+        finally:
+            sandbox.terminate()
+        record.update(schemaVersion=2, dockerImageId=docker_image.object_id)
     path = image_reference_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record) + "\n")
+    # No half-published pair if a process is interrupted or either probe fails.
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(json.dumps(record) + "\n")
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    write_build_result(base_image.object_id)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-sandbox-image", action="store_true")
+    parser.add_argument("--with-docker", action="store_true")
     args = parser.parse_args()
     if args.build_sandbox_image:
-        build_sandbox_image()
+        build_sandbox_image(
+            with_docker=args.with_docker or os.environ.get("BUILD_MODAL_VM_IMAGE") == "true"
+        )
 
 
 if __name__ == "__main__":

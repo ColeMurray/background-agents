@@ -1,5 +1,6 @@
 """Behavior matrix for shared fresh, repository-image, and snapshot launches."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -18,6 +19,7 @@ from src.sandbox.manager import (
     RepositoryImageUnavailableError,
     SandboxConfig,
     SandboxManager,
+    SnapshotImageUnavailableError,
 )
 
 
@@ -33,11 +35,19 @@ def _fake_create(captured: dict):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
+@pytest.mark.parametrize("docker_enabled", [False, True])
 async def test_launch_matrix_preserves_common_and_source_specific_behavior(
-    monkeypatch, image_source
+    monkeypatch, image_source, docker_enabled
 ):
     captured: dict = {}
     base_image = object()
+    docker_image = object()
+    execution = (
+        {"profile": "docker-v1", "provider": "modal", "cpuCores": 2, "memoryMib": 4096}
+        if docker_enabled
+        else {"profile": "default"}
+    )
+    monkeypatch.setattr("src.images.base.docker_image", docker_image)
     images = {
         "repo-image-1": object(),
         "snapshot-image-1": object(),
@@ -66,6 +76,7 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
 
     manager = SandboxManager()
     settings = {
+        "dockerEnabled": docker_enabled,
         "codeServerPort": 9000,
         "vncPort": 9001,
         "terminalPort": 9002,
@@ -101,6 +112,7 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         handle = await manager.restore_from_snapshot(
             snapshot_image_id="snapshot-image-1",
             session_config={
+                "sandbox_execution": execution,
                 "session_id": "session-1",
                 "repo_owner": "acme",
                 "repo_name": "repo",
@@ -116,6 +128,7 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
                 repo_owner="acme",
                 repo_name="repo",
                 session_config=SessionConfig(
+                    sandbox_execution=execution,
                     session_id="session-1",
                     repo_owner="acme",
                     repo_name="repo",
@@ -126,15 +139,23 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
                 **common,
             )
         )
-        expected_image = images["repo-image-1"] if image_source == "repository" else base_image
+        expected_image = (
+            images["repo-image-1"]
+            if image_source == "repository"
+            else docker_image
+            if docker_enabled
+            else base_image
+        )
 
     kwargs = captured["kwargs"]
     env = kwargs["env"]
     assert captured["command"] == ("python", "-m", "sandbox_runtime.entrypoint")
     assert kwargs["image"] is expected_image
     assert kwargs["timeout"] == 4321
-    assert kwargs["cpu"] == 1.5
-    assert kwargs["memory"] == 3072
+    assert kwargs["cpu"] == (2 if docker_enabled else 1.5)
+    assert kwargs["memory"] == (4096 if docker_enabled else 3072)
+    assert kwargs.get("experimental_options") == ({"vm_runtime": True} if docker_enabled else None)
+    assert json.loads(env["SESSION_CONFIG"])["sandbox_execution"] == execution
     assert kwargs["encrypted_ports"] == [9000, 9001, 9002, 3000]
 
     assert env["CONTROL_PLANE_URL"] == "https://control.example"
@@ -218,3 +239,72 @@ async def test_repository_image_not_found_is_reported_explicitly(monkeypatch):
                 repo_image_id="repo-image-missing",
             )
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_missing", [True, False])
+async def test_create_not_found_only_latches_a_confirmed_missing_snapshot(
+    monkeypatch, image_missing
+):
+    from modal.exception import NotFoundError
+
+    lookup = AsyncMock(side_effect=NotFoundError("missing image") if image_missing else None)
+    image = SimpleNamespace(build=SimpleNamespace(aio=lookup))
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _: image)
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.create",
+        SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("create failed"))),
+    )
+    expected = SnapshotImageUnavailableError if image_missing else NotFoundError
+    with pytest.raises(expected):
+        await SandboxManager().restore_from_snapshot("im-test", {"session_id": "s1"})
+    lookup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tunnel_failure_terminates_known_allocation(monkeypatch):
+    terminate = AsyncMock()
+    sandbox = SimpleNamespace(object_id="sb-owned", terminate=SimpleNamespace(aio=terminate))
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.create",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+    monkeypatch.setattr(
+        SandboxManager,
+        "_resolve_and_setup_tunnels",
+        AsyncMock(side_effect=RuntimeError("tunnel setup")),
+    )
+    with pytest.raises(RuntimeError, match="tunnel setup"):
+        await SandboxManager().create_sandbox(SandboxConfig(repo_owner=None, repo_name=None))
+    terminate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_allocation_cleanup_is_bounded_despite_repeated_cancellation(monkeypatch):
+    started = asyncio.Event()
+
+    async def terminate():
+        started.set()
+        await asyncio.Event().wait()
+
+    sandbox = SimpleNamespace(object_id="sb-owned", terminate=SimpleNamespace(aio=terminate))
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.create",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+    monkeypatch.setattr(
+        SandboxManager,
+        "_resolve_and_setup_tunnels",
+        AsyncMock(side_effect=RuntimeError("tunnel setup")),
+    )
+    timeout = asyncio.timeout
+    monkeypatch.setattr("src.sandbox.manager.asyncio.timeout", lambda _: timeout(0.03))
+    task = asyncio.create_task(
+        SandboxManager().create_sandbox(SandboxConfig(repo_owner=None, repo_name=None))
+    )
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises((TimeoutError, asyncio.CancelledError)):
+        await asyncio.wait_for(task, 1)

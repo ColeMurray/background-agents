@@ -5,6 +5,10 @@ import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
 import { sandboxPreservationSchema } from "./sandbox-preservation";
+import {
+  sessionSandboxExecutionSchema,
+  snapshotRecoveryErrorCodeSchema,
+} from "./sandbox-execution";
 import { clientRequestIdSchema } from "./prompts";
 
 const timelineSequenceSchema = z.number().int().nonnegative().safe();
@@ -26,6 +30,7 @@ const sessionStateSchema = z.object({
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
   sandboxPreservation: sandboxPreservationSchema.nullable().optional(),
+  sandboxExecution: sessionSandboxExecutionSchema.optional(),
   messageCount: z.number(),
   createdAt: z.number(),
   /**
@@ -125,6 +130,7 @@ export const sessionSnapshotSchema = z.object({
   artifacts: z.array(sessionArtifactSchema),
   timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
+  snapshotRecoveryError: snapshotRecoveryErrorCodeSchema.nullable().optional(),
   /** The boot phase a spawning/connecting sandbox last reported; null otherwise. */
   bootPhase: sandboxBootPhaseSchema.nullable().optional(),
   promptQueue: z.array(promptQueueItemSchema),
@@ -175,7 +181,11 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_warming") }),
   z.object({ type: z.literal("sandbox_spawning") }),
   z.object({ type: z.literal("sandbox_status"), status: sandboxStatusSchema }),
-  z.object({ type: z.literal("sandbox_error"), error: z.string() }),
+  z.object({
+    type: z.literal("sandbox_error"),
+    error: z.string(),
+    snapshotRecoveryError: snapshotRecoveryErrorCodeSchema.optional(),
+  }),
   z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
   // Existing artifact changed (e.g. PR lifecycle update). Consumers upsert by
   // artifact id; clients predating this message ignore it and resync on

@@ -52,6 +52,26 @@ variable "vercel_team_id" {
   default     = "unused"
 }
 
+variable "enable_modal_vm_sandboxes" {
+  description = "Allow opt-in Modal VM Docker sessions after both native images verify"
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.enable_modal_vm_sandboxes || var.sandbox_provider == "modal"
+    error_message = "Modal VM support requires sandbox_provider = modal."
+  }
+  validation {
+    condition     = !var.enable_modal_vm_sandboxes || var.provision_modal_vm_sandboxes
+    error_message = "Enable provision_modal_vm_sandboxes before admitting VM sessions; keep it enabled when disabling admission."
+  }
+}
+
+variable "provision_modal_vm_sandboxes" {
+  description = "Build and retain the verified Docker VM image. Keep true while any admitted Docker sessions or builds remain, independently of new-session admission."
+  type        = bool
+  default     = false
+}
+
 variable "modal_token_id" {
   description = "Modal API token ID"
   type        = string

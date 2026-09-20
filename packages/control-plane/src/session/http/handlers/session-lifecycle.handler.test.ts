@@ -107,7 +107,8 @@ function createHandler() {
     { applySessionTitleUpdate } as unknown as SessionTitleService,
     { cancelSandbox },
     "session-do-id",
-    cancelSession
+    cancelSession,
+    vi.fn(async () => false)
   );
 
   const handler = {

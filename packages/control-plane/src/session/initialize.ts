@@ -8,6 +8,8 @@ import {
   unsupportedSandboxSettings,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
+import type { SessionSandboxExecution } from "@open-inspect/shared/types/sandbox-execution";
+import { readSandboxExecutionSettings, resolveSandboxExecution } from "../sandbox/execution";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
@@ -58,6 +60,9 @@ export interface SessionInitInput {
   codeServerEnabled?: boolean;
   vncEnabled?: boolean;
   sandboxSettings?: SandboxSettings;
+  dockerEnabled?: boolean;
+  /** Trusted parent spawn-context only; never copied from a public create request. */
+  sandboxExecution?: SessionSandboxExecution;
 
   // Identity
   /** Participant identity for the session creator — becomes the owner participant's user_id in the DO. */
@@ -149,7 +154,7 @@ export async function initializeSession(
     input.sandboxSettings ?? {},
     sandboxProvider
   );
-  const sandboxSettings = input.sandboxSettings
+  const supportedSandboxSettings = input.sandboxSettings
     ? omitUnsupportedSandboxSettings(input.sandboxSettings, sandboxProvider)
     : undefined;
   if (unsupportedSettings.length > 0) {
@@ -161,6 +166,25 @@ export async function initializeSession(
       trace_id: ctx.trace_id,
     });
   }
+
+  // This common admission boundary also covers automation and child ingress. It
+  // must complete before either the D1 index or the runtime can create a Session.
+  const executionSettings = await readSandboxExecutionSettings(
+    ctx.db,
+    input.repoOwner && input.repoName ? `${input.repoOwner}/${input.repoName}` : null,
+    input.environmentId
+  );
+  const sandboxExecution = resolveSandboxExecution(
+    env,
+    executionSettings.settings,
+    executionSettings.scopeAllowed,
+    input.dockerEnabled,
+    input.sandboxExecution
+  );
+  const sandboxSettings = {
+    ...supportedSandboxSettings,
+    dockerEnabled: sandboxExecution.profile === "docker-v1",
+  };
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -221,6 +245,7 @@ export async function initializeSession(
           codeServerEnabled: input.codeServerEnabled,
           vncEnabled: input.vncEnabled,
           sandboxSettings,
+          sandboxExecution,
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,

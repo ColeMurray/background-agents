@@ -48,6 +48,7 @@ export async function POST(request: NextRequest) {
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       harness: body.harness,
+      dockerEnabled: body.dockerEnabled,
       branch: body.branch,
       title: body.title,
       // The picker's other two target modes (mutually exclusive with the

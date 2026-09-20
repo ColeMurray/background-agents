@@ -1,6 +1,7 @@
 import { isValidSandboxTimeoutMs } from "@open-inspect/shared/types/integrations";
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
+import { sessionSandboxExecutionSchema } from "@open-inspect/shared/types/sandbox-execution";
 
 const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
 
@@ -32,6 +33,7 @@ export const spawnContextSchema = z.object({
   reasoningEffort: z.string().nullable(),
   baseBranch: z.string().nullable(),
   sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
+  sandboxExecution: sessionSandboxExecutionSchema.default({ profile: "default" }),
   promptAuthor: promptAuthorSchema,
 });
 

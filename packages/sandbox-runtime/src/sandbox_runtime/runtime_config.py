@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from .execution import parse_sandbox_execution
 from .harness.base import HarnessId, parse_harness_id
 
 
@@ -37,6 +38,10 @@ def _freeze_json(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_freeze_json(item) for item in value)
     return value
+
+
+def _validate_sandbox_execution(session_config: dict[str, Any]) -> None:
+    parse_sandbox_execution(session_config.get("sandbox_execution", {"profile": "default"}))
 
 
 def _validate_control_plane_url(url: str) -> None:
@@ -123,6 +128,7 @@ class RuntimeConfig:
         parsed_session_config = json.loads(environment.get("SESSION_CONFIG", "{}"))
         if not isinstance(parsed_session_config, dict):
             raise ValueError("SESSION_CONFIG must contain a JSON object")
+        _validate_sandbox_execution(parsed_session_config)
         session_config = _freeze_json(parsed_session_config)
         repo_path = workspace_path / repo_name if repo_owner and repo_name else workspace_path
         control_plane_url = environment.get("CONTROL_PLANE_URL", "")
@@ -142,6 +148,11 @@ class RuntimeConfig:
     @property
     def has_repository(self) -> bool:
         return bool(self.repo_owner and self.repo_name)
+
+    @property
+    def docker_enabled(self) -> bool:
+        execution = self.session_config.get("sandbox_execution", {"profile": "default"})
+        return execution["profile"] == "docker-v1"
 
     @property
     def base_branch(self) -> str:

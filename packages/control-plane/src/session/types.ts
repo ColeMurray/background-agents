@@ -58,6 +58,7 @@ export interface SessionRow {
   vnc_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  sandbox_execution?: string | null; // Immutable execution contract; absent legacy rows are default.
   max_cost_usd: number | null; // Mutable effective session cost limit; NULL = unlimited
   budget_exhausted: number; // 0 = promptable by budget, 1 = paused
   environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
@@ -174,6 +175,8 @@ export interface SandboxRow {
   snapshot_id: string | null;
   snapshot_image_id: string | null; // Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version: string | null; // SANDBOX_VERSION that produced snapshot_image_id
+  snapshot_execution_profile?: string | null;
+  snapshot_recovery_error_code?: string | null;
   runtime_version: string | null; // SANDBOX_VERSION reported by the running sandbox
   auth_token: string | null;
   auth_token_hash: string | null; // SHA-256 hash of sandbox auth token

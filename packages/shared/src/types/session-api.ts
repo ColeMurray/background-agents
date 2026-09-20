@@ -227,6 +227,8 @@ function hasExclusiveSessionTarget(
 }
 
 const createSessionRequestBaseSchema = z.object({
+  /** One-session override; the server resolves and freezes the execution profile. */
+  dockerEnabled: z.boolean().optional(),
   repoOwner: z.string().trim().min(1).nullish(),
   repoName: z.string().trim().min(1).nullish(),
   title: z.string().optional(),

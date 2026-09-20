@@ -5,6 +5,10 @@ import type { SandboxAccessKind, SandboxRow } from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
+import type {
+  SandboxExecutionProfile,
+  SnapshotRecoveryErrorCode,
+} from "@open-inspect/shared/types/sandbox-execution";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
@@ -28,6 +32,8 @@ export interface SandboxCircuitBreakerState {
   modal_object_id: string | null;
   snapshot_image_id: string | null;
   snapshot_runtime_version: string | null;
+  snapshot_execution_profile?: string | null;
+  snapshot_recovery_error_code?: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
 }
@@ -93,7 +99,7 @@ export class SandboxRepository {
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {
     const result = this.sql.exec(
-      `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
+      `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, snapshot_execution_profile, snapshot_recovery_error_code, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`
     );
     const rows = this.rows<Omit<SandboxCircuitBreakerState, "status"> & { status: string }>(result);
     const row = rows[0];
@@ -159,7 +165,8 @@ export class SandboxRepository {
    */
   markSandboxReady(generation: { sandboxId: string | null; createdAt: number }): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET status = 'ready', boot_phase = NULL, boot_seq = NULL
+      `UPDATE sandbox SET status = 'ready', boot_phase = NULL, boot_seq = NULL,
+         snapshot_recovery_error_code = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ?
          AND status NOT IN ('ready', 'stopped', 'stale')
@@ -314,18 +321,44 @@ export class SandboxRepository {
    * only while that is still the row's sandbox; reports whether it was.
    */
   recordSandboxSnapshot(
-    sandboxId: string | null,
+    generation: { sandboxId: string | null; createdAt: number },
     imageId: string,
-    runtimeVersion: string | null
+    runtimeVersion: string | null,
+    executionProfile: SandboxExecutionProfile
   ): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
-       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`,
+      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?, snapshot_execution_profile = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ? AND created_at = ?
+         AND snapshot_recovery_error_code IS NULL`,
       imageId,
       runtimeVersion,
-      sandboxId
+      executionProfile,
+      generation.sandboxId,
+      generation.createdAt
     );
     // Consume the result before reading rowsWritten so the count is final.
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /** Keep the artifact and revoke the failed generation atomically. */
+  setSnapshotRecoveryError(
+    generation: { sandboxId: string | null; createdAt: number },
+    code: SnapshotRecoveryErrorCode,
+    snapshot: { imageId: string; runtimeVersion: string | null; executionProfile: string | null }
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET snapshot_recovery_error_code = ?, status = 'failed', fenced = 1,
+         auth_token = NULL, auth_token_hash = '', active_socket_id = ''
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ? AND created_at = ?
+         AND snapshot_image_id = ? AND snapshot_runtime_version IS ? AND snapshot_execution_profile IS ?`,
+      code,
+      generation.sandboxId,
+      generation.createdAt,
+      snapshot.imageId,
+      snapshot.runtimeVersion,
+      snapshot.executionProfile
+    );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }

@@ -391,6 +391,12 @@ export class SessionMessageQueue {
     }
     const now = Date.now();
     const session = this.repository.getSession();
+    const recoveryError = this.sandboxLifecycle.getSnapshotRecoveryError();
+    if (recoveryError) {
+      await this.failPendingMessage(message.id, recoveryError);
+      await this.processMessageQueue();
+      return;
+    }
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
     // The same rule as admission, applied at dispatch: the harness is fixed
     // at create, so nothing may reach the sandbox on a model it cannot run.
@@ -459,16 +465,27 @@ export class SessionMessageQueue {
       // pending and dispatches when the sandbox WebSocket connects.
       this.backgroundTasks.submit(
         () =>
-          this.sandboxLifecycle.spawnSandbox().catch((error) => {
-            // Expected provider failures report themselves inside the lifecycle
-            // manager; this catch only sees throws from before those handlers.
-            // Route it through the same call so the reason is persisted as well
-            // as broadcast — otherwise it survives only until the tab reloads.
-            this.sandboxLifecycle.reportSandboxError(
-              error instanceof Error ? error.message : "Failed to spawn sandbox"
-            );
-            throw error;
-          }),
+          this.sandboxLifecycle
+            .spawnSandbox()
+            .then(async () => {
+              // A retained snapshot can become recovery-required during provider
+              // I/O. Settle persisted work and bot callbacks, not only the UI.
+              const reason = this.sandboxLifecycle.getSnapshotRecoveryError();
+              if (reason) {
+                await this.failPendingMessage(message.id, reason);
+                await this.processMessageQueue();
+              }
+            })
+            .catch((error) => {
+              // Expected provider failures report themselves inside the lifecycle
+              // manager; this catch only sees throws from before those handlers.
+              // Route it through the same call so the reason is persisted as well
+              // as broadcast — otherwise it survives only until the tab reloads.
+              this.sandboxLifecycle.reportSandboxError(
+                error instanceof Error ? error.message : "Failed to spawn sandbox"
+              );
+              throw error;
+            }),
         {
           name: "sandbox.spawn",
           context: { message_id: message.id },

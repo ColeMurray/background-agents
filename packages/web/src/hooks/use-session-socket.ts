@@ -55,6 +55,7 @@ interface UseSessionSocketReturn {
   sessionState: SessionState | null;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
+  snapshotRecoveryError: SessionSocketState["snapshotRecoveryError"];
   /** The latest sandbox boot: its last phase and completed-phase timings. */
   boot: SessionSocketState["boot"];
   messages: Message[];
@@ -428,6 +429,7 @@ export function useSessionSocket(
     connectionError: transport.connectionError,
     sessionState,
     sandboxError: state.sandboxError,
+    snapshotRecoveryError: state.snapshotRecoveryError,
     boot: state.boot,
     messages: NO_MESSAGES,
     events: state.events,

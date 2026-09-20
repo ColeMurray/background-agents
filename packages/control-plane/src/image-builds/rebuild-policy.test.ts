@@ -28,6 +28,16 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
 }
 
 describe("evaluateImageBuildRebuildPolicy", () => {
+  it("rebuilds Docker artifacts below the profile floor even with unchanged provenance", () => {
+    expect(
+      evaluateImageBuildRebuildPolicy(
+        unit,
+        [row({ runtimeVersion: "v71-final-sandbox-preservation" })],
+        "modal",
+        "docker-v1"
+      )
+    ).toEqual({ type: "rebuild", reason: "runtime_incompatible" });
+  });
   it("skips an active build for the active provider", () => {
     expect(evaluateImageBuildRebuildPolicy(unit, [row({ status: "building" })], "modal")).toEqual({
       type: "skip",

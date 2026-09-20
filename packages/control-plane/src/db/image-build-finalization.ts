@@ -12,6 +12,8 @@ import {
   type ImageBuildProvider,
 } from "../image-builds/model";
 import type { SqlDatabase } from "./sql-database";
+import { parseRuntimeVersionNumber } from "../image-builds/model";
+import { EXECUTION_PROFILE_MIN_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 
 const callbackTokenRowSchema = z.object({
   id: z.string(),
@@ -84,6 +86,7 @@ export class ImageBuildFinalizationStore {
              build_duration_seconds = ?,
              callback_token_used_at = ?
          WHERE id = ? AND provider = ? AND provider_session_id = ? AND status = 'building'
+           AND (execution_profile = 'default' OR (execution_profile = 'docker-v1' AND ? >= ?))
            AND callback_token_hash = ?
            AND callback_token_expires_at >= ?
            AND callback_token_used_at IS NULL`
@@ -97,6 +100,8 @@ export class ImageBuildFinalizationStore {
         params.buildId,
         params.provider,
         params.providerSessionId,
+        parseRuntimeVersionNumber(params.runtimeVersion) ?? 0,
+        EXECUTION_PROFILE_MIN_RUNTIME_GENERATION["docker-v1"],
         params.tokenHash,
         params.now
       )

@@ -112,6 +112,7 @@ describe("session runtime proxy routes", () => {
     { method: "GET", path: "/sessions/session-1/sandbox-access", internal: "sandboxAccess" },
     { method: "GET", path: "/sessions/session-1", internal: "snapshot", status: 502 },
     { method: "POST", path: "/sessions/session-1/stop", internal: "stop" },
+    { method: "POST", path: "/sessions/session-1/retry-snapshot", internal: "retrySnapshot" },
     {
       method: "POST",
       path: "/sessions/session-1/sandbox-error",
@@ -202,6 +203,32 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(200);
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.sandboxAccess);
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each(['{"snapshotImageId":"im-other"}', '{"profile":"default"}', "null", "[]", "bad"])(
+    "rejects snapshot retry overrides before runtime dispatch: %s",
+    async (body) => {
+      const fetch = vi.fn(async () => Response.json({ started: true }));
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/retry-snapshot", {
+          method: "POST",
+          body,
+        }),
+        createEnv(fetch)
+      );
+      expect(response.status).toBe(400);
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("denies snapshot retry without lifecycle permission", async () => {
+    const fetch = vi.fn(async () => Response.json({ started: true }));
+    const response = await dispatch(
+      new Request("https://test.local/sessions/session-1/retry-snapshot", { method: "POST" }),
+      createEnv(fetch, { permissions: ["sessions.read"] })
+    );
+    expect(response.status).toBe(403);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([

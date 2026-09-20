@@ -21,6 +21,7 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter {
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerImageBuild({
+      sandboxExecution: plan.sandboxExecution,
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
       buildId: plan.buildId,

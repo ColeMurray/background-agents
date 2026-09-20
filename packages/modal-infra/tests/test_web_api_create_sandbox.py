@@ -770,7 +770,10 @@ async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
     )
 
     assert result["success"] is True
-    assert captured["restore"]["session_config"] == session_config
+    assert captured["restore"]["session_config"] == {
+        **session_config,
+        "sandbox_execution": {"profile": "default"},
+    }
 
 
 def test_session_config_helper_prefers_normalized_identity():

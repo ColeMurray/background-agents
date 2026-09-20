@@ -13,6 +13,7 @@ import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SnapshotArtifactUnavailableError,
   createVncAccess,
   type ImageBuildProviderTriggerConfig,
   type SandboxProvider,
@@ -124,6 +125,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          sandboxExecution: config.sandboxExecution,
           repositories: config.repositories,
         },
         config.correlation
@@ -172,6 +174,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          sandboxExecution: config.sandboxExecution,
           repositories: config.repositories,
         },
         config.correlation
@@ -188,6 +191,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
+      if (error instanceof ModalApiError && error.status === 410) {
+        throw new SnapshotArtifactUnavailableError("Modal snapshot artifact is unavailable", error);
+      }
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
           `Restore failed with HTTP ${error.status}`,
@@ -265,6 +271,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       return await this.client.createImageBuildSandbox(
         {
           scopeKind: config.scopeKind,
+          sandboxExecution: config.sandboxExecution,
           scopeId: config.scopeId,
           buildId: config.buildId,
           repositories: config.repositories,
@@ -311,14 +318,13 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
-  /**
-   * Deletion is a local no-op for now: Modal's only deletion surface is the
-   * experimental `image_delete` API, whose adoption is deferred until
-   * validated (#1658). The HTTP endpoint this replaced deleted nothing
-   * either, so reaped images were already retained provider-side. Callers
-   * (the image reaper and finalizer) log each attempt and outcome.
-   */
-  async deleteProviderImage(): Promise<void> {}
+  async deleteProviderImage(
+    providerImageId: string,
+    correlation?: CorrelationContext,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.client.deleteProviderImage(providerImageId, correlation, signal);
+  }
 
   private classifyImageBuildError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;

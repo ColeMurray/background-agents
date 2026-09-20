@@ -120,7 +120,7 @@ function harness(
   );
   const scheduler = new ImageBuildScheduler(
     options.env ?? createTestEnv(),
-    {} as SqlDatabase,
+    { prepare: () => ({ bind: () => ({ first: async () => null }) }) } as unknown as SqlDatabase,
     options.provider === undefined ? "modal" : options.provider,
     store as unknown as ImageBuildStore,
     workflow as unknown as ImageBuildWorkflow,
@@ -170,7 +170,8 @@ describe("ImageBuildScheduler", () => {
     expect(resolveTarget).toHaveBeenCalledOnce();
     expect(store.getReconciliationStatus).toHaveBeenCalledWith(
       { kind: "repo", id: "acme/web" },
-      "modal"
+      "modal",
+      "default"
     );
   });
 

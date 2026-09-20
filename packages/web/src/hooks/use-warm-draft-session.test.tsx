@@ -37,6 +37,15 @@ const routing = (
 
 describe("useWarmDraftSession", () => {
   beforeEach(() => vi.resetAllMocks());
+  it("separates inherited, standard and Docker warm draft identities", () => {
+    expect(
+      new Set([
+        warmDraftSessionIdentity(request()),
+        warmDraftSessionIdentity({ ...request(), dockerEnabled: false }),
+        warmDraftSessionIdentity({ ...request(), dockerEnabled: true }),
+      ]).size
+    ).toBe(3);
+  });
 
   it("derives one stable identity from the complete launch request", () => {
     expect(warmDraftSessionIdentity(request(), routing())).toBe(
@@ -85,6 +94,27 @@ describe("useWarmDraftSession", () => {
     });
 
     expect(result.current.sessionId).toBeNull();
+  });
+
+  it("retains actionable Docker admission errors and clears them when intent changes", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json(
+        { code: "docker_not_available", error: "Docker-enabled Modal VM sessions are unavailable" },
+        { status: 503 }
+      )
+    );
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: { ...request(), dockerEnabled: true } } }
+    );
+    await act(async () => {
+      expect(await result.current.warm()).toBeNull();
+    });
+    expect(result.current.getFailureReason()).toBe(
+      "Docker-enabled Modal VM sessions are unavailable"
+    );
+    rerender({ launchRequest: { ...request(), dockerEnabled: false } });
+    expect(result.current.getFailureReason()).toBeNull();
   });
 
   it("retires a draft and warms the explicit provider account after authentication changes", async () => {

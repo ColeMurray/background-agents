@@ -80,6 +80,17 @@ type FieldRegistry<Keys extends keyof SandboxSettings = keyof SandboxSettings> =
 
 // Registry order also preserves the form's first-validation-error precedence.
 const fields: FieldRegistry = {
+  dockerEnabled: {
+    draftKey: "dockerEnabled",
+    format: (value) => (value === undefined ? "inherit" : String(value)),
+    parse: (value) =>
+      value === "inherit"
+        ? { value: undefined }
+        : value === "true" || value === "false"
+          ? { value: value === "true" }
+          : { error: "Invalid Docker setting" },
+    isChanged: (value, current) => value !== current,
+  },
   tunnelPorts: {
     draftKey: "tunnelPorts",
     format: (value) => (value ?? []).map(String),
@@ -209,7 +220,9 @@ export function resolveSandboxSettingsDraft({
     const field: Field<K> = fields[key];
     const prior = ownSettings?.[key];
     // Explicit resource nulls mask inheritance, rather than falling through it.
-    const current = field.format(prior !== undefined ? prior : baseDefaults?.[key]);
+    const current = field.format(
+      key === "dockerEnabled" ? prior : prior !== undefined ? prior : baseDefaults?.[key]
+    );
     const edit = draft[field.draftKey];
     const value = edit ?? current;
     values[field.draftKey] = value;

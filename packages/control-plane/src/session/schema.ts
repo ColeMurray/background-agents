@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS session (
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  sandbox_execution TEXT DEFAULT NULL,              -- Immutable execution profile and effective resource allocation
   max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
   budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
@@ -175,6 +176,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   snapshot_id TEXT,
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version TEXT,                    -- SANDBOX_VERSION that produced snapshot_image_id (restore compatibility floor)
+  snapshot_execution_profile TEXT,
+  snapshot_recovery_error_code TEXT,
   runtime_version TEXT,                             -- SANDBOX_VERSION reported by the running sandbox
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
@@ -711,6 +714,15 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 53,
     description: "Remove persisted boot hook output tails",
     run: removePersistedHookOutputTails,
+  },
+  {
+    id: 54,
+    description: "Persist immutable sandbox execution and snapshot recovery metadata",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN sandbox_execution TEXT DEFAULT NULL`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_execution_profile TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN snapshot_recovery_error_code TEXT`);
+    },
   },
 ];
 

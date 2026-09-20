@@ -31,9 +31,22 @@ function resolve(draft: SandboxSettingsDraft = {}, ownSettings?: SandboxSettings
 }
 
 describe("resolveSandboxSettingsDraft", () => {
+  it("distinguishes inherited Docker from explicit false and removes overrides on reset", () => {
+    expect(resolve({}, { dockerEnabled: false }).values.dockerEnabled).toBe("false");
+    expect(resolve({ dockerEnabled: "false" }, { dockerEnabled: true }).result).toEqual({
+      settings: { dockerEnabled: false },
+    });
+    expect(resolve({ dockerEnabled: "inherit" }, { dockerEnabled: true }).result).toEqual({
+      settings: {},
+    });
+    expect(resolve({ dockerEnabled: "invalid" }).result).toEqual({
+      error: "Invalid Docker setting",
+    });
+  });
   it("displays inherited values without pinning untouched fields", () => {
     expect(resolve()).toEqual({
       values: {
+        dockerEnabled: "inherit",
         tunnelPorts: ["3000", "5173"],
         terminalEnabled: true,
         maxSessionCostUsd: "",

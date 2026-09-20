@@ -371,6 +371,7 @@ describe("ChildSessionsHandler", () => {
       reasoningEffort: "high",
       baseBranch: "main",
       sandboxTimeoutMs: 14_400_000,
+      sandboxExecution: { profile: "default" },
       promptAuthor: {
         userId: "user-1",
         scmUserId: null,
