@@ -157,10 +157,8 @@ class OpenCodeClient:
             self._log.warn("bridge.stop_request_error", exc=e, reason=reason)
             return False
 
-    async def wait_until_session_idle(
-        self, opencode_session_id: str, *, timeout_seconds: float
-    ) -> bool:
-        """Confirm OpenCode reports this session idle within one caller budget."""
+    async def wait_until_idle(self, *, timeout_seconds: float) -> bool:
+        """Confirm every session in OpenCode's execution domain is idle."""
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
         try:
             async with asyncio.timeout_at(deadline):
@@ -175,12 +173,11 @@ class OpenCodeClient:
                         )
                         if response.status_code == 200:
                             statuses = response.json()
-                            if isinstance(statuses, dict):
-                                if opencode_session_id not in statuses:
-                                    return True
-                                status = statuses[opencode_session_id]
-                                if isinstance(status, dict) and status.get("type") == "idle":
-                                    return True
+                            if isinstance(statuses, dict) and all(
+                                isinstance(status, dict) and status.get("type") == "idle"
+                                for status in statuses.values()
+                            ):
+                                return True
                     except Exception as error:
                         self._log.warn("bridge.stop_status_error", exc=error)
                     remaining = deadline - asyncio.get_running_loop().time()

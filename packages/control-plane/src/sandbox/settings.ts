@@ -1,4 +1,5 @@
 import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   findSandboxPortConflict,
   isValidSandboxTimeoutMs,
   MIN_FINAL_SNAPSHOT_BUFFER_MS,
@@ -13,6 +14,8 @@ type InvalidSandboxSettingsBehavior = "throw" | "omit";
 export interface NormalizeSandboxSettingsOptions {
   invalid?: InvalidSandboxSettingsBehavior;
   createError?: (message: string) => Error;
+  /** Defer cross-field defaults until repo/environment overrides are merged. */
+  partial?: boolean;
 }
 
 export class SandboxSettingsValidationError extends Error {
@@ -152,13 +155,24 @@ export function normalizeSandboxSettings(
       reject(
         `finalSnapshotBufferMs must be at least ${MIN_FINAL_SNAPSHOT_BUFFER_MS} and a whole number of seconds`
       );
-    } else if (
-      result.sandboxTimeoutMs !== undefined &&
-      settings.finalSnapshotBufferMs >= result.sandboxTimeoutMs
-    ) {
-      reject("finalSnapshotBufferMs must be less than sandboxTimeoutMs");
     } else {
       result.finalSnapshotBufferMs = settings.finalSnapshotBufferMs;
+    }
+  }
+
+  if (!options.partial && result.sandboxTimeoutMs !== undefined) {
+    if (
+      result.finalSnapshotBufferMs !== undefined &&
+      result.finalSnapshotBufferMs >= result.sandboxTimeoutMs
+    ) {
+      reject("finalSnapshotBufferMs must be less than sandboxTimeoutMs");
+      delete result.finalSnapshotBufferMs;
+    }
+    if (
+      (result.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS) >= result.sandboxTimeoutMs
+    ) {
+      reject("default finalSnapshotBufferMs must be less than sandboxTimeoutMs");
+      delete result.sandboxTimeoutMs;
     }
   }
 

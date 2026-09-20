@@ -137,20 +137,22 @@ async def test_valid_generation_with_invalid_deadline_returns_invalid_command(st
 
 
 @pytest.mark.asyncio
-async def test_preservation_override_wins_when_prompt_returns_success_after_stop() -> None:
+async def test_preservation_override_wins_when_prompt_returns_success_during_cancellation() -> None:
     entered = asyncio.Event()
-    released = asyncio.Event()
+    cancelled = asyncio.Event()
 
     class RacingHarness(PreservationHarness):
         async def run_prompt(self, prompt, emit):
             await emit({"type": "token", "messageId": prompt.message_id, "content": "partial"})
             entered.set()
-            await released.wait()
-            return TurnOutcome.ok(message_cost_usd=0.25)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                return TurnOutcome.ok(message_cost_usd=0.25)
 
         async def stop_execution(self, timeout_seconds: float) -> bool:
-            released.set()
-            await asyncio.sleep(0)
+            assert cancelled.is_set()
             return True
 
     harness = RacingHarness()

@@ -84,28 +84,47 @@ class TestRequestStop:
         assert stopped is False
 
 
-class TestWaitUntilSessionIdle:
-    async def test_polls_until_session_is_no_longer_active(self):
+class TestWaitUntilIdle:
+    async def test_polls_until_execution_domain_is_idle(self):
         http_client = AsyncMock()
         http_client.get.side_effect = [
             MockResponse(200, {SESSION_ID: {"type": "busy"}}),
             MockResponse(200, {}),
         ]
 
-        stopped = await make_client(http_client).wait_until_session_idle(
-            SESSION_ID, timeout_seconds=1
-        )
+        stopped = await make_client(http_client).wait_until_idle(timeout_seconds=1)
 
         assert stopped is True
+        assert http_client.get.await_count == 2
+
+    @pytest.mark.parametrize(
+        "statuses",
+        [
+            {"child": {"type": "busy"}},
+            {SESSION_ID: {"type": "idle"}, "child": {"type": "busy"}},
+        ],
+    )
+    async def test_busy_child_prevents_domain_idle(self, statuses):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(200, statuses)
+
+        assert await make_client(http_client).wait_until_idle(timeout_seconds=0.01) is False
+
+    async def test_waits_until_child_is_idle(self):
+        http_client = AsyncMock()
+        http_client.get.side_effect = [
+            MockResponse(200, {SESSION_ID: {"type": "idle"}, "child": {"type": "busy"}}),
+            MockResponse(200, {SESSION_ID: {"type": "idle"}, "child": {"type": "idle"}}),
+        ]
+
+        assert await make_client(http_client).wait_until_idle(timeout_seconds=1) is True
         assert http_client.get.await_count == 2
 
     async def test_active_session_at_deadline_is_unconfirmed(self):
         http_client = AsyncMock()
         http_client.get.return_value = MockResponse(200, {SESSION_ID: {"type": "busy"}})
 
-        stopped = await make_client(http_client).wait_until_session_idle(
-            SESSION_ID, timeout_seconds=0.01
-        )
+        stopped = await make_client(http_client).wait_until_idle(timeout_seconds=0.01)
 
         assert stopped is False
 
@@ -120,7 +139,7 @@ class TestWaitUntilSessionIdle:
         http_client.get.side_effect = hung_status
 
         stopped = await asyncio.wait_for(
-            make_client(http_client).wait_until_session_idle(SESSION_ID, timeout_seconds=0.01),
+            make_client(http_client).wait_until_idle(timeout_seconds=0.01),
             timeout=0.2,
         )
 
@@ -136,9 +155,7 @@ class TestWaitUntilSessionIdle:
             await asyncio.Event().wait()
 
         http_client.get.side_effect = hung_status
-        waiting = asyncio.create_task(
-            make_client(http_client).wait_until_session_idle(SESSION_ID, timeout_seconds=1)
-        )
+        waiting = asyncio.create_task(make_client(http_client).wait_until_idle(timeout_seconds=1))
         await request_started.wait()
         waiting.cancel()
 
@@ -165,7 +182,7 @@ class TestWaitUntilSessionIdle:
         )
 
         stopped = await asyncio.wait_for(
-            make_client(http_client).wait_until_session_idle(SESSION_ID, timeout_seconds=0.2),
+            make_client(http_client).wait_until_idle(timeout_seconds=0.2),
             timeout=0.5,
         )
 
@@ -173,14 +190,21 @@ class TestWaitUntilSessionIdle:
         assert len(requested_sleeps) == 1
         assert requested_sleeps[0] < 0.15
 
-    @pytest.mark.parametrize("payload", [[{"type": "idle"}], "idle", {SESSION_ID: "idle"}])
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            [{"type": "idle"}],
+            "idle",
+            {SESSION_ID: "idle"},
+            {SESSION_ID: {"type": "idle"}, "child": {"status": "idle"}},
+            {SESSION_ID: {"type": "idle"}, "child": {"type": "unknown"}},
+        ],
+    )
     async def test_malformed_status_payload_is_not_idle_evidence(self, payload):
         http_client = AsyncMock()
         http_client.get.return_value = MockResponse(200, payload)
 
-        stopped = await make_client(http_client).wait_until_session_idle(
-            SESSION_ID, timeout_seconds=0.01
-        )
+        stopped = await make_client(http_client).wait_until_idle(timeout_seconds=0.01)
 
         assert stopped is False
 
