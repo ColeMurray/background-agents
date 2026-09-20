@@ -674,12 +674,33 @@ async def test_generic_snapshot_rejects_expired_deadline_without_provider_call(m
 
 
 @pytest.mark.asyncio
-async def test_generic_snapshot_passes_ordinary_deadline_to_real_manager(monkeypatch):
+@pytest.mark.parametrize("deadline_at_ms", [True, False])
+async def test_generic_snapshot_rejects_boolean_deadline_without_provider_call(
+    monkeypatch, deadline_at_ms
+):
+    snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_snapshot(
+            {"sandbox_id": "modal-session-1", "deadline_at_ms": deadline_at_ms}
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "deadline_at_ms must be a number"
+    get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    snapshot_filesystem.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deadline_at_ms", [1_010_000, 1_010_000.0])
+async def test_generic_snapshot_passes_ordinary_deadline_to_real_manager(
+    monkeypatch, deadline_at_ms
+):
     snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
     monkeypatch.setattr(web_api.time, "time", lambda: 1000.0)
 
     result = await _call_generic_snapshot(
-        {"sandbox_id": "modal-session-1", "deadline_at_ms": 1_010_000}
+        {"sandbox_id": "modal-session-1", "deadline_at_ms": deadline_at_ms}
     )
 
     assert result["data"]["image_id"] == "im-session-1"
