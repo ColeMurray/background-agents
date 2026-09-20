@@ -6,6 +6,7 @@
  * and the polls that observe each of those to completion.
  */
 
+import { webcrypto } from "node:crypto";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   DaytonaImageBuildResources,
@@ -127,9 +128,8 @@ const TEST_CLOCK_SLICES = 40;
  * polls, so the test clock — not wall time — is what these assertions run on.
  *
  * The clock is advanced in slices until the call settles, because a flow
- * arms its next wait only after work that does not resolve on the microtask
- * queue (the digest behind a resource name, for one): a single advance can
- * finish before the timer it was meant to fire exists.
+ * arms its next wait only after asynchronous provider work completes: a
+ * single advance can finish before the timer it was meant to fire exists.
  */
 async function complete<T>(operation: Promise<T>): Promise<T> {
   let done = false;
@@ -153,6 +153,10 @@ async function complete<T>(operation: Promise<T>): Promise<T> {
 describe("DaytonaImageBuildResources", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Resource-name hashing is covered by daytona-rest-client.test.ts. Keep
+    // these lifecycle tests independent of WebCrypto worker scheduling so a
+    // loaded CI runner cannot strand the fake-clock driver behind a digest.
+    vi.spyOn(webcrypto.subtle, "digest").mockResolvedValue(new Uint8Array(32).buffer);
   });
 
   afterEach(() => {

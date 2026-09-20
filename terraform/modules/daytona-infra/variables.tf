@@ -15,8 +15,8 @@ variable "target" {
   default     = ""
 }
 
-variable "snapshot_name" {
-  description = "Name of the Daytona snapshot to create/update"
+variable "snapshot_name_prefix" {
+  description = "Prefix for the immutable Daytona snapshot name"
   type        = string
 }
 
