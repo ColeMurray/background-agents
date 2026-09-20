@@ -144,6 +144,11 @@ provider/runtime calls convert explicitly to seconds where required.
 - Default: **600,000 ms (10 minutes)**.
 - Minimum: **300,000 ms (5 minutes)**, in whole seconds.
 - An explicitly configured buffer must be smaller than an explicitly configured lifetime.
+- Newly edited timing settings also validate an omitted buffer against its inherited value or
+  `DEFAULT_FINAL_SNAPSHOT_BUFFER_MS`. Untouched legacy short lifetimes with no explicit buffer do
+  not prevent saving unrelated settings. Stored global reads retain that value, and writes allow
+  only the same previously stored lifetime without an explicit buffer; effective runtime settings
+  still undergo the existing normalization before launch.
 - Resolve through the existing global → primary-repository → environment settings composition.
   Repository-less sessions use the existing global/environment path.
 - Child sessions inherit the parent's resolved lifetime/buffer pair rather than accidentally
@@ -390,8 +395,16 @@ definitions, and the `sandbox_preservation` SQLite table retain their compatibil
 control-plane modules and UI callbacks use shutdown terminology instead.
 
 The public view includes phase, reason, effective expiry/drain times, last successful save time,
-safe error text, and whether recovery is available. It excludes provider artifact IDs, tokens, and
-private access credentials.
+safe error text, receipt existence, and server-authoritative `availableRecoveryActions`. Snapshot
+and semantic updates use the same eligibility checks as command execution. A receipt belonging to
+another provider is not an available restore action. The view excludes provider artifact IDs,
+tokens, and private access credentials. Missing action metadata disables recovery controls.
+
+The existing `recover_preservation` command accepts an optional `clientRequestId`. New clients await
+a sender-only `shutdown_recovery_accepted` response or a correlated error and disable recovery
+controls while pending. Acceptance confirms the request, not completed restoration. Disconnects and
+timeouts surface an unconfirmed result and do not retry automatically; durable status remains the
+source of truth. Legacy commands without an ID do not receive the new acknowledgement.
 
 The reducer replaces this state from the initial/reconnect snapshot and applies semantic updates.
 Show compact stopping/saving/retiring/saved banners and persistent failed/unknown warnings. When a

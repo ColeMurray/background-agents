@@ -203,6 +203,7 @@ export function resolveSandboxSettingsDraft({
   const settings: SandboxSettings = {};
   const effective: SandboxSettings = {};
   let hasChanges = false;
+  let timingSettingsChanged = false;
   let error: string | undefined;
 
   function resolveField<K extends keyof SandboxSettings>(key: K) {
@@ -228,6 +229,13 @@ export function resolveSandboxSettingsDraft({
         : prior;
     if (payload !== undefined) settings[key] = payload;
     effective[key] = payload !== undefined ? payload : (parsed.value ?? baseDefaults?.[key]);
+    if (
+      (key === "sandboxTimeoutMs" || key === "finalSnapshotBufferMs") &&
+      edit !== undefined &&
+      !Object.is(effective[key], prior !== undefined ? prior : baseDefaults?.[key])
+    ) {
+      timingSettingsChanged = true;
+    }
   }
 
   for (const key of Object.keys(fields) as (keyof SandboxSettings)[]) resolveField(key);
@@ -236,6 +244,7 @@ export function resolveSandboxSettingsDraft({
   if (
     !error &&
     effective.sandboxTimeoutMs !== undefined &&
+    (timingSettingsChanged || effective.finalSnapshotBufferMs !== undefined) &&
     (effective.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS) >=
       effective.sandboxTimeoutMs
   ) {

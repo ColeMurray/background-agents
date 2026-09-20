@@ -3,6 +3,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
   sandboxPreservationSchema,
   type SandboxPreservationState,
+  type ShutdownRecoveryAction,
 } from "@open-inspect/shared/types/sandbox-preservation";
 import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { Logger } from "../logger";
@@ -14,6 +15,7 @@ import type {
   SandboxStartupDecision,
   SandboxWorkAdmission,
 } from "../sandbox/lifecycle/ports";
+import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
@@ -71,6 +73,7 @@ export class SandboxShutdownCoordinator {
           savedAtMs: state.receipt?.savedAtMs ?? state.savedAtMs,
           hasRecoveryPoint: !!state.receipt,
           continuationPaused: this.continuationPaused(state),
+          availableRecoveryActions: this.availableRecoveryActions(state),
         })
       : null;
   }
@@ -105,6 +108,7 @@ export class SandboxShutdownCoordinator {
         savedAtMs: state.receipt?.savedAtMs ?? state.savedAtMs,
         hasRecoveryPoint: !!state.receipt,
         continuationPaused: this.continuationPaused(state),
+        availableRecoveryActions: this.availableRecoveryActions(state),
       }),
     });
   }
@@ -347,29 +351,25 @@ export class SandboxShutdownCoordinator {
       );
   }
 
-  /** Only an explicit authenticated user choice may leave a failed/unknown hold. */
-  async recover(action: "retry" | "restore_saved"): Promise<void> {
+  /** Only an explicit authenticated, currently eligible user choice may leave a hold. */
+  async recover(action: ShutdownRecoveryAction): Promise<void> {
     const state = this.normalizeInterruptedRestore();
-    if (!state || !this.current(state)) return;
+    if (!state || !this.availableRecoveryActions(state).includes(action))
+      throw new ShutdownRecoveryRejectedError(
+        state?.phase === "unknown" && action === "retry"
+          ? "An unknown provider result cannot be retried safely; restore a saved recovery point or start a separate session."
+          : undefined
+      );
     if (state.phase === "saved" && this.continuationPaused(state)) {
-      if (action !== "restore_saved") return;
       this.publish({ ...state, continuationPaused: false });
       this.notifyLifecycleChange();
       return;
     }
-    if (state.phase !== "failed" && state.phase !== "unknown") return;
     if (action === "retry") {
-      // Unknown means provider I/O may still have run; never repeat that capture blindly.
-      if (state.phase !== "failed")
-        throw new Error(
-          "An unknown provider result cannot be retried safely; restore a saved recovery point or start a separate session."
-        );
       this.publish({ ...state, phase: "running", error: undefined });
       await this.requestShutdown(state.reason ?? "preservation_retry");
       return;
     }
-    if (!state.receipt || state.receipt.provider !== this.deps.provider.name)
-      throw new Error("No saved recovery point for the configured provider is available.");
     const next: ShutdownRecord = {
       ...state,
       phase: "retiring",
@@ -395,6 +395,57 @@ export class SandboxShutdownCoordinator {
         "unknown",
         "The source provider handle is unknown; retirement cannot be verified."
       );
+  }
+
+  private availableRecoveryActions(state: ShutdownRecord): ShutdownRecoveryAction[] {
+    if (
+      !this.current(state) ||
+      (state.provider !== undefined && state.provider !== this.deps.provider.name) ||
+      (state.receipt && state.receipt.provider !== this.deps.provider.name)
+    )
+      return [];
+    if (state.phase === "failed") {
+      const actions: ShutdownRecoveryAction[] = [];
+      if (this.canRetryShutdown(state)) actions.push("retry");
+      if (this.canRestoreSaved(state)) actions.push("restore_saved");
+      return actions;
+    }
+    if (state.phase === "unknown") return this.canRestoreSaved(state) ? ["restore_saved"] : [];
+    if (state.phase === "saved" && this.continuationPaused(state))
+      return this.canRestoreSaved(state) ? ["restore_saved"] : [];
+    return [];
+  }
+
+  private canRestoreSaved(state: ShutdownRecord): boolean {
+    if (!state.receipt || state.receipt.provider !== this.deps.provider.name) return false;
+    return (
+      state.phase === "saved" ||
+      state.sourceRetired === true ||
+      (state.lifetimeSource === "provider" &&
+        state.expiresAtMs !== null &&
+        this.now() >= state.expiresAtMs) ||
+      (!!state.providerObjectId &&
+        this.deps.provider.capabilities.supportsExplicitStop === true &&
+        !!this.deps.provider.stopSandbox)
+    );
+  }
+
+  private canRetryShutdown(state: ShutdownRecord): boolean {
+    const provider = this.deps.provider;
+    const canCapture =
+      (provider.capabilities.supportsPersistentResume === true &&
+        provider.capabilities.supportsExplicitStop === true &&
+        !!provider.stopSandbox) ||
+      (provider.capabilities.supportsSnapshots === true && !!provider.takeSnapshot);
+    return (
+      state.lifecyclePolicy !== "legacy" &&
+      state.protocolVersion === 1 &&
+      state.generationReady &&
+      !state.checkpointInFlight &&
+      !!state.providerObjectId &&
+      canCapture &&
+      (state.expiresAtMs === null || this.now() + RETIRE_MS + MARGIN_MS < state.expiresAtMs)
+    );
   }
 
   /** Owns an ordinary capture from admission through durable outcome classification. */

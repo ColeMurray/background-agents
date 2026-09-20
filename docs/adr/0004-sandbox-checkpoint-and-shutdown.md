@@ -78,6 +78,22 @@ generation after checkpointing and retirement are confirmed. That generation mus
 startup, lifetime, and runtime-readiness gates. The shutdown coordinator reports completion; the
 lifecycle/session policy decides whether to wake queued work.
 
+### Recovery availability and request acknowledgement
+
+The lifecycle subsystem projects `availableRecoveryActions` using the same eligibility checks it
+applies when executing a recovery command. Receipt existence is informational, not permission to
+restore: the current generation, source provider, receipt provider, and retirement prerequisites
+must agree. The UI renders these actions without reconstructing provider policy. Missing action
+metadata means no recovery controls; lifecycle authorization is still checked for every command.
+
+Recovery commands optionally carry `clientRequestId` for compatibility with existing clients. New
+clients receive a sender-only `shutdown_recovery_accepted` acknowledgement or a correlated error.
+Acceptance is not proof that restoration completed; the durable shutdown state remains
+authoritative. While awaiting acknowledgement, the UI prevents duplicate submissions. A disconnect
+or timeout means the result is unconfirmed, not that the operation failed or was cancelled, and
+never triggers an automatic retry. Legacy requests without an ID receive no new acknowledgement
+message.
+
 ### Compatibility and terminology
 
 Use shutdown terminology for the internal lifecycle operation and checkpoint/recovery terminology

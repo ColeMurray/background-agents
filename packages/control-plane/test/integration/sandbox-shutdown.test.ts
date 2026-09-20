@@ -886,11 +886,39 @@ describe("sandbox graceful shutdown wiring", () => {
     anonymous.ws.close();
 
     const authenticated = await openClientWs(name, { subscribe: true });
+    const accepted = collectMessages(authenticated.ws, {
+      until: (message) => message.type === "shutdown_recovery_accepted",
+    });
     authenticated.ws.send(
-      JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "resume-1",
+      })
     );
+    await expect(accepted).resolves.toContainEqual({
+      type: "shutdown_recovery_accepted",
+      clientRequestId: "resume-1",
+      action: "restore_saved",
+    });
     await vi.waitFor(async () => {
       expect(await readShutdown(stub)).not.toMatchObject({ continuationPaused: true });
+    });
+    const rejected = collectMessages(authenticated.ws, {
+      until: (message) => message.type === "error",
+    });
+    authenticated.ws.send(
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "stale-1",
+      })
+    );
+    await expect(rejected).resolves.toContainEqual({
+      type: "error",
+      code: "RECOVERY_UNAVAILABLE",
+      message: "Shutdown recovery is unavailable",
+      clientRequestId: "stale-1",
     });
     authenticated.ws.close();
 

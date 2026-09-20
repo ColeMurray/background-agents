@@ -774,7 +774,9 @@ describe("final graceful shutdown lifecycle integration", () => {
 
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: false });
-    await saved.shutdown.recover("restore_saved");
+    await expect(saved.shutdown.recover("restore_saved")).rejects.toThrow(
+      "Shutdown recovery is unavailable"
+    );
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({
       phase: "unknown",

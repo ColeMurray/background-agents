@@ -1,5 +1,12 @@
-import type { SandboxPreservationState } from "@open-inspect/shared/types/sandbox-preservation";
+"use client";
+
+import { useState } from "react";
+import type {
+  SandboxPreservationState,
+  ShutdownRecoveryAction,
+} from "@open-inspect/shared/types/sandbox-preservation";
 import { cn } from "@/lib/utils";
+import type { ShutdownRecoveryResult } from "@/hooks/use-session-socket";
 
 const PHASE_MESSAGES: Record<Exclude<SandboxPreservationState["phase"], "running">, string> = {
   draining: "Stopping the prompt to save your sandbox state.",
@@ -14,16 +21,43 @@ const PHASE_MESSAGES: Record<Exclude<SandboxPreservationState["phase"], "running
 
 interface SandboxShutdownBannerProps {
   shutdown: SandboxPreservationState | null | undefined;
-  onRecover?: (action: "retry" | "restore_saved") => void;
+  onRecover?: (action: ShutdownRecoveryAction) => Promise<ShutdownRecoveryResult>;
 }
 
 export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBannerProps) {
+  const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+
   if (!shutdown || shutdown.phase === "running") return null;
 
   const isError = shutdown.phase === "failed" || shutdown.phase === "unknown";
   const isContinuationPaused = shutdown.phase === "saved" && shutdown.continuationPaused === true;
-  const canResumeQueuedWork = isContinuationPaused && shutdown.hasRecoveryPoint === true;
+  const recoveryActions = shutdown.availableRecoveryActions ?? [];
+  const canRetry = recoveryActions.includes("retry");
+  const canRestoreSaved = recoveryActions.includes("restore_saved");
+  const canResumeQueuedWork = isContinuationPaused && canRestoreSaved;
   const detail = shutdown.error ?? shutdown.reason;
+
+  const recover = async (action: ShutdownRecoveryAction) => {
+    if (!onRecover || pendingAction) return;
+    setPendingAction(action);
+    setRecoveryError(null);
+    try {
+      const result = await onRecover(action);
+      if (result.ok) return;
+      setRecoveryError(
+        result.reason === "rejected"
+          ? (result.message ?? "The recovery request was rejected.")
+          : "Recovery was not confirmed. Check the current sandbox state before retrying."
+      );
+    } catch {
+      setRecoveryError(
+        "Recovery was not confirmed. Check the current sandbox state before retrying."
+      );
+    } finally {
+      setPendingAction(null);
+    }
+  };
 
   return (
     <div
@@ -43,32 +77,48 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
         </span>
       )}
       {detail && <span className="ml-2">{detail}</span>}
-      {shutdown.phase === "failed" && onRecover && (
-        <button type="button" className="ml-3 underline" onClick={() => onRecover("retry")}>
-          Retry shutdown
-        </button>
-      )}
-      {isError && shutdown.hasRecoveryPoint && onRecover && (
+      {shutdown.phase === "failed" && canRetry && onRecover && (
         <button
           type="button"
-          className="ml-3 underline"
+          className="ml-3 underline disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={pendingAction !== null}
+          onClick={() => void recover("retry")}
+        >
+          {pendingAction === "retry" ? "Retrying shutdown…" : "Retry shutdown"}
+        </button>
+      )}
+      {isError && canRestoreSaved && onRecover && (
+        <button
+          type="button"
+          className="ml-3 underline disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={pendingAction !== null}
           onClick={() => {
             if (
               window.confirm(
                 "Restore the last saved sandbox state? Changes since that save may be lost."
               )
             ) {
-              onRecover("restore_saved");
+              void recover("restore_saved");
             }
           }}
         >
-          Restore saved state
+          {pendingAction === "restore_saved" ? "Restoring saved state…" : "Restore saved state"}
         </button>
       )}
       {canResumeQueuedWork && onRecover && (
-        <button type="button" className="ml-3 underline" onClick={() => onRecover("restore_saved")}>
-          Resume queued work
+        <button
+          type="button"
+          className="ml-3 underline disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={pendingAction !== null}
+          onClick={() => void recover("restore_saved")}
+        >
+          {pendingAction === "restore_saved" ? "Resuming queued work…" : "Resume queued work"}
         </button>
+      )}
+      {recoveryError && (
+        <span aria-live="polite" className="ml-3">
+          {recoveryError}
+        </span>
       )}
     </div>
   );

@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-preservation";
 import { SandboxShutdownBanner as Banner } from "./sandbox-shutdown-banner";
+
+const acceptedRecovery = () =>
+  vi.fn(async (action: ShutdownRecoveryAction) => ({ ok: true as const, action }));
 
 afterEach(() => {
   cleanup();
@@ -30,7 +34,7 @@ describe("SandboxShutdownBanner", () => {
   });
 
   it("offers to resume queued work after an active prompt was interrupted and saved", () => {
-    const onRecover = vi.fn();
+    const onRecover = acceptedRecovery();
     render(
       <Banner
         shutdown={{
@@ -39,6 +43,7 @@ describe("SandboxShutdownBanner", () => {
           drainAtMs: 1,
           hasRecoveryPoint: true,
           continuationPaused: true,
+          availableRecoveryActions: ["restore_saved"],
         }}
         onRecover={onRecover}
       />
@@ -66,7 +71,7 @@ describe("SandboxShutdownBanner", () => {
           drainAtMs: 1,
           hasRecoveryPoint: true,
         }}
-        onRecover={vi.fn()}
+        onRecover={acceptedRecovery()}
       />
     );
 
@@ -74,7 +79,7 @@ describe("SandboxShutdownBanner", () => {
   });
 
   it("clears the paused-continuation action when newer state no longer requires it", () => {
-    const onRecover = vi.fn();
+    const onRecover = acceptedRecovery();
     const { rerender } = render(
       <Banner
         shutdown={{
@@ -83,6 +88,7 @@ describe("SandboxShutdownBanner", () => {
           drainAtMs: 1,
           hasRecoveryPoint: true,
           continuationPaused: true,
+          availableRecoveryActions: ["restore_saved"],
         }}
         onRecover={onRecover}
       />
@@ -97,6 +103,7 @@ describe("SandboxShutdownBanner", () => {
           drainAtMs: 1,
           hasRecoveryPoint: true,
           continuationPaused: true,
+          availableRecoveryActions: ["restore_saved"],
         }}
         onRecover={onRecover}
       />
@@ -132,7 +139,7 @@ describe("SandboxShutdownBanner", () => {
           drainAtMs: 1,
           continuationPaused: true,
         }}
-        onRecover={vi.fn()}
+        onRecover={acceptedRecovery()}
       />
     );
 
@@ -159,8 +166,8 @@ describe("SandboxShutdownBanner", () => {
     }
   );
 
-  it("offers bounded failure recovery and confirms restoring older state", () => {
-    const onRecover = vi.fn();
+  it("offers bounded failure recovery and confirms restoring older state", async () => {
+    const onRecover = acceptedRecovery();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(
       <Banner
@@ -169,12 +176,16 @@ describe("SandboxShutdownBanner", () => {
           expiresAtMs: 2,
           drainAtMs: 1,
           hasRecoveryPoint: true,
+          availableRecoveryActions: ["retry", "restore_saved"],
         }}
         onRecover={onRecover}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
     expect(onRecover).toHaveBeenCalledWith("retry");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry shutdown" })).toBeEnabled()
+    );
     fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
     expect(confirm).toHaveBeenCalledWith(
       "Restore the last saved sandbox state? Changes since that save may be lost."
@@ -183,5 +194,106 @@ describe("SandboxShutdownBanner", () => {
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
     expect(onRecover).toHaveBeenCalledWith("restore_saved");
+  });
+
+  it.each([undefined, [] as ShutdownRecoveryAction[]])(
+    "fails closed when projected recovery actions are %s even if a receipt exists",
+    (availableRecoveryActions) => {
+      render(
+        <Banner
+          shutdown={{
+            phase: "failed",
+            expiresAtMs: 2,
+            drainAtMs: 1,
+            hasRecoveryPoint: true,
+            availableRecoveryActions,
+          }}
+          onRecover={acceptedRecovery()}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: "Retry shutdown" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Restore saved state" })).not.toBeInTheDocument();
+    }
+  );
+
+  it("disables all recovery controls while pending and shows an unconfirmed result", async () => {
+    let settle!: (result: { ok: false; reason: "timeout" }) => void;
+    const onRecover = vi.fn(
+      () =>
+        new Promise<{ ok: false; reason: "timeout" }>((resolve) => {
+          settle = resolve;
+        })
+    );
+    render(
+      <Banner
+        shutdown={{
+          phase: "failed",
+          expiresAtMs: 2,
+          drainAtMs: 1,
+          availableRecoveryActions: ["retry", "restore_saved"],
+        }}
+        onRecover={onRecover}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+    expect(screen.getByRole("button", { name: "Retrying shutdown…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restore saved state" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retrying shutdown…" }));
+    expect(onRecover).toHaveBeenCalledOnce();
+
+    settle({ ok: false, reason: "timeout" });
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Recovery was not confirmed. Check the current sandbox state before retrying."
+        )
+      ).toBeInTheDocument()
+    );
+  });
+
+  it("clears pending and safely reports an unexpected callback rejection", async () => {
+    render(
+      <Banner
+        shutdown={{
+          phase: "failed",
+          expiresAtMs: 2,
+          drainAtMs: 1,
+          availableRecoveryActions: ["retry"],
+        }}
+        onRecover={vi.fn(async () => {
+          throw new Error("unexpected");
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry shutdown" })).toBeEnabled()
+    );
+    expect(screen.getByText(/Recovery was not confirmed/)).toBeInTheDocument();
+  });
+
+  it("shows a definite server rejection separately from an unconfirmed request", async () => {
+    render(
+      <Banner
+        shutdown={{
+          phase: "failed",
+          expiresAtMs: 2,
+          drainAtMs: 1,
+          availableRecoveryActions: ["retry"],
+        }}
+        onRecover={vi.fn(async () => ({
+          ok: false as const,
+          reason: "rejected" as const,
+          message: "Recovery is no longer eligible",
+        }))}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+    expect(await screen.findByText("Recovery is no longer eligible")).toBeInTheDocument();
+    expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
   });
 });

@@ -16,6 +16,11 @@ export interface NormalizeSandboxSettingsOptions {
   createError?: (message: string) => Error;
   /** Defer cross-field defaults until repo/environment overrides are merged. */
   partial?: boolean;
+  /**
+   * Preserve this exact pre-buffer timeout only when no explicit buffer is present.
+   * Field shape and explicit-buffer validation remain strict.
+   */
+  legacyImplicitBufferTimeoutMs?: number;
 }
 
 export class SandboxSettingsValidationError extends Error {
@@ -168,7 +173,11 @@ export function normalizeSandboxSettings(
       reject("finalSnapshotBufferMs must be less than sandboxTimeoutMs");
       delete result.finalSnapshotBufferMs;
     }
+    const preservesLegacyImplicitBufferTimeout =
+      settings.finalSnapshotBufferMs === undefined &&
+      options.legacyImplicitBufferTimeoutMs === result.sandboxTimeoutMs;
     if (
+      !preservesLegacyImplicitBufferTimeout &&
       (result.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS) >= result.sandboxTimeoutMs
     ) {
       reject("default finalSnapshotBufferMs must be less than sandboxTimeoutMs");
