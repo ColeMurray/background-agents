@@ -71,10 +71,16 @@ export class SessionSandboxEventProcessor {
   private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
       case "sandbox_generation_ready":
-        this.preservation?.generationReady(event);
+        if (!this.preservation) {
+          throw new Error("Sandbox preservation event handlers are not configured");
+        }
+        this.preservation.generationReady(event);
         return;
       case "preservation_prepared":
-        this.preservation?.prepared(event);
+        if (!this.preservation) {
+          throw new Error("Sandbox preservation event handlers are not configured");
+        }
+        this.preservation.prepared(event);
         return;
       case "heartbeat":
         this.runtime.handleHeartbeat(context);

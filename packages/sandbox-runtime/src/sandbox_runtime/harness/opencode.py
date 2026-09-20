@@ -136,8 +136,12 @@ class OpencodeHarness:
         if not self.session_id:
             return True
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
-        await self.client.request_stop(self.session_id, reason="preservation")
-        return await self.client.wait_until_session_idle(
-            self.session_id,
-            timeout_seconds=max(deadline - asyncio.get_running_loop().time(), 0.0),
-        )
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self.client.request_stop(self.session_id, reason="preservation")
+                return await self.client.wait_until_session_idle(
+                    self.session_id,
+                    timeout_seconds=max(deadline - asyncio.get_running_loop().time(), 0.0),
+                )
+        except TimeoutError:
+            return False

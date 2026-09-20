@@ -10,8 +10,8 @@ from sandbox_runtime.push_operation import PushRequest, PushResult
 
 
 async def drain_pushes(bridge: AgentBridge) -> None:
-    while bridge._push_tasks:
-        await asyncio.gather(*list(bridge._push_tasks), return_exceptions=True)
+    while bridge.activity.push_tasks:
+        await asyncio.gather(*bridge.activity.push_tasks, return_exceptions=True)
 
 
 @pytest.mark.parametrize(
