@@ -1,4 +1,6 @@
 import {
+  DEFAULT_CODE_SERVER_PORT,
+  DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
   INTERNAL_TTYD_PORT,
   INTERNAL_VNC_PORT,
@@ -30,14 +32,14 @@ describe("resolveSandboxPortPlan", () => {
     expect(
       resolveSandboxPortPlan(
         { codeServer: true, terminal: true, vnc: false },
-        { tunnelPorts: [8080, 7680, 3000] }
+        { tunnelPorts: [DEFAULT_CODE_SERVER_PORT, DEFAULT_TERMINAL_PORT, 3000] }
       )
     ).toEqual({
-      codeServerPort: 8080,
-      terminalPort: 7680,
-      reservedPorts: [8080, 7680],
+      codeServerPort: DEFAULT_CODE_SERVER_PORT,
+      terminalPort: DEFAULT_TERMINAL_PORT,
+      reservedPorts: [DEFAULT_CODE_SERVER_PORT, DEFAULT_TERMINAL_PORT],
       extraTunnelPorts: [3000],
-      allExposedPorts: [8080, 7680, 3000],
+      allExposedPorts: [DEFAULT_CODE_SERVER_PORT, DEFAULT_TERMINAL_PORT, 3000],
     });
   });
 
@@ -45,8 +47,10 @@ describe("resolveSandboxPortPlan", () => {
     expect(() =>
       resolveSandboxPortPlan(
         { codeServer: true, terminal: true, vnc: false },
-        { terminalEnabled: true, terminalPort: 8080 }
+        { terminalEnabled: true, terminalPort: DEFAULT_CODE_SERVER_PORT }
       )
-    ).toThrow("Sandbox port 8080 is assigned to more than one enabled service");
+    ).toThrow(
+      `Sandbox port ${DEFAULT_CODE_SERVER_PORT} is assigned to more than one enabled service`
+    );
   });
 });
