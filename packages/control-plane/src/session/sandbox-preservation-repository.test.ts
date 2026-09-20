@@ -43,6 +43,7 @@ describe("SandboxPreservationRepository", () => {
     fixture.repository.write(record());
     const saved = record({
       phase: "saved",
+      sourceRetired: true,
       generationReady: true,
       operationId: "operation-1",
       receipt: {

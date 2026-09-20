@@ -647,4 +647,71 @@ describe("SandboxPreservation", () => {
       name: "message_queue.process",
     });
   });
+
+  it("retains preflight retirement proof across restart without automatically retrying", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "saved",
+      receipt: {
+        kind: "snapshot",
+        artifactId: "saved-image",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: "runtime-1",
+      },
+    });
+    const next = { ...GENERATION, createdAt: GENERATION.createdAt + 1 };
+    f.sandboxRow.created_at = next.createdAt;
+    f.preservation.beginGeneration(next);
+    f.preservation.restoreFailed("preflight failed", next);
+
+    const restarted = new SandboxPreservation(f.deps as never);
+    expect(restarted.isHolding()).toBe(true);
+    expect(restarted.mayDispatch()).toBe(false);
+    expect(restarted.recoveryReceipt()).toBeUndefined();
+    await restarted.recover("restore_saved");
+    expect(restarted.recoveryReceipt()?.artifactId).toBe("saved-image");
+    expect(f.store.value?.sourceRetired).toBe(true);
+  });
+
+  it("ignores failed restore publication and rejects startup from a superseded generation", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "saved-image",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: "runtime-1",
+      },
+    });
+    const next = { ...GENERATION, createdAt: GENERATION.createdAt + 1 };
+    f.sandboxRow.created_at = next.createdAt;
+    f.preservation.beginGeneration(next);
+    const state = structuredClone(f.store.value);
+
+    f.preservation.restoreFailed("late provider failure", GENERATION);
+    expect(() => f.preservation.restoreStarting(GENERATION)).toThrow("superseded");
+    expect(f.store.value).toEqual(state);
+  });
+
+  it("keeps provider ownership but holds dispatch for an explicit unknown lifetime", async () => {
+    const f = fixture();
+    f.preservation.beginGeneration(GENERATION);
+    await f.preservation.started(GENERATION, {
+      kind: "unknown",
+      observedAtMs: 100_000,
+      reason: "metadata unavailable",
+    });
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      providerObjectId: "provider-object-1",
+      sourceRetired: false,
+    });
+    expect(f.preservation.mayDispatch()).toBe(false);
+  });
 });

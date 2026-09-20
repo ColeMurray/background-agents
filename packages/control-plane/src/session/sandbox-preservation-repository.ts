@@ -17,6 +17,8 @@ const stateSchema = sandboxPreservationSchema
     generation: sandboxGenerationSchema,
     provider: z.string().optional(),
     providerObjectId: z.string().nullable(),
+    // Proof about the current source, not the artifact's original source.
+    sourceRetired: z.boolean().optional(),
     lifetimeKind: z.enum(["finite", "none", "unknown"]),
     protocolVersion: z.literal(1).optional(),
     generationReady: z.boolean(),

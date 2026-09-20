@@ -345,6 +345,19 @@ Provider-native readiness/readback is used where available. A universal capture-
 automatic artifact cleanup service, and arbitrary snapshot history browser are not prerequisites. An
 unrecoverable response remains explicitly unknown.
 
+Receipt availability is separate from proof that the **current** source is retired. Persist that
+proof on verified retirement and carry it through restore preflight, then invalidate it before
+calling the provider to restore or resume. A preflight failure keeps dispatch held but allows an
+explicit saved-state retry without trying to retire a nonexistent target. A lost provider response
+does not prove no new sandbox was started: retained-object resume keeps its known handle so recovery
+can stop it again before retrying; snapshot restore with no returned handle remains unknown. Late
+failures must match the attempted generation before changing recovery state.
+
+Successful provider creation/resume must return an explicit lifetime receipt. If a trailing metadata
+read fails after ownership was established, return the successful handle with an `unknown` lifetime,
+not a failed startup that loses ownership. Unknown lifetime deliberately holds dispatch; running
+without final preservation is not a supported degraded mode.
+
 The UI's failure-only commands reuse authenticated Session WebSocket handling and existing lifecycle
 permission:
 

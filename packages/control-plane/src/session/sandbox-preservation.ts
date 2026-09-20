@@ -103,6 +103,7 @@ export class SandboxPreservation {
       generation: { ...generation, sandboxId: generation.sandboxId },
       provider: this.deps.provider.name,
       providerObjectId: null,
+      sourceRetired: previous?.phase === "saved",
       lifetimeKind: "unknown",
       expiresAtMs: null,
       drainAtMs: null,
@@ -111,7 +112,15 @@ export class SandboxPreservation {
     });
   }
 
-  async started(generation: SandboxGeneration, lifetime?: SandboxLifetime): Promise<void> {
+  /** Persist uncertainty before restore/resume can create or reactivate execution. */
+  restoreStarting(generation: SandboxGeneration, providerObjectId?: string): void {
+    const state = this.deps.store.read();
+    if (!state || !this.current(state) || !this.matches(state, generation))
+      throw new Error("Saved sandbox restore generation was superseded");
+    this.publish({ ...state, sourceRetired: false, providerObjectId: providerObjectId ?? null });
+  }
+
+  async started(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void> {
     const state = this.deps.store.read();
     if (
       !state ||
@@ -125,16 +134,17 @@ export class SandboxPreservation {
       this.deps.session.getSession()?.sandbox_settings ?? null
     );
     const buffer = settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS;
-    const expiresAtMs = lifetime?.kind === "finite" ? lifetime.expiresAtMs : null;
+    const expiresAtMs = lifetime.kind === "finite" ? lifetime.expiresAtMs : null;
     const next: PreservationRecord = {
       ...state,
       providerObjectId: row?.modal_object_id ?? null,
-      lifetimeKind: lifetime?.kind ?? "unknown",
+      sourceRetired: false,
+      lifetimeKind: lifetime.kind,
       expiresAtMs,
       drainAtMs: expiresAtMs === null ? null : expiresAtMs - buffer,
     };
     this.publish(next);
-    if (!lifetime || lifetime.kind === "unknown") {
+    if (lifetime.kind === "unknown") {
       this.fail(
         next,
         "unknown",
@@ -217,11 +227,12 @@ export class SandboxPreservation {
     return state?.phase === "saved" ? state.receipt : undefined;
   }
 
-  restoreFailed(error: string): void {
+  restoreFailed(error: string, generation?: SandboxGeneration): void {
     const state = this.deps.store.read();
-    if (state?.receipt)
+    if (!state || !this.current(state) || (generation && !this.matches(state, generation))) return;
+    if (state.receipt)
       this.fail(
-        state,
+        { ...state, sourceRetired: state.sourceRetired || state.phase === "saved" },
         "unknown",
         `Saved sandbox could not be restored: ${error}. No fresh sandbox was substituted.`
       );
@@ -253,7 +264,7 @@ export class SandboxPreservation {
       retireByMs: this.now() + RETIRE_MS,
     };
     this.publish(next);
-    if (state.expiresAtMs !== null && this.now() >= state.expiresAtMs) {
+    if (state.sourceRetired || (state.expiresAtMs !== null && this.now() >= state.expiresAtMs)) {
       // The hard provider deadline independently proves the old execution ended.
       this.finish(next);
     } else if (state.providerObjectId) await this.retire(next);
@@ -533,7 +544,7 @@ export class SandboxPreservation {
   private finish(state: PreservationRecord): void {
     this.deps.sandbox.updateSandboxStatus("stopped");
     this.deps.retireAccess();
-    this.publish({ ...state, phase: "saved" });
+    this.publish({ ...state, phase: "saved", sourceRetired: true });
     this.deps.messenger.broadcast({ type: "sandbox_status", status: "stopped" });
     this.kickQueue();
   }
@@ -556,10 +567,7 @@ export class SandboxPreservation {
     );
   }
 
-  private matches(
-    state: PreservationRecord,
-    generation: { sandboxId: string; createdAt: number }
-  ): boolean {
+  private matches(state: PreservationRecord, generation: SandboxGeneration): boolean {
     return (
       state.generation.sandboxId === generation.sandboxId &&
       state.generation.createdAt === generation.createdAt

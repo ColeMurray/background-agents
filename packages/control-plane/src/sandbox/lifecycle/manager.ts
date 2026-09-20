@@ -96,7 +96,8 @@ export interface SandboxGeneration {
 
 export interface SandboxPreservationLifecycle {
   beginGeneration(generation: SandboxGeneration): void;
-  started(generation: SandboxGeneration, lifetime?: SandboxLifetime): Promise<void>;
+  restoreStarting(generation: SandboxGeneration, providerObjectId?: string): void;
+  started(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
   isHolding(): boolean;
   request(reason: string): Promise<boolean>;
   beginCheckpoint(): boolean;
@@ -109,7 +110,7 @@ export interface SandboxPreservationLifecycle {
         runtimeVersion: string | null;
       }
     | undefined;
-  restoreFailed(error: string): void;
+  restoreFailed(error: string, generation?: SandboxGeneration): void;
 }
 
 /**
@@ -1142,6 +1143,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      if (restoringFinal) this.preservation?.restoreStarting(generation);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -1214,7 +1216,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         });
         this.failAttempt(generation, "spawning", result.error || "Failed to restore from snapshot");
         if (restoringFinal)
-          this.preservation?.restoreFailed(result.error || "Failed to restore from snapshot");
+          this.preservation?.restoreFailed(
+            result.error || "Failed to restore from snapshot",
+            generation
+          );
       }
     } catch (error) {
       if (error instanceof SpawnSupersededError) {
@@ -1234,7 +1239,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repo_name: session?.repo_name,
       });
       this.failAttempt(generation, "spawning", errorMessage);
-      if (restoringFinal) this.preservation?.restoreFailed(errorMessage);
+      if (restoringFinal) this.preservation?.restoreFailed(errorMessage, generation ?? undefined);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -1280,6 +1285,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
 
+      if (restoringFinal) this.preservation?.restoreStarting(generation, providerObjectId);
       const result = await this.provider.resumeSandbox({
         providerObjectId,
         sessionId: session.session_name || session.id,
@@ -1319,7 +1325,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.failAttempt(generation, "connecting", errorMessage);
-      if (restoringFinal) this.preservation?.restoreFailed(errorMessage);
+      if (restoringFinal) this.preservation?.restoreFailed(errorMessage, generation ?? undefined);
       this.log.error("Sandbox resume failed", {
         error: error instanceof Error ? error : String(error),
       });
@@ -2081,7 +2087,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private async claimProviderStartup(
     generation: SandboxGeneration,
     providerObjectId: string | undefined,
-    lifetime?: SandboxLifetime
+    lifetime: SandboxLifetime
   ): Promise<boolean> {
     this.providerStartupPending = false;
     const status = this.storage.commitProviderStartup(

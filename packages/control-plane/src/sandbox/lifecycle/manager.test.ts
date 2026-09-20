@@ -30,6 +30,7 @@ import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   type SandboxProvider,
+  type SandboxLifetime,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type RestoreConfig,
@@ -46,6 +47,8 @@ import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/ty
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { hashToken } from "../../auth/crypto";
 import type * as AuthCrypto from "../../auth/crypto";
+import { SandboxPreservation } from "../../session/sandbox-preservation";
+import type { PreservationRecord } from "../../session/sandbox-preservation-repository";
 
 // Gate for the #1589 admission-race suite: hashToken passes through to the
 // real implementation, but a test can hold the next call open to keep the
@@ -384,6 +387,10 @@ function parseStructuredLogs(spy: ReturnType<typeof vi.spyOn>): Array<Record<str
   );
 }
 
+function noLifetime(): SandboxLifetime {
+  return { kind: "none", observedAtMs: Date.now() };
+}
+
 function createMockProvider(
   overrides: Partial<{
     createSandbox: (config: CreateSandboxConfig) => Promise<CreateSandboxResult>;
@@ -409,12 +416,14 @@ function createMockProvider(
         providerObjectId: "provider-obj-123",
         status: "connecting",
         createdAt: Date.now(),
+        lifetime: noLifetime(),
       })),
     restoreFromSnapshot:
       overrides.restoreFromSnapshot ||
       vi.fn(async (config: RestoreConfig) => ({
-        success: true,
+        success: true as const,
         sandboxId: config.sandboxId,
+        lifetime: noLifetime(),
       })),
     takeSnapshot:
       overrides.takeSnapshot ||
@@ -494,16 +503,22 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
         sandboxId: config.sandboxId,
         status: "connecting",
         createdAt: Date.now(),
+        lifetime: noLifetime(),
         ...access,
       };
     }),
     restoreFromSnapshot: vi.fn(async (config) => {
       connectBridge();
-      return { success: true, sandboxId: config.sandboxId, ...access };
+      return {
+        success: true as const,
+        sandboxId: config.sandboxId,
+        lifetime: noLifetime(),
+        ...access,
+      };
     }),
     resumeSandbox: vi.fn(async () => {
       connectBridge();
-      return { success: true, ...access };
+      return { success: true as const, lifetime: noLifetime(), ...access };
     }),
   });
   const manager = new SandboxLifecycleManager(
@@ -570,6 +585,7 @@ describe("final preservation lifecycle integration", () => {
     );
     const preservation = {
       beginGeneration: vi.fn(),
+      restoreStarting: vi.fn(),
       started: vi.fn(async () => {}),
       isHolding: vi.fn(() => false),
       request: vi.fn(async () => true),
@@ -581,6 +597,124 @@ describe("final preservation lifecycle integration", () => {
     manager.setPreservation(preservation);
     return { manager, preservation, storage, provider, sockets };
   }
+
+  function withSavedState(f: ReturnType<typeof fixture>, kind: "snapshot" | "retained") {
+    const row = f.storage.getSandbox()!;
+    let state: PreservationRecord = {
+      phase: "saved",
+      generation: { sandboxId: row.modal_sandbox_id!, createdAt: row.created_at! },
+      provider: f.provider.name,
+      providerObjectId: row.modal_object_id,
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+      generationReady: true,
+      receipt: {
+        kind,
+        provider: f.provider.name,
+        artifactId: kind === "snapshot" ? "saved-image" : row.modal_object_id!,
+        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+        savedAtMs: Date.now(),
+      },
+    };
+    const preservation = new SandboxPreservation({
+      store: {
+        read: () => structuredClone(state),
+        write: (next: PreservationRecord) => {
+          state = structuredClone(next);
+        },
+      },
+      provider: f.provider,
+      sandbox: f.storage,
+      session: f.storage,
+      messenger: createMockBroadcaster(),
+      sockets: { getSandboxSocket: () => null },
+      alarm: createMockAlarmScheduler(),
+      background: { submit: vi.fn() },
+      retireAccess: vi.fn(),
+    } as never);
+    f.manager.setPreservation(preservation);
+    return { preservation, read: () => state };
+  }
+
+  it("allows explicit saved-state retry after restore preflight fails without provider I/O", async () => {
+    const f = fixture();
+    const saved = withSavedState(f, "snapshot");
+    vi.mocked(f.storage.getUserEnvVars).mockRejectedValueOnce(
+      new Error("temporary secrets failure")
+    );
+
+    await f.manager.spawnSandbox();
+
+    expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: true });
+    await f.manager.spawnSandbox();
+    expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
+
+    await saved.preservation.recover("restore_saved");
+    expect(saved.read().phase).toBe("saved");
+    await f.manager.spawnSandbox();
+    expect(f.provider.restoreFromSnapshot).toHaveBeenCalledOnce();
+    expect(saved.read()).toMatchObject({ phase: "running", sourceRetired: false });
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("retires an ambiguously resumed retained object before explicitly retrying it", async () => {
+    const resumeSandbox = vi
+      .fn<NonNullable<SandboxProvider["resumeSandbox"]>>()
+      .mockRejectedValueOnce(new Error("provider response lost"))
+      .mockResolvedValue({ success: true, lifetime: { kind: "none", observedAtMs: Date.now() } });
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const f = fixture(
+      createMockProvider({
+        resumeSandbox,
+        stopSandbox,
+        capabilities: { supportsPersistentResume: true, supportsExplicitStop: true },
+      })
+    );
+    const saved = withSavedState(f, "retained");
+
+    await f.manager.spawnSandbox();
+    expect(saved.read()).toMatchObject({
+      phase: "unknown",
+      sourceRetired: false,
+      providerObjectId: "modal-obj-123",
+    });
+    await f.manager.spawnSandbox();
+    expect(resumeSandbox).toHaveBeenCalledOnce();
+
+    await saved.preservation.recover("restore_saved");
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerObjectId: "modal-obj-123",
+        intent: "preserve",
+      })
+    );
+    expect(saved.read()).toMatchObject({ phase: "saved", sourceRetired: true });
+    await f.manager.spawnSandbox();
+    expect(resumeSandbox).toHaveBeenCalledTimes(2);
+    expect(saved.read()).toMatchObject({ phase: "running", sourceRetired: false });
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ambiguous snapshot restore held when the new provider handle is unknown", async () => {
+    const restoreFromSnapshot = vi.fn(async () => {
+      throw new Error("provider response lost");
+    });
+    const f = fixture(createMockProvider({ restoreFromSnapshot }));
+    const saved = withSavedState(f, "snapshot");
+
+    await f.manager.spawnSandbox();
+    expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: false });
+    await saved.preservation.recover("restore_saved");
+    await f.manager.spawnSandbox();
+    expect(saved.read()).toMatchObject({
+      phase: "unknown",
+      receipt: { artifactId: "saved-image" },
+    });
+    expect(restoreFromSnapshot).toHaveBeenCalledOnce();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
 
   it("does not run generic termination or replacement while preservation owns the source", async () => {
     const f = fixture(
@@ -647,7 +781,7 @@ describe("final preservation lifecycle integration", () => {
     const f = fixture(
       createMockProvider({
         resumeSandbox: vi.fn(async () => ({
-          success: false,
+          success: false as const,
           shouldSpawnFresh: true,
           error: "missing",
         })),
@@ -662,7 +796,10 @@ describe("final preservation lifecycle integration", () => {
     });
     await f.manager.spawnSandbox();
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
-    expect(f.preservation.restoreFailed).toHaveBeenCalledWith("missing");
+    expect(f.preservation.restoreFailed).toHaveBeenCalledWith(
+      "missing",
+      f.preservation.beginGeneration.mock.calls[0][0]
+    );
   });
 
   it("does not silently create a fresh sandbox when retained final resume is unsupported", async () => {
@@ -754,7 +891,7 @@ describe("final preservation lifecycle integration", () => {
     async (failureKind) => {
       const restoreFromSnapshot =
         failureKind === "returned"
-          ? vi.fn(async () => ({ success: false, error: "ordinary restore failed" }))
+          ? vi.fn(async () => ({ success: false as const, error: "ordinary restore failed" }))
           : vi.fn(async () => {
               throw new Error("ordinary restore failed");
             });
@@ -775,7 +912,10 @@ describe("final preservation lifecycle integration", () => {
   );
 
   it("does not report an ordinary retained resume failure as final preservation", async () => {
-    const resumeSandbox = vi.fn(async () => ({ success: false, error: "ordinary resume failed" }));
+    const resumeSandbox = vi.fn(async () => ({
+      success: false as const,
+      error: "ordinary resume failed",
+    }));
     const f = fixture(
       createMockProvider({
         resumeSandbox,
@@ -903,6 +1043,7 @@ describe("SandboxLifecycleManager", () => {
             sandboxId: config.sandboxId,
             status: "connecting",
             createdAt: Date.now(),
+            lifetime: noLifetime(),
           })),
           stopSandbox: vi.fn(async () => {
             throw new Error("provider unavailable");
@@ -953,6 +1094,7 @@ describe("SandboxLifecycleManager", () => {
             sandboxId: config.sandboxId,
             status: "connecting",
             createdAt: Date.now(),
+            lifetime: noLifetime(),
           })),
           stopSandbox: vi.fn(() => new Promise<StopResult>(() => {})),
         });
@@ -1001,6 +1143,7 @@ describe("SandboxLifecycleManager", () => {
           sandboxId: config.sandboxId,
           status: "connecting",
           createdAt: Date.now(),
+          lifetime: noLifetime(),
           vncAccess: { url: "https://vnc.test", password: "secret" },
         })),
       });
@@ -1569,9 +1712,10 @@ describe("SandboxLifecycleManager", () => {
       });
       const provider = createMockProvider({
         restoreFromSnapshot: vi.fn(async (config: RestoreConfig) => ({
-          success: true,
+          success: true as const,
           sandboxId: config.sandboxId,
           providerObjectId: "restored-object",
+          lifetime: noLifetime(),
         })),
       });
       const manager = new SandboxLifecycleManager(
@@ -1611,9 +1755,10 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider({
         restoreFromSnapshot: vi.fn(async (config: RestoreConfig) => ({
-          success: true,
+          success: true as const,
           sandboxId: config.sandboxId,
           providerObjectId: "new-modal-obj-after-restore",
+          lifetime: noLifetime(),
         })),
       });
 
@@ -1644,9 +1789,10 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider({
         restoreFromSnapshot: vi.fn(async (config: RestoreConfig) => ({
-          success: true,
+          success: true as const,
           sandboxId: config.sandboxId,
           providerObjectId: "restored-obj-456",
+          lifetime: noLifetime(),
         })),
       });
       const config = {
@@ -1686,8 +1832,9 @@ describe("SandboxLifecycleManager", () => {
       const provider = createMockProvider({
         capabilities: { supportsPersistentResume: true },
         resumeSandbox: vi.fn(async () => ({
-          success: true,
+          success: true as const,
           providerObjectId: "new-provider-obj",
+          lifetime: noLifetime(),
         })),
       });
       const config = {
@@ -1728,8 +1875,9 @@ describe("SandboxLifecycleManager", () => {
       const provider = createMockProvider({
         capabilities: { supportsPersistentResume: true },
         resumeSandbox: vi.fn(async () => ({
-          success: true,
+          success: true as const,
           providerObjectId: "same-provider-obj",
+          lifetime: noLifetime(),
         })),
       });
       const config = {
@@ -2815,11 +2963,20 @@ describe("SandboxLifecycleManager", () => {
         const provider = createMockProvider({
           createSandbox: vi.fn(async (config) => {
             await checkStartup();
-            return { sandboxId: config.sandboxId, status: "connecting", createdAt: Date.now() };
+            return {
+              sandboxId: config.sandboxId,
+              status: "connecting",
+              createdAt: Date.now(),
+              lifetime: noLifetime(),
+            };
           }),
           restoreFromSnapshot: vi.fn(async (config) => {
             await checkStartup();
-            return { success: true, sandboxId: config.sandboxId };
+            return {
+              success: true as const,
+              sandboxId: config.sandboxId,
+              lifetime: noLifetime(),
+            };
           }),
         });
         const manager = new SandboxLifecycleManager(
@@ -4013,6 +4170,7 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "provider-obj-123",
           status: "connecting",
           createdAt: Date.now(),
+          lifetime: noLifetime(),
         }));
       const { manager, storage } = createRepoSessionManager({
         imageBuildLookup,
@@ -4288,6 +4446,7 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "provider-obj-123",
           status: "connecting",
           createdAt: Date.now(),
+          lifetime: noLifetime(),
         }));
       const alarmScheduler = createMockAlarmScheduler();
       const { manager, storage } = createEnvironmentSessionManager({
@@ -4364,6 +4523,7 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "provider-obj-123",
           status: "connecting",
           createdAt: Date.now(),
+          lifetime: noLifetime(),
         }));
       const { manager, storage } = createEnvironmentSessionManager({
         environmentImageLookup,
@@ -4578,7 +4738,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const provider = createMockProvider({
         capabilities: { supportsPersistentResume: true },
-        resumeSandbox: vi.fn(async () => ({ success: true })),
+        resumeSandbox: vi.fn(async () => ({ success: true as const, lifetime: noLifetime() })),
       });
       const mockStorage = createMockStorage(session, sandbox);
       const manager = new SandboxLifecycleManager(
@@ -4855,6 +5015,7 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "provider-obj-123",
           status: "connecting",
           createdAt: Date.now(),
+          lifetime: noLifetime(),
           tunnelUrls: { "3000": "https://tunnel.example.com" },
         })),
       });
@@ -4953,8 +5114,9 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider({
         restoreFromSnapshot: vi.fn(async (config: RestoreConfig) => ({
-          success: true,
+          success: true as const,
           sandboxId: config.sandboxId,
+          lifetime: noLifetime(),
           tunnelUrls: { "3000": "https://tunnel.example.com" },
         })),
       });
@@ -5194,6 +5356,7 @@ describe("status writes after a provider await (COL-99)", () => {
         providerObjectId: "provider-obj-late",
         status: "connecting",
         createdAt: Date.now(),
+        lifetime: noLifetime(),
       };
     });
 
@@ -5243,6 +5406,7 @@ describe("status writes after a provider await (COL-99)", () => {
       );
       const preservation = {
         beginGeneration: vi.fn(),
+        restoreStarting: vi.fn(),
         started: vi.fn(async () => {}),
         isHolding: vi.fn(() => false),
         request: vi.fn(async () => true),
@@ -5427,6 +5591,7 @@ describe("status writes after a provider await (COL-99)", () => {
           providerObjectId: "provider-obj-B",
           status: "connecting",
           createdAt: Date.now(),
+          lifetime: noLifetime(),
         };
       }),
     });

@@ -180,7 +180,7 @@ export interface CreateSandboxResult {
   providerObjectId?: string;
   /** Creation timestamp */
   createdAt: number;
-  lifetime?: SandboxLifetime;
+  lifetime: SandboxLifetime;
   /** Code-server tunnel URL (if available) */
   codeServerUrl?: string;
   /** Code-server password (if available) */
@@ -242,14 +242,11 @@ export interface RestoreConfig {
 /**
  * Result of restoring a sandbox from a snapshot.
  */
-export interface RestoreResult {
-  /** Whether the restore succeeded */
-  success: boolean;
+interface RestoreResultFields {
   /** Sandbox ID if successful */
   sandboxId?: string;
   /** Provider's internal object ID (e.g., Modal's object ID for snapshot API) */
   providerObjectId?: string;
-  lifetime?: SandboxLifetime;
   /** Error message if failed */
   error?: string;
   /** Code-server tunnel URL (if available) */
@@ -263,6 +260,18 @@ export interface RestoreResult {
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
+
+export type RestoreResult =
+  | (RestoreResultFields & {
+      /** Whether the restore succeeded */
+      success: true;
+      lifetime: SandboxLifetime;
+    })
+  | (RestoreResultFields & {
+      /** Whether the restore succeeded */
+      success: false;
+      lifetime?: never;
+    });
 
 /**
  * Configuration for taking a sandbox snapshot.
@@ -321,12 +330,9 @@ export interface ResumeConfig {
 /**
  * Result of resuming a previously stopped sandbox.
  */
-export interface ResumeResult {
-  /** Whether the resume succeeded */
-  success: boolean;
+interface ResumeResultFields {
   /** Provider's internal object ID, if it changed during recovery */
   providerObjectId?: string;
-  lifetime?: SandboxLifetime;
   /** Error message if resume failed */
   error?: string;
   /** Whether the caller should fall back to a fresh create */
@@ -340,6 +346,18 @@ export interface ResumeResult {
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
+
+export type ResumeResult =
+  | (ResumeResultFields & {
+      /** Whether the resume succeeded */
+      success: true;
+      lifetime: SandboxLifetime;
+    })
+  | (ResumeResultFields & {
+      /** Whether the resume succeeded */
+      success: false;
+      lifetime?: never;
+    });
 
 /**
  * Configuration for explicitly stopping a sandbox.
