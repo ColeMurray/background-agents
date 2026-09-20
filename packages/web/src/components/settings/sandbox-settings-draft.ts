@@ -1,5 +1,6 @@
 import {
   DEFAULT_CODE_SERVER_PORT,
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
@@ -234,9 +235,9 @@ export function resolveSandboxSettingsDraft({
   error ??= validateSandboxChildSessionLimits(effective);
   if (
     !error &&
-    effective.finalSnapshotBufferMs !== undefined &&
     effective.sandboxTimeoutMs !== undefined &&
-    effective.finalSnapshotBufferMs >= effective.sandboxTimeoutMs
+    (effective.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS) >=
+      effective.sandboxTimeoutMs
   ) {
     error = "Final snapshot buffer must be shorter than the session timeout.";
   }
