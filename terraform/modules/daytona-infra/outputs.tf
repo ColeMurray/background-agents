@@ -5,6 +5,6 @@ output "snapshot_build_id" {
 
 output "snapshot_name" {
   description = "Verified snapshot name; only switch traffic after the build succeeds"
-  value       = var.snapshot_name
+  value       = local.snapshot_name
   depends_on  = [null_resource.daytona_snapshot]
 }
