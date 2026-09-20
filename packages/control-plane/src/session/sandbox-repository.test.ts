@@ -346,12 +346,28 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).not.toContain("vnc_password");
     });
 
-    it("can update only the URL", () => {
-      repository.updateSandboxAccessUrl("ttyd", "https://ttyd.test/refreshed");
+    it("updates only the URL for the current generation", () => {
+      const generation = { sandboxId: "modal-sb-1", createdAt: 5000 };
+      const query = `UPDATE sandbox SET ttyd_url = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`;
+      mock.setRowsWritten(query, 1);
 
+      expect(
+        repository.updateSandboxAccessUrl("ttyd", "https://ttyd.test/refreshed", generation)
+      ).toBe(true);
       expect(mock.calls[0].query).toContain("SET ttyd_url = ?");
       expect(mock.calls[0].query).not.toContain("ttyd_token");
-      expect(mock.calls[0].params).toEqual(["https://ttyd.test/refreshed"]);
+      expect(mock.calls[0].params).toEqual(["https://ttyd.test/refreshed", "modal-sb-1", 5000]);
+    });
+
+    it("does not update a replaced generation's URL", () => {
+      expect(
+        repository.updateSandboxAccessUrl("ttyd", "https://ttyd.test/stale", {
+          sandboxId: "retired-sandbox",
+          createdAt: 5000,
+        })
+      ).toBe(false);
     });
   });
 

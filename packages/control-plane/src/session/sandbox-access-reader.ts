@@ -10,6 +10,8 @@ export interface SessionAccessReaderDeps {
   sandboxRepository: SandboxRepository;
   repoSecretsEncryptionKey: string;
   sandboxDashboardSettings: SandboxDashboardSettings;
+  /** Refreshes an expiring terminal URL before this endpoint returns it. */
+  refreshTtydAccess: () => Promise<boolean>;
   log: Logger;
 }
 
@@ -26,6 +28,12 @@ export class SessionAccessReader {
     if (!this.deps.sessionCoreRepository.getSession()) {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
+    const initialSandbox = this.deps.sandboxRepository.getSandbox();
+    if (!initialSandbox || initialSandbox.status !== "ready") {
+      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
+    }
+
+    const terminalRefreshed = await this.deps.refreshTtydAccess();
     const sandbox = this.deps.sandboxRepository.getSandbox();
     if (!sandbox || sandbox.status !== "ready") {
       return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
@@ -61,7 +69,10 @@ export class SessionAccessReader {
             : null,
         vnc:
           current.vnc_url && vncPassword ? { url: current.vnc_url, password: vncPassword } : null,
-        ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
+        ttyd:
+          terminalRefreshed && current.ttyd_url && ttydToken
+            ? { url: current.ttyd_url, token: ttydToken }
+            : null,
         tunnelUrls: current.tunnel_urls
           ? safeParseTunnelUrls(current.tunnel_urls, this.deps.log)
           : null,

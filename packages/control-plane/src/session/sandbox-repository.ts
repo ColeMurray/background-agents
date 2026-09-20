@@ -402,12 +402,22 @@ export class SandboxRepository {
   }
 
   /** Update one access artifact's URL while preserving its stored secret. */
-  updateSandboxAccessUrl(kind: SandboxAccessKind, url: string): void {
+  updateSandboxAccessUrl(
+    kind: SandboxAccessKind,
+    url: string,
+    generation: { sandboxId: string | null; createdAt: number }
+  ): boolean {
     const { urlColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
-    this.sql.exec(
-      `UPDATE sandbox SET ${urlColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url
+    const result = this.sql.exec(
+      `UPDATE sandbox SET ${urlColumn} = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`,
+      url,
+      generation.sandboxId,
+      generation.createdAt
     );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   /** Clear one access artifact's URL and secret. */

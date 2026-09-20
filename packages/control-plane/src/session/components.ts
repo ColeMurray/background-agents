@@ -752,6 +752,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sandboxRepository,
     repoSecretsEncryptionKey,
     sandboxDashboardSettings,
+    refreshTtydAccess: () => lifecycleManager.refreshTtydAccess(),
     log,
   });
 

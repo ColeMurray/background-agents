@@ -205,8 +205,12 @@ export interface SandboxStorage {
   setLastSpawnError(error: string | null, timestamp: number | null): void;
   /** Set one access artifact's URL and (encrypted) secret on the sandbox row */
   updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
-  /** Update one access artifact's URL while preserving its stored secret */
-  updateSandboxAccessUrl(kind: SandboxAccessKind, url: string): void | Promise<void>;
+  /** Update one access artifact's URL while preserving its stored secret. */
+  updateSandboxAccessUrl(
+    kind: SandboxAccessKind,
+    url: string,
+    generation: SandboxGeneration
+  ): boolean | Promise<boolean>;
   /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
   clearSandboxAccess(kind: SandboxAccessKind): void;
   /** Clear one access artifact's URL while preserving its stored secret */
@@ -1250,7 +1254,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
       if (result.ttydUrl) {
-        await this.storage.updateSandboxAccessUrl("ttyd", result.ttydUrl);
+        await this.storage.updateSandboxAccessUrl("ttyd", result.ttydUrl, generation);
       }
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
@@ -1264,6 +1268,46 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
+    }
+  }
+
+  /** Refresh an expiring terminal URL immediately before returning sandbox access. */
+  async refreshTtydAccess(): Promise<boolean> {
+    if (!this.provider.refreshTtydUrl) return true;
+
+    const session = this.sessionContext.getSession();
+    const sandbox = this.storage.getSandbox();
+    if (
+      !session ||
+      !sandbox ||
+      sandbox.status !== "ready" ||
+      !sandbox.modal_sandbox_id ||
+      !sandbox.modal_object_id
+    ) {
+      return true;
+    }
+
+    const sandboxSettings = this.parseSandboxSettings(session);
+    if (!sandboxSettings.terminalEnabled) return true;
+
+    const generation: SandboxGeneration = {
+      sandboxId: sandbox.modal_sandbox_id,
+      createdAt: sandbox.created_at,
+    };
+    try {
+      const url = await this.provider.refreshTtydUrl({
+        providerObjectId: sandbox.modal_object_id,
+        sandboxId: sandbox.modal_sandbox_id,
+        timeoutSeconds: this.resolveSandboxTimeoutSeconds(sandboxSettings),
+        sandboxSettings,
+      });
+      return url ? await this.storage.updateSandboxAccessUrl("ttyd", url, generation) : false;
+    } catch (error) {
+      this.log.warn("Terminal URL refresh failed", {
+        sandbox_id: sandbox.modal_sandbox_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   }
 

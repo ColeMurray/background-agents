@@ -300,6 +300,18 @@ export interface ResumeConfig {
   correlation?: CorrelationContext;
 }
 
+/** Configuration for refreshing a terminal preview URL without restarting the sandbox. */
+export interface RefreshTtydUrlConfig {
+  /** Provider's internal sandbox ID used to request the preview URL. */
+  providerObjectId: string;
+  /** Control-plane logical sandbox ID for provider logging. */
+  sandboxId: string;
+  /** Sandbox lifetime in seconds from control-plane policy. */
+  timeoutSeconds?: number;
+  /** Sandbox settings used to resolve whether and where ttyd is exposed. */
+  sandboxSettings?: SandboxSettings;
+}
+
 /**
  * Result of resuming a previously stopped sandbox.
  */
@@ -521,6 +533,14 @@ export interface SandboxProvider {
    * Only available if `capabilities.supportsPersistentResume` is true.
    */
   resumeSandbox?(config: ResumeConfig): Promise<ResumeResult>;
+
+  /**
+   * Refresh a signed terminal preview URL without restarting the sandbox.
+   *
+   * Only available from providers whose terminal URLs expire independently of
+   * the sandbox lifetime.
+   */
+  refreshTtydUrl?(config: RefreshTtydUrlConfig): Promise<string | undefined>;
 
   /**
    * Take a filesystem snapshot of the sandbox.

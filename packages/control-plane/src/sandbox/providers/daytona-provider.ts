@@ -44,6 +44,7 @@ import {
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type RefreshTtydUrlConfig,
   type ResumeConfig,
   type ResumeResult,
   type SandboxProvider,
@@ -244,6 +245,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     }
   }
 
+  async refreshTtydUrl(config: RefreshTtydUrlConfig): Promise<string | undefined> {
+    return this.getTtydUrl(
+      config.providerObjectId,
+      config.sandboxId,
+      config.timeoutSeconds,
+      config.sandboxSettings
+    );
+  }
+
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     try {
       try {
@@ -391,19 +401,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
     if (sandboxSettings?.terminalEnabled) {
       tunnelPorts = tunnelPorts.filter((p) => p !== terminalPort);
-      try {
-        const preview = await this.client.getSignedPreviewUrl(
-          daytonaSandboxId,
-          terminalPort,
-          expirySeconds
-        );
-        ttydUrl = preview.url;
-      } catch (error) {
-        log.warn("daytona.terminal_preview_url_failed", {
-          sandbox_id: logicalSandboxId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      ttydUrl = await this.getTtydUrl(
+        daytonaSandboxId,
+        logicalSandboxId,
+        timeoutSeconds,
+        sandboxSettings
+      );
     }
 
     let tunnelUrls: Record<string, string> | undefined;
@@ -422,6 +425,30 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     }
 
     return { codeServerUrl, codeServerPassword, ttydUrl, vncAccess, tunnelUrls };
+  }
+
+  private async getTtydUrl(
+    daytonaSandboxId: string,
+    logicalSandboxId: string,
+    timeoutSeconds: number | undefined,
+    sandboxSettings: SandboxSettings | undefined
+  ): Promise<string | undefined> {
+    if (!sandboxSettings?.terminalEnabled) return undefined;
+
+    try {
+      const preview = await this.client.getSignedPreviewUrl(
+        daytonaSandboxId,
+        resolveServicePorts(sandboxSettings).terminalPort,
+        resolvePreviewExpirySeconds(timeoutSeconds)
+      );
+      return preview.url;
+    } catch (error) {
+      log.warn("daytona.terminal_preview_url_failed", {
+        sandbox_id: logicalSandboxId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   // -----------------------------------------------------------------------

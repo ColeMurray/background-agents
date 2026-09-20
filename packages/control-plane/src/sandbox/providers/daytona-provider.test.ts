@@ -14,7 +14,12 @@ import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
 } from "../provider";
-import type { CreateSandboxConfig, ResumeConfig, StopConfig } from "../provider";
+import type {
+  CreateSandboxConfig,
+  RefreshTtydUrlConfig,
+  ResumeConfig,
+  StopConfig,
+} from "../provider";
 import {
   DaytonaNotFoundError,
   DaytonaApiError,
@@ -461,6 +466,28 @@ describe("DaytonaSandboxProvider", () => {
       expect(envVars.TTYD_PROXY_PORT).toBeUndefined();
       expect(result.ttydUrl).toBeUndefined();
       expect(client.getSignedPreviewUrl).not.toHaveBeenCalled();
+    });
+
+    it("refreshes terminal URLs only when the terminal is enabled", async () => {
+      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
+        url: `https://preview.test/${port}`,
+      }));
+      const provider = new DaytonaSandboxProvider(
+        createMockClient({ getSignedPreviewUrl }),
+        defaultProviderConfig
+      );
+      const config: RefreshTtydUrlConfig = {
+        providerObjectId: "daytona-sandbox-id",
+        sandboxId: "sandbox-456",
+        sandboxSettings: { terminalEnabled: true, terminalPort: 7000 },
+      };
+
+      await expect(provider.refreshTtydUrl(config)).resolves.toBe("https://preview.test/7000");
+      await expect(
+        provider.refreshTtydUrl({ ...config, sandboxSettings: { terminalEnabled: false } })
+      ).resolves.toBeUndefined();
+      expect(getSignedPreviewUrl).toHaveBeenCalledTimes(1);
+      expect(getSignedPreviewUrl).toHaveBeenCalledWith("daytona-sandbox-id", 7000, 3900);
     });
 
     it("keeps the sandbox and other tunnels when terminal preview URL creation fails", async () => {

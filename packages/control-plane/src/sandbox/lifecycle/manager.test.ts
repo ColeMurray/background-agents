@@ -30,6 +30,7 @@ import {
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type RefreshTtydUrlConfig,
   type RestoreConfig,
   type RestoreResult,
   type ResumeConfig,
@@ -277,10 +278,20 @@ function createMockStorage(
         sandbox[ACCESS_FIELDS[kind].secret] = secret;
       }
     }),
-    updateSandboxAccessUrl: vi.fn((kind: SandboxAccessKind, url: string) => {
-      calls.push(`updateSandboxAccessUrl:${kind}:${url}`);
-      if (sandbox) sandbox[ACCESS_FIELDS[kind].url] = url;
-    }),
+    updateSandboxAccessUrl: vi.fn(
+      (kind: SandboxAccessKind, url: string, generation: SandboxGeneration) => {
+        calls.push(`updateSandboxAccessUrl:${kind}:${url}`);
+        if (
+          !sandbox ||
+          sandbox.modal_sandbox_id !== generation.sandboxId ||
+          sandbox.created_at !== generation.createdAt
+        ) {
+          return false;
+        }
+        sandbox[ACCESS_FIELDS[kind].url] = url;
+        return true;
+      }
+    ),
     clearSandboxAccess: vi.fn((kind: SandboxAccessKind) => {
       calls.push(`clearSandboxAccess:${kind}`);
       if (sandbox) {
@@ -373,6 +384,7 @@ function createMockProvider(
     createSandbox: (config: CreateSandboxConfig) => Promise<CreateSandboxResult>;
     restoreFromSnapshot: (config: RestoreConfig) => Promise<RestoreResult>;
     resumeSandbox: (config: ResumeConfig) => Promise<ResumeResult>;
+    refreshTtydUrl: (config: RefreshTtydUrlConfig) => Promise<string | undefined>;
     takeSnapshot: (config: SnapshotConfig) => Promise<SnapshotResult>;
     stopSandbox: (config: StopConfig) => Promise<StopResult>;
     capabilities: Partial<SandboxProvider["capabilities"]>;
@@ -409,6 +421,9 @@ function createMockProvider(
   };
   if (overrides.resumeSandbox) {
     provider.resumeSandbox = overrides.resumeSandbox;
+  }
+  if (overrides.refreshTtydUrl) {
+    provider.refreshTtydUrl = overrides.refreshTtydUrl;
   }
   if (overrides.stopSandbox) {
     provider.stopSandbox = overrides.stopSandbox;
@@ -1534,6 +1549,93 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).toContain(
         "updateSandboxAccessUrl:ttyd:https://terminal.test/refreshed"
       );
+      expect(storage.updateSandboxAccessUrl).toHaveBeenCalledWith(
+        "ttyd",
+        "https://terminal.test/refreshed",
+        expect.objectContaining({
+          sandboxId: sandbox.modal_sandbox_id,
+          createdAt: sandbox.created_at,
+        })
+      );
+    });
+
+    it("does not store a late resume terminal URL on a replacement generation", async () => {
+      let resolveResume!: (result: ResumeResult) => void;
+      const resumeResult = new Promise<ResumeResult>((resolve) => {
+        resolveResume = resolve;
+      });
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "same-provider-obj",
+        snapshot_image_id: null,
+        ttyd_url: null,
+        ttyd_token: "encrypted-terminal-token",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const provider = createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(() => resumeResult),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      const resume = manager.spawnSandbox();
+      await vi.waitFor(() => expect(provider.resumeSandbox).toHaveBeenCalledOnce());
+      await manager.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
+      storage.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: Date.now(),
+        modalSandboxId: "replacement-sandbox",
+      });
+      resolveResume({
+        success: true,
+        providerObjectId: "same-provider-obj",
+        ttydUrl: "https://terminal.test/stale",
+      });
+      await resume;
+
+      expect(sandbox.modal_sandbox_id).toBe("replacement-sandbox");
+      expect(sandbox.ttyd_url).toBeNull();
+    });
+
+    it("refreshes terminal access for the current ready generation", async () => {
+      const sandbox = createMockSandbox({
+        modal_object_id: "daytona-sandbox",
+        ttyd_url: "https://terminal.test/expired",
+        ttyd_token: "encrypted-terminal-token",
+      });
+      const session = createMockSession({ sandbox_settings: '{"terminalEnabled":true}' });
+      const storage = createMockStorage(session, sandbox);
+      const refreshTtydUrl = vi.fn(async () => "https://terminal.test/refreshed");
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({ refreshTtydUrl }),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await expect(manager.refreshTtydAccess()).resolves.toBe(true);
+
+      expect(refreshTtydUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: "daytona-sandbox",
+          sandboxId: sandbox.modal_sandbox_id,
+          sandboxSettings: { terminalEnabled: true },
+        })
+      );
+      expect(sandbox.ttyd_url).toBe("https://terminal.test/refreshed");
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
