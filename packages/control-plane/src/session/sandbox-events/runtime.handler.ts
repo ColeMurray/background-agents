@@ -1,14 +1,16 @@
 import { toSandboxBootPhase, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
+import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { SessionMessenger } from "../messenger";
-import type { SandboxRepository } from "../sandbox-repository";
+import type { SandboxRuntimeFacts } from "../sandbox-ports";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
+import { sandboxBootPhaseLogFields } from "../../sandbox/boot-phase";
 
 /**
  * Sandbox-runtime family: events about the sandbox itself rather than the
@@ -25,7 +27,7 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
 export class SandboxRuntimeEventHandler {
   constructor(
     private readonly repository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxRuntimeFacts,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
@@ -38,7 +40,8 @@ export class SandboxRuntimeEventHandler {
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly lifecycle: SandboxReadiness
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -81,19 +84,9 @@ export class SandboxRuntimeEventHandler {
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
 
-    // Transition-only, and only for the generation that emitted the event: a
-    // bridge resends `ready` on every reconnect, and a replacement reserved
-    // while this event was in flight is readied by its own runtime. The
-    // repository decides which rows may move.
-    const row = this.sandboxRepository.getSandbox();
-    if (!row) return;
-    const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
-    if (!this.sandboxRepository.markSandboxReady(generation)) return;
-    this.log.info("sandbox.ready", { event: "sandbox.ready", harness: event.harness ?? null });
-    // Activity is stamped here, not at attach: the inactivity reaper measures
-    // from this value, and a long boot must not count as idle time.
-    this.updateLastActivity(context.now);
-    this.messenger.broadcast({ type: "sandbox_status", status: "ready" });
+    // No await between the authorized event and the lifecycle-owned commit.
+    // Repeated, fenced or retired readiness must not wake the prompt queue.
+    if (!this.lifecycle.onRuntimeReady(context.now, event.harness)) return;
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });
@@ -121,13 +114,7 @@ export class SandboxRuntimeEventHandler {
     }
     this.log.info("sandbox.boot_progress", {
       event: "sandbox.boot_progress",
-      boot_seq: event.bootSeq,
-      phase: event.phase,
-      phase_status: event.status,
-      repo_owner: event.repoOwner ?? null,
-      repo_name: event.repoName ?? null,
-      elapsed_ms: event.elapsedMs ?? null,
-      warning: event.warning ?? false,
+      ...sandboxBootPhaseLogFields(toSandboxBootPhase(event)),
     });
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });

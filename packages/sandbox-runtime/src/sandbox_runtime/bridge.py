@@ -41,9 +41,8 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
-from .boot_event_relay import BootEventRelay
+from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
 from .constants import (
-    BOOT_EVENTS_FILE_PATH,
     BRIDGE_FATAL_ERROR_FILE_PATH,
     REPO_MANIFEST_FILE_PATH,
 )
@@ -64,7 +63,7 @@ from .harness import (
 )
 from .log_config import configure_logging, get_logger
 from .prompt_budgets import resolve_prompt_limits
-from .push_operation import PushOperation, PushRejected, PushRequest
+from .push_operation import PushOperation
 from .repo_config import load_repo_manifest
 from .types import GitUser
 
@@ -124,11 +123,9 @@ class AgentBridge:
     """
 
     HEARTBEAT_INTERVAL = 30.0
-    RECONNECT_BACKOFF_BASE = 2.0
-    RECONNECT_MAX_DELAY = 60.0
+    RECONNECT_BACKOFF_BASE = RECONNECT_BACKOFF_BASE
+    RECONNECT_MAX_DELAY_SECONDS = RECONNECT_MAX_DELAY_SECONDS
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
-    # How often the boot-events file is polled while the repository boots.
-    BOOT_EVENTS_POLL_SECONDS = 0.25
 
     def __init__(
         self,
@@ -144,7 +141,6 @@ class AgentBridge:
         harness_factory: Callable[[], AgentHarness] | None = None,
     ):
         self.sandbox_id = sandbox_id
-        self.early_connect = early_connect
         self.session_id = session_id
         self.control_plane_url = control_plane_url
         self.auth_token = auth_token
@@ -188,13 +184,10 @@ class AgentBridge:
             repo_manifest_path=self.repo_manifest_path,
         )
 
-        # The agent behind the seam. Injected in tests; built from the
-        # registry in production. In early-connect mode nothing is built
-        # until the supervisor reports the harness phase complete: the
-        # Claude harness reads a handoff the supervisor writes during boot,
-        # and OpenCode's session probe needs the server up.
+        # BootAttach decides when this factory can safely read handoffs and
+        # probe the vendor server. Transport can start without either.
         self._harness_id = harness_id
-        self._harness_factory: Callable[[], AgentHarness] = (
+        build_harness: Callable[[], AgentHarness] = (
             harness_factory
             if harness_factory is not None
             else lambda: build_agent_harness(
@@ -212,31 +205,6 @@ class AgentBridge:
                 opencode_port=opencode_port,
             )
         )
-        self.harness: AgentHarness | None
-        if early_connect:
-            self.harness = None
-        else:
-            self.harness = harness if harness is not None else self._harness_factory()
-        # Set once the harness is attached and `ready` has been sent; prompts
-        # received before then wait on it. `ready` is the readiness signal;
-        # heartbeats are liveness-only, with status retained for compatibility
-        # with control planes whose event schema still requires it. A classic
-        # bridge is attached from construction: it only starts after boot, and
-        # opens its harness before its first connect.
-        self._boot_ready = asyncio.Event()
-        if not early_connect:
-            self._boot_ready.set()
-        self.boot_relay = BootEventRelay(Path(BOOT_EVENTS_FILE_PATH), self.log)
-        self._boot_relay_task: asyncio.Task[None] | None = None
-        # Boot-event lines read but not yet delivered over an open socket.
-        # Retried at the head of the next pass, and they hold the relay
-        # cursor where it is until they land.
-        self._held_boot_lines: list[dict[str, Any]] = []
-        # A harness attach that ended the run; re-raised from run() so the
-        # process exits the way a pre-connect open failure always has.
-        self._attach_failure: BaseException | None = None
-        self._attach_outcome: str | None = None
-
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
         self.diff_refresh = SessionDiffRefreshWorker(
@@ -252,11 +220,29 @@ class AgentBridge:
         # Reconnect-safe event delivery: buffers while the WS is down and
         # re-sends unacknowledged critical events (see event_forwarder.py).
         self.event_forwarder = BufferedEventForwarder(sandbox_id=sandbox_id, log=self.log)
+        self.boot_attach = BootAttach(
+            early_connect=early_connect,
+            harness=harness,
+            harness_factory=build_harness,
+            git_signing=self.git_signing,
+            event_forwarder=self.event_forwarder,
+            shutdown_event=self.shutdown_event,
+            log=self.log,
+            load_session_id=lambda harness: self._load_session_id(harness),
+            build_ready_event=self._build_ready_event,
+            send_event=lambda event: self._send_event(event),
+            end_run=self._end_run,
+            record_fatal_error=self._record_fatal_error,
+        )
 
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
         self._reconnect_attempt_count = 0
         self._total_connected_duration_seconds = 0.0
+
+    @property
+    def harness(self) -> AgentHarness | None:
+        return self.boot_attach.harness
 
     @property
     def agent_session_id(self) -> str | None:
@@ -306,31 +292,23 @@ class AgentBridge:
         exits gracefully for terminal errors like HTTP 410 (session terminated).
         """
         self.log.info(
-            "bridge.run_start", harness=self._harness_id.value, early_connect=self.early_connect
+            "bridge.run_start",
+            harness=self._harness_id.value,
+            early_connect=self.boot_attach.early_connect,
         )
         reconnect_attempts = 0
         run_outcome = "harness_start_failed"
-        signing_initialized = False
 
         # One lifecycle: whatever the harness acquires in open() is released
         # in the finally below, whether startup, session loading or the run
         # loop is what ends the bridge.
         try:
-            if self.early_connect:
-                # The relay attaches the harness when the supervisor reports
-                # it up; until then the loop below is transport only.
-                self._boot_relay_task = asyncio.create_task(self._relay_boot_events())
-            else:
-                await self._open_harness(self._require_harness())
-                await self._load_session_id()
-                self._boot_relay_task = asyncio.create_task(self._relay_boot_events())
+            await self.boot_attach.start()
             run_outcome = "shutdown"
             while not self.shutdown_event.is_set():
                 run_outcome = "shutdown"
                 try:
-                    if not self.early_connect and not signing_initialized:
-                        await self.git_signing.initialize(None)
-                        signing_initialized = True
+                    await self.boot_attach.before_connect()
                     await self._connect_and_run()
                     if not self.shutdown_event.is_set():
                         run_outcome = "connection_closed"
@@ -367,7 +345,7 @@ class AgentBridge:
                 self._reconnect_attempt_count += 1
                 delay = min(
                     self.RECONNECT_BACKOFF_BASE**reconnect_attempts,
-                    self.RECONNECT_MAX_DELAY,
+                    self.RECONNECT_MAX_DELAY_SECONDS,
                 )
                 self.log.info(
                     "bridge.reconnect",
@@ -378,16 +356,13 @@ class AgentBridge:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self.shutdown_event.wait(), timeout=delay)
 
-            if self._attach_outcome is not None:
-                run_outcome = self._attach_outcome
-            if self._attach_failure is not None:
-                raise self._attach_failure
+            if self.boot_attach.outcome is not None:
+                run_outcome = self.boot_attach.outcome
+            if self.boot_attach.failure is not None:
+                raise self.boot_attach.failure
 
         finally:
-            if self._boot_relay_task is not None and not self._boot_relay_task.done():
-                self._boot_relay_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await self._boot_relay_task
+            await self.boot_attach.stop()
             # Cancel any in-flight prompt task before closing resources
             if self._current_prompt_task and not self._current_prompt_task.done():
                 self._current_prompt_task.cancel()
@@ -515,18 +490,7 @@ class AgentBridge:
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
                     await self.event_forwarder.bind(ws)
-                    if self._boot_ready.is_set():
-                        # On every (re)connect: the control plane's ready
-                        # transition is idempotent, and a row that lost its
-                        # socket mid-boot learns readiness from this resend.
-                        await self._send_event(self._build_ready_event())
-                    elif self.early_connect:
-                        # Still booting: the latest phase (or `starting`), once,
-                        # never buffered — a replay of older phases would only
-                        # be stale, and the control plane de-duplicates on seq.
-                        await self.event_forwarder.send(
-                            self.boot_relay.latest_phase_event(), buffered=False
-                        )
+                    await self.boot_attach.on_connect()
 
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                     async for message in ws:
@@ -581,10 +545,12 @@ class AgentBridge:
             raise
 
     def _heartbeat_event(self) -> dict[str, Any]:
+        # `ready` is the readiness signal. Older control planes still require
+        # this ignored status field before they will record heartbeat liveness.
         return {
             "type": "heartbeat",
             "sandboxId": self.sandbox_id,
-            "status": "ready" if self._boot_ready.is_set() else "booting",
+            "status": "booting" if self.boot_attach.booting else "ready",
             "timestamp": time.time(),
         }
 
@@ -596,149 +562,19 @@ class AgentBridge:
             if self.ws and self.ws.state == State.OPEN:
                 await self._send_event(self._heartbeat_event())
 
-    async def _relay_boot_events(self) -> None:
-        """Tail the supervisor's boot-events file until the harness phase completes.
-
-        Each warning line is forwarded as a `warning` event, over an open
-        socket or not at all: an undelivered one is held for the next pass.
-        In early-connect mode each phase line is forwarded as `boot_progress`,
-        unbuffered, and the `harness completed` line triggers the harness
-        attach; in classic mode the bridge only starts after boot, so phases
-        are already history and only warnings are relayed.
-        """
-        try:
-            while not self.shutdown_event.is_set():
-                await self._relay_boot_events_once()
-                if self.boot_relay.harness_completed:
-                    await self._buffer_held_boot_events()
-                    return
-                await asyncio.sleep(self.BOOT_EVENTS_POLL_SECONDS)
-        except asyncio.CancelledError:
-            raise
-        except HarnessStartError as error:
-            self._attach_failure = error
-            await self._end_run("harness_start_failed")
-        except GitSigningError as error:
-            if self.shutdown_event.is_set():
-                await self._end_run("shutdown")
-                return
-            self.log.error("bridge.signing_init_failed", exc=error)
-            self._record_fatal_error(str(error))
-            self._attach_failure = error
-            await self._end_run("fatal_error")
-        except Exception as error:
-            self.log.error("bridge.harness_attach_failed", exc=error)
-            self._attach_failure = error
-            await self._end_run("harness_attach_failed")
-
-    async def _end_run(self, outcome: str) -> None:
+    async def _end_run(self) -> None:
         """End the run loop from outside it.
 
         The receive loop only re-checks ``shutdown_event`` when a message
         arrives, and a quiet control plane sends none, so the open socket is
-        closed as well: the loop then ends and ``run()`` exits with this
-        outcome, re-raising the recorded attach failure if there is one.
+        closed as well. The coordinator retains the outcome and any attach
+        failure for ``run()`` to report.
         """
-        self._attach_outcome = outcome
         self.shutdown_event.set()
         ws = self.ws
         if ws is not None:
             with contextlib.suppress(Exception):
                 await ws.close()
-
-    async def _relay_boot_events_once(self) -> None:
-        """One pass over new boot-events lines (see ``_relay_boot_events``).
-
-        Lines held by an earlier pass are retried first, so the file is the
-        queue of what this boot still owes the control plane and no warning
-        waits on a buffer the cursor cannot see. A warning goes out over an
-        open socket or is held again; a line the wire has no shape for, and a
-        phase, are done with either way — a phase is never replayed from the
-        file, a reconnect resends the latest one instead.
-
-        The cursor advances only while nothing is held, so it never passes a
-        warning this bridge has not delivered and its successor picks that
-        warning up. Delivery is therefore at least once: a line sent just
-        before the process dies is relayed again by the next bridge.
-        """
-        lines = self._held_boot_lines + self.boot_relay.read_new_lines()
-        self._held_boot_lines = []
-        relayed_through: int | None = None
-        for line in lines:
-            event = BootEventRelay.to_event(line)
-            if event is not None:
-                if event["type"] == "warning":
-                    if not await self.event_forwarder.send(event, buffered=False):
-                        self._held_boot_lines.append(line)
-                elif self.early_connect and not self._boot_ready.is_set():
-                    await self.event_forwarder.send(event, buffered=False)
-            if not self._held_boot_lines:
-                relayed_through = line["seq"]
-        if relayed_through is not None:
-            self.boot_relay.mark_relayed(relayed_through)
-        if self.early_connect and self.boot_relay.harness_completed and self.harness is None:
-            await self._attach_harness()
-
-    async def _buffer_held_boot_events(self) -> None:
-        """Hand still-undelivered boot events to the event buffer at the end of boot.
-
-        The relay stops polling once the harness attaches, so nothing would
-        retry them; the buffer outlives it and flushes on the next connect.
-        The cursor stays behind them, as it does for any undelivered line.
-        """
-        held, self._held_boot_lines = self._held_boot_lines, []
-        for line in held:
-            event = BootEventRelay.to_event(line)
-            if event is not None:
-                await self._send_event(event)
-
-    async def _attach_harness(self) -> None:
-        """Build, open and resume the harness, then report `ready`.
-
-        Exactly the classic pre-connect sequence, run once the supervisor has
-        the vendor up and the repositories on disk: the session probe needs
-        OpenCode listening (probing earlier reads as "session gone" and the
-        first prompt would start a fresh conversation), and signing needs
-        the checkouts.
-        """
-        harness = self._harness_factory()
-        await self._open_harness(harness)
-        try:
-            await self._load_session_id(harness)
-            await self._initialize_signing_for_attach()
-        except BaseException:
-            # Whatever open() acquired is released here; the harness never
-            # became the bridge's, so run()'s cleanup will not see it.
-            with contextlib.suppress(Exception):
-                await harness.close()
-            raise
-        self.harness = harness
-        await self._send_event(self._build_ready_event())
-        self._boot_ready.set()
-        self.log.info("bridge.harness_attached", harness=harness.id.value)
-
-    async def _open_harness(self, harness: AgentHarness) -> None:
-        try:
-            await harness.open()
-        except HarnessStartError as error:
-            self._record_fatal_error(str(error))
-            self.log.error("bridge.harness_open_failed", exc=error, harness=harness.id.value)
-            raise
-
-    async def _initialize_signing_for_attach(self) -> None:
-        """Signing initialization with the connect loop's retry policy."""
-        attempt = 0
-        while True:
-            try:
-                await self.git_signing.initialize(None)
-                return
-            except GitSigningError as error:
-                if not error.retryable:
-                    raise
-                attempt += 1
-                delay = min(self.RECONNECT_BACKOFF_BASE**attempt, self.RECONNECT_MAX_DELAY)
-                self.log.warn("bridge.signing_init_retry", attempt=attempt, delay_s=delay)
-                await asyncio.sleep(delay)
 
     async def _send_media_warning(self, message: str) -> None:
         """Surface non-fatal media handling failures to the user timeline."""
@@ -761,7 +597,8 @@ class AgentBridge:
         """
         cmd_type = cmd.get("type")
         self.log.debug("bridge.command_received", cmd_type=cmd_type)
-        booting = not self._boot_ready.is_set()
+        if await self.boot_attach.handle_command(cmd):
+            return None
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
@@ -808,27 +645,15 @@ class AgentBridge:
         elif cmd_type == "stop":
             await self._handle_stop()
         elif cmd_type == "snapshot":
-            if booting:
-                # A half-booted filesystem is not a snapshot; and the reply
-                # shape has no failure form, so the command is dropped rather
-                # than answered with something the control plane would trust.
-                self.log.warn("bridge.command_refused_while_booting", cmd_type=cmd_type)
-            else:
-                await self._handle_snapshot()
+            await self._handle_snapshot()
         elif cmd_type == "shutdown":
             await self._handle_shutdown()
         elif cmd_type == "git_sync_complete":
             self.git_sync_complete.set()
         elif cmd_type == "push":
-            if booting:
-                await self._refuse_push_while_booting(cmd)
-            else:
-                await self._handle_push(cmd)
+            await self._handle_push(cmd)
         elif cmd_type == "refresh_diff":
-            if booting:
-                self.log.warn("bridge.command_refused_while_booting", cmd_type=cmd_type)
-            else:
-                self.diff_refresh.request(None)
+            self.diff_refresh.request(None)
         elif cmd_type == "ack":
             ack_id = cmd.get("ackId")
             if ack_id and self.event_forwarder.acknowledge(ack_id):
@@ -978,13 +803,7 @@ class AgentBridge:
         """
         try:
             async with asyncio.timeout_at(deadline):
-                if not self._boot_ready.is_set():
-                    self.log.info(
-                        "prompt.held_until_ready",
-                        message_id=message_id,
-                        timeout_s=max(deadline - asyncio.get_running_loop().time(), 0.0),
-                    )
-                    await self._boot_ready.wait()
+                await self.boot_attach.wait_until_ready(message_id, deadline)
                 harness = self._require_harness()
                 await self._configure_git_identity(parse_prompt_git_author(author_data))
                 await self._ensure_agent_session(harness)
@@ -1003,7 +822,7 @@ class AgentBridge:
                 attachments = await self.attachment_processor.process(session_attachments)
         except TimeoutError:
             budget = int(self.prompt_limits.prompt_max_duration_seconds)
-            if not self._boot_ready.is_set():
+            if self.boot_attach.booting:
                 raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
             raise RuntimeError(f"prompt could not start within {budget} s") from None
         return harness, attachments
@@ -1041,28 +860,7 @@ class AgentBridge:
         self.log.info("bridge.shutdown_requested")
         if self._current_prompt_task and not self._current_prompt_task.done():
             self._current_prompt_task.cancel()
-        await self._end_run("shutdown")
-
-    async def _refuse_push_while_booting(self, cmd: dict[str, Any]) -> None:
-        """Answer a push that arrived before the repositories exist.
-
-        A reply keeps the control plane's pending push from waiting out its
-        timeout; the spec is parsed only for the correlation fields.
-        """
-        try:
-            request: PushRequest | None = PushRequest.from_push_spec(cmd.get("pushSpec"))
-        except PushRejected as rejected:
-            request = rejected.request
-        self.log.warn("bridge.command_refused_while_booting", cmd_type="push")
-        await self._send_event(
-            {
-                "type": "push_error",
-                "error": "Push failed - the sandbox is still booting",
-                "branchName": request.branch_name if request is not None else "",
-                **(request.repo_fields() if request is not None else {}),
-                "timestamp": time.time(),
-            }
-        )
+        await self.boot_attach.end_run("shutdown")
 
     async def _handle_push(self, cmd: dict[str, Any]) -> None:
         """Execute locally, then emit exactly one timestamped result event."""

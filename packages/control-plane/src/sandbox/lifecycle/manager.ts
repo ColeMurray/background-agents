@@ -11,14 +11,16 @@
  */
 
 import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  unsupportedSandboxSettings,
+  type McpServerConfig,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import {
-  sandboxBootPhaseSchema,
-  type SandboxBootPhase,
-} from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import {
   sessionHasRepository,
   type SandboxAccessKind,
@@ -42,6 +44,7 @@ import {
   evaluateBootBudget,
   evaluateWarmDecision,
   isDeadSandboxStatus,
+  shouldStopSandboxOnSessionCancel,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -60,6 +63,7 @@ import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import { parsePersistedSandboxSettings } from "../settings";
+import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import {
   evaluateImageBuildForSpawn,
   type ImageBuildLookup,
@@ -67,6 +71,15 @@ import {
 } from "./image-selection";
 import type { AlarmScheduler, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
+import type {
+  SandboxGeneration,
+  SandboxReadiness,
+  SandboxCancellation,
+  SandboxAttachment,
+  SandboxAlarm,
+  SandboxAlarmResult,
+} from "./ports";
+export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
@@ -78,18 +91,6 @@ const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 
 // ==================== Dependency Interfaces ====================
-
-/**
- * One occupancy of the sandbox row: the logical sandbox id plus the
- * `created_at` its reservation or resume stamped. Every write an attempt
- * makes after its first await names the generation it was started for, so a
- * completion that outlives its attempt cannot land on a later one, even one
- * that reached the same status.
- */
-export interface SandboxGeneration {
-  sandboxId: string | null;
-  createdAt: number;
-}
 
 /**
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
@@ -136,6 +137,8 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
+  /** Atomically accept readiness only for the current, eligible, unfenced attempt. */
+  markSandboxReady(generation: SandboxGeneration): boolean;
   /**
    * Revoke the current generation's credentials and socket authority for
    * good, so the runtime cannot reconnect and the row cannot become ready.
@@ -293,16 +296,7 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
  * Names the script where there is one, since that is what the operator will
  * go and look at.
  */
-function describeBootPhase(bootPhaseJson: string | null): string {
-  let phase: SandboxBootPhase | null = null;
-  if (bootPhaseJson) {
-    try {
-      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(bootPhaseJson));
-      phase = parsed.success ? parsed.data : null;
-    } catch {
-      phase = null;
-    }
-  }
+function describeBootPhase(phase: SandboxBootPhase | null): string {
   if (!phase) return "booting";
   const repo = phase.repoOwner && phase.repoName ? ` for ${phase.repoOwner}/${phase.repoName}` : "";
   switch (phase.phase) {
@@ -392,17 +386,6 @@ export type UnresponsiveSandboxTrigger =
   | "stop_confirmation_timeout";
 
 /**
- * What the lifecycle alarm did. `boot_budget_exceeded` carries the failure
- * text because the alarm handler must fail the prompt the boot was for with
- * the same words the user sees.
- */
-export type SandboxAlarmResult =
-  | "no_action"
-  | "sandbox_failed"
-  | "sandbox_terminated"
-  | { kind: "boot_budget_exceeded"; reason: string };
-
-/**
  * Manages sandbox lifecycle operations.
  *
  * Uses dependency injection for all external interactions, enabling unit testing
@@ -421,7 +404,14 @@ class SpawnSupersededError extends Error {
   }
 }
 
-export class SandboxLifecycleManager implements SandboxLifecycle {
+export class SandboxLifecycleManager
+  implements
+    SandboxLifecycle,
+    SandboxReadiness,
+    SandboxCancellation,
+    SandboxAttachment,
+    SandboxAlarm
+{
   /**
    * In-memory flag to prevent concurrent spawn attempts within the same request.
    * This is NOT persisted - it protects against multiple spawns in one DO method call.
@@ -1729,14 +1719,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     now: number
   ): Promise<SandboxAlarmResult> {
     const budgetMinutes = Math.round(this.config.bootBudget.timeoutMs / 60_000);
+    const bootPhase = parseStoredSandboxBootPhase(sandbox.boot_phase);
     const reason =
-      `Sandbox boot exceeded ${budgetMinutes} minutes while ${describeBootPhase(sandbox.boot_phase)}. ` +
+      `Sandbox boot exceeded ${budgetMinutes} minutes while ${describeBootPhase(bootPhase)}. ` +
       "Raise SANDBOX_BOOT_TIMEOUT_MS if the boot legitimately needs longer, or make it return sooner.";
     this.log.warn("Boot budget exceeded", {
       event: "sandbox.boot_budget",
+      ...sandboxBootPhaseLogFields(bootPhase),
       elapsed_ms: elapsedMs,
       timeout_ms: this.config.bootBudget.timeoutMs,
-      boot_phase: sandbox.boot_phase,
     });
     this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.fenceSandboxGeneration();
@@ -1864,8 +1855,31 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /**
-   * Update last activity timestamp.
+   * Called synchronously for an already-authorized runtime event. Publication
+   * and activity follow the guarded commit; the event handler wakes the queue
+   * and arms inactivity afterward, preserving their existing ordering.
    */
+  onRuntimeReady(timestamp: number, harness?: string): boolean {
+    const row = this.storage.getSandbox();
+    if (!row) return false;
+    const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
+    if (!this.storage.markSandboxReady(generation)) return false;
+    this.log.info("sandbox.ready", { event: "sandbox.ready", harness: harness ?? null });
+    this.updateLastActivity(timestamp);
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
+    return true;
+  }
+
+  /** Session cancellation preserves its existing shutdown-before-status policy. */
+  cancelSandbox(): void {
+    if (!shouldStopSandboxOnSessionCancel(this.storage.getSandbox()?.status)) return;
+    if (this.wsManager.getSandboxWebSocket()) {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+    }
+    this.storage.updateSandboxStatus("stopped");
+  }
+
+  /** Update last activity timestamp. */
   updateLastActivity(timestamp: number): void {
     this.storage.updateSandboxLastActivity(timestamp);
   }
@@ -1937,7 +1951,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
     try {
-      return parsePersistedSandboxSettings(session.sandbox_settings);
+      const settings = parsePersistedSandboxSettings(session.sandbox_settings);
+      const unsupported = unsupportedSandboxSettings(settings, this.provider.name);
+      if (unsupported.length > 0) {
+        this.log.warn("Ignoring persisted sandbox settings unsupported by the provider", {
+          event: "sandbox.settings_unsupported",
+          provider: this.provider.name,
+          settings: unsupported,
+        });
+      }
+      return omitUnsupportedSandboxSettings(settings, this.provider.name);
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};

@@ -32,7 +32,9 @@ import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
+// The composition root binds lifecycle ports to their implementation.
 import {
+  // eslint-disable-next-line no-restricted-imports
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
   type SandboxStorage,
@@ -56,6 +58,8 @@ import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionPlatform } from "./platform";
 import { SessionCoreRepository } from "./session-core-repository";
+// The composition root grants each consumer only its declared sandbox port.
+// eslint-disable-next-line no-restricted-imports
 import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
@@ -452,7 +456,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     backgroundTasks,
     log,
     sessionCoreRepository,
-    sandboxRepository,
     messageRepository,
     participantRepository,
     attachmentRepository,
@@ -551,7 +554,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => lifecycleManager.scheduleInactivityCheck(),
     backgroundTasks,
     messageQueue,
-    log
+    log,
+    lifecycleManager
   );
   const pushService = new SandboxPushService(log, wsManager);
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
@@ -671,7 +675,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const wsTokenHandler = new WsTokenHandler(participantRepository, generateId, hashToken);
 
-  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
   const sessionInitHandler = new SessionInitHandler(
     sessionCoreRepository,
     sandboxRepository,
@@ -690,7 +693,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageRepository,
     statusService,
     titleService,
-    lifecycleWsManager,
+    lifecycleManager,
     durableObjectId,
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());

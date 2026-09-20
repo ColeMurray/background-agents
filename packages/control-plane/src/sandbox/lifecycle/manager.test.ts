@@ -181,6 +181,7 @@ function createMockStorage(
       calls.push(`updateSandboxStatus:${status}`);
       if (sandbox) sandbox.status = status;
     }),
+    markSandboxReady: vi.fn(() => true),
     transitionSandboxStatus: vi.fn(
       (generation: SandboxGeneration, from: SandboxStatus, to: SandboxStatus) => {
         calls.push(`transitionSandboxStatus:${from}->${to}`);
@@ -530,6 +531,109 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
 }
 
 // ==================== Tests ====================
+
+describe("lifecycle-owned runtime readiness and cancellation", () => {
+  function harness(status: SandboxStatus | null, attached = true) {
+    const row = status === null ? null : createMockSandbox({ status });
+    const storage = createMockStorage(createMockSession(), row);
+    const broadcaster = createMockBroadcaster();
+    const ws = createMockWebSocketManager(attached);
+    const provider = createMockProvider({ stopSandbox: vi.fn(async () => ({ success: true })) });
+    const alarms = createMockAlarmScheduler();
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      broadcaster,
+      ws,
+      alarms,
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+    return { manager, row, storage, broadcaster, ws, provider, alarms };
+  }
+
+  it.each([
+    "pending",
+    "spawning",
+    "connecting",
+    "warming",
+    "ready",
+    "snapshotting",
+    "stale",
+  ] as const)(
+    "preserves cancellation of %s without introducing provider retirement or fencing",
+    (status) => {
+      const h = harness(status);
+      h.manager.cancelSandbox();
+      expect(h.ws.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+      expect(h.storage.updateSandboxStatus).toHaveBeenCalledWith("stopped");
+      expect(vi.mocked(h.ws.sendToSandbox).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(h.storage.updateSandboxStatus).mock.invocationCallOrder[0]
+      );
+      expect(h.provider.stopSandbox).not.toHaveBeenCalled();
+      expect(h.storage.fenceSandboxGeneration).not.toHaveBeenCalled();
+      expect(h.ws.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(h.broadcaster.messages).toEqual([]);
+    }
+  );
+
+  it.each(["stopped", "failed", null] as const)("leaves %s unchanged on cancel", (status) => {
+    const h = harness(status);
+    h.manager.cancelSandbox();
+    expect(h.ws.getSandboxWebSocket).not.toHaveBeenCalled();
+    expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(["ready", "stale"] as const)(
+    "cancels a %s row without an attached dispatch socket",
+    (status) => {
+      const h = harness(status, false);
+      h.manager.cancelSandbox();
+      expect(h.ws.sendToSandbox).not.toHaveBeenCalled();
+      expect(h.storage.updateSandboxStatus).toHaveBeenCalledWith("stopped");
+    }
+  );
+
+  it("still records stopped when the existing local shutdown send fails", () => {
+    const h = harness("ready");
+    vi.mocked(h.ws.sendToSandbox).mockReturnValue(false);
+    h.manager.cancelSandbox();
+    expect(h.row?.status).toBe("stopped");
+  });
+
+  it("commits readiness and activity before publishing; leaves queue/scheduling to the caller", () => {
+    const h = harness("connecting");
+    expect(h.manager.onRuntimeReady(1234, "opencode")).toBe(true);
+    expect(h.storage.markSandboxReady).toHaveBeenCalledWith({
+      sandboxId: h.row?.modal_sandbox_id,
+      createdAt: h.row?.created_at,
+    });
+    expect(h.storage.updateSandboxLastActivity).toHaveBeenCalledWith(1234);
+    expect(vi.mocked(h.storage.markSandboxReady).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(h.storage.updateSandboxLastActivity).mock.invocationCallOrder[0]
+    );
+    expect(vi.mocked(h.storage.updateSandboxLastActivity).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(h.broadcaster.broadcast).mock.invocationCallOrder[0]
+    );
+    expect(h.broadcaster.messages).toEqual([{ type: "sandbox_status", status: "ready" }]);
+    expect(h.alarms.alarms).toEqual([]);
+  });
+
+  it("does not publish or update activity when the readiness CAS rejects the attempt", () => {
+    const h = harness("connecting");
+    vi.mocked(h.storage.markSandboxReady).mockReturnValue(false);
+    expect(h.manager.onRuntimeReady(1234)).toBe(false);
+    expect(h.storage.updateSandboxLastActivity).not.toHaveBeenCalled();
+    expect(h.broadcaster.messages).toEqual([]);
+  });
+
+  it("ignores readiness without a current row", () => {
+    const h = harness(null);
+    expect(h.manager.onRuntimeReady(1234)).toBe(false);
+    expect(h.storage.markSandboxReady).not.toHaveBeenCalled();
+  });
+});
 
 describe("SandboxLifecycleManager", () => {
   describe("spawnSandbox", () => {
@@ -4399,6 +4503,39 @@ describe("SandboxLifecycleManager", () => {
         type: "sandbox_error",
         error: "mock does not support configurable sandbox timeouts",
       });
+    });
+
+    it("ignores legacy resource and timeout settings for Daytona", async () => {
+      const session = createMockSession({
+        spawn_source: "agent",
+        sandbox_settings:
+          '{"cpuCores":2,"memoryMib":4096,"sandboxTimeoutMs":14400000,"terminalEnabled":true}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = {
+        ...createMockProvider({ capabilities: { supportsSandboxTimeout: false } }),
+        name: "daytona",
+      };
+      const mockStorage = createMockStorage(session, sandbox);
+      const manager = new SandboxLifecycleManager(
+        provider,
+        mockStorage,
+        mockStorage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutSeconds: undefined,
+          sandboxSettings: { terminalEnabled: true },
+        })
+      );
     });
 
     it("uses the provider default for child sessions on unsupported providers", async () => {

@@ -14,7 +14,7 @@ import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } fro
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
@@ -198,22 +198,14 @@ function buildQueue() {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };
 
-  const bootPhase = {
-    phase: "setup",
-    status: "started",
-    repoOwner: "acme",
-    repoName: "repo",
-  } as const;
-  const sandboxRepository = {
-    getSandbox: vi.fn(() => null),
-    readBootPhase: vi.fn(() => bootPhase),
-  };
-
   const wsManager = {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
     // Mirrors the attached socket unless a test withholds it, the way the
     // registry does while a bridge is attached ahead of its boot.
-    getReadySandboxSocket: vi.fn((): WebSocket | null => wsManager.getSandboxSocket()),
+    getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => {
+      const socket = wsManager.getSandboxSocket();
+      return socket ? { kind: "dispatch", socket } : { kind: "unavailable" };
+    }),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
 
@@ -290,7 +282,6 @@ function buildQueue() {
     backgroundTasks,
     log,
     repository as unknown as SessionCoreRepository,
-    sandboxRepository,
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
@@ -313,7 +304,6 @@ function buildQueue() {
     queue,
     executionStop,
     repository,
-    sandboxRepository,
     attachmentRepository,
     wsManager,
     participantService,
@@ -693,26 +683,34 @@ describe("SessionMessageQueue", () => {
   it("defers, without spawning, while the bridge is attached but the sandbox is still booting", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-boot" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
-    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({
+      kind: "booting",
+      phase: {
+        phase: "setup",
+        status: "started",
+        bootSeq: 3,
+        repoOwner: "acme",
+        repoName: "repo",
+        detail: "not logged",
+      },
+    });
 
     await h.queue.processMessageQueue();
     await h.backgroundTasks.settle();
 
-    expect(h.log.info).toHaveBeenCalledWith(
-      "prompt.dispatch",
-      expect.objectContaining({
-        message_id: "msg-boot",
-        outcome: "deferred",
-        reason: "sandbox_booting",
-        boot_phase: {
-          phase: "setup",
-          status: "started",
-          repoOwner: "acme",
-          repoName: "repo",
-        },
-      })
-    );
+    expect(h.log.info).toHaveBeenCalledWith("prompt.dispatch", {
+      event: "prompt.dispatch",
+      message_id: "msg-boot",
+      outcome: "deferred",
+      reason: "sandbox_booting",
+      boot_seq: 3,
+      phase: "setup",
+      phase_status: "started",
+      repo_owner: "acme",
+      repo_name: "repo",
+      elapsed_ms: null,
+      warning: false,
+    });
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();

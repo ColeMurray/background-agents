@@ -43,7 +43,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
-import type { SandboxRepository } from "./sandbox-repository";
+import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -147,7 +147,6 @@ export class SessionMessageQueue {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
-    private readonly sandboxRepository: Pick<SandboxRepository, "getSandbox" | "readBootPhase">,
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
@@ -415,8 +414,8 @@ export class SessionMessageQueue {
       }
       return;
     }
-    const sandboxWs = this.wsManager.getReadySandboxSocket();
-    if (!sandboxWs && this.wsManager.getSandboxSocket()) {
+    const target = this.wsManager.getSandboxCommandTarget();
+    if (target.kind === "booting") {
       // A bridge is attached ahead of its boot. Nothing to spawn and nothing
       // to send: the runtime's `ready` event pumps this queue when the
       // harness is up, and the lifecycle alarms decide if the boot died.
@@ -425,11 +424,11 @@ export class SessionMessageQueue {
         message_id: message.id,
         outcome: "deferred",
         reason: "sandbox_booting",
-        boot_phase: this.sandboxRepository.readBootPhase(this.sandboxRepository.getSandbox()),
+        ...sandboxBootPhaseLogFields(target.phase),
       });
       return;
     }
-    if (!sandboxWs) {
+    if (target.kind === "unavailable") {
       // The provider-auth lookup above is a non-storage await. The socket
       // path re-validates through the processing claim; this path has no
       // claim, so it re-reads what it acts on: a cancel or archive that
@@ -480,6 +479,7 @@ export class SessionMessageQueue {
       return;
     }
 
+    const sandboxWs = target.socket;
     const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
       throw new Error(`Missing prompt author ${message.author_id}`);
