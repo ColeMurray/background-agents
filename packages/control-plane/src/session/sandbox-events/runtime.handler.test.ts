@@ -6,16 +6,15 @@ import { SandboxRuntimeEventHandler } from "./runtime.handler";
 import type { SandboxEventContext } from "./context";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
-import type { SandboxRepository } from "../sandbox-repository";
 import type { SessionCoreRepository } from "../session-core-repository";
+import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
 
 function createHandler() {
   const sandboxRepository = {
-    getSandbox: vi.fn(() => ({ modal_sandbox_id: "sb-1", created_at: 4000 })),
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
-    markSandboxReady: vi.fn(() => true),
     recordBootProgress: vi.fn(() => true),
+    updateSandboxGitSyncStatus: vi.fn(),
   };
   const repository = { getSession: vi.fn(() => ({ harness: "opencode" })) };
   const eventRepository = { createEvent: vi.fn() };
@@ -28,9 +27,10 @@ function createHandler() {
   const backgroundTasks = createTestBackgroundTasks();
   const processMessageQueue = vi.fn(async () => {});
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() };
+  const lifecycle = { onRuntimeReady: vi.fn<SandboxReadiness["onRuntimeReady"]>(() => true) };
   const handler = new SandboxRuntimeEventHandler(
     repository as unknown as SessionCoreRepository,
-    sandboxRepository as unknown as SandboxRepository,
+    sandboxRepository,
     eventRepository as unknown as EventRepository,
     messenger,
     diffService as unknown as SessionDiffService,
@@ -40,10 +40,12 @@ function createHandler() {
     scheduleInactivityCheck,
     backgroundTasks,
     { processMessageQueue },
-    log
+    log,
+    lifecycle
   );
   return {
     handler,
+    lifecycle,
     sandboxRepository,
     eventRepository,
     broadcast,
@@ -67,62 +69,15 @@ const readyEvent: Extract<SandboxEvent, { type: "ready" }> = {
 };
 
 describe("SandboxRuntimeEventHandler.handleReady", () => {
-  it("flips a booting sandbox to ready, stamps activity, arms inactivity, broadcasts and pumps the queue", async () => {
-    const h = createHandler();
-
-    await h.handler.handleReady(readyEvent, context);
-
-    expect(h.sandboxRepository.markSandboxReady).toHaveBeenCalledWith({
-      sandboxId: "sb-1",
-      createdAt: 4000,
-    });
-    expect(h.updateLastActivity).toHaveBeenCalledWith(5000);
-    expect(h.scheduleInactivityCheck).toHaveBeenCalledOnce();
-    expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual([
-      "sandbox_event",
-      "sandbox_status",
-    ]);
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_status", status: "ready" });
-    expect(h.backgroundTasks.submissions.map((submission) => submission.name)).toEqual([
-      "message_queue.process",
-    ]);
-    expect(h.processMessageQueue).toHaveBeenCalledOnce();
-    // Unchanged duties of the ready event.
-    expect(h.diffService.pinBaselines).toHaveBeenCalledWith(readyEvent);
-    expect(h.sandboxRepository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(
-      "v68-early-bridge-connect"
-    );
-    expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "ready" })
-    );
-  });
-
-  it("is transition-only: a repeat ready from an already-ready, stopped, stale, fenced or replaced row changes nothing", async () => {
-    const h = createHandler();
-    h.sandboxRepository.markSandboxReady.mockReturnValue(false);
-
-    await h.handler.handleReady(readyEvent, context);
-
-    expect(h.updateLastActivity).not.toHaveBeenCalled();
-    expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
-    expect(h.broadcast.mock.calls.map(([message]) => message.type)).toEqual(["sandbox_event"]);
-    expect(h.backgroundTasks.submissions).toEqual([]);
-    expect(h.processMessageQueue).not.toHaveBeenCalled();
-    // The timeline still records the event: it is a fact about the runtime.
-    expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
-  });
-
-  it("commits and publishes readiness before arming the inactivity check", async () => {
-    // The bridge does not resend ready unless it reconnects, so the durable
-    // transition and its publication cannot sit behind a fallible step.
+  it("records the runtime fact, delegates readiness, then wakes work and arms inactivity", async () => {
     const h = createHandler();
     const order: string[] = [];
-    h.sandboxRepository.markSandboxReady.mockImplementation(() => {
+    h.broadcast.mockImplementation(() => {
+      order.push("event");
+    });
+    h.lifecycle.onRuntimeReady.mockImplementation(() => {
       order.push("ready");
       return true;
-    });
-    h.broadcast.mockImplementation((message) => {
-      if (message.type === "sandbox_status") order.push("broadcast");
     });
     h.processMessageQueue.mockImplementation(async () => {
       order.push("pump");
@@ -133,34 +88,53 @@ describe("SandboxRuntimeEventHandler.handleReady", () => {
 
     await h.handler.handleReady(readyEvent, context);
 
-    expect(order).toEqual(["ready", "broadcast", "pump", "inactivity"]);
+    expect(h.lifecycle.onRuntimeReady).toHaveBeenCalledWith(5000, "opencode");
+    expect(order).toEqual(["event", "ready", "pump", "inactivity"]);
+    expect(h.updateLastActivity).not.toHaveBeenCalled();
+    expect(h.broadcast).toHaveBeenCalledExactlyOnceWith({
+      type: "sandbox_event",
+      event: readyEvent,
+    });
+    expect(h.diffService.pinBaselines).toHaveBeenCalledWith(readyEvent);
+    expect(h.sandboxRepository.recordReportedSandboxRuntimeVersion).toHaveBeenCalledWith(
+      "v68-early-bridge-connect"
+    );
+    expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "ready" })
+    );
   });
 
-  it("keeps the sandbox ready, published and pumping when the inactivity check cannot be armed", async () => {
-    // An alarm is always pending while a bridge is attached (the disconnect
-    // check armed at attach, re-armed by every alarm run), so a failed arm
-    // here costs nothing but the error it surfaces.
+  it("does not wake or schedule work when the lifecycle owner rejects readiness", async () => {
+    const h = createHandler();
+    h.lifecycle.onRuntimeReady.mockReturnValue(false);
+
+    await h.handler.handleReady(readyEvent, context);
+
+    expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
+    expect(h.broadcast).toHaveBeenCalledExactlyOnceWith({
+      type: "sandbox_event",
+      event: readyEvent,
+    });
+    expect(h.updateLastActivity).not.toHaveBeenCalled();
+    expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
+    expect(h.backgroundTasks.submissions).toEqual([]);
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+  });
+
+  it("delegates readiness and wakes work before a fallible inactivity schedule", async () => {
     const h = createHandler();
     h.scheduleInactivityCheck.mockRejectedValue(new Error("alarm unavailable"));
 
     await expect(h.handler.handleReady(readyEvent, context)).rejects.toThrow("alarm unavailable");
 
-    expect(h.sandboxRepository.markSandboxReady).toHaveBeenCalledOnce();
-    expect(h.updateLastActivity).toHaveBeenCalledWith(5000);
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_status", status: "ready" });
+    expect(h.lifecycle.onRuntimeReady).toHaveBeenCalledOnce();
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
-  });
-
-  it("records the event but moves nothing when there is no sandbox row to own it", async () => {
-    const h = createHandler();
-    h.sandboxRepository.getSandbox.mockReturnValue(null as never);
-
-    await h.handler.handleReady(readyEvent, context);
-
-    expect(h.eventRepository.createEvent).toHaveBeenCalledOnce();
-    expect(h.sandboxRepository.markSandboxReady).not.toHaveBeenCalled();
-    expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
-    expect(h.processMessageQueue).not.toHaveBeenCalled();
+    expect(h.lifecycle.onRuntimeReady.mock.invocationCallOrder[0]).toBeLessThan(
+      h.processMessageQueue.mock.invocationCallOrder[0]
+    );
+    expect(h.processMessageQueue.mock.invocationCallOrder[0]).toBeLessThan(
+      h.scheduleInactivityCheck.mock.invocationCallOrder[0]
+    );
   });
 });
 

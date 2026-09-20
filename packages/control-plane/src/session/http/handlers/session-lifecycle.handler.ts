@@ -1,11 +1,11 @@
-import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
+import type { SandboxCancellation } from "../../../sandbox/lifecycle/ports";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import {
   SESSION_ARCHIVE_HTTP_STATUS,
   type SessionArchiveOutcome,
 } from "@open-inspect/shared/types/session-archive";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxRepository } from "../../sandbox-repository";
+import type { SandboxStateReader } from "../../sandbox-ports";
 import type { MessageRepository } from "../../message-repository";
 import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
@@ -62,11 +62,11 @@ export class SessionLifecycleHandler {
   /** Create the session lifecycle HTTP handler with its persistence and lifecycle services. */
   constructor(
     private readonly sessionCoreRepository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxStateReader,
     private readonly messageRepository: MessageRepository,
     private readonly statusService: SessionStatusService,
     private readonly titleService: SessionTitleService,
-    private readonly sockets: WebSocketManager,
+    private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>
   ) {}
@@ -259,13 +259,7 @@ export class SessionLifecycleHandler {
 
     await this.cancelSession();
 
-    const sandbox = this.sandboxRepository.getSandbox();
-    if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {
-      if (this.sockets.getSandboxWebSocket()) {
-        this.sockets.sendToSandbox({ type: "shutdown" });
-      }
-      this.sandboxRepository.updateSandboxStatus("stopped");
-    }
+    this.sandboxLifecycle.cancelSandbox();
 
     return Response.json({ status: "cancelled" });
   }
