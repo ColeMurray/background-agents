@@ -713,6 +713,50 @@ describe("final preservation lifecycle integration", () => {
       expect(f.provider.createSandbox).not.toHaveBeenCalled();
     }
   );
+
+  it.each(["returned", "thrown"] as const)(
+    "does not report an ordinary snapshot restore failure as final preservation when %s",
+    async (failureKind) => {
+      const restoreFromSnapshot =
+        failureKind === "returned"
+          ? vi.fn(async () => ({ success: false, error: "ordinary restore failed" }))
+          : vi.fn(async () => {
+              throw new Error("ordinary restore failed");
+            });
+      const f = fixture(
+        createMockProvider({ restoreFromSnapshot }),
+        createMockSandbox({
+          status: "stopped",
+          snapshot_image_id: "ordinary-image",
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+        })
+      );
+
+      await f.manager.spawnSandbox();
+
+      expect(restoreFromSnapshot).toHaveBeenCalled();
+      expect(f.preservation.restoreFailed).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not report an ordinary retained resume failure as final preservation", async () => {
+    const resumeSandbox = vi.fn(async () => ({ success: false, error: "ordinary resume failed" }));
+    const f = fixture(
+      createMockProvider({
+        resumeSandbox,
+        capabilities: { supportsPersistentResume: true },
+      }),
+      createMockSandbox({
+        status: "stopped",
+        modal_object_id: "ordinary-retained-source",
+      })
+    );
+
+    await f.manager.spawnSandbox();
+
+    expect(resumeSandbox).toHaveBeenCalled();
+    expect(f.preservation.restoreFailed).not.toHaveBeenCalled();
+  });
 });
 
 describe("SandboxLifecycleManager", () => {

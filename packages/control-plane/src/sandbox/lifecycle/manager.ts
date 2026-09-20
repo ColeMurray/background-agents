@@ -1084,6 +1084,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     snapshotImageId: string,
     snapshotRuntimeVersion: string
   ): Promise<void> {
+    const restoringFinal = !!this.preservation?.recoveryReceipt();
     if (!this.provider.restoreFromSnapshot) {
       this.log.info("Provider does not support restore, falling back to fresh spawn");
       // Fall back to fresh spawn
@@ -1201,7 +1202,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           repo_name: session.repo_name,
         });
         this.failAttempt(generation, "spawning", result.error || "Failed to restore from snapshot");
-        this.preservation?.restoreFailed(result.error || "Failed to restore from snapshot");
+        if (restoringFinal)
+          this.preservation?.restoreFailed(result.error || "Failed to restore from snapshot");
       }
     } catch (error) {
       if (error instanceof SpawnSupersededError) {
@@ -1221,7 +1223,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         repo_name: session?.repo_name,
       });
       this.failAttempt(generation, "spawning", errorMessage);
-      this.preservation?.restoreFailed(errorMessage);
+      if (restoringFinal) this.preservation?.restoreFailed(errorMessage);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -1308,7 +1310,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.failAttempt(generation, "connecting", errorMessage);
-      this.preservation?.restoreFailed(errorMessage);
+      if (restoringFinal) this.preservation?.restoreFailed(errorMessage);
       this.log.error("Sandbox resume failed", {
         error: error instanceof Error ? error : String(error),
       });
