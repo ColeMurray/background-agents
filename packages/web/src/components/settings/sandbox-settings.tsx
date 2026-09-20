@@ -2,7 +2,6 @@
 
 import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
-import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
@@ -16,13 +15,17 @@ import {
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
-  sandboxSettingsSchema,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import { MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
 import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
+import {
+  parseSandboxEnvironmentSettingsResponse,
+  parseSandboxGlobalSettingsResponse,
+  parseSandboxRepoSettingsResponse,
+} from "./sandbox-settings-schema";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   getPublicSandboxProvider,
@@ -31,53 +34,6 @@ import {
 } from "@/lib/sandbox-provider";
 
 const GLOBAL_SCOPE = "__global__";
-
-export const sandboxGlobalSettingsResponseSchema = z.object({
-  integrationId: z.literal("sandbox"),
-  settings: z
-    .object({
-      defaults: sandboxSettingsSchema.optional(),
-      enabledRepos: z.array(z.string()).nullable().optional(),
-    })
-    .nullable(),
-});
-
-export type GlobalSettingsResponse = z.infer<typeof sandboxGlobalSettingsResponseSchema>;
-
-export const sandboxRepoSettingsResponseSchema = z.object({
-  integrationId: z.literal("sandbox"),
-  repo: z.string(),
-  settings: sandboxSettingsSchema.nullable(),
-});
-
-export type RepoSettingsResponse = z.infer<typeof sandboxRepoSettingsResponseSchema>;
-
-export const sandboxEnvironmentSettingsResponseSchema = z.object({
-  integrationId: z.literal("sandbox"),
-  environmentId: z.string(),
-  settings: sandboxSettingsSchema.nullable(),
-});
-
-export type EnvironmentSettingsResponse = z.infer<typeof sandboxEnvironmentSettingsResponseSchema>;
-
-export function parseSandboxGlobalSettingsResponse(
-  value: unknown
-): GlobalSettingsResponse | undefined {
-  const parsed = sandboxGlobalSettingsResponseSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
-}
-
-function parseSandboxRepoSettingsResponse(value: unknown): RepoSettingsResponse | undefined {
-  const parsed = sandboxRepoSettingsResponseSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
-}
-
-function parseSandboxEnvironmentSettingsResponse(
-  value: unknown
-): EnvironmentSettingsResponse | undefined {
-  const parsed = sandboxEnvironmentSettingsResponseSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
-}
 
 const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
 
