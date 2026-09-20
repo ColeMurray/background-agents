@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
+import {
+  DEFAULT_LIFECYCLE_CONFIG,
+  SandboxLifecycleManager,
+} from "../../src/sandbox/lifecycle/manager";
+import type { SandboxProvider } from "../../src/sandbox/provider";
+import { SandboxPreservation } from "../../src/session/sandbox-preservation";
+import { SandboxPreservationRepository } from "../../src/session/sandbox-preservation-repository";
 import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
@@ -9,7 +16,7 @@ import {
   seedMessage,
   seedSandboxAuth,
 } from "./helpers";
-import { runInSessionDO } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 
 const AUTH_TOKEN = "preservation-integration-token";
 const SANDBOX_ID = "preservation-sandbox";
@@ -58,6 +65,95 @@ async function readPreservation(stub: DurableObjectStub): Promise<Record<string,
 }
 
 describe("sandbox preservation wiring", () => {
+  it("snapshots an unmanaged destructive provider before inactivity destroys it", async () => {
+    const { stub } = await initNamedSession(`preservation-unmanaged-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    const now = Date.now();
+    await runInSessionDO(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(
+        `UPDATE sandbox
+         SET modal_object_id = ?, runtime_version = ?, last_activity = ?, last_heartbeat = ?`,
+        "vercel-session-1",
+        "v62-legacy-runtime",
+        now - 11 * 60_000,
+        now - 10_000
+      );
+    });
+
+    const calls = await runInSessionDO(stub, async (instance, durableState) => {
+      const calls: string[] = [];
+      const provider: SandboxProvider = {
+        name: "vercel",
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: true,
+          supportsRestore: true,
+          supportsExplicitStop: true,
+          supportsPersistentResume: false,
+          snapshotStopsSandbox: true,
+        },
+        createSandbox: async () => {
+          throw new Error("not used by inactivity regression");
+        },
+        takeSnapshot: async () => {
+          calls.push("snapshot");
+          return {
+            success: true as const,
+            imageId: "legacy-vercel-snapshot",
+            sourceStopped: true,
+          };
+        },
+        stopSandbox: async () => {
+          const [row] = durableState.storage.sql
+            .exec("SELECT snapshot_image_id FROM sandbox")
+            .toArray() as Array<{ snapshot_image_id: string | null }>;
+          expect(row?.snapshot_image_id).toBe("legacy-vercel-snapshot");
+          calls.push("stop");
+          return { success: true };
+        },
+      };
+      const sandbox = componentsOf(instance).sandboxRepository;
+      const manager = new SandboxLifecycleManager(
+        provider,
+        sandbox,
+        {
+          getSession: () => ({ id: "session-1", session_name: "legacy-session" }),
+          getSessionRepositories: () => [],
+          getUserEnvVars: async () => undefined,
+        } as never,
+        { broadcast: () => undefined },
+        {
+          getConnectedClientCount: () => 0,
+          sendToSandbox: () => false,
+          detachSandboxWebSocket: () => undefined,
+        } as never,
+        { schedule: async () => undefined, cancel: async () => undefined } as never,
+        { generateId: () => "generated-id" },
+        {
+          ...DEFAULT_LIFECYCLE_CONFIG,
+          controlPlaneUrl: "https://control-plane.test",
+          model: "anthropic/claude-sonnet-4-5",
+        }
+      );
+      const preservation = new SandboxPreservation({
+        store: new SandboxPreservationRepository(durableState.storage.sql),
+        provider,
+      } as never);
+      manager.setPreservation(preservation);
+
+      await manager.handleAlarm();
+      return calls;
+    });
+
+    expect(calls).toEqual(["snapshot", "stop"]);
+    expect(
+      await queryDO<{ snapshot_image_id: string | null }>(
+        stub,
+        "SELECT snapshot_image_id FROM sandbox"
+      )
+    ).toEqual([{ snapshot_image_id: "legacy-vercel-snapshot" }]);
+  });
+
   it("holds queued work until a versioned runtime acknowledges its sandbox generation", async () => {
     const name = `preservation-generation-${Date.now()}`;
     const { stub } = await initNamedSession(name);

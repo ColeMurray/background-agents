@@ -102,7 +102,7 @@ export interface SandboxPreservationLifecycle {
   restoreStarting(generation: SandboxGeneration, providerObjectId?: string): void;
   started(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
   isHolding(): boolean;
-  request(reason: string): Promise<boolean>;
+  request(reason: string): Promise<"owned" | "unmanaged" | "held">;
   beginCheckpoint(): boolean;
   endCheckpoint(): void;
   recoveryReceipt():
@@ -1344,13 +1344,16 @@ export class SandboxLifecycleManager
     // A Vercel snapshot stops the source. It requires the same preparation
     // and replacement ordering as a final snapshot, even after a prompt.
     if (this.provider.capabilities.snapshotStopsSandbox) {
-      if (this.preservation) await this.preservation.request(reason);
-      else
+      if (this.preservation) {
+        const ownership = await this.preservation.request(reason);
+        if (ownership !== "unmanaged") return;
+      } else {
         this.log.warn("Skipping destructive snapshot without preservation coordination", {
           event: "sandbox.snapshot_uncoordinated",
           reason,
         });
-      return;
+        return;
+      }
     }
     if (!this.provider.takeSnapshot) {
       this.log.debug("Provider does not support snapshots");
@@ -1741,7 +1744,8 @@ export class SandboxLifecycleManager
     switch (inactivityDecision.action) {
       case "timeout":
         if (this.preservation) {
-          if (await this.preservation.request("inactivity_timeout")) return "no_action";
+          const ownership = await this.preservation.request("inactivity_timeout");
+          if (ownership !== "unmanaged") return "no_action";
         }
         this.log.info("Inactivity timeout", {
           event: "sandbox.timeout",

@@ -306,10 +306,11 @@ export class SandboxPreservation {
     else this.kickQueue();
   }
 
-  async request(reason: string): Promise<boolean> {
+  async request(reason: string): Promise<"owned" | "unmanaged" | "held"> {
     const state = this.deps.store.read();
-    if (!state || !this.current(state) || state.phase !== "running") return false;
-    if (!this.providerMatches(state)) return true;
+    if (!state) return "unmanaged";
+    if (!this.current(state) || state.phase !== "running" || !this.providerMatches(state))
+      return "held";
     const now = this.now();
     const end = state.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS;
     // A shorter buffer reduces capture time, not the prompt-stop allowance.
@@ -337,7 +338,7 @@ export class SandboxPreservation {
       name: "sandbox.preservation_status",
     });
     await this.advance();
-    return true;
+    return "owned";
   }
 
   prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void {

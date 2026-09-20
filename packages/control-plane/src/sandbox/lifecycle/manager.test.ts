@@ -589,7 +589,7 @@ describe("final preservation lifecycle integration", () => {
       restoreStarting: vi.fn(),
       started: vi.fn(async () => {}),
       isHolding: vi.fn(() => false),
-      request: vi.fn(async () => true),
+      request: vi.fn<SandboxPreservationLifecycle["request"]>(async () => "owned"),
       beginCheckpoint: vi.fn(() => true),
       endCheckpoint: vi.fn(),
       recoveryReceipt: vi.fn<SandboxPreservationLifecycle["recoveryReceipt"]>(() => undefined),
@@ -747,7 +747,7 @@ describe("final preservation lifecycle integration", () => {
       createMockProvider({ capabilities: { snapshotStopsSandbox: true } }),
       sandbox
     );
-    f.preservation.request.mockResolvedValue(false);
+    f.preservation.request.mockResolvedValue("held");
 
     await f.manager.triggerSnapshot("execution_complete");
 
@@ -3063,6 +3063,40 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).not.toContain("recordSandboxSnapshot");
     });
+
+    it("does not claim a failed unmanaged destructive snapshot", async () => {
+      const sandbox = createMockSandbox({ status: "ready" });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        capabilities: { snapshotStopsSandbox: true },
+        takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      manager.setPreservation(
+        new SandboxPreservation({
+          store: { read: () => null, write: vi.fn() },
+          provider,
+        } as never)
+      );
+
+      await manager.triggerSnapshot("test");
+
+      expect(provider.takeSnapshot).toHaveBeenCalledOnce();
+      expect(storage.calls).not.toContain("recordSandboxSnapshot");
+      expect(broadcaster.messages).not.toContainEqual(
+        expect.objectContaining({ type: "snapshot_saved" })
+      );
+    });
   });
 
   describe("handleAlarm", () => {
@@ -3324,6 +3358,53 @@ describe("SandboxLifecycleManager", () => {
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
       expect(storage.calls).toContain("clearSandboxAccess:codeServer");
       expect(storage.calls).toContain("clearSandboxAccess:vnc");
+    });
+
+    it("preserves an unmanaged destructive-snapshot sandbox before inactivity destroys it", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10_000,
+        last_activity: now - 11 * 60 * 1000,
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      const calls: string[] = [];
+      const provider = createMockProvider({
+        capabilities: {
+          snapshotStopsSandbox: true,
+          supportsExplicitStop: true,
+          supportsPersistentResume: false,
+        },
+        takeSnapshot: vi.fn(async () => {
+          calls.push("snapshot");
+          return { success: true, imageId: "legacy-vercel-snapshot" };
+        }),
+        stopSandbox: vi.fn(async () => {
+          calls.push("stop");
+          return { success: true };
+        }),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+      manager.setPreservation(
+        new SandboxPreservation({
+          store: { read: () => null, write: vi.fn() },
+          provider,
+        } as never)
+      );
+
+      await manager.handleAlarm();
+
+      expect(calls).toEqual(["snapshot", "stop"]);
+      expect(sandbox.snapshot_image_id).toBe("legacy-vercel-snapshot");
     });
 
     it("does not explicitly stop providers when the capability is disabled", async () => {
@@ -5565,7 +5646,7 @@ describe("status writes after a provider await (COL-99)", () => {
         restoreStarting: vi.fn(),
         started: vi.fn(async () => {}),
         isHolding: vi.fn(() => false),
-        request: vi.fn(async () => true),
+        request: vi.fn(async () => "owned" as const),
         beginCheckpoint: vi.fn(() => true),
         endCheckpoint: vi.fn(),
         recoveryReceipt: vi.fn(() => undefined),

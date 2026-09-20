@@ -142,12 +142,23 @@ function preparedEvent(
 describe("SandboxPreservation", () => {
   beforeEach(() => vi.restoreAllMocks());
 
+  it("distinguishes unmanaged and held preservation requests", async () => {
+    const f = fixture();
+
+    await expect(f.preservation.request("checkpoint")).resolves.toBe("unmanaged");
+
+    await readyFinite(f);
+    f.sandboxRow.modal_sandbox_id = "replacement-sandbox";
+    await expect(f.preservation.request("checkpoint")).resolves.toBe("held");
+    expect(f.store.value).toMatchObject({ phase: "running", generation: GENERATION });
+  });
+
   it("derives one absolute stop/capture/retire budget and sends a correlated command", async () => {
     const f = fixture();
     await readyFinite(f);
     expect(f.preservation.mayDispatch()).toBe(true);
 
-    await f.preservation.request("sandbox_lifetime_expiring");
+    await expect(f.preservation.request("sandbox_lifetime_expiring")).resolves.toBe("owned");
 
     expect(f.store.value).toMatchObject({
       phase: "draining",
