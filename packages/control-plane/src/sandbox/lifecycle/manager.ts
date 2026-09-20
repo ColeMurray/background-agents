@@ -11,7 +11,12 @@
  */
 
 import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  unsupportedSandboxSettings,
+  type McpServerConfig,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
@@ -2033,7 +2038,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
     try {
-      return parsePersistedSandboxSettings(session.sandbox_settings);
+      const settings = parsePersistedSandboxSettings(session.sandbox_settings);
+      const unsupported = unsupportedSandboxSettings(settings, this.provider.name);
+      if (unsupported.length > 0) {
+        this.log.warn("Ignoring persisted sandbox settings unsupported by the provider", {
+          event: "sandbox.settings_unsupported",
+          provider: this.provider.name,
+          settings: unsupported,
+        });
+      }
+      return omitUnsupportedSandboxSettings(settings, this.provider.name);
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};

@@ -4,7 +4,8 @@ import { resolveExecutionBudgetMs } from "./execution-budget";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "./provider";
 import type { Env } from "../types";
 
-const env = (executionTimeoutMs?: string) => ({ EXECUTION_TIMEOUT_MS: executionTimeoutMs }) as Env;
+const env = (executionTimeoutMs?: string, sandboxProvider?: string) =>
+  ({ EXECUTION_TIMEOUT_MS: executionTimeoutMs, SANDBOX_PROVIDER: sandboxProvider }) as Env;
 
 describe("resolveExecutionBudgetMs", () => {
   it("prefers the session's own sandbox timeout over the deployment default", () => {
@@ -15,6 +16,12 @@ describe("resolveExecutionBudgetMs", () => {
     expect(resolveExecutionBudgetMs({ sandboxTimeoutMs: 28_800_000 }, env("900000"))).toBe(
       28_800_000
     );
+  });
+
+  it("ignores a legacy sandbox timeout when Daytona is configured", () => {
+    expect(
+      resolveExecutionBudgetMs({ sandboxTimeoutMs: 28_800_000 }, env("900000", "daytona"))
+    ).toBe(900_000);
   });
 
   it("falls back to the deployment-wide default", () => {
