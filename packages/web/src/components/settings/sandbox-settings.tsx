@@ -29,7 +29,6 @@ import {
   supportsConfigurableSandboxResources,
   supportsConfigurableSandboxTimeout,
 } from "@/lib/sandbox-provider";
-import { DockerSessionSelector } from "@/components/docker-session-selector";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -278,15 +277,23 @@ export function SandboxSettingsEditor({
 
   return (
     <fieldset disabled={!canManage} className="min-w-0 space-y-4">
-      <DockerSessionSelector
-        value={values.dockerEnabled === "inherit" ? undefined : values.dockerEnabled === "true"}
-        onChange={(value) =>
-          updateField("dockerEnabled", value === undefined ? "inherit" : String(value))
-        }
-      />
+      <label className="block text-sm text-muted-foreground">
+        Sandbox execution
+        <select
+          aria-label="Sandbox execution"
+          className="ml-2 rounded border border-border bg-background px-2 py-1"
+          value={values.dockerEnabled}
+          onChange={(event) => updateField("dockerEnabled", event.target.value)}
+        >
+          <option value="inherit">Use inherited setting</option>
+          <option value="false">Standard</option>
+          <option value="true">Docker (Modal VM)</option>
+        </select>
+      </label>
       <p className="text-xs text-muted-foreground">
         Docker uses an opt-in Modal VM. Changes apply to new sessions and future prebuilds; existing
-        sessions keep their execution profile.
+        sessions keep their execution profile. Session admission separately checks whether Docker is
+        available.
       </p>
       {/* Web Terminal toggle */}
       <div className="max-w-sm">

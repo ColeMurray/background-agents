@@ -21,8 +21,14 @@ import {
   SandboxSettingsPage,
 } from "./sandbox-settings";
 
+const authorizationMock = vi.hoisted(() => ({
+  permissions: undefined as Set<string> | undefined,
+}));
+
 vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
+  useCurrentUserAuthorization: () => ({
+    hasPermission: (permission: string) => authorizationMock.permissions?.has(permission) ?? true,
+  }),
 }));
 
 expect.extend(matchers);
@@ -90,6 +96,109 @@ afterEach(() => {
   vi.unstubAllEnvs();
   reposMock.repos = [];
   reposMock.loading = false;
+  authorizationMock.permissions = undefined;
+});
+
+describe("SandboxSettingsEditor — Docker execution intent", () => {
+  const cases = [
+    {
+      scope: "global" as const,
+      permission: "integrations.manage",
+      apiUrl: SETTINGS_KEY,
+      fallback: {
+        [SETTINGS_KEY]: { integrationId: "sandbox", settings: null },
+      },
+    },
+    {
+      scope: "repo" as const,
+      permission: "repositories.settings.manage",
+      apiUrl: "/api/integration-settings/sandbox/repos/acme/app",
+      fallback: {
+        [SETTINGS_KEY]: { integrationId: "sandbox", settings: null },
+        "/api/integration-settings/sandbox/repos/acme/app": {
+          integrationId: "sandbox",
+          repo: "acme/app",
+          settings: null,
+        },
+      },
+    },
+    {
+      scope: "environment" as const,
+      permission: "environments.settings.manage",
+      apiUrl: "/api/integration-settings/sandbox/environments/env_1",
+      fallback: {
+        [SETTINGS_KEY]: { integrationId: "sandbox", settings: null },
+        "/api/integration-settings/sandbox/repos/acme/app": {
+          integrationId: "sandbox",
+          repo: "acme/app",
+          settings: null,
+        },
+        "/api/integration-settings/sandbox/environments/env_1": {
+          integrationId: "sandbox",
+          environmentId: "env_1",
+          settings: null,
+        },
+      },
+    },
+  ];
+
+  it.each(cases)(
+    "persists Docker at $scope scope without session creation permission or a capability fetch",
+    async ({ scope, permission, apiUrl, fallback }) => {
+      authorizationMock.permissions = new Set([permission]);
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("session-capabilities")) {
+          return new Response(JSON.stringify({ dockerAvailable: false }), { status: 403 });
+        }
+        if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+        throw new Error(`unexpected fetch: ${String(input)}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(
+        <SWRConfig
+          value={{
+            provider: () => new Map(),
+            fallback,
+            dedupingInterval: Infinity,
+            revalidateOnFocus: false,
+            revalidateIfStale: false,
+            revalidateOnReconnect: false,
+          }}
+        >
+          <SandboxSettingsEditor
+            scope={scope}
+            owner={scope === "global" ? undefined : "acme"}
+            name={scope === "global" ? undefined : "app"}
+            environmentId={scope === "environment" ? "env_1" : undefined}
+          />
+        </SWRConfig>
+      );
+
+      await userEvent.selectOptions(screen.getByLabelText("Sandbox execution"), "true");
+      await userEvent.click(screen.getByText("Save Settings"));
+
+      await waitFor(() => {
+        const request = fetchMock.mock.calls.find(
+          ([input, init]) => String(input) === apiUrl && init?.method === "PUT"
+        )?.[1];
+        const body = JSON.parse(String(request?.body));
+        expect(
+          scope === "global" ? body.settings.defaults.dockerEnabled : body.settings.dockerEnabled
+        ).toBe(true);
+      });
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).includes("session-capabilities"))
+      ).toBe(false);
+    }
+  );
+
+  it("keeps the execution setting disabled without scope management permission", () => {
+    authorizationMock.permissions = new Set(["sessions.create"]);
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+
+    expect(screen.getByLabelText("Sandbox execution")).toBeDisabled();
+  });
 });
 
 describe("sandbox settings response schemas", () => {
