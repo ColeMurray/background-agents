@@ -6,7 +6,7 @@ import {
   type EventTimelineCursor,
 } from "./event-cursor";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
-import type { EventRow } from "./types";
+import { eventRowSchema, SessionStorageIntegrityError, type EventRow } from "./types";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
@@ -178,10 +178,19 @@ export class EventRepository {
     query += ` ORDER BY created_at DESC, ${tieBreaker} DESC LIMIT ?`;
     params.push(options.limit + 1);
 
-    const rows = this.sql.exec(query, ...params).toArray() as EventRow[];
+    const rows = this.sql
+      .exec(query, ...params)
+      .toArray()
+      .map(parseEventRow);
     const hasMore = rows.length > options.limit;
     const events = hasMore ? rows.slice(0, options.limit) : rows;
     const nextCursor = events.length ? eventTimelineCursorFromRow(events[events.length - 1]) : null;
     return { events, hasMore, nextCursor };
   }
+}
+
+function parseEventRow(row: unknown): EventRow {
+  const parsed = eventRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new SessionStorageIntegrityError("Malformed persisted event row");
 }

@@ -46,10 +46,10 @@ export class SandboxPushService {
     // would wait out PUSH_TIMEOUT_MS for an answer that never comes. Nor is
     // a booting sandbox "no sandbox": that path assumes the branch was pushed
     // by hand, and a PR opened on that assumption would point at nothing.
-    const sandboxWs = this.wsManager.getReadySandboxSocket();
+    const target = this.wsManager.getSandboxCommandTarget();
 
-    if (!sandboxWs) {
-      if (this.wsManager.getSandboxSocket()) {
+    if (target.kind !== "dispatch") {
+      if (target.kind === "booting") {
         this.log.info("Sandbox attached but not ready, refusing push", {
           branch_name: pushSpec.targetBranch,
         });
@@ -59,6 +59,7 @@ export class SandboxPushService {
       return { success: true };
     }
 
+    const sandboxWs = target.socket;
     const resolverKey = this.pushResolverKey(
       pushSpec.repoOwner,
       pushSpec.repoName,

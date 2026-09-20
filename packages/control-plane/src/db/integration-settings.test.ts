@@ -1393,6 +1393,14 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("rejects partial routing rule payloads", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend" }] as unknown as [] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("rejects a routing rule with an empty keyword", async () => {
       await expect(
         store.setGlobal("slack", {
