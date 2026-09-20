@@ -277,6 +277,25 @@ describe("buildSandboxEnvVars", () => {
     expect(enabled.NOVNC_PORT).toBe("6099");
   });
 
+  it("owns terminal enablement, port, and captured-image disablement", () => {
+    const disabled = buildSandboxEnvVars(
+      {
+        ...baseConfig,
+        userEnvVars: { TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: "7000" },
+      },
+      { scmIdentity: scmCloneIdentity("github"), emitDisabledTerminalEnv: true }
+    );
+    expect(disabled.TERMINAL_ENABLED).toBe("");
+    expect(disabled).not.toHaveProperty("TTYD_PROXY_PORT");
+
+    const enabled = buildSandboxEnvVars(
+      { ...baseConfig, sandboxSettings: { terminalEnabled: true, terminalPort: 7001 } },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+    expect(enabled.TERMINAL_ENABLED).toBe("true");
+    expect(enabled.TTYD_PROXY_PORT).toBe("7001");
+  });
+
   it("strips boot-mode markers from the user layer", () => {
     // Providers add these after buildSandboxEnvVars returns, and only when the
     // mode is real, so they are not part of the system overlay that shadows user

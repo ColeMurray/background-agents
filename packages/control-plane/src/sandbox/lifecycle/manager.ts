@@ -178,6 +178,17 @@ export interface SandboxStorage {
   updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
+  /** Atomically commit access returned for the named resume generation. */
+  completeProviderResume(
+    generation: SandboxGeneration,
+    access: {
+      providerObjectId: string;
+      codeServer: { url: string; password: string } | null;
+      vnc: { url: string; password: string } | null;
+      ttyd: { url: string | null; token: string } | null;
+      tunnelUrls: Record<string, string> | null;
+    }
+  ): Promise<boolean>;
   /** Update sandbox Modal object ID (for snapshot API) */
   updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Set the runtime version describing the sandbox's current filesystem. */
@@ -207,8 +218,6 @@ export interface SandboxStorage {
   updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
   /** Read and decrypt one access artifact's stored secret */
   getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null>;
-  /** Update one access artifact's URL while preserving its stored secret */
-  updateSandboxAccessUrl(kind: SandboxAccessKind, url: string): void | Promise<void>;
   /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
   clearSandboxAccess(kind: SandboxAccessKind): void;
   /** Clear one access artifact's URL while preserving its stored secret */
@@ -1240,32 +1249,46 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
 
       const finalProviderObjectId = result.providerObjectId ?? providerObjectId;
-      if (result.providerObjectId && result.providerObjectId !== providerObjectId) {
-        this.storeProviderObjectId(result.providerObjectId);
+      const ttydToken = sandboxSettings.terminalEnabled
+        ? await this.storage.getSandboxAccessSecret("ttyd")
+        : null;
+      const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
+      const replaceForTerminalCredential = Boolean(result.ttydUrl && !validTtydToken);
+      const completed = await this.storage.completeProviderResume(generation, {
+        providerObjectId: finalProviderObjectId,
+        codeServer:
+          result.codeServerUrl && result.codeServerPassword
+            ? { url: result.codeServerUrl, password: result.codeServerPassword }
+            : null,
+        vnc: result.vncAccess ?? null,
+        ttyd: validTtydToken
+          ? {
+              url: replaceForTerminalCredential ? null : (result.ttydUrl ?? null),
+              token: validTtydToken,
+            }
+          : null,
+        tunnelUrls: result.tunnelUrls ?? null,
+      });
+      if (!completed) {
+        this.log.warn("Resume attempt superseded; abandoning", {
+          event: "sandbox.resume_superseded",
+        });
+        return;
       }
-      this.broadcastSandboxDashboardUrl(finalProviderObjectId);
 
-      if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
-      }
-      if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
-      }
-      if (result.ttydUrl) {
-        const ttydToken = await this.storage.getSandboxAccessSecret("ttyd");
-        if (!isJwtUnexpired(ttydToken)) {
-          this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
-            event: "sandbox.resume_terminal_credential_unavailable",
-            provider_object_id: finalProviderObjectId,
-            reason: ttydToken ? "invalid_or_expired" : "missing",
-          });
-          await this.doSpawn();
-          return;
-        }
-        await this.storage.updateSandboxAccessUrl("ttyd", result.ttydUrl);
+      if (replaceForTerminalCredential) {
+        this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
+          event: "sandbox.resume_terminal_credential_unavailable",
+          provider_object_id: finalProviderObjectId,
+          reason: ttydToken ? "invalid_or_expired" : "missing",
+        });
+        await this.doSpawn();
+        return;
       }
 
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+      if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
+        this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      }
       await this.finishProviderStartup(generation);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
@@ -1933,14 +1956,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.storage.updateSandboxModalObjectId(providerObjectId);
   }
 
-  private broadcastSandboxDashboardUrl(providerObjectId: string): void {
+  private broadcastSandboxDashboardUrl(providerObjectId: string): boolean {
     const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
     if (url) {
       this.log.debug("Broadcasting sandbox dashboard URL", {
         provider_object_id: providerObjectId,
       });
       this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      return true;
     }
+    return false;
   }
 
   private async storeCodeServer(url: string, password: string): Promise<void> {

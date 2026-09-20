@@ -9,11 +9,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { DEFAULT_TERMINAL_PORT } from "@open-inspect/shared/types/integrations";
 import { deriveVncPassword } from "../sandbox-env";
-import {
-  DaytonaSandboxProvider,
-  DEFAULT_PREVIEW_EXPIRY_SECONDS,
-  type DaytonaProviderConfig,
-} from "./daytona-provider";
+import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
 import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
@@ -404,113 +400,6 @@ describe("DaytonaSandboxProvider", () => {
     });
   });
 
-  describe("web terminal", () => {
-    it("injects the default proxy port, returns its URL, and excludes it from tunnels", async () => {
-      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
-        url: `https://preview.test/${port}`,
-      }));
-      const client = createMockClient({
-        getSignedPreviewUrl,
-      });
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-
-      const result = await provider.createSandbox({
-        ...baseCreateConfig,
-        sandboxSettings: {
-          terminalEnabled: true,
-          tunnelPorts: [DEFAULT_TERMINAL_PORT, 3000, 3000],
-        },
-      });
-      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
-
-      expect(envVars).toMatchObject({
-        TERMINAL_ENABLED: "true",
-        TTYD_PROXY_PORT: String(DEFAULT_TERMINAL_PORT),
-      });
-      expect(result.ttydUrl).toBe(`https://preview.test/${DEFAULT_TERMINAL_PORT}`);
-      expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
-      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(
-        1,
-        "daytona-sandbox-id",
-        DEFAULT_TERMINAL_PORT,
-        DEFAULT_PREVIEW_EXPIRY_SECONDS
-      );
-      expect(getSignedPreviewUrl).toHaveBeenNthCalledWith(
-        2,
-        "daytona-sandbox-id",
-        3000,
-        DEFAULT_PREVIEW_EXPIRY_SECONDS
-      );
-      expect(getSignedPreviewUrl).toHaveBeenCalledTimes(2);
-    });
-
-    it("uses a custom terminal proxy port", async () => {
-      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
-        url: `https://preview.test/${port}`,
-      }));
-      const client = createMockClient({
-        getSignedPreviewUrl,
-      });
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-
-      const result = await provider.createSandbox({
-        ...baseCreateConfig,
-        sandboxSettings: { terminalEnabled: true, terminalPort: 7000 },
-      });
-      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
-
-      expect(envVars.TTYD_PROXY_PORT).toBe("7000");
-      expect(result.ttydUrl).toBe("https://preview.test/7000");
-      expect(getSignedPreviewUrl).toHaveBeenCalledWith(
-        "daytona-sandbox-id",
-        7000,
-        DEFAULT_PREVIEW_EXPIRY_SECONDS
-      );
-    });
-
-    it("does not start or expose the terminal when disabled", async () => {
-      const client = createMockClient();
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-
-      const result = await provider.createSandbox({
-        ...baseCreateConfig,
-        userEnvVars: { TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: "7000" },
-        sandboxSettings: { terminalEnabled: false },
-      });
-      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env!;
-
-      expect(envVars.TERMINAL_ENABLED).toBe("");
-      expect(envVars.TTYD_PROXY_PORT).toBeUndefined();
-      expect(result.ttydUrl).toBeUndefined();
-      expect(client.getSignedPreviewUrl).not.toHaveBeenCalled();
-    });
-
-    it("keeps the sandbox and other tunnels when terminal preview URL creation fails", async () => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const client = createMockClient({
-        getSignedPreviewUrl: async (_id, port) => {
-          if (port === DEFAULT_TERMINAL_PORT) {
-            throw new DaytonaApiError("preview unavailable", 500);
-          }
-          return { url: `https://preview.test/${port}` };
-        },
-      });
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-
-      const result = await provider.createSandbox({
-        ...baseCreateConfig,
-        sandboxSettings: { terminalEnabled: true, tunnelPorts: [3000] },
-      });
-
-      expect(result.providerObjectId).toBe("daytona-sandbox-id");
-      expect(result.ttydUrl).toBeUndefined();
-      expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("daytona.terminal_preview_url_failed")
-      );
-    });
-  });
-
   describe("code-server password derivation", () => {
     it("derives deterministic password via HMAC", async () => {
       const client = createMockClient();
@@ -658,33 +547,6 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(result.vncAccess?.url).toBe("https://preview.test/6080");
       expect(result.vncAccess?.password).toMatch(/^[A-Za-z0-9]{8}$/);
-    });
-
-    it("returns terminal access after resume using the custom proxy port", async () => {
-      const getSignedPreviewUrl = vi.fn(async (_id: string, port: number) => ({
-        url: `https://preview.test/${port}`,
-      }));
-      const client = createMockClient({
-        getSignedPreviewUrl,
-      });
-      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
-
-      const result = await provider.resumeSandbox({
-        ...baseResumeConfig,
-        sandboxSettings: {
-          terminalEnabled: true,
-          terminalPort: 7002,
-          tunnelPorts: [7002, 3000],
-        },
-      });
-
-      expect(result.ttydUrl).toBe("https://preview.test/7002");
-      expect(result.tunnelUrls).toEqual({ "3000": "https://preview.test/3000" });
-      expect(getSignedPreviewUrl).toHaveBeenCalledWith(
-        "daytona-sandbox-id",
-        7002,
-        DEFAULT_PREVIEW_EXPIRY_SECONDS
-      );
     });
 
     it("tunnel URL failure does not fail the resume", async () => {
@@ -1132,6 +994,6 @@ describe("DaytonaSandboxProvider prebuilt images", () => {
     expect(result.vncAccess).toBeUndefined();
     expect(result.tunnelUrls).toBeUndefined();
     expect(client.deleteSandbox).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("daytona.create_tunnel_urls_failed"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("daytona.preview_url_failed"));
   });
 });

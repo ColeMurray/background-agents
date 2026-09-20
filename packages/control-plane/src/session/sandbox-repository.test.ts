@@ -346,14 +346,6 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).not.toContain("vnc_password");
     });
 
-    it("can update only the URL", () => {
-      repository.updateSandboxAccessUrl("ttyd", "https://ttyd.test/refreshed");
-
-      expect(mock.calls[0].query).toContain("SET ttyd_url = ?");
-      expect(mock.calls[0].query).not.toContain("ttyd_token");
-      expect(mock.calls[0].params).toEqual(["https://ttyd.test/refreshed"]);
-    });
-
     it("reads a decrypted access secret", async () => {
       const encrypted = await encryptToken("ttyd-token", TEST_ENCRYPTION_KEY);
       mock.setData(`SELECT ttyd_token AS secret FROM sandbox LIMIT 1`, [{ secret: encrypted }]);
@@ -473,6 +465,65 @@ describe("SandboxRepository boot state (SQLite)", () => {
       set("status = 'connecting', modal_sandbox_id = NULL");
 
       expect(repository.markSandboxReady({ sandboxId: null, createdAt: 1000 })).toBe(true);
+    });
+  });
+
+  describe("completeProviderResume", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 2000 };
+    const access = {
+      providerObjectId: "provider-2",
+      codeServer: { url: "https://code.test", password: "code-secret" },
+      vnc: { url: "https://vnc.test", password: "vnc-secret" },
+      ttyd: { url: "https://terminal.test", token: "terminal-token" },
+      tunnelUrls: { "3000": "https://preview.test" },
+    };
+
+    it.each(["connecting", "ready"] as const)(
+      "atomically records access for the current %s generation",
+      async (status) => {
+        const { repository, set } = createSqliteRepository();
+        set("status = ?, modal_sandbox_id = 'sb-1', created_at = 2000", status);
+
+        await expect(repository.completeProviderResume(generation, access)).resolves.toBe(true);
+
+        const row = repository.getSandbox();
+        expect(row).toMatchObject({
+          modal_object_id: "provider-2",
+          code_server_url: "https://code.test",
+          vnc_url: "https://vnc.test",
+          ttyd_url: "https://terminal.test",
+          tunnel_urls: JSON.stringify(access.tunnelUrls),
+        });
+        await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("code-secret");
+        await expect(repository.getSandboxAccessSecret("vnc")).resolves.toBe("vnc-secret");
+        await expect(repository.getSandboxAccessSecret("ttyd")).resolves.toBe("terminal-token");
+      }
+    );
+
+    it.each([
+      [
+        "replaced generation",
+        "status = 'connecting', modal_sandbox_id = 'sb-2', created_at = 2000",
+      ],
+      ["cancelled generation", "status = 'stopped', modal_sandbox_id = 'sb-1', created_at = 2000"],
+      ["timed-out generation", "status = 'failed', modal_sandbox_id = 'sb-1', created_at = 2000"],
+      [
+        "fenced generation",
+        "status = 'connecting', modal_sandbox_id = 'sb-1', created_at = 2000, fenced = 1",
+      ],
+    ])("rejects a %s without writing any access", async (_case, assignments) => {
+      const { repository, set } = createSqliteRepository();
+      set(assignments);
+
+      await expect(repository.completeProviderResume(generation, access)).resolves.toBe(false);
+
+      expect(repository.getSandbox()).toMatchObject({
+        modal_object_id: null,
+        code_server_url: null,
+        vnc_url: null,
+        ttyd_url: null,
+        tunnel_urls: null,
+      });
     });
   });
 

@@ -55,6 +55,15 @@ export interface ResumeSandboxData {
   createdAt: number;
 }
 
+/** Provider access discovered while resuming an existing sandbox. */
+export interface ProviderResumeAccessData {
+  providerObjectId: string;
+  codeServer: { url: string; password: string } | null;
+  vnc: { url: string; password: string } | null;
+  ttyd: { url: string | null; token: string } | null;
+  tunnelUrls: Record<string, string> | null;
+}
+
 /**
  * Persistence for the sandbox scoped to one session.
  *
@@ -302,6 +311,48 @@ export class SandboxRepository {
     );
   }
 
+  /**
+   * Commit all provider access returned by a resume as one generation-scoped
+   * write. `ready` is allowed because the bridge can complete startup before
+   * the provider's resume request returns.
+   */
+  async completeProviderResume(
+    generation: { sandboxId: string | null; createdAt: number },
+    access: ProviderResumeAccessData
+  ): Promise<boolean> {
+    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
+      access.codeServer ? this.encrypt(access.codeServer.password) : null,
+      access.vnc ? this.encrypt(access.vnc.password) : null,
+      access.ttyd ? this.encrypt(access.ttyd.token) : null,
+    ]);
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         modal_object_id = ?,
+         code_server_url = ?,
+         code_server_password = ?,
+         vnc_url = ?,
+         vnc_password = ?,
+         ttyd_url = ?,
+         ttyd_token = ?,
+         tunnel_urls = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?
+         AND status IN ('connecting', 'ready') AND fenced = 0`,
+      access.providerObjectId,
+      access.codeServer?.url ?? null,
+      codeServerPassword,
+      access.vnc?.url ?? null,
+      vncPassword,
+      access.ttyd?.url ?? null,
+      ttydToken,
+      access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
   updateSandboxModalObjectId(modalObjectId: string | null): void {
     this.sql.exec(
       `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
@@ -409,15 +460,6 @@ export class SandboxRepository {
       this.sql.exec(`SELECT ${secretColumn} AS secret FROM sandbox LIMIT 1`)
     );
     return decryptStoredAccessValue(rows[0]?.secret ?? null, this.encryptionKey, this.log);
-  }
-
-  /** Update one access artifact's URL while preserving its stored secret. */
-  updateSandboxAccessUrl(kind: SandboxAccessKind, url: string): void {
-    const { urlColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
-    this.sql.exec(
-      `UPDATE sandbox SET ${urlColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url
-    );
   }
 
   /** Clear one access artifact's URL and secret. */

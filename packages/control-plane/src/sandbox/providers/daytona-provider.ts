@@ -12,8 +12,7 @@
  * boots.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
-import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
+import { resolveSandboxPortPlan, type SandboxPortPlan } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import {
@@ -109,7 +108,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         await this.ensurePrebuiltImageUsable(config.prebuiltImageId);
       }
 
-      const envVars = await this.buildEnvVars(config);
+      const portPlan = resolveSandboxPortPlan(
+        {
+          codeServer: config.codeServerEnabled === true,
+          terminal: config.sandboxSettings?.terminalEnabled === true,
+          vnc: config.vncEnabled === true,
+        },
+        config.sandboxSettings
+      );
+      const envVars = await this.buildEnvVars(config, portPlan);
       const labels = this.buildLabels(config);
 
       const params: DaytonaCreateSandboxParams = {
@@ -127,46 +134,21 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       const sandbox = await this.client.createSandbox(params);
 
-      // Preview URLs are user-facing extras, not how a session runs: the
-      // runtime dials the control plane itself. Failing the create here would
-      // throw away the only handle to a live sandbox that has no hard TTL, so
-      // the create reports the id it was given and the access fields stay
-      // empty until the next resume issues them.
-      let codeServerUrl: string | undefined;
-      let codeServerPassword: string | undefined;
-      let ttydUrl: string | undefined;
-      let vncAccess: VncAccess | undefined;
-      let tunnelUrls: Record<string, string> | undefined;
-      try {
-        const tunnels = await this.buildTunnelUrls(
-          sandbox.id,
-          config.sandboxId,
-          config.timeoutSeconds,
-          config.codeServerEnabled,
-          config.vncEnabled,
-          config.sandboxSettings
-        );
-        codeServerUrl = tunnels.codeServerUrl;
-        codeServerPassword = tunnels.codeServerPassword;
-        ttydUrl = tunnels.ttydUrl;
-        vncAccess = tunnels.vncAccess;
-        tunnelUrls = tunnels.tunnelUrls;
-      } catch (tunnelError) {
-        log.warn("daytona.create_tunnel_urls_failed", {
-          sandbox_id: config.sandboxId,
-          error: tunnelError instanceof Error ? tunnelError.message : String(tunnelError),
-        });
-      }
+      // Preview URLs are user-facing extras, not how a session runs: resolve
+      // each independently so one unavailable service cannot hide the live
+      // sandbox or other access that succeeded.
+      const access = await this.buildTunnelUrls(
+        sandbox.id,
+        config.sandboxId,
+        config.timeoutSeconds,
+        portPlan
+      );
 
       return {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.id,
         createdAt: Date.now(),
-        codeServerUrl,
-        codeServerPassword,
-        ttydUrl,
-        vncAccess,
-        tunnelUrls,
+        ...access,
       };
     } catch (error) {
       // Already classified (the prebuilt-image guards) — rethrow so the
@@ -178,6 +160,14 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async resumeSandbox(config: ResumeConfig): Promise<ResumeResult> {
     try {
+      const portPlan = resolveSandboxPortPlan(
+        {
+          codeServer: config.codeServerEnabled === true,
+          terminal: config.sandboxSettings?.terminalEnabled === true,
+          vnc: config.vncEnabled === true,
+        },
+        config.sandboxSettings
+      );
       let sandbox;
       try {
         sandbox = await this.client.getSandbox(config.providerObjectId);
@@ -203,40 +193,17 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       // Tunnel URL generation runs after start so a preview-URL failure
       // doesn't mask a successful resume.
-      let codeServerUrl: string | undefined;
-      let codeServerPassword: string | undefined;
-      let ttydUrl: string | undefined;
-      let vncAccess: VncAccess | undefined;
-      let tunnelUrls: Record<string, string> | undefined;
-      try {
-        const tunnels = await this.buildTunnelUrls(
-          config.providerObjectId,
-          config.sandboxId,
-          config.timeoutSeconds,
-          config.codeServerEnabled,
-          config.vncEnabled,
-          config.sandboxSettings
-        );
-        codeServerUrl = tunnels.codeServerUrl;
-        codeServerPassword = tunnels.codeServerPassword;
-        ttydUrl = tunnels.ttydUrl;
-        vncAccess = tunnels.vncAccess;
-        tunnelUrls = tunnels.tunnelUrls;
-      } catch (tunnelError) {
-        log.warn("daytona.resume_tunnel_urls_failed", {
-          sandbox_id: config.sandboxId,
-          error: tunnelError instanceof Error ? tunnelError.message : String(tunnelError),
-        });
-      }
+      const access = await this.buildTunnelUrls(
+        config.providerObjectId,
+        config.sandboxId,
+        config.timeoutSeconds,
+        portPlan
+      );
 
       return {
         success: true,
         providerObjectId: sandbox.id,
-        codeServerUrl,
-        codeServerPassword,
-        ttydUrl,
-        vncAccess,
-        tunnelUrls,
+        ...access,
       };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
@@ -275,9 +242,14 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   // Env var assembly (ported from service.py _build_env)
   // -----------------------------------------------------------------------
 
-  private async buildEnvVars(config: CreateSandboxConfig): Promise<Record<string, string>> {
+  private async buildEnvVars(
+    config: CreateSandboxConfig,
+    portPlan: SandboxPortPlan
+  ): Promise<Record<string, string>> {
     const envVars = buildSandboxEnvVars(config, {
       scmIdentity: this.cloneIdentity(),
+      portPlan,
+      emitDisabledTerminalEnv: true,
       codeServerPassword: config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
@@ -303,13 +275,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       RESTORED_FROM_SNAPSHOT: "false",
       FROM_REPO_IMAGE: config.prebuiltImageId ? "true" : "false",
     });
-    delete envVars.TTYD_PROXY_PORT;
-    // An empty value disables the runtime's truthiness check and overrides captured image env.
-    envVars.TERMINAL_ENABLED = "";
-    if (config.sandboxSettings?.terminalEnabled) {
-      envVars.TERMINAL_ENABLED = "true";
-      envVars.TTYD_PROXY_PORT = String(resolveServicePorts(config.sandboxSettings).terminalPort);
-    }
     if (config.prebuiltImageId) {
       envVars.REPO_IMAGE_SHA = config.prebuiltImageSha ?? "";
     }
@@ -343,9 +308,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     daytonaSandboxId: string,
     logicalSandboxId: string,
     timeoutSeconds: number | undefined,
-    codeServerEnabled: boolean | undefined,
-    vncEnabled: boolean | undefined,
-    sandboxSettings: SandboxSettings | undefined
+    portPlan: SandboxPortPlan
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;
@@ -354,74 +317,81 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     tunnelUrls?: Record<string, string>;
   }> {
     const expirySeconds = resolvePreviewExpirySeconds(timeoutSeconds);
-    const { codeServerPort, terminalPort, vncPort } = resolveServicePorts(sandboxSettings);
-    let tunnelPorts = [...new Set(resolveTunnelPorts(sandboxSettings?.tunnelPorts))];
+    const requests: Array<{
+      kind: "codeServer" | "terminal" | "vnc" | "tunnel";
+      port: number;
+    }> = [];
+    if (portPlan.codeServerPort !== undefined) {
+      requests.push({ kind: "codeServer", port: portPlan.codeServerPort });
+    }
+    if (portPlan.terminalPort !== undefined) {
+      requests.push({ kind: "terminal", port: portPlan.terminalPort });
+    }
+    if (portPlan.vncPort !== undefined) {
+      requests.push({ kind: "vnc", port: portPlan.vncPort });
+    }
+    for (const port of portPlan.extraTunnelPorts) {
+      requests.push({ kind: "tunnel", port });
+    }
+    const previews = await Promise.allSettled(
+      requests.map(async (request) => {
+        const preview = await this.client.getSignedPreviewUrl(
+          daytonaSandboxId,
+          request.port,
+          expirySeconds
+        );
+        let password: string | undefined;
+        if (request.kind === "codeServer") {
+          password = await deriveCodeServerPassword(
+            logicalSandboxId,
+            this.providerConfig.sandboxAccessPasswordSecret
+          );
+        } else if (request.kind === "vnc") {
+          password = await deriveVncPassword(
+            logicalSandboxId,
+            this.providerConfig.sandboxAccessPasswordSecret
+          );
+        }
+        return { request, url: preview.url, password };
+      })
+    );
+
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
     let ttydUrl: string | undefined;
     let vncAccess: VncAccess | undefined;
-
-    if (codeServerEnabled) {
-      const preview = await this.client.getSignedPreviewUrl(
-        daytonaSandboxId,
-        codeServerPort,
-        expirySeconds
-      );
-      codeServerUrl = preview.url;
-      codeServerPassword = await deriveCodeServerPassword(
-        logicalSandboxId,
-        this.providerConfig.sandboxAccessPasswordSecret
-      );
-      tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
-    }
-
-    if (vncEnabled) {
-      const preview = await this.client.getSignedPreviewUrl(
-        daytonaSandboxId,
-        vncPort,
-        expirySeconds
-      );
-      const password = await deriveVncPassword(
-        logicalSandboxId,
-        this.providerConfig.sandboxAccessPasswordSecret
-      );
-      vncAccess = { url: preview.url, password };
-      tunnelPorts = tunnelPorts.filter((p) => p !== vncPort);
-    }
-
-    if (sandboxSettings?.terminalEnabled) {
-      tunnelPorts = tunnelPorts.filter((p) => p !== terminalPort);
-      try {
-        const preview = await this.client.getSignedPreviewUrl(
-          daytonaSandboxId,
-          terminalPort,
-          expirySeconds
-        );
-        ttydUrl = preview.url;
-      } catch (error) {
-        log.warn("daytona.terminal_preview_url_failed", {
+    const tunnelUrls: Record<string, string> = {};
+    for (const [index, preview] of previews.entries()) {
+      if (preview.status === "rejected") {
+        const request = requests[index];
+        log.warn("daytona.preview_url_failed", {
           sandbox_id: logicalSandboxId,
-          error: error instanceof Error ? error.message : String(error),
+          access_kind: request.kind,
+          port: request.port,
+          error: preview.reason instanceof Error ? preview.reason.message : String(preview.reason),
         });
+        continue;
+      }
+      const { request, url, password } = preview.value;
+      if (request.kind === "codeServer") {
+        codeServerUrl = url;
+        codeServerPassword = password;
+      } else if (request.kind === "terminal") {
+        ttydUrl = url;
+      } else if (request.kind === "vnc" && password) {
+        vncAccess = { url, password };
+      } else if (request.kind === "tunnel") {
+        tunnelUrls[String(request.port)] = url;
       }
     }
 
-    let tunnelUrls: Record<string, string> | undefined;
-    if (tunnelPorts.length > 0) {
-      const entries = await Promise.all(
-        tunnelPorts.map(async (port) => {
-          const preview = await this.client.getSignedPreviewUrl(
-            daytonaSandboxId,
-            port,
-            expirySeconds
-          );
-          return [String(port), preview.url] as const;
-        })
-      );
-      tunnelUrls = Object.fromEntries(entries);
-    }
-
-    return { codeServerUrl, codeServerPassword, ttydUrl, vncAccess, tunnelUrls };
+    return {
+      codeServerUrl,
+      codeServerPassword,
+      ttydUrl,
+      vncAccess,
+      tunnelUrls: Object.keys(tunnelUrls).length > 0 ? tunnelUrls : undefined,
+    };
   }
 
   // -----------------------------------------------------------------------
