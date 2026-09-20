@@ -1,13 +1,14 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { SessionCallbackJob } from "@open-inspect/shared/types/session-callback-jobs";
 import { COMPLETION_JOB, LINEAR_CONTEXT, SLACK_CONTEXT } from "../../test/callback-fixtures";
 import type { JobDeps } from "../jobs";
 import { createLogger } from "../logger";
 import { handleSessionCallback } from "../session/callback-job-consumer";
+import { deliverWithRetry } from "../session/callback-delivery";
 import type { Env } from "../types";
 import { createUrlFetchClient } from "./url-fetch-client";
 
@@ -205,6 +206,28 @@ describe("URL-backed bot client", () => {
 });
 
 describe("real callback consumer over the URL transport", () => {
+  it("disposes never-ending HTTP bodies before retrying or returning", async () => {
+    let calls = 0;
+    let closed = 0;
+    const origin = await listen((_req, res) => {
+      calls++;
+      res.on("close", () => {
+        closed++;
+      });
+      res.writeHead(calls === 1 ? 503 : 200);
+      res.write("headers arrived, but this response never ends");
+    });
+    const client = createUrlFetchClient(origin);
+    const result = await deliverWithRetry(
+      (signal) => client.fetch("/callbacks/automation-complete", { signal }),
+      async () => {
+        await vi.waitFor(() => expect(closed).toBe(1));
+      },
+      () => {}
+    );
+    expect(result).toEqual({ delivered: true, attempts: 2, httpStatus: 200 });
+    await vi.waitFor(() => expect(closed).toBe(2));
+  });
   const toolJob: SessionCallbackJob = {
     version: 1,
     type: "slack.tool_call",

@@ -1459,6 +1459,7 @@ export class Scheduler {
         signal: AbortSignal.timeout(SLACK_THREAD_CONTEXT_TIMEOUT_MS),
       });
       if (!response.ok) {
+        await response.body?.cancel();
         this.log.warn("Slack thread context request failed", {
           event: "scheduler.slack_thread_context_failed",
           channel: event.channelId,
@@ -1514,6 +1515,7 @@ export class Scheduler {
         body: JSON.stringify({ ...body, signature }),
         signal: AbortSignal.timeout(CALLBACK_ATTEMPT_TIMEOUT_MS),
       });
+      await response.body?.cancel();
       if (!response.ok) {
         this.log.warn("Slack skip callback failed", {
           event: "scheduler.slack_skip_failed",

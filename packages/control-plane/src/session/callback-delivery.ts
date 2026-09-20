@@ -77,6 +77,9 @@ export async function deliverWithRetry(
   const result = await retryDelivery(
     async (signal) => {
       const response = await send(signal);
+      // Only status is part of this delivery contract. Release the connection
+      // before the attempt timer is cleared or another attempt can begin.
+      await response.body?.cancel();
       return response.ok
         ? { outcome: "delivered", value: response }
         : { outcome: "retryable_failure", failure: response };

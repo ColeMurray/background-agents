@@ -2390,6 +2390,27 @@ describe("Scheduler", () => {
         }
       });
 
+      it.each([200, 503])(
+        "cancels status-only skip response bodies for HTTP %s",
+        async (status) => {
+          mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+          mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+          mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
+          const cancel = vi.fn();
+          const response = new Response(new ReadableStream({ cancel }), { status });
+          const env = createEnv({
+            SLACK_BOT: { fetch: vi.fn().mockResolvedValue(response) },
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          });
+          expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+          });
+          expect(cancel).toHaveBeenCalledOnce();
+        }
+      );
+
       it("does not request context when the invocation is deduplicated", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
@@ -2479,7 +2500,10 @@ describe("Scheduler", () => {
       it("launches without history when the context request fails", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
-        const slackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
+        const cancel = vi.fn();
+        const slackFetch = vi.fn(
+          async () => new Response(new ReadableStream({ cancel }), { status: 500 })
+        );
         const stub = createMockSessionStub();
         const env = createEnv(
           {
@@ -2498,6 +2522,7 @@ describe("Scheduler", () => {
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
         expect(String(prompt.content)).not.toContain("<thread_context>");
+        expect(cancel).toHaveBeenCalledOnce();
       });
 
       it("launches without history when the context request is aborted", async () => {
