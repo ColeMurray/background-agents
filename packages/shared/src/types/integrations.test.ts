@@ -12,7 +12,10 @@ import {
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   normalizeRoutingRules,
+  omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
+  supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
   integrationSettingsSchemas,
@@ -20,6 +23,44 @@ import {
   validateSandboxChildSessionLimits,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("sandbox provider settings capabilities", () => {
+  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+    expect(supportsConfigurableSandboxResources(provider)).toBe(true);
+  });
+
+  it.each(["daytona", "opencomputer", "e2b"])(
+    "does not expose resource overrides for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResources(provider)).toBe(false);
+    }
+  );
+
+  it("does not expose session timeout overrides for Daytona", () => {
+    expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
+    expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
+  });
+
+  it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
+  });
+
+  it("drops unsupported Daytona settings while preserving supported settings", () => {
+    expect(
+      omitUnsupportedSandboxSettings(
+        {
+          cpuCores: 2,
+          memoryMib: 4096,
+          sandboxTimeoutMs: 14_400_000,
+          buildTimeoutSeconds: 2400,
+          terminalEnabled: true,
+        },
+        "daytona"
+      )
+    ).toEqual({ buildTimeoutSeconds: 2400, terminalEnabled: true });
+  });
+});
 
 describe("findSandboxPortConflict", () => {
   it.each([INTERNAL_TTYD_PORT, INTERNAL_VNC_PORT])("rejects reserved internal port %i", (port) => {

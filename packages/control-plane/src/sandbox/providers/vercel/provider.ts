@@ -2,7 +2,10 @@
  * Vercel Sandbox provider implementation.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  supportsConfigurableSandboxTimeout,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
@@ -84,7 +87,7 @@ export class VercelSandboxProvider implements SandboxProvider {
   private baseSnapshotIdPromise?: Promise<string>;
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,

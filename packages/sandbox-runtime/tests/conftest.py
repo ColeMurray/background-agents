@@ -35,7 +35,7 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("sandbox_runtime.repository_boot.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.bridge.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", boot_events_path)
-    monkeypatch.setattr("sandbox_runtime.bridge.BOOT_EVENTS_FILE_PATH", boot_events_path)
+    monkeypatch.setattr("sandbox_runtime.boot_attach.BOOT_EVENTS_FILE_PATH", boot_events_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
 
 
@@ -60,7 +60,7 @@ def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
         limits=previous.limits,
     )
     harness.session_id = previous.session_id
-    bridge.harness = harness
+    bridge.boot_attach.harness = harness
     bridge.http_client = http_client
     return http_client
 

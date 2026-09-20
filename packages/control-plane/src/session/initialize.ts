@@ -3,7 +3,11 @@ import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  unsupportedSandboxSettings,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
@@ -11,6 +15,7 @@ import { createLogger } from "../logger";
 import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import { resolveSandboxBackendName } from "../sandbox/provider-name";
 
 const logger = createLogger("session-init");
 
@@ -139,6 +144,23 @@ export async function initializeSession(
           },
         ]
       : [];
+  const sandboxProvider = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
+  const unsupportedSettings = unsupportedSandboxSettings(
+    input.sandboxSettings ?? {},
+    sandboxProvider
+  );
+  const sandboxSettings = input.sandboxSettings
+    ? omitUnsupportedSandboxSettings(input.sandboxSettings, sandboxProvider)
+    : undefined;
+  if (unsupportedSettings.length > 0) {
+    logger.warn("Ignoring sandbox settings unsupported by the configured provider", {
+      event: "sandbox.settings_unsupported",
+      provider: sandboxProvider,
+      settings: unsupportedSettings,
+      session_id: input.sessionId,
+      trace_id: ctx.trace_id,
+    });
+  }
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
@@ -198,7 +220,7 @@ export async function initializeSession(
           scmUserId: input.scmUserId,
           codeServerEnabled: input.codeServerEnabled,
           vncEnabled: input.vncEnabled,
-          sandboxSettings: input.sandboxSettings,
+          sandboxSettings,
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,
           spawnDepth: input.spawnDepth,

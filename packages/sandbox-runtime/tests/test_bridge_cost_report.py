@@ -47,7 +47,7 @@ class TestExecutionCompleteCostReport:
             reported.set()
             await asyncio.Event().wait()
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
         bridge.diff_refresh = Mock()
         await bridge._handle_command({"type": "prompt", **_prompt_command()})
         await asyncio.wait_for(reported.wait(), timeout=1)
@@ -80,7 +80,7 @@ class TestExecutionCompleteCostReport:
                 "messageCostUsd": 0.75,
             }
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
 
         completion = await bridge._handle_prompt(_prompt_command())
         assert completion["success"] is True
@@ -92,7 +92,7 @@ class TestExecutionCompleteCostReport:
             yield {"type": "step_finish", "messageId": "msg-1", "cost": 0.5, "messageCostUsd": 0.5}
             yield {"type": "error", "messageId": "msg-1", "error": "boom"}
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
 
         completion = await bridge._handle_prompt(_prompt_command())
         assert completion["success"] is False
@@ -103,7 +103,7 @@ class TestExecutionCompleteCostReport:
         async def stream(*_args, **_kwargs):
             yield {"type": "token", "messageId": "msg-1", "content": "hi"}
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
 
         completion = await bridge._handle_prompt(_prompt_command())
 
