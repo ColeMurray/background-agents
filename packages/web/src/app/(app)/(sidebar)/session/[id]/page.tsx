@@ -64,7 +64,7 @@ import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
-import { SandboxPreservationBanner } from "@/components/sandbox-preservation-banner";
+import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -451,7 +451,7 @@ export default function SessionPage() {
       )}
 
       {capabilities.read && (
-        <SandboxPreservationBanner
+        <SandboxShutdownBanner
           preservation={sessionState?.sandboxPreservation}
           onRecover={capabilities.lifecycle && ready ? recoverPreservation : undefined}
         />

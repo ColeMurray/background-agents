@@ -7,22 +7,23 @@ const PHASE_MESSAGES: Record<Exclude<SandboxPreservationState["phase"], "running
   capturing: "Saving final sandbox state.",
   retiring: "State saved. Confirming sandbox shutdown.",
   saved: "Sandbox saved and stopped.",
+  restoring: "Restoring the saved sandbox state.",
   failed: "Final sandbox save failed. Changes since the last verified save may be missing.",
   unknown: "Final sandbox save could not be confirmed. Changes may be missing.",
 };
 
-interface SandboxPreservationBannerProps {
+interface SandboxShutdownBannerProps {
   preservation: SandboxPreservationState | null | undefined;
   onRecover?: (action: "retry" | "restore_saved") => void;
 }
 
-export function SandboxPreservationBanner({
-  preservation,
-  onRecover,
-}: SandboxPreservationBannerProps) {
+export function SandboxShutdownBanner({ preservation, onRecover }: SandboxShutdownBannerProps) {
   if (!preservation || preservation.phase === "running") return null;
 
   const isError = preservation.phase === "failed" || preservation.phase === "unknown";
+  const isContinuationPaused =
+    preservation.phase === "saved" && preservation.continuationPaused === true;
+  const canResumeQueuedWork = isContinuationPaused && preservation.hasRecoveryPoint === true;
   const detail = preservation.error ?? preservation.reason;
 
   return (
@@ -36,10 +37,16 @@ export function SandboxPreservationBanner({
       )}
     >
       <span className="font-medium">{PHASE_MESSAGES[preservation.phase]}</span>
+      {isContinuationPaused && (
+        <span className="ml-2">
+          The previous prompt was interrupted and will not replay automatically. Partial work was
+          saved. Queued work will wait until you resume.
+        </span>
+      )}
       {detail && <span className="ml-2">{detail}</span>}
       {preservation.phase === "failed" && onRecover && (
         <button type="button" className="ml-3 underline" onClick={() => onRecover("retry")}>
-          Retry preservation
+          Retry shutdown
         </button>
       )}
       {isError && preservation.hasRecoveryPoint && onRecover && (
@@ -57,6 +64,11 @@ export function SandboxPreservationBanner({
           }}
         >
           Restore saved state
+        </button>
+      )}
+      {canResumeQueuedWork && onRecover && (
+        <button type="button" className="ml-3 underline" onClick={() => onRecover("restore_saved")}>
+          Resume queued work
         </button>
       )}
     </div>

@@ -1,4 +1,4 @@
-# Final sandbox preservation before provider expiry
+# Sandbox checkpoint and graceful shutdown before provider expiry
 
 - **Status:** Implemented locally; automated verification complete, provider-backed release canaries
   required.
@@ -208,9 +208,9 @@ claiming/sending a prompt.
 
 Persist one validated `sandbox_preservation` singleton in the Session SQLite database:
 
-- Generation, provider object locator, lifetime kind, expiry and drain boundary.
+- Generation, provider object locator, lifetime kind and provenance, expiry and drain boundary.
 - Runtime protocol support and matching generation acknowledgement.
-- Phase, operation ID, interrupted message ID, absolute phase deadlines.
+- Phase, operation ID, interrupted message ID, durable continuation pause, absolute phase deadlines.
 - Ordinary-checkpoint in-flight marker.
 - Latest verified recovery receipt and safe failure description.
 
@@ -315,7 +315,9 @@ Only after receipt commit **and** confirmed source retirement:
 
 - Mark the Sandbox stopped, revoke live access URLs, and detach its socket.
 - Persist/publish `saved`.
-- Let the existing queued/new-prompt path restore or resume it automatically.
+- If the shutdown interrupted an active prompt, hold later prompts until the user explicitly resumes
+  queued work. Never replay the interrupted prompt automatically.
+- If shutdown reaches a clean prompt boundary, continue queued/new work automatically.
 - Prefer the explicit final receipt over an older snapshot or persistent-source heuristic.
 - Require compatible runtime version and matching provider ownership.
 - Never silently fresh-spawn if this restore/resume fails.
@@ -358,15 +360,18 @@ read fails after ownership was established, return the successful handle with an
 not a failed startup that loses ownership. Unknown lifetime deliberately holds dispatch; running
 without final preservation is not a supported degraded mode.
 
-The UI's failure-only commands reuse authenticated Session WebSocket handling and existing lifecycle
+The UI's recovery commands reuse authenticated Session WebSocket handling and existing lifecycle
 permission:
 
-- **Retry preservation:** only from `failed`, where capture did not start. Keep admission closed and
+- **Retry shutdown:** only from `failed`, where capture did not start. Keep admission closed and
   retry preparation with remaining time. Unknown capture cannot be retried blindly.
 - **Restore saved state:** only when a verified receipt exists, after an explicit warning that
   changes since the last save may be lost. Confirm old execution ended, then let queued/new work use
-  that receipt. For finite hard expiry, a passed provider cutoff independently proves old execution
-  ended.
+  that receipt. Only authoritative provider expiry can independently prove the current source
+  execution ended. A conservative request-start bound, or an older record without provenance, still
+  requires verified retirement; proof for an earlier source does not cover a later restore.
+- **Resume queued work:** only from `saved` when an active prompt was interrupted and a verified
+  recovery point exists. Resume from that checkpoint without replaying the interrupted prompt.
 - If no usable receipt/known source exists, retain the visible hold. Starting a separate session
   remains an existing user action, not an automatic data-loss fallback.
 
@@ -384,8 +389,10 @@ safe error text, and whether recovery is available. It excludes provider artifac
 private access credentials.
 
 The reducer replaces this state from the initial/reconnect snapshot and applies semantic updates.
-Show compact stopping/saving/retiring/saved banners and persistent failed/unknown warnings.
-Successful preservation adds no new Resume button or mandatory user step.
+Show compact stopping/saving/retiring/saved banners and persistent failed/unknown warnings. When a
+successful checkpoint interrupted an active prompt, explain that its partial work was saved, the
+interrupted prompt will not replay automatically, and later prompts remain held behind an explicit
+**Resume queued work** action. Clean successful shutdowns add no mandatory user step.
 
 ## 10. Implementation map
 
@@ -440,8 +447,9 @@ Ship runtime protocol support and rebuild cached repository images before enabli
 Plane for new launches. Runtime generation 71 raises the rebuild floor without raising the existing
 snapshot compatibility floor or silently discarding older saved state. Existing active generations
 without preservation metadata remain legacy/unprotected until a new launch; do not fabricate an
-expiry from deployment time. Restored old runtime images without the protocol are held visibly
-rather than falsely advertised as protected.
+expiry from deployment time. Eligible older snapshots and retained sandboxes remain restorable under
+legacy lifecycle policy; they do not acquire confirmed-shutdown guarantees. A new launch selected
+for confirmed shutdown that fails its protocol handshake remains visibly held.
 
 Structured `sandbox.preservation` logs carry phase, provider, generation, operation ID and expiry.
 Persisted warnings make uncertain outcomes visible after reload. Provider-backed canaries and
@@ -452,7 +460,8 @@ production deployment were not performed as part of local implementation.
 The independent design review identified four avoidable expansions. This implementation incorporates
 the narrow alternatives:
 
-- Existing automatic queued/new-prompt continuation after success; acknowledgement only on failure.
+- Explicit continuation after an active prompt is interrupted; clean successful shutdowns still need
+  no acknowledgement.
 - Active prompt/tool containment, not whole-workspace service shutdown.
 - Honest persistent unknown outcomes, not mandatory provider-side result journals.
 - Existing generation identity, not a second lease epoch or clock protocol.
