@@ -14,7 +14,7 @@ import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } fro
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
@@ -202,7 +202,10 @@ function buildQueue() {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
     // Mirrors the attached socket unless a test withholds it, the way the
     // registry does while a bridge is attached ahead of its boot.
-    getReadySandboxSocket: vi.fn((): WebSocket | null => wsManager.getSandboxSocket()),
+    getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => {
+      const socket = wsManager.getSandboxSocket();
+      return socket ? { kind: "dispatch", socket } : { kind: "unavailable" };
+    }),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
 
@@ -681,7 +684,7 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-boot" }));
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
-    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting" });
 
     await h.queue.processMessageQueue();
     await h.backgroundTasks.settle();
