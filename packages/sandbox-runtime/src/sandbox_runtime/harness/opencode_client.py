@@ -162,26 +162,33 @@ class OpenCodeClient:
     ) -> bool:
         """Confirm OpenCode reports this session idle within one caller budget."""
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                return False
-            try:
-                response = await self._client().get(
-                    f"{self._base_url}/session/status",
-                    timeout=min(self._request_timeout_seconds, remaining),
-                )
-                if response.status_code == 200:
-                    statuses = response.json()
-                    if isinstance(statuses, dict):
-                        if opencode_session_id not in statuses:
-                            return True
-                        status = statuses[opencode_session_id]
-                        if isinstance(status, dict) and status.get("type") == "idle":
-                            return True
-            except Exception as error:
-                self._log.warn("bridge.stop_status_error", exc=error)
-            await asyncio.sleep(min(EXECUTION_STOP_POLL_SECONDS, remaining))
+        try:
+            async with asyncio.timeout_at(deadline):
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        return False
+                    try:
+                        response = await self._client().get(
+                            f"{self._base_url}/session/status",
+                            timeout=min(self._request_timeout_seconds, remaining),
+                        )
+                        if response.status_code == 200:
+                            statuses = response.json()
+                            if isinstance(statuses, dict):
+                                if opencode_session_id not in statuses:
+                                    return True
+                                status = statuses[opencode_session_id]
+                                if isinstance(status, dict) and status.get("type") == "idle":
+                                    return True
+                    except Exception as error:
+                        self._log.warn("bridge.stop_status_error", exc=error)
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        return False
+                    await asyncio.sleep(min(EXECUTION_STOP_POLL_SECONDS, remaining))
+        except TimeoutError:
+            return False
 
     async def get_messages(self, opencode_session_id: str) -> list[Any] | None:
         """Fetch the session's message list; ``None`` when OpenCode rejects the fetch."""
