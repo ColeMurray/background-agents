@@ -5,6 +5,7 @@ import type { SandboxAccessKind, SandboxRow } from "./types";
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
+import { decryptStoredAccessValue } from "./sandbox-access";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 type RawSandboxRow = Omit<SandboxRow, "status"> & { status: string };
@@ -399,6 +400,15 @@ export class SandboxRepository {
       url,
       await this.encrypt(secret)
     );
+  }
+
+  /** Read and decrypt one access artifact's stored secret. */
+  async getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null> {
+    const { secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
+    const rows = this.rows<{ secret: string | null }>(
+      this.sql.exec(`SELECT ${secretColumn} AS secret FROM sandbox LIMIT 1`)
+    );
+    return decryptStoredAccessValue(rows[0]?.secret ?? null, this.encryptionKey, this.log);
   }
 
   /** Update one access artifact's URL while preserving its stored secret. */

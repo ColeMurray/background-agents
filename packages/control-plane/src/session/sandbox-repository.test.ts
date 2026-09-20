@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxRepository } from "./sandbox-repository";
 import { initSchema } from "./schema";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
-import { decryptToken, generateEncryptionKey } from "../auth/crypto";
+import { decryptToken, encryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
 
@@ -352,6 +352,13 @@ describe("SandboxRepository", () => {
       expect(mock.calls[0].query).toContain("SET ttyd_url = ?");
       expect(mock.calls[0].query).not.toContain("ttyd_token");
       expect(mock.calls[0].params).toEqual(["https://ttyd.test/refreshed"]);
+    });
+
+    it("reads a decrypted access secret", async () => {
+      const encrypted = await encryptToken("ttyd-token", TEST_ENCRYPTION_KEY);
+      mock.setData(`SELECT ttyd_token AS secret FROM sandbox LIMIT 1`, [{ secret: encrypted }]);
+
+      await expect(repository.getSandboxAccessSecret("ttyd")).resolves.toBe("ttyd-token");
     });
   });
 

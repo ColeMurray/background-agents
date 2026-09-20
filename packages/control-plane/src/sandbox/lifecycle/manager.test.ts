@@ -43,6 +43,7 @@ import {
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { hashToken } from "../../auth/crypto";
+import { mintJwt } from "../../auth/jwt";
 import type * as AuthCrypto from "../../auth/crypto";
 
 // Gate for the #1589 admission-race suite: hashToken passes through to the
@@ -276,6 +277,10 @@ function createMockStorage(
         sandbox[ACCESS_FIELDS[kind].url] = url;
         sandbox[ACCESS_FIELDS[kind].secret] = secret;
       }
+    }),
+    getSandboxAccessSecret: vi.fn(async (kind: SandboxAccessKind) => {
+      calls.push(`getSandboxAccessSecret:${kind}`);
+      return sandbox?.[ACCESS_FIELDS[kind].secret] ?? null;
     }),
     updateSandboxAccessUrl: vi.fn((kind: SandboxAccessKind, url: string) => {
       calls.push(`updateSandboxAccessUrl:${kind}:${url}`);
@@ -1500,14 +1505,21 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it("refreshes terminal URL after resume without replacing its token", async () => {
+      const ttydToken = await mintJwt(
+        { exp: Math.floor(Date.now() / 1000) + 60 },
+        "sandbox-auth-token"
+      );
       const sandbox = createMockSandbox({
         status: "stopped",
         modal_object_id: "same-provider-obj",
         snapshot_image_id: null,
         ttyd_url: null,
-        ttyd_token: "encrypted-terminal-token",
+        ttyd_token: ttydToken,
       });
-      const storage = createMockStorage(createMockSession(), sandbox);
+      const storage = createMockStorage(
+        createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
+        sandbox
+      );
       const provider = createMockProvider({
         capabilities: { supportsPersistentResume: true },
         resumeSandbox: vi.fn(async () => ({
@@ -1530,11 +1542,75 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(sandbox.ttyd_url).toBe("https://terminal.test/refreshed");
-      expect(sandbox.ttyd_token).toBe("encrypted-terminal-token");
+      expect(sandbox.ttyd_token).toBe(ttydToken);
       expect(storage.calls).toContain(
         "updateSandboxAccessUrl:ttyd:https://terminal.test/refreshed"
       );
     });
+
+    it.each(["missing", "expired"] as const)(
+      "replaces a resumable sandbox when its terminal token is %s",
+      async (credentialState) => {
+        const ttydToken =
+          credentialState === "expired"
+            ? await mintJwt({ exp: Math.floor(Date.now() / 1000) - 1 }, "sandbox-auth-token")
+            : null;
+        const sandbox = createMockSandbox({
+          status: "stopped",
+          modal_object_id: "old-provider-obj",
+          snapshot_image_id: null,
+          ttyd_url: null,
+          ttyd_token: ttydToken,
+        });
+        const storage = createMockStorage(
+          createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
+          sandbox
+        );
+        const createSandbox = vi.fn(async (config: CreateSandboxConfig) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "replacement-provider-obj",
+          createdAt: Date.now(),
+          ttydUrl: "https://terminal.test/replacement",
+        }));
+        const resumeSandbox = vi.fn(async () => ({
+          success: true,
+          providerObjectId: "old-provider-obj",
+          ttydUrl: "https://terminal.test/resumed",
+        }));
+        const stopSandbox = vi.fn(async () => ({ success: true }));
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+          createSandbox,
+          resumeSandbox,
+          stopSandbox,
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(resumeSandbox).toHaveBeenCalled();
+        expect(stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerObjectId: "old-provider-obj",
+            reason: "respawn",
+          })
+        );
+        expect(createSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ sandboxSettings: { terminalEnabled: true } })
+        );
+        expect(sandbox.ttyd_token).not.toBeNull();
+        expect(sandbox.ttyd_token).not.toBe(ttydToken);
+      }
+    );
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
       // The row starts out describing a sandbox that reported a compatible

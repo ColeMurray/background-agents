@@ -57,7 +57,7 @@ import {
 } from "./decisions";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
-import { mintJwt } from "../../auth/jwt";
+import { isJwtUnexpired, mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import { parsePersistedSandboxSettings } from "../settings";
 import {
@@ -205,6 +205,8 @@ export interface SandboxStorage {
   setLastSpawnError(error: string | null, timestamp: number | null): void;
   /** Set one access artifact's URL and (encrypted) secret on the sandbox row */
   updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
+  /** Read and decrypt one access artifact's stored secret */
+  getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null>;
   /** Update one access artifact's URL while preserving its stored secret */
   updateSandboxAccessUrl(kind: SandboxAccessKind, url: string): void | Promise<void>;
   /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
@@ -1250,6 +1252,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
       if (result.ttydUrl) {
+        const ttydToken = await this.storage.getSandboxAccessSecret("ttyd");
+        if (!isJwtUnexpired(ttydToken)) {
+          this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
+            event: "sandbox.resume_terminal_credential_unavailable",
+            provider_object_id: finalProviderObjectId,
+            reason: ttydToken ? "invalid_or_expired" : "missing",
+          });
+          await this.doSpawn();
+          return;
+        }
         await this.storage.updateSandboxAccessUrl("ttyd", result.ttydUrl);
       }
 
