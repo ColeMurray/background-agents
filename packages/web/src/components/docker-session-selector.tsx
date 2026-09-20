@@ -7,9 +7,11 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 export function DockerSessionSelector({
   value,
   onChange,
+  disabled = false,
 }: {
   value: boolean | undefined;
   onChange: (value: boolean | undefined) => void;
+  disabled?: boolean;
 }) {
   const { data } = useSWR("/api/session-capabilities", async () => {
     const response = await browserApiFetch("/api/session-capabilities");
@@ -29,6 +31,7 @@ export function DockerSessionSelector({
       <select
         aria-label="Sandbox execution"
         className="ml-2 rounded border border-border bg-background px-2 py-1"
+        disabled={disabled}
         value={value === undefined ? "inherit" : String(value)}
         onChange={(event) =>
           onChange(event.target.value === "inherit" ? undefined : event.target.value === "true")

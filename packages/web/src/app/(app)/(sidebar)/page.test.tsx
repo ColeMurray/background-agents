@@ -384,6 +384,46 @@ describe("Home", () => {
     expect(mocks.routerPush).not.toHaveBeenCalled();
   });
 
+  it("locks sandbox execution while a warmed session prompt is pending", async () => {
+    let finishPrompt!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions") {
+        return Response.json({ sessionId: "session-1", status: "created" });
+      }
+      if (url === "/api/sessions/session-1/prompt") {
+        return new Promise<Response>((resolve) => {
+          finishPrompt = resolve;
+        });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+    const prompt = screen.getByPlaceholderText("What do you want to build?");
+    const execution = screen.getByRole("combobox", { name: "Sandbox execution" });
+
+    await user.type(prompt, "Keep the warmed sandbox");
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/sessions")
+      ).toHaveLength(1)
+    );
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(execution).toBeDisabled());
+
+    await user.selectOptions(execution, "false");
+    expect(execution).toHaveValue("inherit");
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/archive"))).toBe(
+      false
+    );
+
+    finishPrompt(Response.json({ error: "prompt failed" }, { status: 500 }));
+    await screen.findByText("prompt failed");
+    expect(execution).toBeEnabled();
+    expect(execution).toHaveValue("inherit");
+  });
+
   it("invalidates a warmed session when the managed skill selection changes", async () => {
     const user = userEvent.setup();
     render(<Home />);

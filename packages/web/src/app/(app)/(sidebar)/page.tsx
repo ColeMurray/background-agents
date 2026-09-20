@@ -397,7 +397,11 @@ export default function Home() {
   return (
     <HomeContent
       executionSelector={
-        <DockerSessionSelector value={dockerEnabled} onChange={setDockerEnabled} />
+        <DockerSessionSelector
+          value={dockerEnabled}
+          onChange={setDockerEnabled}
+          disabled={creating}
+        />
       }
       isAuthenticated={!!session}
       canCreateSession={canCreateSession}
