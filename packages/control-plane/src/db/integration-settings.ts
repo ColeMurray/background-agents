@@ -11,6 +11,7 @@ import {
   getIntegrationGlobalSettingsSchema,
   getIntegrationRepoSettingsSchema,
   normalizeRoutingRules,
+  slackRoutingRuleSchema,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
@@ -651,16 +652,17 @@ export class IntegrationSettingsStore {
         `routingRules cannot exceed ${MAX_SLACK_ROUTING_RULES} entries`
       );
     }
+    const parsedRules: SlackRoutingRule[] = [];
     for (const rule of rules) {
       if (typeof rule !== "object" || rule === null) {
         throw new IntegrationSettingsValidationError("each routing rule must be an object");
       }
-      const { keyword, target, targetType } = rule as {
-        keyword?: unknown;
-        target?: unknown;
-        targetType?: unknown;
-      };
-      if (typeof keyword !== "string" || keyword.trim() === "") {
+      const parsedRule = slackRoutingRuleSchema.safeParse(rule);
+      if (!parsedRule.success) {
+        throw new IntegrationSettingsValidationError("each routing rule must be an object");
+      }
+      const { keyword, target, targetType } = parsedRule.data;
+      if (keyword.trim() === "") {
         throw new IntegrationSettingsValidationError(
           "routing rule keyword must be a non-empty string"
         );
@@ -670,14 +672,9 @@ export class IntegrationSettingsStore {
           `routing rule keyword must be ${MAX_SLACK_ROUTING_KEYWORD_LENGTH} characters or fewer`
         );
       }
-      if (targetType !== undefined && targetType !== "repository" && targetType !== "environment") {
-        throw new IntegrationSettingsValidationError(
-          'routing rule targetType must be "repository" or "environment"'
-        );
-      }
       if (targetType === "environment") {
         // The stable environment id, never the rename-able display name.
-        if (typeof target !== "string" || !isEnvironmentId(target.trim())) {
+        if (!isEnvironmentId(target.trim())) {
           throw new IntegrationSettingsValidationError(
             "routing rule target must be an environment id (env_…) when targetType is environment"
           );
@@ -685,8 +682,7 @@ export class IntegrationSettingsStore {
         // The owner segment excludes ":" (GitHub forbids it) so a repository
         // target can never collide with the bots' "env:<id>" value encoding.
       } else {
-        const repository =
-          typeof target === "string" ? parseRepositoryFullName(target.trim()) : null;
+        const repository = parseRepositoryFullName(target.trim());
         if (
           !repository ||
           /[\s:]/.test(repository.repoOwner) ||
@@ -697,8 +693,9 @@ export class IntegrationSettingsStore {
           );
         }
       }
+      parsedRules.push(parsedRule.data);
     }
-    return normalizeRoutingRules(rules as SlackRoutingRule[]);
+    return normalizeRoutingRules(parsedRules);
   }
 }
 
