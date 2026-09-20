@@ -45,6 +45,7 @@ from .vcs_env import inject_vcs_env_vars
 log = get_logger("manager")
 
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
+ALLOCATION_CLEANUP_TIMEOUT_SECONDS = 30
 MAX_TUNNEL_PORTS = 10
 DEFAULT_VNC_ENABLED = False
 _RESERVED_LAUNCH_ENV_VARS = {
@@ -525,7 +526,7 @@ class SandboxManager:
         except BaseException:
 
             async def terminate_failed_allocation() -> None:
-                async with asyncio.timeout(30):
+                async with asyncio.timeout(ALLOCATION_CLEANUP_TIMEOUT_SECONDS):
                     await sandbox.terminate.aio()
 
             cleanup = asyncio.create_task(terminate_failed_allocation())
