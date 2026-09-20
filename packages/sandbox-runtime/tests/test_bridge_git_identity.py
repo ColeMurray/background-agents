@@ -35,7 +35,7 @@ class TestGitIdentityConfiguration:
     async def test_uses_author_identity_when_provided(self, bridge: AgentBridge):
         """Should use the attributed-user identity selected by the control plane."""
         bridge._configure_git_identity = AsyncMock()
-        bridge.harness = ScriptedHarness(empty_event_stream)
+        bridge.boot_attach.harness = ScriptedHarness(empty_event_stream)
         bridge._send_event = AsyncMock()
 
         cmd = {
@@ -62,7 +62,7 @@ class TestGitIdentityConfiguration:
     @pytest.mark.asyncio
     async def test_uses_agent_only_mode_when_selected(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge.harness = ScriptedHarness(empty_event_stream)
+        bridge.boot_attach.harness = ScriptedHarness(empty_event_stream)
         bridge._send_execution_complete = AsyncMock()
 
         cmd = {
@@ -82,7 +82,7 @@ class TestGitIdentityConfiguration:
     @pytest.mark.asyncio
     async def test_rejects_an_incomplete_attributed_identity(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge.harness = ScriptedHarness(empty_event_stream)
+        bridge.boot_attach.harness = ScriptedHarness(empty_event_stream)
         bridge._send_event = AsyncMock()
 
         cmd = {
@@ -110,7 +110,7 @@ class TestGitIdentityConfiguration:
     @pytest.mark.asyncio
     async def test_rejects_an_unknown_identity_mode(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge.harness = ScriptedHarness(empty_event_stream)
+        bridge.boot_attach.harness = ScriptedHarness(empty_event_stream)
         bridge._send_event = AsyncMock()
 
         cmd = {
@@ -138,7 +138,7 @@ class TestGitIdentityConfiguration:
     @pytest.mark.asyncio
     async def test_rejects_a_missing_git_identity_mode(self, bridge: AgentBridge):
         bridge._configure_git_identity = AsyncMock()
-        bridge.harness = ScriptedHarness(empty_event_stream)
+        bridge.boot_attach.harness = ScriptedHarness(empty_event_stream)
         bridge._send_event = AsyncMock()
 
         cmd = {
@@ -188,7 +188,7 @@ class TestConfigureGitIdentity:
             side_effect=GitSigningError("Commit signing configuration unavailable")
         )
         stream = MagicMock()
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
         bridge._send_event = AsyncMock()
 
         await bridge._handle_prompt(
