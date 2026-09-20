@@ -200,8 +200,10 @@ function toEntry(row: SessionRow): SessionEntry {
 }
 
 function parseSessionRow(row: unknown): SessionRow | null {
+  if (row === null || row === undefined) return null;
   const parsed = sessionRowSchema.safeParse(row);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) throw new Error("Malformed persisted session index row");
+  return parsed.data;
 }
 
 function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {

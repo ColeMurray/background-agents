@@ -636,18 +636,18 @@ describe("SessionIndexStore", () => {
     it.each([
       ["status", { status: "unknown" }],
       ["spawn source", { spawn_source: "cron" }],
-    ])("returns null for a persisted session row with invalid %s", async (_field, updates) => {
+    ])("rejects a persisted session row with invalid %s", async (_field, updates) => {
       await store.create(makeSession());
       db.updateRawSessionRow("test-id", updates);
 
-      await expect(store.get("test-id")).resolves.toBeNull();
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
     });
 
-    it("returns null for a partial persisted session row", async () => {
+    it("rejects a partial persisted session row", async () => {
       await store.create(makeSession());
       db.updateRawSessionRow("test-id", { model: undefined });
 
-      await expect(store.get("test-id")).resolves.toBeNull();
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
     });
 
     it("returns null when not found", async () => {

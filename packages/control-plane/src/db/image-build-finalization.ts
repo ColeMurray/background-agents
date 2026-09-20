@@ -43,6 +43,9 @@ const imageBuildFinalizationRowSchema = z.object({
   finalization_lease_expires_at: z.number().nullable(),
   provider_session_cleanup_pending: z.number().nullable(),
   callback_token_used_at: z.number().nullable(),
+  provider_operation_ref: z.string().nullable(),
+  provider_operation_deadline_at: z.number().nullable(),
+  created_at: z.number(),
 });
 
 /** Result of atomically consuming or replaying a callback completion. */
@@ -257,8 +260,10 @@ export class ImageBuildFinalizationStore {
       )
       .bind(buildId)
       .first();
+    if (row === null) return null;
     const parsed = imageBuildFinalizationRowSchema.safeParse(row);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) throw new Error(`Malformed image build finalization row: ${buildId}`);
+    return parsed.data;
   }
 
   /**

@@ -101,7 +101,7 @@ describe("ImageBuildStore status projection", () => {
   });
 
   it.each([
-    ["provider", { provider: "daytona" }],
+    ["provider", { provider: "unknown" }],
     ["status", { status: "queued" }],
     ["scope kind", { scope_kind: "workspace" }],
   ])("rejects a status row with invalid %s", async (_field, overrides) => {

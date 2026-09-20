@@ -30,6 +30,9 @@ const VALID_FINALIZATION_ROW = {
   finalization_lease_expires_at: null,
   provider_session_cleanup_pending: 1,
   callback_token_used_at: 1_500,
+  provider_operation_ref: "oi-image-build-1",
+  provider_operation_deadline_at: 30_000,
+  created_at: 1_000,
 };
 
 function database(row: Record<string, unknown> | null): SqlDatabase {
@@ -110,14 +113,16 @@ describe("ImageBuildFinalizationStore finalization rows", () => {
   });
 
   it.each([
-    ["provider", { provider: "daytona" }],
+    ["provider", { provider: "unknown" }],
     ["status", { status: "queued" }],
   ])("rejects a finalization row with invalid %s", async (_field, override) => {
     const store = new ImageBuildFinalizationStore(
       database({ ...VALID_FINALIZATION_ROW, ...override })
     );
 
-    await expect(store.getBuild("build-1")).resolves.toBeNull();
+    await expect(store.getBuild("build-1")).rejects.toThrow(
+      "Malformed image build finalization row: build-1"
+    );
   });
 
   it("rejects a partial finalization row", async () => {
@@ -125,6 +130,8 @@ describe("ImageBuildFinalizationStore finalization rows", () => {
     delete partialRow.runtime_version;
     const store = new ImageBuildFinalizationStore(database(partialRow));
 
-    await expect(store.getBuild("build-1")).resolves.toBeNull();
+    await expect(store.getBuild("build-1")).rejects.toThrow(
+      "Malformed image build finalization row: build-1"
+    );
   });
 });
