@@ -1,0 +1,317 @@
+import { describe, expect, it } from "vitest";
+import { evaluateAlarmPolicy, type AlarmPolicyConfig, type AlarmSandbox } from "./alarm-policy";
+import type { InactivityAction } from "./decisions";
+
+const now = 10_000_000;
+const config: AlarmPolicyConfig = {
+  connectingTimeout: { timeoutMs: 120_000 },
+  heartbeat: { timeoutMs: 90_000 },
+  bootBudget: { timeoutMs: 1_800_000 },
+  inactivity: { timeoutMs: 600_000, extensionMs: 300_000, minCheckIntervalMs: 30_000 },
+};
+
+function row(overrides: Partial<AlarmSandbox> = {}): AlarmSandbox {
+  return {
+    status: "connecting",
+    created_at: now - 60_000,
+    last_heartbeat: null,
+    last_activity: null,
+    boot_phase: null,
+    ...overrides,
+  };
+}
+
+const schedule = { action: "schedule", nextCheckMs: config.inactivity.minCheckIntervalMs } as const;
+
+describe("evaluateAlarmPolicy", () => {
+  it("prioritizes terminal, connect watchdog, stale heartbeat, boot budget, then inactivity", () => {
+    const expired = row({
+      created_at: now - config.bootBudget.timeoutMs,
+      last_activity: now - config.inactivity.timeoutMs,
+    });
+
+    expect(evaluateAlarmPolicy({ ...expired, status: "failed" }, config, now, 0)).toEqual({
+      action: "no_action",
+    });
+    expect(evaluateAlarmPolicy(expired, config, now, 0).action).toBe("connecting_timeout");
+    expect(
+      evaluateAlarmPolicy(
+        { ...expired, last_heartbeat: now - config.heartbeat.timeoutMs - 1 },
+        config,
+        now,
+        0
+      ).action
+    ).toBe("heartbeat_stale");
+    expect(evaluateAlarmPolicy({ ...expired, last_heartbeat: now }, config, now, 0).action).toBe(
+      "boot_budget_exceeded"
+    );
+    expect(
+      evaluateAlarmPolicy({ ...expired, status: "ready", last_heartbeat: now }, config, now, 0)
+    ).toEqual({ action: "timeout", shouldSnapshot: true });
+    // A ready sandbox with both deadlines expired still takes the heartbeat exit.
+    expect(
+      evaluateAlarmPolicy({ ...expired, status: "ready", last_heartbeat: 0 }, config, now, 0).action
+    ).toBe("heartbeat_stale");
+  });
+
+  it("ignores a missing row", () => {
+    expect(evaluateAlarmPolicy(null, config, now, 0)).toEqual({ action: "no_action" });
+  });
+
+  it.each(["stopped", "stale", "failed"] as const)(
+    "ignores a %s row even with stale timestamps",
+    (status) => {
+      expect(
+        evaluateAlarmPolicy(
+          row({ status, created_at: 0, last_heartbeat: 0, last_activity: 0 }),
+          config,
+          now,
+          0
+        )
+      ).toEqual({ action: "no_action" });
+    }
+  );
+
+  describe.each(["spawning", "connecting"] as const)("%s", (status) => {
+    it.each([-1, 0, 1])("checks the connect watchdog at its boundary (%i ms)", (offsetMs) => {
+      const elapsedMs = config.connectingTimeout.timeoutMs + offsetMs;
+      expect(
+        evaluateAlarmPolicy(row({ status, created_at: now - elapsedMs }), config, now, 0)
+      ).toEqual(offsetMs < 0 ? schedule : { action: "connecting_timeout", elapsedMs });
+    });
+
+    it("stands down the watchdog once a heartbeat proves connection", () => {
+      expect(
+        evaluateAlarmPolicy(
+          row({ status, created_at: now - 500_000, last_heartbeat: now }),
+          config,
+          now,
+          0
+        )
+      ).toEqual(schedule);
+    });
+
+    it("selects boot-failure recovery for a stale heartbeat", () => {
+      expect(
+        evaluateAlarmPolicy(
+          row({ status, last_heartbeat: now - config.heartbeat.timeoutMs - 1 }),
+          config,
+          now,
+          0
+        )
+      ).toEqual({
+        action: "heartbeat_stale",
+        ageMs: 90_001,
+        isBooting: true,
+      });
+    });
+
+    it.each([-1, 0, 1])("checks the boot budget at its boundary (%i ms)", (offsetMs) => {
+      const elapsedMs = config.bootBudget.timeoutMs + offsetMs;
+      const decision = evaluateAlarmPolicy(
+        row({ status, created_at: now - elapsedMs, last_heartbeat: now }),
+        config,
+        now,
+        10
+      );
+      if (offsetMs < 0) {
+        expect(decision).toEqual(schedule);
+      } else {
+        expect(decision).toEqual({
+          action: "boot_budget_exceeded",
+          elapsedMs,
+          reason:
+            "Sandbox boot exceeded 30 minutes while booting. Raise SANDBOX_BOOT_TIMEOUT_MS if the boot legitimately needs longer, or make it return sooner.",
+        });
+      }
+    });
+
+    it("does not treat a boot as idle, even with old activity and no clients", () => {
+      expect(evaluateAlarmPolicy(row({ status, last_activity: 0 }), config, now, 0)).toEqual(
+        schedule
+      );
+    });
+  });
+
+  it.each(["pending", "ready", "snapshotting"] as const)(
+    "does not impose a boot budget on %s",
+    (status) => {
+      expect(
+        evaluateAlarmPolicy(row({ status, created_at: 0, last_heartbeat: now }), config, now, 0)
+      ).toEqual(schedule);
+    }
+  );
+
+  it.each([-1, 0, 1])(
+    "marks heartbeats stale only strictly past the threshold (%i ms)",
+    (offsetMs) => {
+      const ageMs = config.heartbeat.timeoutMs + offsetMs;
+      expect(
+        evaluateAlarmPolicy(row({ status: "ready", last_heartbeat: now - ageMs }), config, now, 0)
+      ).toEqual(
+        offsetMs <= 0
+          ? schedule
+          : {
+              action: "heartbeat_stale",
+              ageMs,
+              isBooting: false,
+            }
+      );
+    }
+  );
+
+  it("treats a heartbeat timestamp of zero as a connection, not an absent heartbeat", () => {
+    expect(
+      evaluateAlarmPolicy(row({ created_at: 0, last_heartbeat: 0 }), config, now, 0).action
+    ).toBe("heartbeat_stale");
+  });
+
+  it.each<[number | null, number, InactivityAction]>([
+    [null, 0, schedule],
+    [now - 300_000, 0, { action: "schedule", nextCheckMs: 300_000 }],
+    [now - 599_999, 0, schedule],
+    [now - 600_000, 0, { action: "timeout", shouldSnapshot: true }],
+    [now - 600_001, 0, { action: "timeout", shouldSnapshot: true }],
+    [now - 600_000, 2, { action: "extend", extensionMs: 300_000, shouldWarn: true }],
+    [now - 600_000, 1, { action: "extend", extensionMs: 300_000, shouldWarn: true }],
+    [now - 599_999, 1, schedule],
+    [0, 0, { action: "timeout", shouldSnapshot: true }],
+  ])("evaluates inactivity with activity %s and %i clients", (last_activity, clients, expected) => {
+    expect(
+      evaluateAlarmPolicy(
+        row({
+          status: "ready",
+          last_heartbeat: now,
+          last_activity,
+        }),
+        config,
+        now,
+        clients
+      )
+    ).toEqual(expected);
+  });
+
+  it.each(["pending", "snapshotting"] as const)("does not stop an idle %s row", (status) => {
+    expect(
+      evaluateAlarmPolicy(row({ status, last_heartbeat: now, last_activity: 0 }), config, now, 0)
+    ).toEqual(schedule);
+  });
+
+  it("still checks inactivity without a heartbeat on a ready row", () => {
+    expect(evaluateAlarmPolicy(row({ status: "ready", last_activity: 0 }), config, now, 0)).toEqual(
+      { action: "timeout", shouldSnapshot: true }
+    );
+  });
+
+  it("honors custom heartbeat and inactivity settings", () => {
+    const custom = {
+      ...config,
+      heartbeat: { timeoutMs: 50 },
+      inactivity: { timeoutMs: 100, extensionMs: 80, minCheckIntervalMs: 10 },
+    };
+    expect(
+      evaluateAlarmPolicy(row({ status: "ready", last_heartbeat: now - 51 }), custom, now, 0)
+    ).toEqual({ action: "heartbeat_stale", ageMs: 51, isBooting: false });
+    const idle = row({ status: "ready", last_heartbeat: now, last_activity: now - 100 });
+    expect(evaluateAlarmPolicy(idle, custom, now, 1)).toEqual({
+      action: "extend",
+      extensionMs: 80,
+      shouldWarn: true,
+    });
+    expect(evaluateAlarmPolicy({ ...idle, last_activity: now - 99 }, custom, now, 0)).toEqual({
+      action: "schedule",
+      nextCheckMs: 10,
+    });
+  });
+
+  it.each([
+    ["starting", "starting the runtime"],
+    ["sync", "cloning for group/subgroup/api"],
+    ["setup", "running setup.sh for group/subgroup/api"],
+    ["start", "running start.sh for group/subgroup/api"],
+    ["skills", "installing managed skills"],
+    ["harness", "starting the agent"],
+  ])("names the %s boot phase in the failure", (phase, description) => {
+    const decision = evaluateAlarmPolicy(
+      row({
+        created_at: now - config.bootBudget.timeoutMs,
+        last_heartbeat: now,
+        boot_phase: JSON.stringify({
+          phase,
+          status: "started",
+          repoOwner: "group/subgroup",
+          repoName: "api",
+        }),
+      }),
+      config,
+      now,
+      0
+    );
+    expect(decision).toEqual({
+      action: "boot_budget_exceeded",
+      elapsedMs: config.bootBudget.timeoutMs,
+      reason: expect.stringContaining(`while ${description}.`),
+    });
+  });
+
+  it.each([
+    null,
+    "",
+    "not-json",
+    "null",
+    "{}",
+    '{"phase":"future","status":"started"}',
+    '{"phase":"setup"}',
+    '{"phase":"setup","status":"unknown"}',
+    '{"phase":"setup","status":"started","repoOwner":42}',
+  ])("falls back to booting for absent or invalid phase %s", (boot_phase) => {
+    expect(
+      evaluateAlarmPolicy(row({ created_at: 0, last_heartbeat: now, boot_phase }), config, now, 0)
+    ).toMatchObject({
+      action: "boot_budget_exceeded",
+      reason: expect.stringContaining("while booting."),
+    });
+  });
+
+  it("uses the configured boot budget and omits incomplete repository identity", () => {
+    expect(
+      evaluateAlarmPolicy(
+        row({
+          created_at: now - 250_000,
+          last_heartbeat: now,
+          boot_phase: JSON.stringify({ phase: "setup", status: "started", repoOwner: "acme" }),
+        }),
+        { ...config, bootBudget: { timeoutMs: 250_000 } },
+        now,
+        0
+      )
+    ).toMatchObject({
+      action: "boot_budget_exceeded",
+      reason: expect.stringContaining("exceeded 4 minutes while running setup.sh."),
+    });
+  });
+
+  it.each(["completed", "failed"])("describes a valid %s phase report", (status) => {
+    expect(
+      evaluateAlarmPolicy(
+        row({
+          created_at: 0,
+          last_heartbeat: now,
+          boot_phase: JSON.stringify({
+            phase: "harness",
+            status,
+            bootSeq: 5,
+            sandboxId: "sb-123",
+            elapsedMs: 100,
+          }),
+        }),
+        config,
+        now,
+        0
+      )
+    ).toMatchObject({
+      action: "boot_budget_exceeded",
+      reason: expect.stringContaining("while starting the agent."),
+    });
+  });
+});

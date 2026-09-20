@@ -21,10 +21,6 @@ import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import {
-  sandboxBootPhaseSchema,
-  type SandboxBootPhase,
-} from "@open-inspect/shared/types/sandbox-events";
-import {
   sessionHasRepository,
   type SandboxAccessKind,
   type SandboxRow,
@@ -41,10 +37,6 @@ import {
 import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
-  evaluateInactivityTimeout,
-  evaluateHeartbeatHealth,
-  evaluateConnectingTimeout,
-  evaluateBootBudget,
   evaluateWarmDecision,
   isDeadSandboxStatus,
   shouldStopSandboxOnSessionCancel,
@@ -56,11 +48,8 @@ import {
   DEFAULT_BOOT_BUDGET_CONFIG,
   type CircuitBreakerConfig,
   type SpawnConfig,
-  type InactivityConfig,
-  type HeartbeatConfig,
-  type ConnectingTimeoutConfig,
-  type BootBudgetConfig,
 } from "./decisions";
+import { evaluateAlarmPolicy, type AlarmDecision, type AlarmPolicyConfig } from "./alarm-policy";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
@@ -256,13 +245,9 @@ export interface IdGenerator {
 /**
  * Complete lifecycle configuration.
  */
-export interface SandboxLifecycleConfig {
+export interface SandboxLifecycleConfig extends AlarmPolicyConfig {
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
-  inactivity: InactivityConfig;
-  heartbeat: HeartbeatConfig;
-  connectingTimeout: ConnectingTimeoutConfig;
-  bootBudget: BootBudgetConfig;
   controlPlaneUrl: string;
   /** Default model ID used when the session has no model override. */
   model: string;
@@ -292,39 +277,6 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
 };
-
-/**
- * The human-readable name of a boot phase for the boot-budget failure text.
- * Names the script where there is one, since that is what the operator will
- * go and look at.
- */
-function describeBootPhase(bootPhaseJson: string | null): string {
-  let phase: SandboxBootPhase | null = null;
-  if (bootPhaseJson) {
-    try {
-      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(bootPhaseJson));
-      phase = parsed.success ? parsed.data : null;
-    } catch {
-      phase = null;
-    }
-  }
-  if (!phase) return "booting";
-  const repo = phase.repoOwner && phase.repoName ? ` for ${phase.repoOwner}/${phase.repoName}` : "";
-  switch (phase.phase) {
-    case "starting":
-      return "starting the runtime";
-    case "sync":
-      return `cloning${repo}`;
-    case "setup":
-      return `running setup.sh${repo}`;
-    case "start":
-      return `running start.sh${repo}`;
-    case "skills":
-      return "installing managed skills";
-    case "harness":
-      return "starting the agent";
-  }
-}
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -1498,155 +1450,136 @@ export class SandboxLifecycleManager
       last_heartbeat: sandbox.last_heartbeat,
     });
 
-    // Skip if sandbox is already in terminal state
-    if (isDeadSandboxStatus(sandbox.status)) {
-      this.log.debug("Alarm: sandbox in terminal state, skipping", {
-        sandbox_status: sandbox.status,
-      });
-      return "no_action";
-    }
+    const connectedClients = this.getConnectedClientCount();
+    const decision = evaluateAlarmPolicy(sandbox, this.config, now, connectedClients);
+    return this.applyAlarmDecision(sandbox, decision, now, connectedClients);
+  }
 
-    // Booting means the bridge may be attached ahead of the harness; the
-    // heartbeat proves it connected. Read once so every branch below agrees.
-    const isBooting = sandbox.status === "spawning" || sandbox.status === "connecting";
-    const hasConnected = sandbox.last_heartbeat !== null;
+  private async applyAlarmDecision(
+    sandbox: SandboxRow,
+    decision: AlarmDecision,
+    now: number,
+    connectedClients: number
+  ): Promise<SandboxAlarmResult> {
+    switch (decision.action) {
+      case "no_action":
+        this.log.debug("Alarm: sandbox in terminal state, skipping", {
+          sandbox_status: sandbox.status,
+        });
+        return "no_action";
 
-    // Check connecting timeout — the bridge never connected within allowed time
-    const connectingResult = evaluateConnectingTimeout(
-      sandbox.status,
-      sandbox.created_at,
-      this.config.connectingTimeout,
-      now,
-      hasConnected
-    );
-
-    if (connectingResult.isTimedOut) {
-      this.log.warn("Connecting timeout", {
-        event: "sandbox.connecting_timeout",
-        elapsed_ms: connectingResult.elapsedMs,
-        timeout_ms: this.config.connectingTimeout.timeoutMs,
-      });
-      this.storage.updateSandboxStatus("failed");
-      this.recordSpawnFailure(now, sandbox.created_at);
-      this.clearSandboxAccessState();
-      if (this.canStopProviderSandbox()) {
-        // Fenced before the stop: a bridge arriving while the stop is in
-        // flight is refused at the door instead of self-healing into a
-        // container being killed. Where the provider cannot be stopped the
-        // row stays unfenced, so a boot that outlives the watchdog (#1905)
-        // can still connect and serve the session.
-        this.storage.fenceSandboxGeneration();
-        try {
-          await this.stopProviderSandbox("connecting_timeout");
-        } catch (error) {
-          this.log.warn("Provider stop failed after connecting timeout", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-      this.reportSandboxError(
-        "Sandbox failed to connect within the allowed time. It will be retried on your next message."
-      );
-      return "sandbox_failed";
-    }
-
-    // Check heartbeat health
-    const heartbeatHealth = evaluateHeartbeatHealth(
-      sandbox.last_heartbeat,
-      this.config.heartbeat,
-      now
-    );
-
-    if (heartbeatHealth.isStale) {
-      this.log.warn("Heartbeat stale", {
-        event: "sandbox.heartbeat_stale",
-        last_heartbeat_ms: heartbeatHealth.ageMs || 0,
-        threshold_ms: this.config.heartbeat.timeoutMs,
-        sandbox_status: sandbox.status,
-      });
-      this.storage.updateSandboxStatus("stale");
-      // A bridge that connected and then died mid-boot is a boot failure
-      // like any other; the termination re-drives the queue, and the breaker
-      // is what bounds a boot that dies the same way every time.
-      if (isBooting) this.recordSpawnFailure(now, sandbox.created_at);
-      this.clearSandboxAccessState();
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
-
-      if (this.usesProviderManagedStop()) {
-        try {
-          await this.stopProviderSandbox("heartbeat_timeout");
-        } catch (error) {
-          this.log.warn("Provider stop failed after heartbeat timeout", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      } else if (isBooting) {
-        // Never snapshot a half-booted filesystem: it would be recorded as
-        // the restore point, and the next spawn would boot from it and skip
-        // the setup it never finished. No shutdown either: the row is
-        // already `stale`, which the send path refuses, and a bridge that
-        // stopped heartbeating is not there to receive it.
+      case "connecting_timeout":
+        this.log.warn("Connecting timeout", {
+          event: "sandbox.connecting_timeout",
+          elapsed_ms: decision.elapsedMs,
+          timeout_ms: this.config.connectingTimeout.timeoutMs,
+        });
+        this.storage.updateSandboxStatus("failed");
+        this.recordSpawnFailure(now, sandbox.created_at);
+        this.clearSandboxAccessState();
         if (this.canStopProviderSandbox()) {
+          // Fenced before the stop: a bridge arriving while the stop is in
+          // flight is refused at the door instead of self-healing into a
+          // container being killed. Where the provider cannot be stopped the
+          // row stays unfenced, so a boot that outlives the watchdog (#1905)
+          // can still connect and serve the session.
+          this.storage.fenceSandboxGeneration();
           try {
-            await this.stopProviderSandbox("heartbeat_timeout");
+            await this.stopProviderSandbox("connecting_timeout");
           } catch (error) {
-            this.log.warn("Provider stop failed after heartbeat timeout", {
+            this.log.warn("Provider stop failed after connecting timeout", {
               error: error instanceof Error ? error.message : String(error),
             });
           }
         }
-      } else {
-        if (this.canStopProviderSandbox()) {
-          await this.triggerSnapshot("heartbeat_timeout");
-          try {
-            await this.stopProviderSandbox("heartbeat_timeout");
-          } catch (error) {
-            this.log.warn("Provider stop failed after heartbeat timeout", {
-              error: error instanceof Error ? error.message : String(error),
-            });
+        this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+        this.reportSandboxError(
+          "Sandbox failed to connect within the allowed time. It will be retried on your next message."
+        );
+        return "sandbox_failed";
+
+      case "heartbeat_stale":
+        this.log.warn("Heartbeat stale", {
+          event: "sandbox.heartbeat_stale",
+          last_heartbeat_ms: decision.ageMs,
+          threshold_ms: this.config.heartbeat.timeoutMs,
+          sandbox_status: sandbox.status,
+        });
+        this.storage.updateSandboxStatus("stale");
+        // A bridge that connected and then died mid-boot is a boot failure
+        // like any other; the termination re-drives the queue, and the breaker
+        // is what bounds a boot that dies the same way every time.
+        if (decision.isBooting) this.recordSpawnFailure(now, sandbox.created_at);
+        this.clearSandboxAccessState();
+        this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
+
+        if (this.usesProviderManagedStop() || decision.isBooting) {
+          // Preserve provider-owned state, but never snapshot a half-booted
+          // filesystem. A stale boot's bridge cannot receive shutdown either.
+          if (this.canStopProviderSandbox()) {
+            try {
+              await this.stopProviderSandbox("heartbeat_timeout");
+            } catch (error) {
+              this.log.warn("Provider stop failed after heartbeat timeout", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
           }
         } else {
-          // Fire-and-forget snapshot so status broadcast isn't delayed.
-          this.triggerSnapshot("heartbeat_timeout").catch((e) =>
-            this.log.error("Heartbeat snapshot failed", {
-              error: e instanceof Error ? e : String(e),
-            })
-          );
+          if (this.canStopProviderSandbox()) {
+            await this.triggerSnapshot("heartbeat_timeout");
+            try {
+              await this.stopProviderSandbox("heartbeat_timeout");
+            } catch (error) {
+              this.log.warn("Provider stop failed after heartbeat timeout", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else {
+            // Fire-and-forget snapshot so status broadcast isn't delayed.
+            this.triggerSnapshot("heartbeat_timeout").catch((e) =>
+              this.log.error("Heartbeat snapshot failed", {
+                error: e instanceof Error ? e : String(e),
+              })
+            );
+          }
+          this.wsManager.sendToSandbox({ type: "shutdown" });
         }
+
+        this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
+        return "sandbox_terminated";
+
+      case "boot_budget_exceeded":
+        this.log.warn("Boot budget exceeded", {
+          event: "sandbox.boot_budget",
+          elapsed_ms: decision.elapsedMs,
+          timeout_ms: this.config.bootBudget.timeoutMs,
+          boot_phase: sandbox.boot_phase,
+        });
+        // Send while the row is adoptable, then fence reconnects before failing it.
         this.wsManager.sendToSandbox({ type: "shutdown" });
-      }
+        this.storage.fenceSandboxGeneration();
+        this.storage.updateSandboxStatus("failed");
+        this.recordSpawnFailure(now, sandbox.created_at);
+        this.clearSandboxAccessState();
+        this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+        this.reportSandboxError(decision.reason);
+        this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
+        if (this.canStopProviderSandbox()) {
+          // Publish failure before yielding; block replacement spawns across the stop.
+          this.isTerminatingSandbox = true;
+          try {
+            await this.stopProviderSandbox("boot_budget_exceeded");
+          } catch (error) {
+            this.log.warn("Provider stop failed after boot budget", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } finally {
+            this.isTerminatingSandbox = false;
+          }
+        }
+        return { kind: "boot_budget_exceeded", reason: decision.reason };
 
-      this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
-      return "sandbox_terminated";
-    }
-
-    // Boot budget — a connected runtime that has been booting for too long.
-    const bootBudget = evaluateBootBudget(
-      sandbox.status,
-      sandbox.created_at,
-      this.config.bootBudget,
-      now
-    );
-    if (bootBudget.isExceeded) {
-      return this.failBootBudget(sandbox, bootBudget.elapsedMs, now);
-    }
-
-    // Evaluate inactivity timeout
-    const connectedClients = this.getConnectedClientCount();
-    const inactivityState = {
-      lastActivity: sandbox.last_activity,
-      status: sandbox.status,
-      connectedClientCount: connectedClients,
-    };
-
-    const inactivityDecision = evaluateInactivityTimeout(
-      inactivityState,
-      this.config.inactivity,
-      now
-    );
-
-    switch (inactivityDecision.action) {
       case "timeout":
         this.log.info("Inactivity timeout", {
           event: "sandbox.timeout",
@@ -1692,74 +1625,23 @@ export class SandboxLifecycleManager
       case "extend":
         this.log.info("Inactivity extended", {
           connected_clients: connectedClients,
-          extension_ms: inactivityDecision.extensionMs,
+          extension_ms: decision.extensionMs,
         });
-        if (inactivityDecision.shouldWarn) {
+        if (decision.shouldWarn) {
           this.broadcaster.broadcast({
             type: "sandbox_warning",
             message:
               "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
           });
         }
-        await this.alarmScheduler.schedule(now + inactivityDecision.extensionMs);
+        await this.alarmScheduler.schedule(now + decision.extensionMs);
         return "no_action";
 
       case "schedule":
-        this.log.debug("Scheduling next alarm", { next_check_ms: inactivityDecision.nextCheckMs });
-        await this.alarmScheduler.schedule(now + inactivityDecision.nextCheckMs);
+        this.log.debug("Scheduling next alarm", { next_check_ms: decision.nextCheckMs });
+        await this.alarmScheduler.schedule(now + decision.nextCheckMs);
         return "no_action";
     }
-  }
-
-  /**
-   * Give up on a boot that outlived its budget. Order matters: the `shutdown`
-   * goes out first, while the socket is still adoptable (the lifecycle send
-   * path refuses a failed row); the generation is then fenced so a runtime
-   * that ignores the shutdown, or reconnects, is refused at the door and its
-   * supervisor exits — which is how a provider with no explicit stop is
-   * stopped; only then is the row failed. The failure is published and
-   * persisted before the provider stop yields, and the spawn guard is held
-   * across it, so a prompt arriving mid-stop neither waits to learn the boot
-   * died nor reserves a replacement that inherits this failure. Returns the
-   * failure text so the alarm handler can fail the pending prompt with the
-   * same words.
-   */
-  private async failBootBudget(
-    sandbox: SandboxRow,
-    elapsedMs: number,
-    now: number
-  ): Promise<SandboxAlarmResult> {
-    const budgetMinutes = Math.round(this.config.bootBudget.timeoutMs / 60_000);
-    const reason =
-      `Sandbox boot exceeded ${budgetMinutes} minutes while ${describeBootPhase(sandbox.boot_phase)}. ` +
-      "Raise SANDBOX_BOOT_TIMEOUT_MS if the boot legitimately needs longer, or make it return sooner.";
-    this.log.warn("Boot budget exceeded", {
-      event: "sandbox.boot_budget",
-      elapsed_ms: elapsedMs,
-      timeout_ms: this.config.bootBudget.timeoutMs,
-      boot_phase: sandbox.boot_phase,
-    });
-    this.wsManager.sendToSandbox({ type: "shutdown" });
-    this.storage.fenceSandboxGeneration();
-    this.storage.updateSandboxStatus("failed");
-    this.recordSpawnFailure(now, sandbox.created_at);
-    this.clearSandboxAccessState();
-    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    this.reportSandboxError(reason);
-    this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
-    if (this.canStopProviderSandbox()) {
-      this.isTerminatingSandbox = true;
-      try {
-        await this.stopProviderSandbox("boot_budget_exceeded");
-      } catch (error) {
-        this.log.warn("Provider stop failed after boot budget", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        this.isTerminatingSandbox = false;
-      }
-    }
-    return { kind: "boot_budget_exceeded", reason };
   }
 
   async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
