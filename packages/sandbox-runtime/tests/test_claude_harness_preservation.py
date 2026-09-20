@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
@@ -81,3 +82,81 @@ class TestPreservationStop:
 
         assert await h.harness.stop_execution(0.1) is False
         assert h.harness._client is client
+
+    @pytest.mark.asyncio
+    async def test_stop_budget_includes_wait_for_concurrent_disconnect(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        client = h.client
+        disconnect_started = asyncio.Event()
+        release_disconnect = asyncio.Event()
+
+        async def stalled_disconnect() -> None:
+            disconnect_started.set()
+            await release_disconnect.wait()
+            client.disconnected = True
+
+        client.disconnect = stalled_disconnect  # type: ignore[method-assign]
+        cleanup = asyncio.create_task(h.harness._disconnect())
+        await disconnect_started.wait()
+
+        assert await h.harness.stop_execution(0.01) is False
+        assert h.harness._client is client
+
+        release_disconnect.set()
+        await cleanup
+        assert h.harness._client is None
+        assert await h.harness.stop_execution(0.01) is True
+
+    @pytest.mark.asyncio
+    async def test_connect_and_stop_are_serialized_without_losing_connecting_owner(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(tmp_path, turns=[], client_kwargs={"hang_connect": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        connecting = asyncio.create_task(h.harness._ensure_client("claude-sonnet-4-6", None))
+
+        async def wait_for_client_owner() -> None:
+            while h.harness._client is None:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_client_owner(), timeout=0.1)
+        client = h.harness._client
+        assert await h.harness.stop_execution(0.01) is False
+        assert h.harness._client is client
+
+        connecting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await connecting
+        assert h.harness._client is client
+
+        h.client.hang_connect = False
+        await h.harness._disconnect()
+        assert h.harness._client is None
+
+    @pytest.mark.asyncio
+    async def test_explicit_stop_cancellation_retains_owned_client(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)]], client_kwargs={"hang_disconnect": True})
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        client = h.client
+        stopping = asyncio.create_task(h.harness.stop_execution(1))
+
+        async def wait_for_interrupt() -> None:
+            while client.interrupts == 0:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_interrupt(), timeout=0.1)
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        assert h.harness._client is client
+
+        client.hang_disconnect = False
+        assert await h.harness.stop_execution(0.1) is True
