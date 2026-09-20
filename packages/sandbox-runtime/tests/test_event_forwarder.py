@@ -136,6 +136,35 @@ class TestBufferWhileDisconnected:
 
 class TestSendWhileConnected:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])
+    async def test_early_ack_during_direct_send_is_not_reintroduced(self, finish):
+        forwarder = make_forwarder()
+        ws = GatedWs()
+        await forwarder.bind(ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-early-ack"})
+        )
+        await settle()
+
+        assert forwarder.acknowledge("execution_complete:msg-early-ack") is True
+        if finish == "success":
+            ws.release(0)
+            assert await send_task is True
+        elif finish == "failure":
+            ws.release(0, ConnectionError("failed after delivery"))
+            assert await send_task is False
+        else:
+            send_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await send_task
+
+        assert forwarder._event_buffer == []
+        assert forwarder._pending_acks == {}
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
+
+    @pytest.mark.asyncio
     async def test_hung_direct_send_times_out_then_replays_critical_once(self):
         forwarder = make_forwarder(send_timeout_seconds=0.01)
         hung_ws = MagicMock()
@@ -231,6 +260,53 @@ class TestSendWhileConnected:
 
 
 class TestBindRecovery:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])
+    async def test_early_ack_during_buffer_flush_is_not_reintroduced(self, finish):
+        forwarder = make_forwarder()
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-flush-early-ack"})
+        ws = GatedWs()
+        bind_task = asyncio.create_task(forwarder.bind(ws))
+        await settle()
+
+        assert forwarder.acknowledge("execution_complete:msg-flush-early-ack") is True
+        if finish == "success":
+            ws.release(0)
+            await bind_task
+        elif finish == "failure":
+            ws.release(0, ConnectionError("failed after delivery"))
+            await bind_task
+        else:
+            bind_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await bind_task
+
+        assert forwarder._event_buffer == []
+        assert forwarder._pending_acks == {}
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
+
+    @pytest.mark.asyncio
+    async def test_unacknowledged_cancelled_flush_keeps_one_replayable_copy(self):
+        forwarder = make_forwarder()
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-cancelled-flush"})
+        ws = GatedWs()
+        bind_task = asyncio.create_task(forwarder.bind(ws))
+        await settle()
+
+        bind_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await bind_task
+
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-cancelled-flush"]
+        assert forwarder._pending_acks == {}
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-cancelled-flush"
+        ]
+
     @pytest.mark.asyncio
     async def test_bind_flushes_buffered_events_in_order(self):
         forwarder = make_forwarder()

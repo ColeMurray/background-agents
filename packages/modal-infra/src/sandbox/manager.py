@@ -603,8 +603,12 @@ class SandboxManager:
 
     async def stop_sandbox(self, sandbox_id: str) -> None:
         """Terminate a provider sandbox by its immutable Modal object id."""
-        sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
-        await sandbox.terminate.aio(wait=True)
+        try:
+            sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+            await sandbox.terminate.aio(wait=True)
+        except modal.exception.NotFoundError:
+            # Already absent is the terminal state requested by stop.
+            return
 
     async def get_sandbox_by_id(self, sandbox_id: str) -> SandboxHandle | None:
         """

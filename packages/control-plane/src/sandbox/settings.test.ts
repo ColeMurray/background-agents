@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
   DEFAULT_CODE_SERVER_PORT,
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
@@ -22,6 +23,12 @@ describe("parsePersistedSandboxSettings", () => {
     expect(
       parsePersistedSandboxSettings('{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000,"bad"]}')
     ).toEqual({ sandboxTimeoutMs: 14_400_000, tunnelPorts: [3000] });
+  });
+
+  it("omits a persisted timeout that cannot accommodate the default final buffer", () => {
+    expect(
+      parsePersistedSandboxSettings('{"sandboxTimeoutMs":300000,"terminalEnabled":true}')
+    ).toEqual({ terminalEnabled: true });
   });
 
   it.each(["", "not-json"])("throws when persisted blob %j is not valid JSON", (settingsJson) => {
@@ -115,7 +122,7 @@ describe("normalizeSandboxSettings", () => {
         SandboxSettingsValidationError
       );
     }
-    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 })).toEqual({
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 }, { partial: true })).toEqual({
       sandboxTimeoutMs: 1000,
     });
   });
@@ -126,24 +133,68 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({ terminalEnabled: true });
   });
 
-  it("validates finalSnapshotBufferMs without rejecting legacy omitted buffers", () => {
-    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 60_000 })).toEqual({
-      sandboxTimeoutMs: 60_000,
-    });
+  it("validates final snapshot buffers and their effective default against timeout", () => {
     expect(
-      normalizeSandboxSettings({ sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 })
-    ).toEqual({ sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 });
-    expect(normalizeSandboxSettings({ finalSnapshotBufferMs: 300_000 })).toEqual({
-      finalSnapshotBufferMs: 300_000,
-    });
-    for (const finalSnapshotBufferMs of [299_000, 300_001]) {
+      normalizeSandboxSettings({
+        sandboxTimeoutMs: 1_200_000,
+        finalSnapshotBufferMs: 300_000,
+      })
+    ).toEqual({ sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 300_000 });
+    expect(() => normalizeSandboxSettings({ sandboxTimeoutMs: 300_000 })).toThrow(
+      SandboxSettingsValidationError
+    );
+    expect(() =>
+      normalizeSandboxSettings({
+        sandboxTimeoutMs: DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
+      })
+    ).toThrow(SandboxSettingsValidationError);
+    expect(() =>
+      normalizeSandboxSettings({
+        sandboxTimeoutMs: 1_200_000,
+        finalSnapshotBufferMs: 1_200_000,
+      })
+    ).toThrow(SandboxSettingsValidationError);
+  });
+
+  it.each([299_000, 300_001, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects malformed final snapshot buffer %s",
+    (finalSnapshotBufferMs) => {
       expect(() => normalizeSandboxSettings({ finalSnapshotBufferMs })).toThrow(
         SandboxSettingsValidationError
       );
     }
-    expect(() =>
-      normalizeSandboxSettings({ sandboxTimeoutMs: 600_000, finalSnapshotBufferMs: 600_000 })
-    ).toThrow(SandboxSettingsValidationError);
+  );
+
+  it("preserves partial override fields until merge validation", () => {
+    expect(
+      normalizeSandboxSettings(
+        { sandboxTimeoutMs: 360_000, finalSnapshotBufferMs: 600_000 },
+        { partial: true }
+      )
+    ).toEqual({ sandboxTimeoutMs: 360_000, finalSnapshotBufferMs: 600_000 });
+  });
+
+  it("omits unsafe effective relationships while preserving unrelated settings", () => {
+    expect(
+      normalizeSandboxSettings(
+        {
+          sandboxTimeoutMs: 1_200_000,
+          finalSnapshotBufferMs: 1_200_000,
+          terminalEnabled: true,
+        },
+        { invalid: "omit" }
+      )
+    ).toEqual({ sandboxTimeoutMs: 1_200_000, terminalEnabled: true });
+    expect(
+      normalizeSandboxSettings(
+        {
+          sandboxTimeoutMs: 300_000,
+          finalSnapshotBufferMs: 300_000,
+          terminalEnabled: true,
+        },
+        { invalid: "omit" }
+      )
+    ).toEqual({ terminalEnabled: true });
   });
 
   it("accepts valid session cost settings", () => {
