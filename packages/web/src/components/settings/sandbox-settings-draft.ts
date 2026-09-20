@@ -185,11 +185,14 @@ export function resolveSandboxSettingsDraft({
   ownSettings,
   baseDefaults,
   draft,
+  hiddenFields,
 }: {
   isGlobal: boolean;
   ownSettings?: SandboxSettings;
   baseDefaults?: SandboxSettings;
   draft: SandboxSettingsDraft;
+  /** Fields hidden by provider policy are preserved as stored intent and are not validated. */
+  hiddenFields?: ReadonlySet<keyof SandboxSettings>;
 }): {
   values: SandboxSettingsDraftValues;
   hasChanges: boolean;
@@ -209,6 +212,10 @@ export function resolveSandboxSettingsDraft({
     const edit = draft[field.draftKey];
     const value = edit ?? current;
     values[field.draftKey] = value;
+    if (hiddenFields?.has(key)) {
+      if (prior !== undefined) settings[key] = prior;
+      return;
+    }
     const parsed = field.parse(value);
     hasChanges ||=
       edit !== undefined && (parsed.error !== undefined || field.isChanged(edit, current));
