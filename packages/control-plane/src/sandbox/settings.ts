@@ -1,6 +1,7 @@
 import {
   findSandboxPortConflict,
   isValidSandboxTimeoutMs,
+  MIN_FINAL_SNAPSHOT_BUFFER_MS,
   MAX_TUNNEL_PORTS,
   validateSandboxChildSessionLimits,
   type ConfiguredSandboxPort,
@@ -138,6 +139,26 @@ export function normalizeSandboxSettings(
       reject("sandboxTimeoutMs must be a positive whole number of seconds");
     } else {
       result.sandboxTimeoutMs = settings.sandboxTimeoutMs;
+    }
+  }
+
+  if (settings.finalSnapshotBufferMs !== undefined) {
+    if (
+      typeof settings.finalSnapshotBufferMs !== "number" ||
+      !Number.isSafeInteger(settings.finalSnapshotBufferMs) ||
+      settings.finalSnapshotBufferMs < MIN_FINAL_SNAPSHOT_BUFFER_MS ||
+      settings.finalSnapshotBufferMs % 1000 !== 0
+    ) {
+      reject(
+        `finalSnapshotBufferMs must be at least ${MIN_FINAL_SNAPSHOT_BUFFER_MS} and a whole number of seconds`
+      );
+    } else if (
+      result.sandboxTimeoutMs !== undefined &&
+      settings.finalSnapshotBufferMs >= result.sandboxTimeoutMs
+    ) {
+      reject("finalSnapshotBufferMs must be less than sandboxTimeoutMs");
+    } else {
+      result.finalSnapshotBufferMs = settings.finalSnapshotBufferMs;
     }
   }
 

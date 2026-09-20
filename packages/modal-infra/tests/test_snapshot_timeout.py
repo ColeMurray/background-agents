@@ -50,3 +50,16 @@ async def test_get_sandbox_by_id_awaits_async_lookup(monkeypatch):
     assert handle.modal_sandbox is modal_sandbox
     from_id.assert_not_called()
     from_id.aio.assert_awaited_once_with("sandbox-1")
+
+
+@pytest.mark.asyncio
+async def test_stop_sandbox_waits_for_provider_termination(monkeypatch):
+    terminate = _async_method()
+    modal_sandbox = SimpleNamespace(terminate=terminate)
+    from_id = _async_method(modal_sandbox)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    await SandboxManager().stop_sandbox("sandbox-1")
+
+    from_id.aio.assert_awaited_once_with("sandbox-1")
+    terminate.aio.assert_awaited_once_with(wait=True)

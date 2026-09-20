@@ -1,8 +1,13 @@
-import { MIN_SANDBOX_TIMEOUT_MS } from "@open-inspect/shared/types/integrations";
+import {
+  MIN_FINAL_SNAPSHOT_BUFFER_MS,
+  MIN_SANDBOX_TIMEOUT_MS,
+} from "@open-inspect/shared/types/integrations";
 
 const MILLISECONDS_PER_MINUTE = 60_000;
 
 export const MIN_SANDBOX_TIMEOUT_MINUTES = MIN_SANDBOX_TIMEOUT_MS / MILLISECONDS_PER_MINUTE;
+export const MIN_FINAL_SNAPSHOT_BUFFER_MINUTES =
+  MIN_FINAL_SNAPSHOT_BUFFER_MS / MILLISECONDS_PER_MINUTE;
 
 export function sandboxTimeoutMsFromMinutes(value: string): number | undefined {
   if (value === "" || !/^\d+(?:\.\d+)?$/.test(value)) return undefined;

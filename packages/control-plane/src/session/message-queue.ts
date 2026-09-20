@@ -162,7 +162,8 @@ export class SessionMessageQueue {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
-    private readonly getExecutionTimeoutMs: () => number
+    private readonly getExecutionTimeoutMs: () => number,
+    private readonly mayDispatch: () => boolean = () => true
   ) {}
 
   async enqueueAutofix(
@@ -363,6 +364,7 @@ export class SessionMessageQueue {
   }
 
   async processMessageQueue(): Promise<void> {
+    if (!this.mayDispatch()) return;
     const currentSession = this.repository.getSession();
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
@@ -400,6 +402,7 @@ export class SessionMessageQueue {
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
+    if (!this.mayDispatch()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
@@ -514,6 +517,7 @@ export class SessionMessageQueue {
       ),
     };
 
+    if (!this.mayDispatch()) return;
     const claimed = this.messageRepository.startMessageProcessing(
       message.id,
       now,

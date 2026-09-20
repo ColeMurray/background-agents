@@ -24,6 +24,8 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "snapshot_ready",
         "push_complete",
         "push_error",
+        "preservation_prepared",
+        "sandbox_generation_ready",
     }
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
@@ -300,6 +302,12 @@ class BufferedEventForwarder:
         so the later one overwrites the earlier pending entry.
         """
         event_type = event.get("type", "unknown")
+        operation_id = event.get("operationId")
+        if operation_id:
+            return f"{event_type}:{operation_id}"
+        generation = event.get("generation")
+        if event_type == "sandbox_generation_ready" and isinstance(generation, dict):
+            return f"{event_type}:{generation.get('sandboxId')}:{generation.get('createdAt')}"
         message_id = event.get("messageId")
         if message_id:
             return f"{event_type}:{message_id}"

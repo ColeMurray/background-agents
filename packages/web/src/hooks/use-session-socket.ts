@@ -74,6 +74,7 @@ interface UseSessionSocketReturn {
   ) => Promise<QueuePromptResult>;
   cancelPrompt: (messageId: string) => Promise<CancelPromptResult>;
   stopExecution: () => void;
+  recoverPreservation: (action: "retry" | "restore_saved") => void;
   sendTyping: () => void;
   reconnect: () => void;
   loadOlderEvents: () => void;
@@ -369,6 +370,14 @@ export function useSessionSocket(
     send({ type: "stop" });
   }, [isOpen, send]);
 
+  const recoverPreservation = useCallback(
+    (action: "retry" | "restore_saved") => {
+      if (!isOpen() || !subscribedRef.current) return;
+      send({ type: "recover_preservation", action });
+    },
+    [isOpen, send]
+  );
+
   const cancelPrompt = useCallback(
     async (messageId: string): Promise<CancelPromptResult> => {
       if (!isOpen() || !(await waitForSubscription()) || !isOpen()) {
@@ -440,6 +449,7 @@ export function useSessionSocket(
     sendPrompt,
     cancelPrompt,
     stopExecution,
+    recoverPreservation,
     sendTyping,
     reconnect,
     loadOlderEvents,

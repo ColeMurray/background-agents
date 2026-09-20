@@ -144,6 +144,7 @@ describe("DaytonaSandboxProvider", () => {
       expect(result.sandboxId).toBe("sandbox-456");
       expect(result.providerObjectId).toBe("daytona-sandbox-id");
       expect(result.createdAt).toBeGreaterThan(0);
+      expect(result.lifetime).toMatchObject({ kind: "none" });
 
       // Verify create was called with correct params
       const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -567,6 +568,26 @@ describe("DaytonaSandboxProvider", () => {
   });
 
   describe("stopSandbox", () => {
+    it("verifies retained state for an explicit preserve stop under the deadline signal", async () => {
+      const client = createMockClient();
+      vi.mocked(client.getSandbox).mockResolvedValue({
+        id: "daytona-sandbox-id",
+        state: "stopped",
+      } as never);
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+      await expect(
+        provider.stopSandbox({
+          ...baseStopConfig,
+          intent: "preserve",
+          deadlineAtMs: Date.now() + 60_000,
+        })
+      ).resolves.toEqual({ success: true });
+      expect(client.stopSandbox).toHaveBeenCalledWith(
+        "daytona-sandbox-id",
+        expect.any(AbortSignal)
+      );
+      expect(client.getSandbox).toHaveBeenCalledWith("daytona-sandbox-id", expect.any(AbortSignal));
+    });
     it("happy path: stops sandbox", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
@@ -600,6 +621,19 @@ describe("DaytonaSandboxProvider", () => {
       const result = await provider.stopSandbox(baseStopConfig);
 
       expect(result.success).toBe(true);
+    });
+
+    it("does not claim preservation when the sandbox is missing", async () => {
+      const client = createMockClient({
+        stopSandbox: async () => {
+          throw new DaytonaNotFoundError("not found");
+        },
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await expect(
+        provider.stopSandbox({ ...baseStopConfig, intent: "preserve" })
+      ).resolves.toMatchObject({ success: false });
     });
 
     it("classifies non-404 errors as SandboxProviderError", async () => {

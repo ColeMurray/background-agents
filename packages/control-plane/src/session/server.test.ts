@@ -54,6 +54,7 @@ function createHarness() {
     submitPrompt: vi.fn(async () => undefined),
     cancelPrompt: vi.fn(async () => undefined),
     stopExecution: vi.fn(async () => undefined),
+    recoverPreservation: vi.fn(async () => undefined),
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
@@ -229,6 +230,11 @@ describe("SessionServer", () => {
       callback: "cancelPrompt",
     },
     { type: "stop", message: { type: "stop" }, callback: "stopExecution" },
+    {
+      type: "recover_preservation",
+      message: { type: "recover_preservation", action: "retry" },
+      callback: "recoverPreservation",
+    },
     { type: "typing", message: { type: "typing" }, callback: "notifyTyping" },
     {
       type: "presence",
@@ -241,6 +247,17 @@ describe("SessionServer", () => {
     await server.onMessage("client", JSON.stringify(message));
 
     expect(clientCommands[callback as keyof typeof clientCommands]).toHaveBeenCalledOnce();
+  });
+
+  it("forwards the requested preservation recovery action", async () => {
+    const { server, clientCommands } = createHarness();
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
+    );
+
+    expect(clientCommands.recoverPreservation).toHaveBeenCalledWith("restore_saved");
   });
 
   it("drops authenticated-only commands when no client mapping exists", async () => {
@@ -259,6 +276,7 @@ describe("SessionServer", () => {
       "sessions.lifecycle",
     ],
     [{ type: "stop" }, "sessions.lifecycle"],
+    [{ type: "recover_preservation", action: "restore_saved" }, "sessions.lifecycle"],
   ] as const)("rejects %s without its command permission", async (message, permission) => {
     const { server, sockets, clientCommands, client } = createHarness();
     vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
@@ -274,6 +292,7 @@ describe("SessionServer", () => {
     expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
     expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
+    expect(clientCommands.recoverPreservation).not.toHaveBeenCalled();
   });
 
   it("routes fetch_history and enforces throttling with the injected clock", async () => {

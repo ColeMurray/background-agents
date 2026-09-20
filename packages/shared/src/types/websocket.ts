@@ -37,6 +37,10 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     clientRequestId: clientRequestIdSchema,
   }),
   z.object({ type: z.literal("stop") }),
+  z.object({
+    type: z.literal("recover_preservation"),
+    action: z.enum(["retry", "restore_saved"]),
+  }),
   z.object({ type: z.literal("typing") }),
   z.object({
     type: z.literal("presence"),

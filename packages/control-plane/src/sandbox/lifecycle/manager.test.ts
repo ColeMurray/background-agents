@@ -16,6 +16,7 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type SandboxLifecycleConfig,
+  type SandboxPreservationLifecycle,
   type McpServerLookup,
   type ImageBuildLookup,
   type SlackAgentNotifyLookup,
@@ -530,6 +531,189 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
 }
 
 // ==================== Tests ====================
+
+describe("final preservation lifecycle integration", () => {
+  function fixture(
+    provider = createMockProvider(),
+    sandbox = createMockSandbox({ status: "stopped" })
+  ) {
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const sockets = createMockWebSocketManager();
+    const manager = new SandboxLifecycleManager(
+      provider,
+      storage,
+      storage,
+      createMockBroadcaster(),
+      sockets,
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createTestConfig()
+    );
+    const preservation = {
+      beginGeneration: vi.fn(),
+      started: vi.fn(async () => {}),
+      isHolding: vi.fn(() => false),
+      request: vi.fn(async () => true),
+      beginCheckpoint: vi.fn(() => true),
+      endCheckpoint: vi.fn(),
+      recoveryReceipt: vi.fn<SandboxPreservationLifecycle["recoveryReceipt"]>(() => undefined),
+      restoreFailed: vi.fn(),
+    };
+    manager.setPreservation(preservation);
+    return { manager, preservation, storage, provider, sockets };
+  }
+
+  it("does not run generic termination or replacement while preservation owns the source", async () => {
+    const f = fixture(
+      createMockProvider({
+        stopSandbox: vi.fn(async () => ({ success: true })),
+        capabilities: { supportsExplicitStop: true },
+      }),
+      createMockSandbox()
+    );
+    f.preservation.isHolding.mockReturnValue(true);
+    await f.manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
+    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+    expect(await f.manager.handleAlarm()).toBe("no_action");
+    await f.manager.spawnSandbox();
+    expect(f.provider.stopSandbox).not.toHaveBeenCalled();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("routes destructive ordinary snapshots through confirmed preservation", async () => {
+    const f = fixture(createMockProvider({ capabilities: { snapshotStopsSandbox: true } }));
+    await f.manager.triggerSnapshot("execution_complete");
+    expect(f.preservation.request).toHaveBeenCalledWith("execution_complete");
+    expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("restores an independent final receipt instead of preferring an expired persistent source", async () => {
+    const f = fixture(
+      createMockProvider({
+        resumeSandbox: vi.fn(),
+        capabilities: { supportsPersistentResume: true },
+      })
+    );
+    f.preservation.recoveryReceipt.mockReturnValue({
+      kind: "snapshot",
+      provider: "mock",
+      artifactId: "final-image",
+      runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    });
+    await f.manager.spawnSandbox();
+    expect(f.provider.restoreFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ snapshotImageId: "final-image" })
+    );
+    expect(f.provider.resumeSandbox).not.toHaveBeenCalled();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("does not silently create a fresh sandbox after retained final resume fails", async () => {
+    const f = fixture(
+      createMockProvider({
+        resumeSandbox: vi.fn(async () => ({
+          success: false,
+          shouldSpawnFresh: true,
+          error: "missing",
+        })),
+        capabilities: { supportsPersistentResume: true },
+      })
+    );
+    f.preservation.recoveryReceipt.mockReturnValue({
+      kind: "retained",
+      provider: "mock",
+      artifactId: "retained-source",
+      runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    });
+    await f.manager.spawnSandbox();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+    expect(f.preservation.restoreFailed).toHaveBeenCalledWith("missing");
+  });
+
+  it("does not silently create a fresh sandbox when retained final resume is unsupported", async () => {
+    const f = fixture(createMockProvider({ capabilities: { supportsPersistentResume: true } }));
+    f.preservation.recoveryReceipt.mockReturnValue({
+      kind: "retained",
+      provider: "mock",
+      artifactId: "retained-source",
+      runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    });
+
+    await f.manager.spawnSandbox();
+
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+    expect(f.preservation.restoreFailed).toHaveBeenCalledWith(
+      expect.stringContaining("cannot resume")
+    );
+  });
+
+  it("retains incompatible and foreign-provider receipts without fresh fallback", async () => {
+    const f = fixture();
+    f.preservation.recoveryReceipt.mockReturnValue({
+      kind: "snapshot",
+      provider: "other-provider",
+      artifactId: "final-image",
+      runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+    });
+    await f.manager.spawnSandbox();
+    f.preservation.recoveryReceipt.mockReturnValue({
+      kind: "snapshot",
+      provider: "mock",
+      artifactId: "final-image",
+      runtimeVersion: "0.0.0",
+    });
+    await f.manager.spawnSandbox();
+    expect(f.preservation.restoreFailed).toHaveBeenCalledTimes(2);
+    expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("publishes the actual provider lifetime for the reserved generation", async () => {
+    const lifetime = {
+      kind: "finite" as const,
+      expiresAtMs: Date.now() + 900_000,
+      observedAtMs: Date.now(),
+      source: "provider" as const,
+    };
+    const f = fixture(
+      createMockProvider({
+        createSandbox: vi.fn(async (config) => ({
+          sandboxId: config.sandboxId,
+          providerObjectId: "provider-new",
+          status: "connecting",
+          createdAt: Date.now(),
+          lifetime,
+        })),
+      }),
+      createMockSandbox({ status: "pending" })
+    );
+    await f.manager.spawnSandbox();
+    const generation = f.preservation.beginGeneration.mock.calls[0]?.[0];
+    expect(generation).toEqual(
+      expect.objectContaining({ sandboxId: expect.any(String), createdAt: expect.any(Number) })
+    );
+    expect(f.preservation.started).toHaveBeenCalledWith(generation, lifetime);
+  });
+
+  it.each([null, "0.0.0"])(
+    "does not resume a retained incompatible runtime %s",
+    async (runtimeVersion) => {
+      const f = fixture(createMockProvider({ resumeSandbox: vi.fn() }));
+      f.preservation.recoveryReceipt.mockReturnValue({
+        kind: "retained",
+        provider: "mock",
+        artifactId: "retained-source",
+        runtimeVersion,
+      });
+      await f.manager.spawnSandbox();
+      expect(f.preservation.restoreFailed).toHaveBeenCalledWith(
+        expect.stringContaining("incompatible")
+      );
+      expect(f.provider.resumeSandbox).not.toHaveBeenCalled();
+      expect(f.provider.createSandbox).not.toHaveBeenCalled();
+    }
+  );
+});
 
 describe("SandboxLifecycleManager", () => {
   describe("spawnSandbox", () => {

@@ -42,6 +42,7 @@ describe("resolveSandboxSettingsDraft", () => {
         terminalPort: "7682",
         buildTimeoutSeconds: "1200",
         sandboxTimeoutMinutes: "2.05",
+        finalSnapshotBufferMinutes: "",
         maxConcurrentChildSessions: "3",
         maxTotalChildSessions: "12",
         cpuCores: "0.5",
@@ -53,6 +54,34 @@ describe("resolveSandboxSettingsDraft", () => {
     expect(resolve({ terminalEnabled: false }).result).toEqual({
       settings: { terminalEnabled: false },
     });
+  });
+
+  it("validates the final snapshot buffer against its minimum and session timeout", () => {
+    expect(resolve({ finalSnapshotBufferMinutes: "4" }).result).toEqual({
+      error: "Final snapshot buffer must be at least 5 minutes, in one-second increments.",
+    });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "20", finalSnapshotBufferMinutes: "5" },
+      }).result
+    ).toMatchObject({
+      settings: { sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 300_000 },
+    });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "20", finalSnapshotBufferMinutes: "10" },
+      }).result
+    ).toMatchObject({
+      settings: { sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 },
+    });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "10", finalSnapshotBufferMinutes: "10" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
   });
 
   it("preserves existing overrides, including false, empty arrays and resource nulls", () => {

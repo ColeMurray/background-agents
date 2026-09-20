@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -237,6 +238,13 @@ class AgentBridge:
 
         # Track the current prompt task so _handle_stop can cancel it
         self._current_prompt_task: asyncio.Task[None] | None = None
+        self._prompt_interruption_reasons: dict[asyncio.Task[None], str] = {}
+        # Set only by the authenticated generation command. A reconnect does
+        # not touch this state, which is essential for retained sandboxes.
+        self._sandbox_generation: dict[str, Any] | None = None
+        self._preservation_operation_id: str | None = None
+        self._preservation_in_flight_operation_id: str | None = None
+        self._preservation_results: dict[str, dict[str, Any]] = {}
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -284,6 +292,7 @@ class AgentBridge:
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": harness.session_id,
             "harness": harness.id.value,
+            "preservationProtocolVersion": 1,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -763,6 +772,16 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
+            if self._preservation_operation_id is not None:
+                await self._send_event(
+                    {
+                        "type": "execution_complete",
+                        "messageId": message_id,
+                        "success": False,
+                        "error": "sandbox_lifetime_expiring",
+                    }
+                )
+                return None
             self.diff_refresh.prompt_started()
             task = asyncio.create_task(self._handle_prompt(cmd))
             self._current_prompt_task = task
@@ -774,13 +793,14 @@ class AgentBridge:
                 if self._current_prompt_task is t:
                     self._current_prompt_task = None
                 if t.cancelled():
+                    error = self._prompt_interruption_reasons.get(t, "Task was cancelled")
                     asyncio.create_task(
                         self._send_terminal_event_and_refresh(
                             {
                                 "type": "execution_complete",
                                 "messageId": mid,
                                 "success": False,
-                                "error": "Task was cancelled",
+                                "error": error,
                             }
                         )
                     )
@@ -797,6 +817,7 @@ class AgentBridge:
                     )
                 else:
                     self.diff_refresh.request(mid)
+                self._prompt_interruption_reasons.pop(t, None)
 
             task.add_done_callback(handle_task_exception)
             # Don't return the task — prompt tasks must survive WS disconnects.
@@ -813,17 +834,25 @@ class AgentBridge:
                 self.log.warn("bridge.command_refused_while_booting", cmd_type=cmd_type)
             else:
                 await self._handle_snapshot()
+        elif cmd_type == "sandbox_generation":
+            await self._handle_sandbox_generation(cmd)
+        elif cmd_type == "prepare_preservation":
+            await self._handle_prepare_preservation(cmd)
         elif cmd_type == "shutdown":
             await self._handle_shutdown()
         elif cmd_type == "git_sync_complete":
             self.git_sync_complete.set()
         elif cmd_type == "push":
-            if booting:
+            if self._preservation_operation_id is not None:
+                await self._refuse_push_for_preservation(cmd)
+            elif booting:
                 await self._refuse_push_while_booting(cmd)
             else:
                 await self._handle_push(cmd)
         elif cmd_type == "refresh_diff":
-            if booting:
+            if self._preservation_operation_id is not None:
+                self.log.warn("bridge.command_refused_for_preservation", cmd_type=cmd_type)
+            elif booting:
                 self.log.warn("bridge.command_refused_while_booting", cmd_type=cmd_type)
             else:
                 self.diff_refresh.request(None)
@@ -932,7 +961,12 @@ class AgentBridge:
             # The done callback remains a fallback for cancellation before start.
             outcome = "cancelled"
             had_error = True
-            error_message = "Task was cancelled"
+            current = asyncio.current_task()
+            error_message = (
+                self._prompt_interruption_reasons.get(current, "Task was cancelled")
+                if current is not None
+                else "Task was cancelled"
+            )
         except Exception as e:
             outcome = "error"
             had_error = True
@@ -975,6 +1009,8 @@ class AgentBridge:
         running turn.
         """
         try:
+            if self._preservation_operation_id is not None:
+                raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 if not self._boot_ready.is_set():
                     self.log.info(
@@ -1004,6 +1040,8 @@ class AgentBridge:
             if not self._boot_ready.is_set():
                 raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
             raise RuntimeError(f"prompt could not start within {budget} s") from None
+        if self._preservation_operation_id is not None:
+            raise RuntimeError("sandbox_lifetime_expiring")
         return harness, attachments
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
@@ -1023,6 +1061,127 @@ class AgentBridge:
         # Best-effort: also tell the agent to stop (saves LLM compute cost)
         if self.harness is not None:
             await self.harness.abort()
+
+    @staticmethod
+    def _parse_generation(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        sandbox_id = value.get("sandboxId")
+        created_at = value.get("createdAt")
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            return None
+        if (
+            isinstance(created_at, bool)
+            or not isinstance(created_at, (int, float))
+            or not math.isfinite(created_at)
+        ):
+            return None
+        return {"sandboxId": sandbox_id, "createdAt": created_at}
+
+    async def _handle_sandbox_generation(self, cmd: dict[str, Any]) -> None:
+        """Establish or advance the authenticated retained-runtime generation."""
+        generation = self._parse_generation(cmd.get("generation"))
+        if generation is None or generation["sandboxId"] != self.sandbox_id:
+            self.log.warn("bridge.sandbox_generation_invalid")
+            return
+        if generation != self._sandbox_generation:
+            self._sandbox_generation = generation
+            self._preservation_operation_id = None
+            self._preservation_in_flight_operation_id = None
+            self._preservation_results.clear()
+        await self._send_event({"type": "sandbox_generation_ready", "generation": generation})
+
+    async def _handle_prepare_preservation(self, cmd: dict[str, Any]) -> None:
+        """Fence admission and confirm the active harness execution stopped."""
+        operation_id = cmd.get("operationId")
+        generation = self._parse_generation(cmd.get("generation"))
+        message_id = cmd.get("messageId")
+        stop_by_ms = cmd.get("stopByMs")
+        if not isinstance(operation_id, str) or not operation_id:
+            return
+
+        cached = self._preservation_results.get(operation_id)
+        if cached is not None:
+            await self._send_event(dict(cached))
+            return
+
+        error: str | None = None
+        if (
+            generation is None
+            or isinstance(stop_by_ms, bool)
+            or not isinstance(stop_by_ms, (int, float))
+            or not math.isfinite(stop_by_ms)
+        ):
+            error = "invalid_command"
+        elif self._sandbox_generation is None:
+            error = "generation_not_established"
+        elif generation != self._sandbox_generation:
+            error = "generation_mismatch"
+        elif (
+            self._preservation_operation_id is not None
+            and self._preservation_operation_id != operation_id
+            and (
+                self._preservation_in_flight_operation_id is not None
+                or self._preservation_operation_id not in self._preservation_results
+            )
+        ):
+            error = "preservation_in_progress"
+
+        execution_stopped = False
+        if error is None:
+            # Fence before the first await. Same-generation reconnects and
+            # duplicate ready commands cannot clear this operation.
+            self._preservation_operation_id = operation_id
+            self._preservation_in_flight_operation_id = operation_id
+            deadline = asyncio.get_running_loop().time() + max(
+                (float(stop_by_ms) - time.time() * 1000) / 1000,
+                0.0,
+            )
+            task = self._current_prompt_task
+            if task is not None and not task.done():
+                self._prompt_interruption_reasons[task] = "sandbox_lifetime_expiring"
+            try:
+                async with asyncio.timeout_at(deadline):
+                    harness = self._require_harness()
+                    active_task = task is not None and not task.done()
+                    # Python task completion is not vendor-idle evidence: an
+                    # earlier user stop or prompt cleanup may have cancelled
+                    # the bridge task while tools continued in the harness.
+                    execution_stopped = await harness.stop_execution(
+                        max(deadline - asyncio.get_running_loop().time(), 0.0)
+                    )
+                    if active_task:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                    if task is not None and not task.done():
+                        execution_stopped = False
+                    await self._persist_rotated_session_id(harness)
+            except TimeoutError:
+                error = "stop_deadline_exceeded"
+                if task is not None and not task.done():
+                    task.cancel()
+            except Exception as exc:
+                self.log.warn("bridge.preservation_stop_error", exc=exc)
+                error = "execution_stop_failed"
+            if not execution_stopped and error is None:
+                error = "execution_stop_unconfirmed"
+
+        if error is not None:
+            execution_stopped = False
+
+        result = {
+            "type": "preservation_prepared",
+            "operationId": operation_id,
+            "generation": generation or cmd.get("generation"),
+            "executionStopped": execution_stopped,
+            **({"messageId": message_id} if isinstance(message_id, str) else {}),
+            **({"error": error} if error is not None else {}),
+        }
+        self._preservation_results[operation_id] = result
+        if self._preservation_in_flight_operation_id == operation_id:
+            self._preservation_in_flight_operation_id = None
+        await self._send_event(dict(result))
 
     async def _handle_snapshot(self) -> None:
         """Handle snapshot command - prepare for snapshot."""
@@ -1056,6 +1215,21 @@ class AgentBridge:
             {
                 "type": "push_error",
                 "error": "Push failed - the sandbox is still booting",
+                "branchName": request.branch_name if request is not None else "",
+                **(request.repo_fields() if request is not None else {}),
+                "timestamp": time.time(),
+            }
+        )
+
+    async def _refuse_push_for_preservation(self, cmd: dict[str, Any]) -> None:
+        try:
+            request: PushRequest | None = PushRequest.from_push_spec(cmd.get("pushSpec"))
+        except PushRejected:
+            request = None
+        await self._send_event(
+            {
+                "type": "push_error",
+                "error": "Push failed - final sandbox preservation is in progress",
                 "branchName": request.branch_name if request is not None else "",
                 **(request.repo_fields() if request is not None else {}),
                 "timestamp": time.time(),

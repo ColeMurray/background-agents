@@ -637,6 +637,49 @@ class ClaudeHarness:
         # interrupt would stall every later command; bound it like cleanup.
         return await self._interrupt_within_budget()
 
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        """Contain the SDK-owned Claude child, escalating to disconnect.
+
+        An interrupt acknowledgement is only a request, so preservation also
+        disconnects the client. The SDK transport owns and reaps the Claude
+        subprocess; unrelated sandbox services are left running.
+        """
+        client = self._client
+        if client is None:
+            return True
+        self._interrupted = True
+        self._needs_reconnect = True
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout_seconds, 0.0)
+        interrupt_deadline = min(
+            deadline,
+            loop.time() + max(timeout_seconds / 2, 0.0),
+        )
+        try:
+            async with asyncio.timeout_at(interrupt_deadline):
+                try:
+                    await client.interrupt()
+                except Exception as error:
+                    self.log.warn("claude.interrupt_error", exc=error)
+        except TimeoutError:
+            self.log.warn("claude.preservation_interrupt_timeout", timeout_s=timeout_seconds / 2)
+        try:
+            async with asyncio.timeout_at(deadline):
+                await client.disconnect()
+        except TimeoutError:
+            self.log.warn("claude.preservation_stop_timeout", timeout_s=timeout_seconds)
+            if self._client is None:
+                self._client = client
+            return False
+        except Exception as error:
+            self.log.warn("claude.preservation_disconnect_error", exc=error)
+            if self._client is None:
+                self._client = client
+            return False
+        if self._client is client:
+            self._client = None
+        return True
+
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]
         for attachment in prompt.attachments:

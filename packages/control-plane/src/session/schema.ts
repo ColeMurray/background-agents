@@ -57,6 +57,10 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
 );`;
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS sandbox_preservation (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  state TEXT NOT NULL
+);
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
@@ -711,6 +715,13 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 53,
     description: "Remove persisted boot hook output tails",
     run: removePersistedHookOutputTails,
+  },
+  {
+    id: 54,
+    description: "Persist final sandbox preservation and expiry fence",
+    run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
+    )`,
   },
 ];
 

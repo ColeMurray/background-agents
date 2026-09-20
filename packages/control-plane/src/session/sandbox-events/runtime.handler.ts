@@ -38,7 +38,8 @@ export class SandboxRuntimeEventHandler {
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly preservation?: { ready(version?: 1): void; isHolding(): boolean }
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -80,6 +81,9 @@ export class SandboxRuntimeEventHandler {
     this.sandboxRepository.recordReportedSandboxRuntimeVersion(event.runtimeVersion ?? null);
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
+
+    this.preservation?.ready(event.preservationProtocolVersion);
+    if (this.preservation?.isHolding()) return;
 
     // Transition-only, and only for the generation that emitted the event: a
     // bridge resends `ready` on every reconnect, and a replacement reserved

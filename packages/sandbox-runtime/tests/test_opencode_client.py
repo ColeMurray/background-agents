@@ -84,6 +84,43 @@ class TestRequestStop:
         assert stopped is False
 
 
+class TestWaitUntilSessionIdle:
+    async def test_polls_until_session_is_no_longer_active(self):
+        http_client = AsyncMock()
+        http_client.get.side_effect = [
+            MockResponse(200, {SESSION_ID: {"type": "busy"}}),
+            MockResponse(200, {}),
+        ]
+
+        stopped = await make_client(http_client).wait_until_session_idle(
+            SESSION_ID, timeout_seconds=1
+        )
+
+        assert stopped is True
+        assert http_client.get.await_count == 2
+
+    async def test_active_session_at_deadline_is_unconfirmed(self):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(200, {SESSION_ID: {"type": "busy"}})
+
+        stopped = await make_client(http_client).wait_until_session_idle(
+            SESSION_ID, timeout_seconds=0.01
+        )
+
+        assert stopped is False
+
+    @pytest.mark.parametrize("payload", [[{"type": "idle"}], "idle", {SESSION_ID: "idle"}])
+    async def test_malformed_status_payload_is_not_idle_evidence(self, payload):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(200, payload)
+
+        stopped = await make_client(http_client).wait_until_session_idle(
+            SESSION_ID, timeout_seconds=0.01
+        )
+
+        assert stopped is False
+
+
 class TestGetMessages:
     async def test_returns_parsed_message_list(self):
         messages = [{"info": {"id": "oc-msg-1", "role": "assistant"}, "parts": []}]

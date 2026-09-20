@@ -136,6 +136,9 @@ export {
   sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
 } from "./server-messages";
+
+export { sandboxPreservationSchema } from "./sandbox-preservation";
+export type { SandboxPreservationState } from "./sandbox-preservation";
 export type {
   ParticipantPresence,
   PromptQueueItem,

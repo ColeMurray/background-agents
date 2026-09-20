@@ -5,6 +5,7 @@ import {
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
+  MIN_FINAL_SNAPSHOT_BUFFER_MS,
   findSandboxPortConflict,
   validateSandboxChildSessionLimits,
   type ConfiguredSandboxPort,
@@ -12,7 +13,11 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { sandboxTimeoutMinutesFromMs, sandboxTimeoutMsFromMinutes } from "./sandbox-timeout";
 
-type DraftKey<K> = K extends "sandboxTimeoutMs" ? "sandboxTimeoutMinutes" : K;
+type DraftKey<K> = K extends "sandboxTimeoutMs"
+  ? "sandboxTimeoutMinutes"
+  : K extends "finalSnapshotBufferMs"
+    ? "finalSnapshotBufferMinutes"
+    : K;
 
 export type SandboxSettingsDraftValues = {
   [K in keyof SandboxSettings as DraftKey<K>]-?: K extends "tunnelPorts"
@@ -159,6 +164,20 @@ const fields: FieldRegistry = {
     },
     isChanged: (value, current) => value.trim() !== current,
   },
+  finalSnapshotBufferMs: {
+    draftKey: "finalSnapshotBufferMinutes",
+    format: sandboxTimeoutMinutesFromMs,
+    parse: (input) => {
+      const trimmed = input.trim();
+      const value = sandboxTimeoutMsFromMinutes(trimmed);
+      return trimmed !== "" && (value === undefined || value < MIN_FINAL_SNAPSHOT_BUFFER_MS)
+        ? {
+            error: `Final snapshot buffer must be at least ${MIN_FINAL_SNAPSHOT_BUFFER_MS / 60_000} minutes, in one-second increments.`,
+          }
+        : { value };
+    },
+    isChanged: (value, current) => value.trim() !== current,
+  },
 };
 
 export function resolveSandboxSettingsDraft({
@@ -206,6 +225,14 @@ export function resolveSandboxSettingsDraft({
   for (const key of Object.keys(fields) as (keyof SandboxSettings)[]) resolveField(key);
 
   error ??= validateSandboxChildSessionLimits(effective);
+  if (
+    !error &&
+    effective.finalSnapshotBufferMs !== undefined &&
+    effective.sandboxTimeoutMs !== undefined &&
+    effective.finalSnapshotBufferMs >= effective.sandboxTimeoutMs
+  ) {
+    error = "Final snapshot buffer must be shorter than the session timeout.";
+  }
 
   if (!error) {
     const configuredPorts: ConfiguredSandboxPort[] = [

@@ -100,13 +100,61 @@ describe("E2BSandboxProvider", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("createSandbox returns running status and tunnel urls", async () => {
-    const client = mockClient();
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({
+        sandboxID: "e2b-id",
+        templateID: "tmpl",
+        state: "running",
+        endAt: "2030-01-02T03:04:05.000Z",
+      })),
+    });
     const provider = new E2BSandboxProvider(client, providerConfig);
     const result = await provider.createSandbox(baseCreateConfig);
     expect(result.providerObjectId).toBe("e2b-id");
     expect(result.codeServerUrl).toBe("https://8080-e2b-id.e2b.app");
     const expected = (await computeHmacHex("code-server:sandbox-logical", "secret")).slice(0, 32);
     expect(result.codeServerPassword).toBe(expected);
+    expect(result.lifetime).toMatchObject({
+      kind: "finite",
+      expiresAtMs: Date.parse("2030-01-02T03:04:05.000Z"),
+      source: "provider",
+    });
+  });
+
+  it("re-reads endAt after resume and verifies an explicit preserve pause", async () => {
+    const getSandbox = vi
+      .fn()
+      .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })
+      .mockResolvedValueOnce({
+        sandboxID: "e2b-id",
+        templateID: "tmpl",
+        state: "running",
+        endAt: "2031-02-03T04:05:06.000Z",
+      })
+      .mockResolvedValueOnce({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" });
+    const client = mockClient({ getSandbox });
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    const resumed = await provider.resumeSandbox({
+      providerObjectId: "e2b-id",
+      sessionId: "sess-1",
+      sandboxId: "sandbox-logical",
+    });
+    expect(resumed.lifetime).toMatchObject({
+      kind: "finite",
+      expiresAtMs: Date.parse("2031-02-03T04:05:06.000Z"),
+      source: "provider",
+    });
+    await expect(
+      provider.stopSandbox({
+        providerObjectId: "e2b-id",
+        sessionId: "sess-1",
+        reason: "final_preservation",
+        intent: "preserve",
+        deadlineAtMs: Date.now() + 60_000,
+      })
+    ).resolves.toEqual({ success: true });
+    expect(client.pauseSandbox).toHaveBeenCalled();
+    expect(getSandbox).toHaveBeenCalledTimes(3);
   });
 
   it("injects and returns VNC access without including its port in generic tunnels", async () => {
@@ -293,6 +341,62 @@ describe("E2BSandboxProvider", () => {
         ).success
       ).toBe(true);
     }
+  });
+
+  it("does not claim preservation when the sandbox is missing", async () => {
+    const client = mockClient({
+      pauseSandbox: vi.fn(async () => {
+        throw new E2BNotFoundError("gone");
+      }),
+    });
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).stopSandbox({
+        providerObjectId: "x",
+        sessionId: "s",
+        reason: "snapshot",
+        intent: "preserve",
+      })
+    ).resolves.toMatchObject({ success: false });
+  });
+
+  it("verifies a pause conflict under the preservation deadline signal", async () => {
+    const client = mockClient({
+      pauseSandbox: vi.fn(async () => {
+        throw new E2BConflictError("already transitioning");
+      }),
+    });
+    const signal = AbortSignal.timeout(1_000);
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).stopSandbox({
+        providerObjectId: "x",
+        sessionId: "s",
+        reason: "snapshot",
+        intent: "preserve",
+        signal,
+      })
+    ).resolves.toEqual({ success: true });
+    expect(client.getSandbox).toHaveBeenCalledWith("x", signal);
+  });
+
+  it("rejects a pause conflict unless the sandbox is verified paused", async () => {
+    const client = mockClient({
+      pauseSandbox: vi.fn(async () => {
+        throw new E2BConflictError("already transitioning");
+      }),
+      getSandbox: vi.fn(async () => ({
+        sandboxID: "x",
+        templateID: "tmpl",
+        state: "running",
+      })),
+    });
+    await expect(
+      new E2BSandboxProvider(client, providerConfig).stopSandbox({
+        providerObjectId: "x",
+        sessionId: "s",
+        reason: "snapshot",
+        intent: "preserve",
+      })
+    ).resolves.toMatchObject({ success: false });
   });
 
   it.each(["connecting_timeout", "respawn"])(

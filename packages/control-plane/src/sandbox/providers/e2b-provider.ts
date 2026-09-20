@@ -48,6 +48,7 @@ import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  signalUntilDeadline,
   createVncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -251,6 +252,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         await this.cleanupSandbox(sandbox.sandboxID, "e2b.cleanup_kill_failed");
         throw error;
       }
+      const detail = await this.client.getSandbox(sandbox.sandboxID);
 
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
@@ -264,6 +266,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.sandboxID,
         createdAt: Date.now(),
+        lifetime: this.lifetimeFromDetail(detail),
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -436,6 +439,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.sandboxID,
+        lifetime: this.lifetimeFromDetail(await this.client.getSandbox(config.providerObjectId)),
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
@@ -454,21 +458,55 @@ export class E2BSandboxProvider implements SandboxProvider {
    * sandbox E2B retains indefinitely.
    */
   async stopSandbox(config: StopConfig): Promise<StopResult> {
-    const terminal = E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason);
+    const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
+    const terminal =
+      config.intent === "destroy" ||
+      (!config.intent && E2BSandboxProvider.TERMINAL_STOP_REASONS.has(config.reason));
     try {
       try {
         if (terminal) {
-          await this.client.killSandbox(
-            config.providerObjectId,
-            ...(config.signal ? [config.signal] : [])
-          );
+          await this.client.killSandbox(config.providerObjectId, ...(signal ? [signal] : []));
         } else {
-          await this.client.pauseSandbox(config.providerObjectId);
+          if (signal) {
+            await this.client.pauseSandbox(config.providerObjectId, undefined, signal);
+          } else {
+            await this.client.pauseSandbox(config.providerObjectId);
+          }
+          if (config.intent === "preserve") {
+            const paused = await this.client.getSandbox(config.providerObjectId, signal);
+            if (paused.state !== "paused") {
+              return { success: false, error: `Sandbox state was ${paused.state} after pause` };
+            }
+          }
         }
       } catch (error) {
-        // Already gone or already paused — nothing to do.
-        if (error instanceof E2BNotFoundError || error instanceof E2BConflictError) {
+        if (error instanceof E2BNotFoundError) {
+          if (config.intent === "preserve") {
+            return {
+              success: false,
+              error: "Sandbox disappeared before preservation was verified",
+            };
+          }
           return { success: true };
+        }
+        if (error instanceof E2BConflictError) {
+          if (config.intent !== "preserve") return { success: true };
+          try {
+            const paused = await this.client.getSandbox(config.providerObjectId, signal);
+            if (paused.state === "paused") return { success: true };
+            return {
+              success: false,
+              error: `Sandbox state was ${paused.state} after pause conflict`,
+            };
+          } catch (verificationError) {
+            if (verificationError instanceof E2BNotFoundError) {
+              return {
+                success: false,
+                error: "Sandbox disappeared before preservation was verified",
+              };
+            }
+            throw verificationError;
+          }
         }
         throw error;
       }
@@ -480,6 +518,14 @@ export class E2BSandboxProvider implements SandboxProvider {
         "stop"
       );
     }
+  }
+
+  private lifetimeFromDetail(detail: E2BSandboxDetail) {
+    const observedAtMs = Date.now();
+    const expiresAtMs = detail.endAt ? Date.parse(detail.endAt) : Number.NaN;
+    return Number.isFinite(expiresAtMs)
+      ? ({ kind: "finite", expiresAtMs, observedAtMs, source: "provider" } as const)
+      : ({ kind: "unknown", observedAtMs, reason: "E2B detail omitted a valid endAt" } as const);
   }
 
   /**
