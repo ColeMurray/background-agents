@@ -25,6 +25,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionEventStream } from "./event-stream";
 import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
+import type { SandboxPreservationState } from "@open-inspect/shared/types/sandbox-preservation";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 export interface SessionSnapshotEnrichment {
@@ -33,6 +34,7 @@ export interface SessionSnapshotEnrichment {
 }
 
 export interface SessionSnapshotReaderDeps {
+  getPreservation?: () => SandboxPreservationState | null;
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   messageRepository: MessageRepository;
@@ -112,6 +114,7 @@ export class SessionSnapshotReader {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
+      sandboxPreservation: this.deps.getPreservation?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,
       harness: getValidHarnessOrDefault(session.harness),

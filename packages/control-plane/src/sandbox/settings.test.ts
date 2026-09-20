@@ -126,6 +126,26 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({ terminalEnabled: true });
   });
 
+  it("validates finalSnapshotBufferMs without rejecting legacy omitted buffers", () => {
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 60_000 })).toEqual({
+      sandboxTimeoutMs: 60_000,
+    });
+    expect(
+      normalizeSandboxSettings({ sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 })
+    ).toEqual({ sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 });
+    expect(normalizeSandboxSettings({ finalSnapshotBufferMs: 300_000 })).toEqual({
+      finalSnapshotBufferMs: 300_000,
+    });
+    for (const finalSnapshotBufferMs of [299_000, 300_001]) {
+      expect(() => normalizeSandboxSettings({ finalSnapshotBufferMs })).toThrow(
+        SandboxSettingsValidationError
+      );
+    }
+    expect(() =>
+      normalizeSandboxSettings({ sandboxTimeoutMs: 600_000, finalSnapshotBufferMs: 600_000 })
+    ).toThrow(SandboxSettingsValidationError);
+  });
+
   it("accepts valid session cost settings", () => {
     expect(normalizeSandboxSettings({ maxSessionCostUsd: 12.5 })).toEqual({
       maxSessionCostUsd: 12.5,

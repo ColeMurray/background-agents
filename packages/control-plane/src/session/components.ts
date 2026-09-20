@@ -27,6 +27,7 @@ import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
+import type { SandboxProvider } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
@@ -90,6 +91,8 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import { MessageFailureService } from "./message-failure-service";
+import { SandboxPreservation } from "./sandbox-preservation";
+import { SandboxPreservationRepository } from "./sandbox-preservation-repository";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
@@ -411,7 +414,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const eventStream = new SessionEventStream(eventRepository);
 
   // Tier 5 — the lifecycle manager.
+  const sandboxProvider = createSandboxProviderFromEnv(
+    env,
+    resolveSandboxBackendName(env.SANDBOX_PROVIDER)
+  );
   const lifecycleManager = createLifecycleManager({
+    provider: sandboxProvider,
     env,
     db,
     getSessionId: getPublicSessionId,
@@ -434,6 +442,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     recordTerminalMessage
   );
+  const preservation = new SandboxPreservation({
+    log,
+    store: new SandboxPreservationRepository(sql),
+    provider: sandboxProvider,
+    sandbox: sandboxRepository,
+    session: sessionCoreRepository,
+    messages: messageRepository,
+    failures: messageFailures,
+    messenger,
+    sockets: wsManager,
+    alarm: alarmScheduler,
+    background: backgroundTasks,
+    processQueue: () => messageQueue.processMessageQueue(),
+    reconcileStatus: () => statusService.reconcileAfterExecution(false),
+    retireAccess: () => lifecycleManager.retirePreservedAccess(),
+  });
+  lifecycleManager.setPreservation(preservation);
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
     sessionCoreRepository,
@@ -467,7 +492,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     scmProviderName,
     alarmScheduler,
     executionStop,
-    getExecutionTimeoutMs
+    getExecutionTimeoutMs,
+    () => !lifecycleManager.isProviderStartupPending() && preservation.mayDispatch()
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -550,9 +576,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => lifecycleManager.scheduleInactivityCheck(),
     backgroundTasks,
     messageQueue,
-    log
+    log,
+    {
+      ready: (version) => preservation.runtimeReady(version),
+      isHolding: () => preservation.isHolding(),
+    }
   );
-  const pushService = new SandboxPushService(log, wsManager);
+  const pushService = new SandboxPushService(log, wsManager, () => preservation.mayDispatch());
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
     log,
     messageRepository,
@@ -561,7 +591,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactEventHandler,
     executionEventHandler,
     runtimeEventHandler,
-    pushService
+    pushService,
+    {
+      generationReady: (event) => preservation.generationReady(event),
+      prepared: (event) => preservation.prepared(event),
+    }
   );
 
   const alarmHandler = createAlarmHandler({
@@ -574,6 +608,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getExecutionTimeoutMs,
     now: () => Date.now(),
     log,
+    preserveBeforeWatchdogs: () => preservation.handleAlarm(),
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
@@ -734,6 +769,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Tier 9 — the read models, connection admission, and the server stack.
   const snapshotReader = new SessionSnapshotReader({
+    getPreservation: () => preservation.snapshot(),
     sessionCoreRepository,
     sandboxRepository,
     messageRepository,
@@ -863,7 +899,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     () => executionStop.stop(),
     presenceService,
-    eventStream
+    eventStream,
+    (action) => preservation.recover(action)
   );
   const sandboxDisconnects: SandboxDisconnectMonitor = {
     getStatus: () => sandboxRepository.getSandbox()?.status,
@@ -942,6 +979,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 }
 
 interface LifecycleManagerDeps {
+  provider: SandboxProvider;
   env: Env;
   db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
@@ -959,6 +997,7 @@ interface LifecycleManagerDeps {
 /** Create the lifecycle manager with all required adapters. */
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
+    provider,
     env,
     db,
     getSessionId,
@@ -974,7 +1013,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   // construction, so every session request fails at initialization instead of
   // the error surfacing later at the first spawn.
   const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
-  const provider = createSandboxProviderFromEnv(env, sandboxBackend);
 
   const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
 

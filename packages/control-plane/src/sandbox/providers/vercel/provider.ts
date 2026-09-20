@@ -21,6 +21,7 @@ import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
+  signalUntilDeadline,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ImageBuildProviderTriggerConfig,
@@ -88,6 +89,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     supportsRestore: true,
     supportsPersistentResume: false,
     supportsExplicitStop: true,
+    snapshotStopsSandbox: true,
   };
 
   constructor(
@@ -159,6 +161,12 @@ export class VercelSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
         createdAt: created.session.createdAt || Date.now(),
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: created.session.createdAt + created.session.timeout,
+          observedAtMs: Date.now(),
+          source: "provider",
+        },
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
@@ -213,6 +221,12 @@ export class VercelSandboxProvider implements SandboxProvider {
         success: true,
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: created.session.createdAt + created.session.timeout,
+          observedAtMs: Date.now(),
+          source: "provider",
+        },
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
@@ -227,11 +241,12 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
+      const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
       const snapshot = await this.client.snapshotSession(
         config.providerObjectId,
         {
           expirationMs: this.providerConfig.snapshotExpirationMs ?? DEFAULT_SNAPSHOT_EXPIRATION_MS,
-          signal: config.signal,
+          signal,
         },
         config.correlation
       );
@@ -243,7 +258,14 @@ export class VercelSandboxProvider implements SandboxProvider {
         };
       }
 
-      return { success: true, imageId: snapshot.snapshot.id };
+      if (snapshot.session.status !== "stopped") {
+        return {
+          success: false,
+          error: `Source session status was ${snapshot.session.status} after snapshot`,
+        };
+      }
+
+      return { success: true, imageId: snapshot.snapshot.id, sourceStopped: true };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to snapshot Vercel sandbox", error);
@@ -252,10 +274,11 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     try {
+      const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
       await this.client.stopSession(
         config.providerObjectId,
         config.correlation,
-        ...(config.signal ? [config.signal] : [])
+        ...(signal ? [signal] : [])
       );
       return { success: true };
     } catch (error) {

@@ -46,7 +46,7 @@ function createSessionResponse(
       status: "running",
       createdAt: 123,
       cwd: "/workspace",
-      timeout: 7200000,
+      timeout: 45 * 60 * 1000,
     },
     routes,
   };
@@ -74,7 +74,7 @@ function createMockClient(
     snapshotSession: vi.fn(
       async (): Promise<VercelSnapshotResponse> => ({
         snapshot: { id: "snapshot-1", status: "created", createdAt: 456 },
-        session: createSessionResponse().session,
+        session: { ...createSessionResponse().session, status: "stopped" },
       })
     ),
     listSnapshots: vi.fn(
@@ -173,6 +173,7 @@ describe("VercelSandboxProvider", () => {
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
+      snapshotStopsSandbox: true,
     });
   });
 
@@ -254,6 +255,11 @@ describe("VercelSandboxProvider", () => {
         codeServerUrl: "https://code.test",
         codeServerPassword: expect.any(String),
         ttydUrl: "https://term.test",
+        lifetime: expect.objectContaining({
+          kind: "finite",
+          expiresAtMs: 123 + VERCEL_MAX_SANDBOX_TIMEOUT_MS,
+          source: "provider",
+        }),
       })
     );
   });
@@ -656,8 +662,28 @@ describe("VercelSandboxProvider", () => {
       { expirationMs: 60_000 },
       undefined
     );
-    expect(snapshot).toEqual({ success: true, imageId: "snapshot-1" });
+    expect(snapshot).toEqual({ success: true, imageId: "snapshot-1", sourceStopped: true });
     expect(vi.mocked(client.deleteSnapshot)).toHaveBeenCalledWith("snapshot-1");
+  });
+
+  it("does not claim sourceStopped when the snapshot response is not stopped", async () => {
+    const client = createMockClient({
+      snapshotSession: vi.fn(async () => ({
+        snapshot: { id: "snapshot-1", status: "created" as const, createdAt: 456 },
+        session: createSessionResponse().session,
+      })),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+    await expect(
+      provider.takeSnapshot({
+        providerObjectId: "vercel-session-1",
+        sessionId: "session-123",
+        reason: "final_preservation",
+      })
+    ).resolves.toEqual({
+      success: false,
+      error: "Source session status was running after snapshot",
+    });
   });
 
   it("treats an already-deleted Vercel snapshot as cleanup success", async () => {
@@ -685,6 +711,7 @@ describe("VercelSandboxProvider", () => {
       providerObjectId: "vercel-session-1",
       sessionId: "session-123",
       reason: "inactivity_timeout",
+      intent: "destroy",
       correlation,
     });
 

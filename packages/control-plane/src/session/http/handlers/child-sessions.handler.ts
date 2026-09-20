@@ -79,8 +79,11 @@ export class ChildSessionsHandler {
     );
     if (promptAuthor instanceof Response) return promptAuthor;
     let sandboxTimeoutMs: number | undefined;
+    let finalSnapshotBufferMs: number | undefined;
     try {
-      sandboxTimeoutMs = parsePersistedSandboxSettings(session.sandbox_settings).sandboxTimeoutMs;
+      const sandboxSettings = parsePersistedSandboxSettings(session.sandbox_settings);
+      sandboxTimeoutMs = sandboxSettings.sandboxTimeoutMs;
+      finalSnapshotBufferMs = sandboxSettings.finalSnapshotBufferMs;
     } catch {
       sandboxTimeoutMs = undefined;
     }
@@ -93,6 +96,7 @@ export class ChildSessionsHandler {
       reasoningEffort: session.reasoning_effort ?? null,
       baseBranch: session.base_branch,
       sandboxTimeoutMs,
+      finalSnapshotBufferMs,
       promptAuthor: {
         userId: promptAuthor.user_id,
         ...(promptAuthor.canonical_user_id
