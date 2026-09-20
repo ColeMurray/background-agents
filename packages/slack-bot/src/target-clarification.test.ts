@@ -38,6 +38,7 @@ import {
   resolveTargetValue,
   targetPickerBlockId,
   targetQuickPickBlockId,
+  targetSelectedText,
 } from "./target-clarification";
 
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
@@ -528,5 +529,21 @@ describe("buildTargetClarificationBlocks", () => {
     expect(blocks[0]).toMatchObject({
       text: { text: expect.stringContaining("if you expected other targets") },
     });
+  });
+});
+
+describe("targetSelectedText", () => {
+  it("names the chosen repository", () => {
+    expect(targetSelectedText(repoTarget("acme/web"))).toBe("Using *acme/web*");
+  });
+
+  it("names the no-repository choice", () => {
+    expect(targetSelectedText(noRepositoryTarget)).toBe("Using *No repository*");
+  });
+
+  it("escapes an environment name so it cannot render as a mention", () => {
+    expect(targetSelectedText(environmentTarget("env_1", "<!channel> staging"))).toBe(
+      "Using *&lt;!channel&gt; staging*"
+    );
   });
 });

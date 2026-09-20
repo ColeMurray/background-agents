@@ -173,9 +173,19 @@ Create an R2 API Token:
    [sandbox image workflow](../packages/sandbox-images/README.md) for dependency updates and manual
    builds.
 4. Set `sandbox_provider = "daytona"` in `terraform.tfvars`
-5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`
+5. Set `daytona_api_url`, `daytona_api_key`, and `daytona_base_snapshot` in `terraform.tfvars`.
+   `daytona_base_snapshot_memory_gib` controls the memory inherited by sandboxes created from the
+   snapshot and defaults to `2`.
 
 The control plane calls the Daytona REST API directly — no shim service to deploy.
+
+Two optional settings:
+
+- `daytona_toolbox_api_url` overrides the per-sandbox toolbox proxy. Leave it empty on a deployment
+  whose sandboxes report their own.
+- `daytona_prebuilds_enabled` admits new Daytona prebuilt-image builds and lets fresh sessions boot
+  from one. It defaults to `false`; see [Daytona prebuilds](IMAGE_PREBUILD.md#daytona-prebuilds) for
+  the gates an operator should clear against their own organization and target before turning it on.
 
 > **Important**: the Daytona provider has no fleet-wide key of its own. Add the key for the models
 > you plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets
@@ -546,6 +556,7 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # daytona_api_url           = "https://app.daytona.io/api"
 # daytona_api_key           = "your-daytona-api-key"
 # daytona_base_snapshot     = "your-snapshot-name"
+# daytona_base_snapshot_memory_gib = 2
 
 # Vercel Sandboxes (only required when sandbox_provider = "vercel")
 # vercel_sandbox_token      = "your-vercel-token"
@@ -1070,7 +1081,10 @@ APP_ICON_URL
 # Daytona
 DAYTONA_API_URL
 DAYTONA_BASE_SNAPSHOT
+DAYTONA_BASE_SNAPSHOT_MEMORY_GIB
 DAYTONA_TARGET
+DAYTONA_TOOLBOX_API_URL
+DAYTONA_PREBUILDS_ENABLED
 
 # Vercel Sandbox
 VERCEL_SANDBOX_PROJECT_ID
@@ -1131,8 +1145,11 @@ Secrets for credentials:
 | `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
 | `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
 | `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
-| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name _(only if `sandbox_provider = "daytona"`)_                       |
+| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                |
+| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB` | Base snapshot memory in GiB (defaults to `2`)                                               |
 | `DAYTONA_TARGET`                   | Optional Daytona target name                                                                |
+| `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports          |
+| `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)     |
 | `VERCEL_SANDBOX_TOKEN`             | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                  |
 | `VERCEL_SANDBOX_PROJECT_ID`        | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_            |
 | `VERCEL_SANDBOX_TEAM_ID`           | Optional Vercel team/account ID for sandbox sessions                                        |

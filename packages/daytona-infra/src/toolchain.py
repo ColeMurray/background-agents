@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from daytona import CreateSnapshotParams, Daytona, Image
+from daytona import CreateSnapshotParams, Daytona, Image, Resources
 
 if TYPE_CHECKING:
     from sandbox_images.bundle import PackedBundle
@@ -21,11 +21,14 @@ def build_base_image(bundle: PackedBundle) -> Image:
     )
 
 
-def create_base_snapshot(daytona: Daytona, bundle: PackedBundle, snapshot_name: str) -> None:
+def create_base_snapshot(
+    daytona: Daytona, bundle: PackedBundle, snapshot_name: str, memory_gib: int
+) -> None:
     daytona.snapshot.create(
         CreateSnapshotParams(
             name=snapshot_name,
             image=build_base_image(bundle),
+            resources=Resources(memory=memory_gib),
             entrypoint=["python", "-m", "sandbox_runtime.entrypoint"],
         ),
         on_logs=lambda chunk: print(chunk, end="\n"),

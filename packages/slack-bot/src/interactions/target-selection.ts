@@ -10,7 +10,8 @@ import { collectForwardedMessages } from "../forwarded-messages";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import { createLogger } from "../logger";
 import {
-  buildWorkingMessageBlocks,
+  buildWorkingMessage,
+  formatSessionDefaultsNotice,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
@@ -26,8 +27,8 @@ import {
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
 } from "../sessions/session-launcher";
-import { resolveTargetValue } from "../target-clarification";
-import { targetId } from "../targets";
+import { resolveTargetValue, targetSelectedText } from "../target-clarification";
+import { targetId, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
 import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
@@ -42,6 +43,35 @@ interface TargetSelectionRequest {
   threadTs?: string;
   selectedBy: string;
   selectionSource: "picker" | "quick_pick";
+}
+
+/**
+ * Replace the clarification message with a record of the chosen target so its
+ * picker and quick-pick buttons stop inviting a second selection. Passing no
+ * `blocks` is load-bearing — that is what removes them. Best effort: a failed
+ * update leaves a stale picker, which must not fail a launched session.
+ */
+async function retireTargetClarificationPrompt(
+  env: Env,
+  channel: string,
+  messageTs: string,
+  target: SlackSessionTarget,
+  traceId: string | undefined
+): Promise<void> {
+  const result = await updateMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    messageTs,
+    targetSelectedText(target)
+  );
+  if (!result.ok) {
+    log.warn("slack.target_clarification.retire_failed", {
+      trace_id: traceId,
+      channel,
+      message_ts: messageTs,
+      slack_error: result.error,
+    });
+  }
 }
 
 export async function handleTargetSelection(
@@ -97,6 +127,7 @@ export async function handleTargetSelection(
     threadContextSource,
     unattributedPrompt,
     turnPlan,
+    launchPlan,
     classification,
   } = pendingData;
   if (selectedBy !== userId) {
@@ -113,10 +144,13 @@ export async function handleTargetSelection(
     !requestId && "inlinePromptOptions" in pendingData
       ? pendingData.inlinePromptOptions
       : undefined;
-  let resolvedTurnPlan = turnPlan;
+  // `turnPlan` is the pre-`launchPlan` field, still read so a clarification
+  // stored before this deploy keeps its model choice.
+  let resolvedLaunchPlan =
+    launchPlan ?? (turnPlan ? { sessionDefaults: turnPlan.effective } : undefined);
   let launchSettings: SlackLaunchSettings | undefined;
   if (
-    !resolvedTurnPlan &&
+    !resolvedLaunchPlan &&
     legacyInlinePromptOptions &&
     hasInlinePromptOptions(legacyInlinePromptOptions)
   ) {
@@ -143,7 +177,7 @@ export async function handleTargetSelection(
       });
       return;
     }
-    resolvedTurnPlan = resolvedTurn.turnPlan;
+    resolvedLaunchPlan = { sessionDefaults: resolvedTurn.turnPlan.effective };
   }
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
@@ -218,9 +252,10 @@ export async function handleTargetSelection(
     target_id: targetId(target),
   });
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, "Starting work...", {
+  const ack = buildWorkingMessage();
+  const ackResult = await postMessage(env.SLACK_BOT_TOKEN, channel, ack.text, {
     thread_ts: threadKey,
-    blocks: buildWorkingMessageBlocks(),
+    blocks: ack.blocks,
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
@@ -243,23 +278,32 @@ export async function handleTargetSelection(
     images,
     contextImages,
     imageOnly,
-    turnPlan: resolvedTurnPlan,
+    launchPlan: resolvedLaunchPlan,
     launchSettings,
     traceId,
   });
+  // A failed launch leaves the pending request in place and tells the user to
+  // try again, so the picker is their retry control: only retire it once the
+  // launch has committed.
   if (!sessionResult) return;
 
+  // Retire the authoritative state first. The Slack call below can burn the
+  // client's full request timeout, and a concurrent click that reads a
+  // still-live pending request would launch a second session.
   if (requestId) {
     await deletePendingRequest(env, requestId);
   } else {
     await deleteLegacyPendingRequest(env, channel, threadKey);
   }
+  await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (ackTs) {
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, "Starting work...", {
-      blocks: buildWorkingMessageBlocks({
-        sessionId: sessionResult.sessionId,
-        webAppUrl: env.WEB_APP_URL,
-      }),
+    const launched = buildWorkingMessage({
+      sessionId: sessionResult.sessionId,
+      webAppUrl: env.WEB_APP_URL,
+      sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
+    });
+    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
+      blocks: launched.blocks,
     });
     scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }

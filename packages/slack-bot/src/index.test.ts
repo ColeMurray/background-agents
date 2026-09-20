@@ -885,7 +885,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("applies combined inline overrides to a new direct-message session", async () => {
+  it("adopts combined inline overrides as a new direct-message session's defaults", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv();
     const ctx = makeCtx();
@@ -906,19 +906,40 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
+    // The flags configure the session itself, so later turns in the thread
+    // inherit them instead of reverting to the App Home default.
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      }),
+    ]);
     const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0]).toMatchObject({
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: "high",
       callbackContext: {
         model: "anthropic/claude-haiku-4-5",
         reasoningEffort: "high",
       },
     });
+    expect(promptBodies[0]).not.toHaveProperty("model");
+    expect(promptBodies[0]).not.toHaveProperty("reasoningEffort");
     expect(String(promptBodies[0].content)).toContain("fix the auth tests");
     expect(String(promptBodies[0].content)).not.toContain("!model");
     expect(String(promptBodies[0].content)).not.toContain("!reasoning");
+    // The thread mapping is what later follow-ups resolve against, so the
+    // flagged model has to land there for the defaults to actually stick.
+    await expect(
+      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
+        "thread:D123:444.555",
+        "json"
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      })
+    );
 
     slackFetch.mockRestore();
   });
@@ -1258,6 +1279,61 @@ describe("POST /events", () => {
     ).get("thread:C123:111.222", "json");
     await expect(storedMapping).resolves.toEqual(
       expect.objectContaining({ sessionId: "session-1" })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("keeps the thread's session defaults when replacing a stale session", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], {
+      prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
+      promptStatus: [404, 200],
+    });
+    // "high" is not this model's default effort, so an App Home reset would
+    // show up as "max" on the replacement session.
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "stale-session",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+        createdAt: Date.now(),
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> now add coverage",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+      }),
+    ]);
+    await expect(
+      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
+        "thread:C123:111.222",
+        "json"
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({ sessionId: "session-1", reasoningEffort: "high" })
     );
 
     slackFetch.mockRestore();
@@ -2012,6 +2088,9 @@ describe("POST /interactions", () => {
 
     const updateBodies = slackApiBodies(slackFetch, "chat.update");
     expect(updateBodies).toEqual([
+      // The clarification message collapses to text with no blocks, which is
+      // what makes Slack drop its picker.
+      { channel: "C123", ts: "111.222", text: "Using *acme/app*" },
       expect.objectContaining({
         channel: "C123",
         ts: "222.333",
