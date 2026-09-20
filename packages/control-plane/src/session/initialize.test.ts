@@ -32,7 +32,7 @@ describe("initializeSession", () => {
     spawnDepth: 0,
     codeServerEnabled: false,
     vncEnabled: true,
-    sandboxSettings: {},
+    sandboxLaunchSpec: { settings: {}, execution: { profile: "default" } },
     automationId: null,
     automationRunId: null,
     managedSkillsManifest: {
@@ -96,17 +96,15 @@ describe("initializeSession", () => {
     );
   });
 
-  it("does not persist settings Daytona cannot honor", async () => {
+  it("persists the already-admitted launch spec without rereading settings", async () => {
+    settingsFirstMock.mockRejectedValue(new Error("settings changed after admission"));
     await initializeSession(
       createEnv("daytona"),
       {
         ...baseInput,
-        sandboxSettings: {
-          cpuCores: 2,
-          memoryMib: 4096,
-          sandboxTimeoutMs: 14_400_000,
-          buildTimeoutSeconds: 2400,
-          terminalEnabled: true,
+        sandboxLaunchSpec: {
+          settings: { buildTimeoutSeconds: 2400, terminalEnabled: true },
+          execution: { profile: "default" },
         },
       },
       ctx as never
@@ -117,41 +115,8 @@ describe("initializeSession", () => {
     expect(body.sandboxSettings).toEqual({
       buildTimeoutSeconds: 2400,
       terminalEnabled: true,
-      dockerEnabled: false,
     });
-  });
-
-  it.each(["user", "automation", "agent"] as const)(
-    "denies unavailable Docker before D1/runtime writes for %s",
-    async (spawnSource) => {
-      await expect(
-        initializeSession(
-          createEnv(),
-          { ...baseInput, spawnSource, dockerEnabled: true },
-          ctx as never
-        )
-      ).rejects.toMatchObject({ code: "docker_not_available" });
-      expect(createMock).not.toHaveBeenCalled();
-      expect(stubFetchMock).not.toHaveBeenCalled();
-    }
-  );
-
-  it("does not turn malformed persisted Docker requirements into a default Session", async () => {
-    settingsFirstMock.mockResolvedValue({ settings: '{"defaults":{"dockerEnabled":"true"}}' });
-    await expect(initializeSession(createEnv(), baseInput, ctx as never)).rejects.toMatchObject({
-      code: "invalid_sandbox_execution",
-    });
-    expect(createMock).not.toHaveBeenCalled();
-    expect(stubFetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not create a Session when strict settings reads fail", async () => {
-    settingsFirstMock.mockRejectedValue(new Error("database unavailable"));
-    await expect(initializeSession(createEnv(), baseInput, ctx as never)).rejects.toMatchObject({
-      code: "invalid_sandbox_execution",
-    });
-    expect(createMock).not.toHaveBeenCalled();
-    expect(stubFetchMock).not.toHaveBeenCalled();
+    expect(settingsFirstMock).not.toHaveBeenCalled();
   });
 
   it("requires exactly one resolved or inherited managed skills manifest", async () => {
@@ -335,7 +300,7 @@ describe("initializeSession", () => {
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
     expect(body.vncEnabled).toBe(true);
-    expect(body.sandboxSettings).toEqual({ dockerEnabled: false });
+    expect(body.sandboxSettings).toEqual({});
     expect(body.sandboxExecution).toEqual({ profile: "default" });
     expect(body.parentSessionId).toBeNull();
     expect(body.spawnSource).toBe("user");

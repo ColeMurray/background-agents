@@ -50,7 +50,11 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: true,
       vncEnabled: true,
-      sandboxSettings: { tunnelPorts: [8080], cpuCores: null },
+      sandboxSnapshot: {
+        settings: { tunnelPorts: [8080], cpuCores: null },
+        scopeAllowed: true,
+        repository: "acme/web",
+      },
     });
     // Every resolution targets the primary member; the secondary is never asked about.
     expect(mockState.resolvedCalls.map((c) => c.repo)).toEqual([
@@ -81,7 +85,11 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: true,
       vncEnabled: true,
-      sandboxSettings: { buildTimeoutSeconds: 3600 },
+      sandboxSnapshot: {
+        settings: { buildTimeoutSeconds: 3600 },
+        scopeAllowed: true,
+        repository: "acme/web",
+      },
     });
     expect(mockState.resolvedCalls.map((c) => c.environmentId)).toEqual([
       "env_1",
@@ -97,7 +105,11 @@ describe("resolveSessionScopedSettings", () => {
 
     expect(result.codeServerEnabled).toBe(false);
     expect(result.vncEnabled).toBe(false);
-    expect(result.sandboxSettings).toEqual({ tunnelPorts: [3000] });
+    expect(result.sandboxSnapshot).toEqual({
+      settings: { tunnelPorts: [3000] },
+      scopeAllowed: true,
+      repository: null,
+    });
     // No per-repo resolution happens without a primary member.
     expect(mockState.resolvedCalls).toEqual([]);
     expect(mockState.globalCalls).toContain("sandbox");
@@ -122,7 +134,11 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: false,
       vncEnabled: false,
-      sandboxSettings: {},
+      sandboxSnapshot: {
+        settings: { tunnelPorts: [8080], cpuCores: 2 },
+        scopeAllowed: false,
+        repository: "acme/web",
+      },
     });
   });
 
@@ -147,21 +163,11 @@ describe("resolveSessionScopedSettings", () => {
     expect(result).toEqual({
       codeServerEnabled: true,
       vncEnabled: true,
-      sandboxSettings: { buildTimeoutSeconds: 1200 },
-    });
-  });
-
-  it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {
-    mockState.resolved["code-server"] = { enabledRepos: null, settings: { enabled: "true" } };
-    mockState.resolved["vnc"] = { enabledRepos: null, settings: { enabled: "true" } };
-    mockState.resolved["sandbox"] = { enabledRepos: null, settings: { tunnelPorts: ["8080"] } };
-
-    const result = await resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }]);
-
-    expect(result).toEqual({
-      codeServerEnabled: false,
-      vncEnabled: false,
-      sandboxSettings: {},
+      sandboxSnapshot: {
+        settings: { buildTimeoutSeconds: 1200 },
+        scopeAllowed: true,
+        repository: "Group/SubGroup/Web",
+      },
     });
   });
 });

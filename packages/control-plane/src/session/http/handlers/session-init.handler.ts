@@ -201,10 +201,23 @@ export class SessionInitHandler {
               strictExecution: true,
             });
       if (
-        (normalizedSandboxSettings?.dockerEnabled ?? false) !==
-        (sandboxExecution.profile === "docker-v1")
+        normalizedSandboxSettings?.dockerEnabled !== undefined &&
+        normalizedSandboxSettings.dockerEnabled !== (sandboxExecution.profile === "docker-v1")
       ) {
         throw new Error("Sandbox execution conflicts with dockerEnabled");
+      }
+      if (
+        sandboxExecution.profile === "docker-v1" &&
+        ((normalizedSandboxSettings?.cpuCores != null &&
+          normalizedSandboxSettings.cpuCores !== sandboxExecution.cpuCores) ||
+          (normalizedSandboxSettings?.memoryMib != null &&
+            normalizedSandboxSettings.memoryMib !== sandboxExecution.memoryMib))
+      ) {
+        throw new Error("Sandbox resources conflict with sandboxExecution");
+      }
+      if (normalizedSandboxSettings) {
+        const { dockerEnabled: _legacyDockerEnabled, ...settings } = normalizedSandboxSettings;
+        normalizedSandboxSettings = settings;
       }
     } catch {
       return Response.json({ error: "Invalid sandbox execution configuration" }, { status: 400 });

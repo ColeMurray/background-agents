@@ -7,7 +7,6 @@ import { spawnChildSessionRequestSchema } from "@open-inspect/shared/types/sessi
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-  type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import {
   getReasoningConfig,
@@ -25,10 +24,13 @@ import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
-import { SandboxExecutionError } from "../sandbox/execution";
+import {
+  readSandboxExecutionSettings,
+  resolveSandboxLaunchSpec,
+  SandboxExecutionError,
+} from "../sandbox/execution";
 import {
   resolveCodeServerEnabled,
-  resolveSandboxSettings,
   resolveVncEnabled,
 } from "../session/integration-settings-resolution";
 import { spawnContextSchema } from "../session/spawn-context";
@@ -74,30 +76,9 @@ export async function handleSpawnChild(
 
   const parentSession = await sessionStore.get(parentId);
   const parentEnvironmentId = parentSession?.environmentId ?? null;
-  // Children inherit the parent's settings scope: its primary repo plus, for
-  // environment-launched parents, that environment's overrides (design §13.5).
-  const resolvedChildSandboxSettings = parentSession
-    ? await resolveSandboxSettings(
-        ctx.db,
-        parentSession.repoOwner,
-        parentSession.repoName,
-        parentEnvironmentId
-      )
-    : {};
-  const maxConcurrentChildren =
-    resolvedChildSandboxSettings.maxConcurrentChildSessions ??
-    DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-  const maxTotalChildren =
-    resolvedChildSandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
-
   const parentDepth = await sessionStore.getSpawnDepth(parentId);
   if (parentDepth >= MAX_SPAWN_DEPTH) {
     return error(`Maximum spawn depth (${MAX_SPAWN_DEPTH}) exceeded`, 403);
-  }
-
-  const totalCount = await sessionStore.countTotalChildren(parentId);
-  if (totalCount >= maxTotalChildren) {
-    return error(`Maximum total children (${maxTotalChildren}) reached`, 429);
   }
 
   const spawnContextRes = await ctx.sessionRuntime.fetch(
@@ -123,13 +104,6 @@ export async function handleSpawnChild(
     return error("Failed to get parent session context", 500);
   }
   const spawnContext = parsedSpawnContext.data;
-  const { sandboxTimeoutMs: _currentTimeoutMs, ...resolvedChildSettingsWithoutTimeout } =
-    resolvedChildSandboxSettings;
-  const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
-  if (spawnContext.sandboxTimeoutMs !== undefined) {
-    childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
-  }
-
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
   const requestedRepoName = body.repoName?.trim().toLowerCase() || null;
   if ((requestedRepoOwner === null) !== (requestedRepoName === null)) {
@@ -243,6 +217,34 @@ export async function handleSpawnChild(
     spawnContext.repoName,
     parentEnvironmentId
   );
+  let sandboxLaunchSpec: ReturnType<typeof resolveSandboxLaunchSpec>;
+  try {
+    const sandboxSnapshot = await readSandboxExecutionSettings(
+      ctx.db,
+      spawnContext.repoOwner && spawnContext.repoName
+        ? `${spawnContext.repoOwner}/${spawnContext.repoName}`
+        : null,
+      parentEnvironmentId
+    );
+    sandboxLaunchSpec = resolveSandboxLaunchSpec(env, sandboxSnapshot, {
+      inherited: {
+        execution: spawnContext.sandboxExecution,
+        sandboxTimeoutMs: spawnContext.sandboxTimeoutMs,
+      },
+    });
+  } catch (e) {
+    if (e instanceof SandboxExecutionError)
+      return json({ error: e.message, code: e.code }, e.status);
+    throw e;
+  }
+  const maxConcurrentChildren =
+    sandboxLaunchSpec.settings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+  const maxTotalChildren =
+    sandboxLaunchSpec.settings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
+  const totalCount = await sessionStore.countTotalChildren(parentId);
+  if (totalCount >= maxTotalChildren) {
+    return error(`Maximum total children (${maxTotalChildren}) reached`, 429);
+  }
 
   const input: SessionInitInput = {
     sessionId: childId,
@@ -266,8 +268,7 @@ export async function handleSpawnChild(
     scmUserId: spawnContext.promptAuthor.scmUserId,
     codeServerEnabled: childCodeServerEnabled,
     vncEnabled: childVncEnabled,
-    sandboxSettings: childSandboxSettings,
-    sandboxExecution: spawnContext.sandboxExecution,
+    sandboxLaunchSpec,
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,

@@ -1147,7 +1147,6 @@ describe("Scheduler", () => {
       expect(initBody.sandboxSettings).toEqual({
         tunnelPorts: [5173],
         terminalEnabled: true,
-        dockerEnabled: false,
       });
     });
 
@@ -1170,6 +1169,34 @@ describe("Scheduler", () => {
       const [, deadline] = mockStore.setRunExecutionDeadline.mock.calls[0];
       expect(deadline).toBe(claimedAt + sandboxTimeoutMs + EXECUTION_DEADLINE_GRACE_MS);
       expect(deadline).toBeGreaterThan(claimedDeadline);
+    });
+
+    it("rejects unavailable Docker automation before runtime initialization", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: "main" })]);
+      const stub = createMockSessionStub();
+      const env = createEnv(
+        { DB: createIntegrationSettingsDbMock(undefined, false, { dockerEnabled: true }) },
+        stub
+      );
+
+      await createScheduler(env).tick();
+
+      const initCalls = vi.mocked(stub.fetch).mock.calls.filter(([request]) => {
+        const input = request as RequestInfo;
+        const url = typeof input === "string" ? input : input.url;
+        return new URL(url).pathname === "/internal/init";
+      });
+      expect(initCalls).toHaveLength(0);
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+      expect(mockStore.claimRunSession).toHaveBeenCalled();
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: expect.stringContaining("unavailable"),
+        })
+      );
     });
 
     it("records an atomic childless skip when a run is active (concurrency guard)", async () => {

@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { createExecutionContext, SELF, env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
+import worker from "../../src/index";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
+import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth, serviceFetch } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -23,6 +25,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     environmentId?: string | null;
     model?: string;
     reasoningEffort?: string | null;
+    sandboxTimeoutMs?: number;
+    sandboxExecution?: Record<string, unknown>;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const store = new SessionIndexStore(env.DB);
@@ -61,6 +65,10 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
       ...(opts?.model != null && { model: opts.model }),
       ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
+      ...(opts?.sandboxTimeoutMs != null && {
+        sandboxSettings: { sandboxTimeoutMs: opts.sandboxTimeoutMs },
+      }),
+      ...(opts?.sandboxExecution != null && { sandboxExecution: opts.sandboxExecution }),
     });
 
     const sandboxToken = `sb-tok-${Date.now()}`;
@@ -150,6 +158,103 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("inherits the parent's frozen Docker resources and timeout despite current settings changes", async () => {
+    const execution = {
+      profile: "docker-v1",
+      provider: "modal",
+      cpuCores: 4,
+      memoryMib: 6144,
+    };
+    const { parentName, sandboxToken } = await setupParent({
+      repoId: 12345,
+      sandboxTimeoutMs: 7_200_000,
+      sandboxExecution: execution,
+    });
+    expect(
+      (
+        await serviceFetch("https://test.local/integration-settings/sandbox", {
+          method: "PUT",
+          body: JSON.stringify({
+            settings: {
+              defaults: {
+                dockerEnabled: true,
+                cpuCores: 1,
+                memoryMib: 2048,
+                sandboxTimeoutMs: 3_600_000,
+              },
+            },
+          }),
+        })
+      ).status
+    ).toBe(200);
+    const request = new Request(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Docker child", prompt: "Keep the parent contract" }),
+    });
+
+    const response = await worker.fetch(
+      request,
+      { ...env, ENABLE_MODAL_VM_SANDBOXES: "true" } as WorkerBindings,
+      createExecutionContext()
+    );
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    const childStub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    const [session] = await queryDO<{ sandbox_settings: string; sandbox_execution: string }>(
+      childStub,
+      "SELECT sandbox_settings, sandbox_execution FROM session"
+    );
+    expect(JSON.parse(session.sandbox_execution)).toEqual(execution);
+    expect(JSON.parse(session.sandbox_settings)).toMatchObject({
+      cpuCores: 4,
+      memoryMib: 6144,
+      sandboxTimeoutMs: 7_200_000,
+    });
+    expect(JSON.parse(session.sandbox_settings)).not.toHaveProperty("dockerEnabled");
+  });
+
+  it("rejects an inherited Docker child before D1 or an admission lease when the gate is closed", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      sandboxExecution: {
+        profile: "docker-v1",
+        provider: "modal",
+        cpuCores: 4,
+        memoryMib: 6144,
+      },
+    });
+    const before = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{
+      count: number;
+    }>();
+    const request = new Request(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Blocked child", prompt: "Do not allocate" }),
+    });
+
+    const response = await worker.fetch(
+      request,
+      { ...env, ENABLE_MODAL_VM_SANDBOXES: "false" } as WorkerBindings,
+      createExecutionContext()
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "docker_not_available" });
+    const after = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{
+      count: number;
+    }>();
+    expect(after?.count).toBe(before?.count);
+    const leases = await env.DB.prepare(
+      "SELECT child_session_id FROM child_admission_leases WHERE parent_session_id = ?"
+    )
+      .bind(parentName)
+      .all();
+    expect(leases.results).toEqual([]);
+    expect(await store.listByParent(parentName)).toEqual([]);
   });
 
   it("attributes a child to the active prompt author instead of the parent owner", async () => {

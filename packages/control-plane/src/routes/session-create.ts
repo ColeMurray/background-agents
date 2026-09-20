@@ -21,7 +21,7 @@ import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
-import { SandboxExecutionError } from "../sandbox/execution";
+import { resolveSandboxLaunchSpec, SandboxExecutionError } from "../sandbox/execution";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
@@ -204,11 +204,19 @@ export async function handleCreateSession(
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
-  const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
-    ctx.db,
-    scopeMembers,
-    environmentId
-  );
+  let scopedSettings: Awaited<ReturnType<typeof resolveSessionScopedSettings>>;
+  let sandboxLaunchSpec: ReturnType<typeof resolveSandboxLaunchSpec>;
+  try {
+    scopedSettings = await resolveSessionScopedSettings(ctx.db, scopeMembers, environmentId);
+    sandboxLaunchSpec = resolveSandboxLaunchSpec(env, scopedSettings.sandboxSnapshot, {
+      dockerEnabled: body.dockerEnabled,
+    });
+  } catch (e) {
+    if (e instanceof SandboxExecutionError)
+      return json({ error: e.message, code: e.code }, e.status);
+    throw e;
+  }
+  const { codeServerEnabled, vncEnabled } = scopedSettings;
 
   const sessionId = generateId();
   let providerAuth;
@@ -266,8 +274,7 @@ export async function handleCreateSession(
     scmUserId,
     codeServerEnabled,
     vncEnabled,
-    sandboxSettings,
-    dockerEnabled: body.dockerEnabled,
+    sandboxLaunchSpec,
     spawnSource,
     managedSkillsManifest,
     providerAuth,

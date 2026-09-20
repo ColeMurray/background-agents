@@ -8,6 +8,10 @@ import { IntegrationSettingsStore } from "../db/integration-settings";
 import { createLogger } from "../logger";
 import type { RepoIdentity } from "./repository-target";
 import type { SqlDatabase } from "../db/sql-database";
+import {
+  readSandboxExecutionSettings,
+  type SandboxLaunchSettingsSnapshot,
+} from "../sandbox/execution";
 
 const logger = createLogger("session-integration-settings");
 
@@ -121,7 +125,7 @@ export async function resolveSandboxSettings(
 export interface SessionScopedSettings {
   codeServerEnabled: boolean;
   vncEnabled: boolean;
-  sandboxSettings: SandboxSettings;
+  sandboxSnapshot: SandboxLaunchSettingsSnapshot;
 }
 
 /**
@@ -152,12 +156,12 @@ export interface SessionScopedSettings {
  * resolvers' null-repo behavior.
  */
 export async function resolveSessionScopedSettings(
-  db: SqlDatabase | undefined,
+  db: SqlDatabase,
   members: readonly RepoIdentity[],
   environmentId?: string | null
 ): Promise<SessionScopedSettings> {
   const primary = members[0] ?? null;
-  const [codeServerEnabled, vncEnabled, sandboxSettings] = await Promise.all([
+  const [codeServerEnabled, vncEnabled, sandboxSnapshot] = await Promise.all([
     resolveCodeServerEnabled(
       db,
       primary?.repoOwner ?? null,
@@ -165,12 +169,11 @@ export async function resolveSessionScopedSettings(
       environmentId
     ),
     resolveVncEnabled(db, primary?.repoOwner ?? null, primary?.repoName ?? null, environmentId),
-    resolveSandboxSettings(
+    readSandboxExecutionSettings(
       db,
-      primary?.repoOwner ?? null,
-      primary?.repoName ?? null,
+      primary ? `${primary.repoOwner}/${primary.repoName}` : null,
       environmentId
     ),
   ]);
-  return { codeServerEnabled, vncEnabled, sandboxSettings };
+  return { codeServerEnabled, vncEnabled, sandboxSnapshot };
 }

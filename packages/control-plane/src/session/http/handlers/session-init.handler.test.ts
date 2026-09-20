@@ -375,6 +375,61 @@ describe("SessionInitHandler", () => {
     });
   });
 
+  it("accepts a consistent legacy Docker boolean but does not store it", async () => {
+    const { handler, repository } = createHandler();
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          userId: "user-1",
+          sandboxSettings: { dockerEnabled: true, cpuCores: 4, memoryMib: 6144 },
+          sandboxExecution: {
+            profile: "docker-v1",
+            provider: "modal",
+            cpuCores: 4,
+            memoryMib: 6144,
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const upsert = repository.upsertSession.mock.calls[0]![0];
+    expect(JSON.parse(upsert.sandboxSettings!)).toEqual({ cpuCores: 4, memoryMib: 6144 });
+  });
+
+  it("rejects Docker resource settings that conflict with the execution contract", async () => {
+    const { handler, repository } = createHandler();
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          userId: "user-1",
+          sandboxSettings: { cpuCores: 2, memoryMib: 4096 },
+          sandboxExecution: {
+            profile: "docker-v1",
+            provider: "modal",
+            cpuCores: 4,
+            memoryMib: 6144,
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed init bodies before creating records", async () => {
     const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
 

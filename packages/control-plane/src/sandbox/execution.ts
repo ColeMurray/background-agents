@@ -4,10 +4,34 @@ import {
   sessionSandboxExecutionSchema,
   type SessionSandboxExecution,
 } from "@open-inspect/shared/types/sandbox-execution";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  omitUnsupportedSandboxSettings,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import type { SqlDatabase } from "../db/sql-database";
 import type { EnvConfig } from "../types";
+import { resolveSandboxBackendName } from "./provider-name";
+import { normalizeSandboxSettings } from "./settings";
+
+export interface SandboxLaunchSettingsSnapshot {
+  readonly settings: SandboxSettings;
+  readonly scopeAllowed: boolean;
+  readonly repository: string | null;
+}
+
+export interface SandboxLaunchSpec {
+  readonly settings: Readonly<Omit<SandboxSettings, "dockerEnabled">>;
+  readonly execution: Readonly<SessionSandboxExecution>;
+}
+
+export interface SandboxLaunchOptions {
+  readonly dockerEnabled?: boolean;
+  readonly inherited?: {
+    readonly execution: SessionSandboxExecution;
+    readonly sandboxTimeoutMs?: number;
+  };
+}
 
 export class SandboxExecutionError extends Error {
   constructor(
@@ -25,20 +49,25 @@ export async function readSandboxExecutionSettings(
   db: SqlDatabase,
   repo: string | null,
   environmentId?: string | null
-): Promise<{ settings: SandboxSettings; scopeAllowed: boolean }> {
+): Promise<SandboxLaunchSettingsSnapshot> {
   try {
     const store = new IntegrationSettingsStore(db, { strictSandboxExecution: true });
     if (repo) {
       const resolved = await store.getResolvedConfig("sandbox", repo, environmentId);
       return {
         settings: resolved.settings,
+        repository: repo,
         scopeAllowed:
           resolved.enabledRepos === null || resolved.enabledRepos.includes(repo.toLowerCase()),
       };
     }
     const global = await store.getGlobal("sandbox");
     // A repository allowlist cannot grant a repository-less session access.
-    return { settings: global?.defaults ?? {}, scopeAllowed: global?.enabledRepos == null };
+    return {
+      settings: global?.defaults ?? {},
+      scopeAllowed: global?.enabledRepos == null,
+      repository: null,
+    };
   } catch {
     throw new SandboxExecutionError(
       "invalid_sandbox_execution",
@@ -46,6 +75,51 @@ export async function readSandboxExecutionSettings(
       503
     );
   }
+}
+
+export function resolveSandboxLaunchSpec(
+  env: Pick<EnvConfig, "SANDBOX_PROVIDER" | "ENABLE_MODAL_VM_SANDBOXES">,
+  snapshot: SandboxLaunchSettingsSnapshot,
+  options: SandboxLaunchOptions = {}
+): SandboxLaunchSpec {
+  const execution = resolveSandboxExecution(
+    env,
+    snapshot.settings,
+    snapshot.scopeAllowed,
+    options.dockerEnabled,
+    options.inherited?.execution
+  );
+  const projected: SandboxSettings =
+    snapshot.scopeAllowed || snapshot.repository === null ? { ...snapshot.settings } : {};
+
+  if (options.inherited) {
+    delete projected.sandboxTimeoutMs;
+    if (options.inherited.sandboxTimeoutMs !== undefined) {
+      projected.sandboxTimeoutMs = options.inherited.sandboxTimeoutMs;
+    }
+  }
+  if (execution.profile === "docker-v1") {
+    projected.cpuCores = execution.cpuCores;
+    projected.memoryMib = execution.memoryMib;
+  }
+  const normalized = normalizeSandboxSettings(projected, {
+    invalid: "omit",
+    strictExecution: true,
+  });
+  const supported = omitUnsupportedSandboxSettings(
+    normalized,
+    resolveSandboxBackendName(env.SANDBOX_PROVIDER)
+  );
+  const { dockerEnabled: _dockerEnabled, ...effective } = supported;
+  if (effective.tunnelPorts) {
+    effective.tunnelPorts = [...effective.tunnelPorts];
+    Object.freeze(effective.tunnelPorts);
+  }
+
+  return Object.freeze({
+    settings: Object.freeze(effective),
+    execution: Object.freeze(execution),
+  });
 }
 
 /** Admission for new Sessions/children/builds; never used to reinterpret an existing Session. */

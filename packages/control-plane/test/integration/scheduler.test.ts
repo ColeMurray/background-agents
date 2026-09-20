@@ -1,19 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { seedActiveUser, sqlDatabase } from "./helpers";
+import { queryDO, seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import {
   AutomationExecutionUnauthorizedError,
+  EXECUTION_DEADLINE_GRACE_MS,
   Scheduler,
   resolveAutomationProviderAuth,
 } from "../../src/scheduler/scheduler";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
-import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { SessionIndexStore } from "../../src/db/session-index";
+import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 
 function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return new Scheduler(env.DB, schedulerEnv, { submit() {} });
@@ -527,6 +529,92 @@ describe("Scheduler (integration)", () => {
       const automation = await store.getById("auto-t4");
       expect(automation!.next_run_at).not.toBeNull();
       expect(automation!.next_run_at!).toBeGreaterThan(now);
+    });
+
+    it("fails a Docker automation with a closed gate before creating a session row", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(
+        makeAutomation({ id: "auto-docker-closed", next_run_at: now - 60_000, enabled: 1 })
+      );
+      expect(
+        (
+          await serviceFetch("https://test.local/integration-settings/sandbox", {
+            method: "PUT",
+            body: JSON.stringify({ settings: { defaults: { dockerEnabled: true } } }),
+          })
+        ).status
+      ).toBe(200);
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
+        ENABLE_MODAL_VM_SANDBOXES: "false",
+      } as WorkerBindings);
+
+      await createScheduler(schedulerEnv).tick();
+
+      expect((await fetchRuns("auto-docker-closed"))[0]).toMatchObject({
+        status: "failed",
+        failure_reason: expect.stringContaining("unavailable"),
+      });
+      const sessions = await env.DB.prepare("SELECT id FROM sessions WHERE automation_id = ?")
+        .bind("auto-docker-closed")
+        .all();
+      expect(sessions.results).toEqual([]);
+    });
+
+    it("sets an enabled Docker run deadline from the same persisted timeout", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      const timeout = 7_200_000;
+      await store.create(
+        makeAutomation({ id: "auto-docker-enabled", next_run_at: now - 60_000, enabled: 1 })
+      );
+      expect(
+        (
+          await serviceFetch("https://test.local/integration-settings/sandbox", {
+            method: "PUT",
+            body: JSON.stringify({
+              settings: {
+                defaults: {
+                  dockerEnabled: true,
+                  cpuCores: 3,
+                  memoryMib: 6144,
+                  sandboxTimeoutMs: timeout,
+                },
+              },
+            }),
+          })
+        ).status
+      ).toBe(200);
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
+        ENABLE_MODAL_VM_SANDBOXES: "true",
+      } as WorkerBindings);
+
+      await createScheduler(schedulerEnv).tick();
+
+      const [run] = await fetchRuns("auto-docker-enabled");
+      expect(run.session_id).toEqual(expect.any(String));
+      expect(run.execution_deadline_at).toBe(
+        run.started_at! + timeout + EXECUTION_DEADLINE_GRACE_MS
+      );
+      const session = await new SessionIndexStore(env.DB).get(run.session_id!);
+      expect(session).not.toBeNull();
+      const stub = env.SESSION.get(env.SESSION.idFromName(run.session_id!));
+      const [persisted] = await queryDO<{
+        sandbox_settings: string;
+        sandbox_execution: string;
+      }>(stub, "SELECT sandbox_settings, sandbox_execution FROM session");
+      expect(JSON.parse(persisted.sandbox_settings)).toMatchObject({
+        sandboxTimeoutMs: timeout,
+        cpuCores: 3,
+        memoryMib: 6144,
+      });
+      expect(JSON.parse(persisted.sandbox_execution)).toMatchObject({
+        profile: "docker-v1",
+        cpuCores: 3,
+        memoryMib: 6144,
+      });
     });
 
     it("records and pauses an authorization-denied schedule so it is not repeatedly overdue", async () => {

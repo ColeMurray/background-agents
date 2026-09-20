@@ -10,11 +10,16 @@ import {
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
+import type * as SandboxExecutionModule from "./sandbox/execution";
 
 const integrationSettingsMocks = vi.hoisted(() => ({
   resolveCodeServerEnabled: vi.fn().mockResolvedValue(false),
   resolveVncEnabled: vi.fn().mockResolvedValue(false),
-  resolveSandboxSettings: vi.fn().mockResolvedValue({}),
+}));
+const executionMocks = vi.hoisted(() => ({
+  readSandboxExecutionSettings: vi
+    .fn()
+    .mockResolvedValue({ settings: {}, scopeAllowed: true, repository: "acme/web-app" }),
 }));
 
 vi.mock("./db/session-index", () => ({
@@ -32,6 +37,10 @@ vi.mock("./db/user-store", () => ({
 }));
 
 vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
+vi.mock("./sandbox/execution", async (importOriginal) => ({
+  ...(await importOriginal<typeof SandboxExecutionModule>()),
+  readSandboxExecutionSettings: executionMocks.readSandboxExecutionSettings,
+}));
 
 describe("handleSpawnChild prompt enqueue handling", () => {
   const parentId = "parent-session-1";
@@ -45,6 +54,12 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     harness: HarnessId;
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
+    sandboxExecution?: {
+      profile: "docker-v1";
+      provider: "modal";
+      cpuCores: number;
+      memoryMib: number;
+    };
     promptAuthor: {
       userId: string;
       canonicalUserId?: string | null;
@@ -123,7 +138,11 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
-    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
+    executionMocks.readSandboxExecutionSettings.mockResolvedValue({
+      settings: {},
+      scopeAllowed: true,
+      repository: "acme/web-app",
+    });
   });
 
   it("copies the exact parent provider auth snapshot with immediate inheritance", async () => {
@@ -242,6 +261,31 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
   }
+
+  it("rejects an inherited Docker child before its admission lease or runtime init", async () => {
+    const dockerContext = {
+      ...spawnContext,
+      sandboxExecution: {
+        profile: "docker-v1" as const,
+        provider: "modal" as const,
+        cpuCores: 4,
+        memoryMib: 6144,
+      },
+    };
+    const store = makeStore("canonical-user-123", dockerContext);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env, childStub } = makeSuccessfulEnv(dockerContext);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ code: "docker_not_available" });
+    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
+    expect(store.create).not.toHaveBeenCalled();
+    expect(childStub.fetch).not.toHaveBeenCalled();
+  });
 
   it("rejects a repository-backed child when the actor cannot use repositories", async () => {
     const store = makeStore(null, spawnContext, null);
@@ -393,8 +437,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
-      sandboxTimeoutMs: 3_600_000,
+    executionMocks.readSandboxExecutionSettings.mockResolvedValue({
+      settings: { sandboxTimeoutMs: 3_600_000 },
+      scopeAllowed: true,
+      repository: "acme/web-app",
     });
 
     const parentStub: DurableObjectStub = {
@@ -486,9 +532,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
-      sandboxTimeoutMs: 3_600_000,
-      tunnelPorts: [3000],
+    executionMocks.readSandboxExecutionSettings.mockResolvedValue({
+      settings: { sandboxTimeoutMs: 3_600_000, tunnelPorts: [3000] },
+      scopeAllowed: true,
+      repository: "acme/web-app",
     });
 
     const parentStub: DurableObjectStub = {
@@ -521,7 +568,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       return new URL(request.url).pathname === SessionInternalPaths.init;
     })?.[0] as Request;
     const initBody = await initRequest.json<{ sandboxSettings: Record<string, unknown> }>();
-    expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [3000], dockerEnabled: false });
+    expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [3000] });
   });
 
   it("creates repo-less children for repo-less parents", async () => {
@@ -771,9 +818,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
-      maxConcurrentChildSessions: 2,
-      maxTotalChildSessions: 15,
+    executionMocks.readSandboxExecutionSettings.mockResolvedValue({
+      settings: { maxConcurrentChildSessions: 2, maxTotalChildSessions: 15 },
+      scopeAllowed: true,
+      repository: "acme/web-app",
     });
 
     const parentStub: DurableObjectStub = {
@@ -795,10 +843,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     });
     // Children resolve limits from the parent's settings scope, including its
     // environment override layer (design §13.5).
-    expect(integrationSettingsMocks.resolveSandboxSettings).toHaveBeenCalledWith(
+    expect(executionMocks.readSandboxExecutionSettings).toHaveBeenCalledWith(
       expect.any(Object),
-      "acme",
-      "web-app",
+      "acme/web-app",
       "env_parent"
     );
   });
@@ -809,9 +856,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
-    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
-      maxConcurrentChildSessions: 5,
-      maxTotalChildSessions: 4,
+    executionMocks.readSandboxExecutionSettings.mockResolvedValue({
+      settings: { maxConcurrentChildSessions: 5, maxTotalChildSessions: 4 },
+      scopeAllowed: true,
+      repository: "acme/web-app",
     });
 
     const parentStub: DurableObjectStub = {

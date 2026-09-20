@@ -228,6 +228,25 @@ describe("handleCreateSession D1 ordering", () => {
     };
   }
 
+  it("rejects unavailable Docker before creating a D1 session or calling the runtime", async () => {
+    const create = vi.fn();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      repoOwner: "acme",
+      repoName: "web-app",
+      dockerEnabled: true,
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ code: "docker_not_available" });
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       target: "environment",

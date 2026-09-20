@@ -77,6 +77,7 @@ import type { SessionModelProviderAuthInput } from "../model-provider-accounts/p
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
+import { resolveSandboxLaunchSpec } from "../sandbox/execution";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
@@ -1572,16 +1573,17 @@ export class Scheduler {
       (target.repoOwner && target.repoName
         ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
         : []);
-    const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+    const { codeServerEnabled, vncEnabled, sandboxSnapshot } = await resolveSessionScopedSettings(
       this.db,
       scopeMembers,
       target.environmentId
     );
+    const sandboxLaunchSpec = resolveSandboxLaunchSpec(this.env, sandboxSnapshot);
     // The session below is about to start spending this budget, so the sweep
     // must not come for the run until it is spent.
     await store.setRunExecutionDeadline(
       run.id,
-      startedAt + this.executionDeadlineMs(sandboxSettings)
+      startedAt + this.executionDeadlineMs(sandboxLaunchSpec.settings)
     );
     // Automation runs use all target-applicable shared skills. Personal
     // profiles are interactive-user choices and are not automation policy.
@@ -1610,7 +1612,7 @@ export class Scheduler {
       scmEmail: executionPrincipal.scmEnrichment?.email,
       codeServerEnabled,
       vncEnabled,
-      sandboxSettings,
+      sandboxLaunchSpec,
       spawnSource: "automation",
       spawnDepth: 0,
       automationId: automation.id,
