@@ -33,8 +33,9 @@ origin; neither protocol needs a new signing scheme or key.
    absent. Cloudflare wiring remains unchanged. Strip clients from session environments as COL-52
    does.
 5. Document Compose configuration and AWS `config` map/SSM wiring. The existing AWS Terraform module
-   already forwards arbitrary config keys, so no duplicate Terraform variables or infrastructure
-   changes are needed.
+   already forwards arbitrary config keys, so no duplicate Terraform variables are needed. Expose
+   existing receiver keys through sensitive Cloudflare outputs and provide an explicit
+   operator-controlled handoff to AWS SecureString parameters; do not generate independent keys.
 
 ## Verification
 

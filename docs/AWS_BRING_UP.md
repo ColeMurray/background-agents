@@ -1,7 +1,8 @@
 # Bringing Up the Control Plane on AWS
 
 This stands the Open-Inspect control plane up on AWS, from an empty account to `/healthz` answering
-over HTTPS at a hostname you choose. **No Cloudflare account is involved at any point.** TLS is a
+over HTTPS at a hostname you choose. **The core stack needs no Cloudflare account; optional bot
+integrations still use Cloudflare Workers.** TLS is a
 Let's Encrypt certificate that Caddy obtains on the instance; DNS is whatever you already run.
 
 What you get is one EC2 instance running the same `docker compose` stack CI boots on every pull
@@ -138,9 +139,9 @@ openssl rand -base64 32 | put IMAGE_CALLBACK_TOKEN_PEPPER
 # others stay unset, which is a refusal rather than a weak key. The web app's
 # own SERVICE_AUTH_SECRET must equal SERVICE_AUTH_SECRET_WEB.
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_WEB
-openssl rand -base64 32 | put SERVICE_AUTH_SECRET_SLACK_BOT
+# Slack and Linear: copy the deployed receiver keys using the handoff below.
+# Do not generate independent AWS values: those callbacks would fail HMAC verification.
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_GITHUB_BOT
-openssl rand -base64 32 | put SERVICE_AUTH_SECRET_LINEAR_BOT
 
 # The sandbox provider. Both environments select Modal, and this is the shared
 # HMAC secret between the control plane and the Modal deployment; without it the
@@ -194,6 +195,45 @@ for URL constraints, timeout behavior and the separate reverse-transport require
 Adding a key the module does not know about — another provider's token — means adding it to the
 `secret_names` variable, which replaces the inventory rather than extending it. Removing a name from
 that set deletes the parameter, and the operator's value with it.
+
+### Copy existing Cloudflare bot keys to AWS
+
+Use the **same isolated bot deployment** as the configured bot URLs. Its Terraform
+configuration exposes `service_auth_secret_slack_bot` and
+`service_auth_secret_linear_bot` as sensitive outputs, directly from the existing
+keys bound to the bot workers. This does not rotate the receivers' keys. Disabled
+bots have no export. Access to that Terraform state already grants access to these
+credentials; do not grant state access solely to run this handoff.
+
+If upgrading existing state, first review a `terraform plan -refresh-only` in that
+Cloudflare checkout, then apply that reviewed refresh-only plan to materialize the
+new outputs. Do not run a normal infrastructure apply just to export a key. Do not
+print `terraform output -raw` or `-json` into logs: those modes reveal sensitive
+values despite the output's `sensitive` flag.
+
+The following commands **overwrite** the selected AWS SecureString parameters
+with the existing receiver keys. Run from the repository root after confirming
+`AWS_PROFILE` / `AWS_REGION`, the Cloudflare checkout's initialized backend and
+workspace, and the exact AWS environment prefix. Never copy production bot keys
+into staging. The script captures only the requested key, passes it to AWS in a
+private temporary file (not argv), suppresses captured CLI output and removes the
+file on success or failure. An invalid/failed export never invokes AWS.
+
+```bash
+CF_TERRAFORM_DIR=/absolute/path/to/isolated-bot-checkout/terraform/environments/production
+AWS_TERRAFORM_DIR=/absolute/path/to/open-inspect/terraform/environments/aws-staging
+PREFIX=$(terraform -chdir="$AWS_TERRAFORM_DIR" output -raw ssm_env_prefix)
+aws sts get-caller-identity
+# Run only for bots enabled in that Cloudflare deployment.
+node scripts/copy-bot-secret-to-ssm.mjs slack "$CF_TERRAFORM_DIR" "$PREFIX" --execute
+node scripts/copy-bot-secret-to-ssm.mjs linear "$CF_TERRAFORM_DIR" "$PREFIX" --execute
+```
+
+The AWS operator needs `ssm:PutParameter` for those exact parameters and any KMS
+permission required by the selected key. Restart the Node service to reload the
+keys. For a planned receiver-key rotation, repeat this handoff and restart; the
+single-key protocol has no overlap window, so coordinate the cutover. This sets
+up outbound callbacks only, not the reverse bot-to-Node routing (COL-107).
 
 ## 5. Push an image
 

@@ -90,6 +90,10 @@ worker's HTTPS origin in `.env`, and supply its matching
 `SERVICE_AUTH_SECRET_SLACK_BOT` / `SERVICE_AUTH_SECRET_LINEAR_BOT`. Each secret must
 match the receiver's configuration. Omit a URL when that bot is not deployed.
 Configured URLs without their secrets fail boot before data files are opened.
+For AWS, use the [existing-key handoff](./AWS_BRING_UP.md#copy-existing-cloudflare-bot-keys-to-aws)
+rather than generating a different secret. For local Compose, retrieve the same
+sensitive output through your approved secret manager into the gitignored `.env`;
+do not print or paste the key into logs or shell history.
 
 Origins cannot contain credentials, a path prefix, query or fragment. Plain HTTP
 is allowed only for exact loopback hosts in local development; loopback inside
