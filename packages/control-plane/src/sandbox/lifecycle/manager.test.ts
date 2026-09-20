@@ -24,6 +24,7 @@ import {
 import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { MIN_PRESERVATION_RUNTIME_GENERATION } from "../runtime-manifest";
 import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
@@ -3894,7 +3895,11 @@ describe("SandboxLifecycleManager", () => {
 
     it("rejects a repo image below the runtime floor at selection", async () => {
       const imageBuildLookup: ImageBuildLookup = {
-        getLatestReady: vi.fn(async () => repoImageRow({ runtime_version: "v52-legacy" })),
+        getLatestReady: vi.fn(async () =>
+          repoImageRow({
+            runtime_version: `v${MIN_PRESERVATION_RUNTIME_GENERATION - 1}-before-preservation`,
+          })
+        ),
         markRestoreFailed: vi.fn(async () => true),
       };
       const { manager, provider } = createRepoSessionManager({ imageBuildLookup });
