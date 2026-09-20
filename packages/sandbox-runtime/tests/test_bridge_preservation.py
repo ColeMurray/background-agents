@@ -218,6 +218,32 @@ async def test_prepare_never_reports_stopped_when_later_flush_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preservation_push_refusal_keeps_invalid_request_correlation() -> None:
+    bridge = make_bridge(PreservationHarness())
+    await establish_generation(bridge)
+    await bridge._handle_command(prepare_command())
+    bridge._send_event.reset_mock()
+
+    await bridge._handle_command(
+        {
+            "type": "push",
+            "pushSpec": {
+                "targetBranch": "open-inspect/session-1",
+                "repoOwner": "acme",
+                "repoName": "api",
+            },
+        }
+    )
+
+    event = bridge._send_event.await_args.args[0]
+    assert event["type"] == "push_error"
+    assert event["branchName"] == "open-inspect/session-1"
+    assert event["repoOwner"] == "acme"
+    assert event["repoName"] == "api"
+    assert "preservation is in progress" in event["error"]
+
+
+@pytest.mark.asyncio
 async def test_same_generation_reconnect_does_not_clear_fence_but_new_generation_does() -> None:
     bridge = make_bridge(PreservationHarness())
     await establish_generation(bridge)

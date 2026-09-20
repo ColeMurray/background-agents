@@ -1224,8 +1224,8 @@ class AgentBridge:
     async def _refuse_push_for_preservation(self, cmd: dict[str, Any]) -> None:
         try:
             request: PushRequest | None = PushRequest.from_push_spec(cmd.get("pushSpec"))
-        except PushRejected:
-            request = None
+        except PushRejected as rejected:
+            request = rejected.request
         await self._send_event(
             {
                 "type": "push_error",
