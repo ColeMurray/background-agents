@@ -1,4 +1,8 @@
-import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import {
+  sandboxBootPhaseSchema,
+  type GitSyncStatus,
+  type SandboxBootPhase,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { SandboxAccessKind, SandboxRow } from "./types";
@@ -89,6 +93,17 @@ export class SandboxRepository {
     const rows = this.rows<RawSandboxRow>(result);
     const row = rows[0];
     return row ? { ...row, status: coerceSandboxStatus(row.status, this.log) } : null;
+  }
+
+  /** The phase a booting sandbox last reported; null once ready or when unparseable. */
+  readBootPhase(sandbox: Pick<SandboxRow, "boot_phase"> | null): SandboxBootPhase | null {
+    if (!sandbox?.boot_phase) return null;
+    try {
+      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(sandbox.boot_phase));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
   }
 
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerState | null {

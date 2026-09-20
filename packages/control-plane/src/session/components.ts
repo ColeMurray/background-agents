@@ -452,6 +452,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     backgroundTasks,
     log,
     sessionCoreRepository,
+    sandboxRepository,
     messageRepository,
     participantRepository,
     attachmentRepository,

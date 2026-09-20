@@ -582,7 +582,6 @@ class AgentBridge:
         return {
             "type": "heartbeat",
             "sandboxId": self.sandbox_id,
-            "status": "ready" if self._boot_ready.is_set() else "booting",
             "timestamp": time.time(),
         }
 

@@ -444,16 +444,20 @@ class TestConnectSnapshot:
         assert bridge.event_forwarder._event_buffer == []
         assert [line["seq"] for line in bridge._held_boot_lines] == [2]
 
-    async def test_heartbeat_reports_booting_until_attached(self, tmp_path, monkeypatch):
+    async def test_heartbeat_does_not_duplicate_readiness(self, tmp_path, monkeypatch):
         harness = OpeningHarness([])
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         bridge._send_event = AsyncMock()
 
-        assert bridge._heartbeat_event()["status"] == "booting"
+        assert set(bridge._heartbeat_event()) == {
+            "type",
+            "sandboxId",
+            "timestamp",
+        }
         _write_lines(HARNESS_COMPLETED)
         await bridge._relay_boot_events()
 
-        assert bridge._heartbeat_event()["status"] == "ready"
+        assert "status" not in bridge._heartbeat_event()
 
 
 class TestCommandsWhileBooting:
@@ -828,4 +832,4 @@ class TestClassicMode:
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
 
         assert bridge.harness is harness
-        assert bridge._heartbeat_event()["status"] == "ready"
+        assert "status" not in bridge._heartbeat_event()

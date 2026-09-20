@@ -88,6 +88,23 @@ describe("SandboxRepository", () => {
     });
   });
 
+  describe("readBootPhase", () => {
+    it("parses a stored boot phase", () => {
+      const phase = {
+        phase: "setup",
+        status: "started",
+        repoOwner: "acme",
+        repoName: "api",
+      } as const;
+
+      expect(repository.readBootPhase({ boot_phase: JSON.stringify(phase) })).toEqual(phase);
+    });
+
+    it.each([null, "not-json", "{}"])("returns null for an unreadable phase %s", (bootPhase) => {
+      expect(repository.readBootPhase({ boot_phase: bootPhase })).toBeNull();
+    });
+  });
+
   describe("createSandbox", () => {
     it("creates sandbox with correct parameters", () => {
       repository.createSandbox({

@@ -830,7 +830,7 @@ describe("boundary schemas", () => {
       ).toBe(true);
     });
 
-    it("parses a ready event (emitted on every sandbox connect)", () => {
+    it("parses a ready event emitted after harness attach", () => {
       const result = sandboxEventSchema.safeParse({
         type: "ready",
         sandboxId: "sandbox-1",
@@ -840,6 +840,16 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("parses a heartbeat without a readiness status", () => {
+      expect(
+        sandboxEventSchema.safeParse({
+          type: "heartbeat",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }).success
+      ).toBe(true);
     });
 
     it("parses context compaction events with required message association", () => {

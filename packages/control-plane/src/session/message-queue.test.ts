@@ -198,6 +198,17 @@ function buildQueue() {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };
 
+  const bootPhase = {
+    phase: "setup",
+    status: "started",
+    repoOwner: "acme",
+    repoName: "repo",
+  } as const;
+  const sandboxRepository = {
+    getSandbox: vi.fn(() => null),
+    readBootPhase: vi.fn(() => bootPhase),
+  };
+
   const wsManager = {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
     // Mirrors the attached socket unless a test withholds it, the way the
@@ -279,6 +290,7 @@ function buildQueue() {
     backgroundTasks,
     log,
     repository as unknown as SessionCoreRepository,
+    sandboxRepository,
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
@@ -301,6 +313,7 @@ function buildQueue() {
     queue,
     executionStop,
     repository,
+    sandboxRepository,
     attachmentRepository,
     wsManager,
     participantService,
@@ -692,6 +705,12 @@ describe("SessionMessageQueue", () => {
         message_id: "msg-boot",
         outcome: "deferred",
         reason: "sandbox_booting",
+        boot_phase: {
+          phase: "setup",
+          status: "started",
+          repoOwner: "acme",
+          repoName: "repo",
+        },
       })
     );
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();

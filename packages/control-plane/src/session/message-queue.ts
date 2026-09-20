@@ -43,6 +43,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import type { SandboxRepository } from "./sandbox-repository";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -146,6 +147,7 @@ export class SessionMessageQueue {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
+    private readonly sandboxRepository: Pick<SandboxRepository, "getSandbox" | "readBootPhase">,
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
@@ -423,6 +425,7 @@ export class SessionMessageQueue {
         message_id: message.id,
         outcome: "deferred",
         reason: "sandbox_booting",
+        boot_phase: this.sandboxRepository.readBootPhase(this.sandboxRepository.getSandbox()),
       });
       return;
     }

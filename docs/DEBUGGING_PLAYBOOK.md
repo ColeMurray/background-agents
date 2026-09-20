@@ -135,7 +135,7 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 | `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call        |
 | `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                   |
 | `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                        |
-| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox, or deferred  |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `boot_phase`, `model`, `has_sandbox_ws`, `queue_wait_ms`                           | Message sent to sandbox, or deferred  |
 | `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                   |
 | `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result   |
 | `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`           | Linear start-callback delivery result |
@@ -442,7 +442,7 @@ which is logged as `sandbox.failed_reconnected` and resumes as `connecting`.
 ### "Why did a sandbox spawn fail?"
 
 ```
-service="control-plane" msg="sandbox.spawn_failed" session_id="<SESSION_ID>"
+service="control-plane" event="sandbox.spawn" outcome="error" session_id="<SESSION_ID>"
 ```
 
 Check the `error_type` and `error_message`. Then look at the selected provider side. Modal example:
@@ -516,7 +516,7 @@ level="error" | group by error_type, service, msg | count
 ### "Slow sandbox spawns"
 
 ```
-service="control-plane" msg="sandbox.spawned" | where duration_ms > 30000
+service="control-plane" event="sandbox.spawn" | where duration_ms > 30000
 ```
 
 Or on the provider side. Modal example:
