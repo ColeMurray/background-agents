@@ -1336,8 +1336,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     if (this.preservation?.isHolding()) return;
     // A Vercel snapshot stops the source. It requires the same preparation
     // and replacement ordering as a final snapshot, even after a prompt.
-    if (this.provider.capabilities.snapshotStopsSandbox && this.preservation) {
-      if (await this.preservation.request(reason)) return;
+    if (this.provider.capabilities.snapshotStopsSandbox) {
+      if (this.preservation) await this.preservation.request(reason);
+      else
+        this.log.warn("Skipping destructive snapshot without preservation coordination", {
+          event: "sandbox.snapshot_uncoordinated",
+          reason,
+        });
+      return;
     }
     if (!this.provider.takeSnapshot) {
       this.log.debug("Provider does not support snapshots");

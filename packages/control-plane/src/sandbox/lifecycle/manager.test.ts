@@ -606,6 +606,22 @@ describe("final preservation lifecycle integration", () => {
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
   });
 
+  it("does not fall through to a destructive checkpoint when preservation declines it", async () => {
+    const sandbox = createMockSandbox({ status: "ready" });
+    const f = fixture(
+      createMockProvider({ capabilities: { snapshotStopsSandbox: true } }),
+      sandbox
+    );
+    f.preservation.request.mockResolvedValue(false);
+
+    await f.manager.triggerSnapshot("execution_complete");
+
+    expect(f.preservation.request).toHaveBeenCalledWith("execution_complete");
+    expect(f.preservation.beginCheckpoint).not.toHaveBeenCalled();
+    expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("ready");
+  });
+
   it("restores an independent final receipt instead of preferring an expired persistent source", async () => {
     const f = fixture(
       createMockProvider({
