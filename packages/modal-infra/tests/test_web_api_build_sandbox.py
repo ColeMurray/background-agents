@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
+from modal.exception import NotFoundError as ModalNotFoundError
 from modal.exception import TimeoutError as ModalTimeoutError
 
 from sandbox_runtime.types import SandboxStatus
@@ -45,6 +46,17 @@ async def _call(endpoint, request: dict) -> dict:
 
 async def _call_generic_snapshot(request: dict) -> dict:
     return await web_api.api_snapshot_sandbox.get_raw_f()(
+        request,
+        authorization="Bearer test",
+        x_trace_id=None,
+        x_request_id=None,
+        x_session_id=None,
+        x_sandbox_id=None,
+    )
+
+
+async def _call_generic_stop(request: dict) -> dict:
+    return await web_api.api_stop_sandbox.get_raw_f()(
         request,
         authorization="Bearer test",
         x_trace_id=None,
@@ -632,6 +644,19 @@ async def test_generic_snapshot_maps_modal_provider_timeout_to_deadline_expired(
     assert exc.value.detail == "snapshot deadline expired"
     get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_generic_stop_succeeds_when_provider_object_is_already_absent(monkeypatch):
+    from_id = MagicMock()
+    from_id.aio = AsyncMock(side_effect=ModalNotFoundError("sandbox not found"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    result = await _call_generic_stop({"sandbox_id": "modal-session-1"})
+
+    assert result == {"success": True, "data": {"terminated": True}}
+    from_id.aio.assert_awaited_once_with("modal-session-1")
 
 
 @pytest.mark.asyncio

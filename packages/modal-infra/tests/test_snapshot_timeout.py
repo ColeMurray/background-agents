@@ -1,9 +1,11 @@
 """Tests for Modal filesystem snapshot timeout configuration."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from modal.exception import NotFoundError as ModalNotFoundError
 
 from sandbox_runtime.types import SandboxStatus
 from src.sandbox.manager import (
@@ -95,3 +97,48 @@ async def test_stop_sandbox_waits_for_provider_termination(monkeypatch):
 
     from_id.aio.assert_awaited_once_with("sandbox-1")
     terminate.aio.assert_awaited_once_with(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_sandbox_succeeds_when_provider_object_is_already_absent(monkeypatch):
+    from_id = _async_method()
+    from_id.aio.side_effect = ModalNotFoundError("sandbox not found")
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    await SandboxManager().stop_sandbox("sandbox-1")
+
+    from_id.aio.assert_awaited_once_with("sandbox-1")
+
+
+@pytest.mark.asyncio
+async def test_stop_sandbox_succeeds_when_object_disappears_during_termination(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = ModalNotFoundError("sandbox disappeared")
+    from_id = _async_method(SimpleNamespace(terminate=terminate))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    await SandboxManager().stop_sandbox("sandbox-1")
+
+    terminate.aio.assert_awaited_once_with(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_sandbox_propagates_unrelated_provider_failure(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = RuntimeError("provider unavailable")
+    from_id = _async_method(SimpleNamespace(terminate=terminate))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await SandboxManager().stop_sandbox("sandbox-1")
+
+
+@pytest.mark.asyncio
+async def test_stop_sandbox_propagates_explicit_cancellation(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = asyncio.CancelledError
+    from_id = _async_method(SimpleNamespace(terminate=terminate))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    with pytest.raises(asyncio.CancelledError):
+        await SandboxManager().stop_sandbox("sandbox-1")
