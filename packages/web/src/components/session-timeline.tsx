@@ -34,7 +34,8 @@ import {
   TIMELINE_VIRTUALIZER_DEFAULTS,
   type TimelineVirtualRow,
 } from "@/lib/timeline-virtual-rows";
-import type { Artifact, SandboxEvent } from "@/types/session";
+import { toUiArtifactMetadata } from "@/lib/session-socket/artifact-metadata";
+import type { SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
@@ -633,7 +634,7 @@ function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
         sessionId={sessionId}
         artifactId={event.artifactId}
         artifactType={event.artifactType}
-        metadata={event.metadata as Artifact["metadata"] | undefined}
+        metadata={toUiArtifactMetadata(event.metadata)}
         onOpen={onOpenMedia}
       />
     </div>
