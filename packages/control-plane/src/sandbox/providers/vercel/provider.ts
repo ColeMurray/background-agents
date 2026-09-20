@@ -148,6 +148,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         }
         throw error;
       }
+      const sessionCreatedAt = created.session.createdAt || Date.now();
 
       const access = await this.prepareSandboxAccess(
         created,
@@ -163,10 +164,10 @@ export class VercelSandboxProvider implements SandboxProvider {
       return {
         sandboxId: config.sandboxId,
         providerObjectId: created.session.id,
-        createdAt: created.session.createdAt || Date.now(),
+        createdAt: sessionCreatedAt,
         lifetime: {
           kind: "finite",
-          expiresAtMs: created.session.createdAt + created.session.timeout,
+          expiresAtMs: sessionCreatedAt + created.session.timeout,
           observedAtMs: Date.now(),
           source: "provider",
         },
