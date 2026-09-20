@@ -110,10 +110,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
       }
 
       const data = parsed.data;
-      correlatedRequestId =
-        "clientRequestId" in data && typeof data.clientRequestId === "string"
-          ? data.clientRequestId
-          : undefined;
+      correlatedRequestId = "clientRequestId" in data ? data.clientRequestId : undefined;
       // Ping and subscribe are the only messages valid before client authentication.
       if (data.type === "ping") {
         this.deps.sockets.send(connection, { type: "pong", timestamp: this.deps.clock.nowMs() });
