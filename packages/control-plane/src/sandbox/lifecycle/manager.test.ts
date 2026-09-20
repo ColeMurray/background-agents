@@ -800,8 +800,22 @@ describe("SandboxLifecycleManager", () => {
     it("does not retry unrecognized persisted recovery codes", async () => {
       const { sandbox, provider, create } = setup("docker-v1");
       sandbox.snapshot_recovery_error_code = "future_code";
-      expect(create().retrySnapshotRestore()).toEqual({ admitted: false });
+      const manager = create();
+      expect(manager.getSnapshotRecoveryError()).toContain("invalid_snapshot_metadata");
+      expect(manager.retrySnapshotRestore()).toEqual({ admitted: false });
       expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    });
+    it("retains an empty malformed recovery latch instead of spawning fresh", async () => {
+      const { sandbox, provider, create } = setup("docker-v1");
+      sandbox.snapshot_recovery_error_code = "";
+      const manager = create();
+
+      expect(manager.getSnapshotRecoveryError()).toContain("invalid_snapshot_metadata");
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(sandbox.snapshot_image_id).toBe("im-preserved");
     });
     it("latches a missing artifact but retains its identity across later automatic attempts", async () => {
       const { sandbox, provider, create } = setup("docker-v1");

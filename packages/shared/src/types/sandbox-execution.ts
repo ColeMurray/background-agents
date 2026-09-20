@@ -27,6 +27,13 @@ export const snapshotRecoveryErrorCodeSchema = z.enum([
 ]);
 export type SnapshotRecoveryErrorCode = z.infer<typeof snapshotRecoveryErrorCodeSchema>;
 
+/** Missing metadata has no latch; malformed present metadata remains fail-closed. */
+export function parseSnapshotRecoveryErrorCode(raw: unknown): SnapshotRecoveryErrorCode | null {
+  if (raw == null) return null;
+  const parsed = snapshotRecoveryErrorCodeSchema.safeParse(raw);
+  return parsed.success ? parsed.data : "invalid_snapshot_metadata";
+}
+
 /** Missing pre-feature metadata is default; malformed present metadata is never default. */
 export function parseSessionSandboxExecution(
   raw: string | null | undefined

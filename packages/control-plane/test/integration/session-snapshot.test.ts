@@ -65,6 +65,43 @@ describe("session snapshot synchronization", () => {
     ]);
   });
 
+  it("serves HTTP and subscription snapshots for malformed recovery codes", async () => {
+    const name = `invalid-recovery-code-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await waitForSandboxStatus(stub, "failed");
+    await queryDO(
+      stub,
+      "UPDATE sandbox SET snapshot_image_id = 'im-retained', snapshot_recovery_error_code = 'future_code'"
+    );
+
+    const response = await stub.fetch("http://internal/internal/snapshot");
+    expect(response.status).toBe(200);
+    expect((await response.json<SessionSnapshot>()).snapshotRecoveryError).toBe(
+      "invalid_snapshot_metadata"
+    );
+
+    const { ws, messages } = await openClientWs(name, { subscribe: true });
+    try {
+      expect(messages?.[0]).toMatchObject({
+        type: "subscribed",
+        snapshotRecoveryError: "invalid_snapshot_metadata",
+      });
+      expect(
+        await queryDO<{ snapshot_image_id: string; snapshot_recovery_error_code: string }>(
+          stub,
+          "SELECT snapshot_image_id, snapshot_recovery_error_code FROM sandbox"
+        )
+      ).toEqual([
+        {
+          snapshot_image_id: "im-retained",
+          snapshot_recovery_error_code: "future_code",
+        },
+      ]);
+    } finally {
+      ws.close();
+    }
+  });
+
   it("retries a Docker snapshot with fresh authority and clears recovery only on current runtime readiness", async () => {
     const name = `vm-retry-ready-${Date.now()}`;
     const { stub } = await initNamedSession(name);

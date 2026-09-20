@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createSessionRequestSchema } from "./session-api";
 import { sandboxSettingsSchema } from "./integrations";
-import { parseSessionSandboxExecution, sessionSandboxExecutionSchema } from "./sandbox-execution";
+import {
+  parseSessionSandboxExecution,
+  parseSnapshotRecoveryErrorCode,
+  sessionSandboxExecutionSchema,
+} from "./sandbox-execution";
 import { serverMessageSchema } from "./server-messages";
 
 describe("sandbox execution contracts", () => {
@@ -60,6 +64,15 @@ describe("sandbox execution contracts", () => {
       '{"profile":"default","provider":"modal"}',
     ]) {
       expect(() => parseSessionSandboxExecution(raw)).toThrow();
+    }
+  });
+
+  it("decodes snapshot recovery errors without dropping malformed persisted latches", () => {
+    expect(parseSnapshotRecoveryErrorCode(null)).toBeNull();
+    expect(parseSnapshotRecoveryErrorCode(undefined)).toBeNull();
+    expect(parseSnapshotRecoveryErrorCode("artifact_missing")).toBe("artifact_missing");
+    for (const raw of ["", "future_code", 1, {}]) {
+      expect(parseSnapshotRecoveryErrorCode(raw)).toBe("invalid_snapshot_metadata");
     }
   });
 

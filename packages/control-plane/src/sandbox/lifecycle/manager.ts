@@ -85,6 +85,7 @@ import type {
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 import {
   parseSessionSandboxExecution,
+  parseSnapshotRecoveryErrorCode,
   snapshotRecoveryErrorCodeSchema,
   type SandboxExecutionProfile,
   type SessionSandboxExecution,
@@ -504,7 +505,7 @@ export class SandboxLifecycleManager
     const now = Date.now();
 
     // This latch is independent of the circuit breaker and survives eviction.
-    if (sandboxState?.snapshot_recovery_error_code) return;
+    if (parseSnapshotRecoveryErrorCode(sandboxState?.snapshot_recovery_error_code) !== null) return;
     try {
       const execution = this.sessionExecution();
       if (sandboxState?.snapshot_image_id && isDeadSandboxStatus(sandboxState.status)) {
@@ -641,10 +642,9 @@ export class SandboxLifecycleManager
   getSnapshotRecoveryError(): string | null {
     const sandbox = this.storage.getSandbox();
     if (sandbox?.status === "spawning" || sandbox?.status === "connecting") return null;
-    const code = sandbox?.snapshot_recovery_error_code;
+    const code = parseSnapshotRecoveryErrorCode(sandbox?.snapshot_recovery_error_code);
     if (!code) return null;
-    const parsed = snapshotRecoveryErrorCodeSchema.safeParse(code);
-    return `Snapshot recovery required (${parsed.success ? parsed.data : "invalid_snapshot_metadata"}). The original snapshot reference is retained; retry recovery after operator repair or create a separate new session.`;
+    return `Snapshot recovery required (${code}). The original snapshot reference is retained; retry recovery after operator repair or create a separate new session.`;
   }
 
   private blockSnapshotRecovery(
@@ -1453,7 +1453,7 @@ export class SandboxLifecycleManager
       });
       return;
     }
-    if (sandbox.snapshot_recovery_error_code) return;
+    if (parseSnapshotRecoveryErrorCode(sandbox.snapshot_recovery_error_code) !== null) return;
 
     // Don't snapshot if already snapshotting
     if (sandbox.status === "snapshotting") {

@@ -1,7 +1,7 @@
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import {
   parseSessionSandboxExecution,
-  snapshotRecoveryErrorCodeSchema,
+  parseSnapshotRecoveryErrorCode,
 } from "@open-inspect/shared/types/sandbox-execution";
 import {
   sandboxBootPhaseSchema,
@@ -85,10 +85,9 @@ export class SessionSnapshotReader {
         timeline: this.deps.eventStream.getReplay(),
         promptQueue: this.deps.messageRepository.listPromptQueue(),
         spawnError: local.sandbox?.last_spawn_error ?? null,
-        snapshotRecoveryError:
-          local.sandbox?.snapshot_recovery_error_code == null
-            ? null
-            : snapshotRecoveryErrorCodeSchema.parse(local.sandbox.snapshot_recovery_error_code),
+        snapshotRecoveryError: parseSnapshotRecoveryErrorCode(
+          local.sandbox?.snapshot_recovery_error_code
+        ),
         bootPhase: this.readBootPhase(local.sandbox),
       };
     });
