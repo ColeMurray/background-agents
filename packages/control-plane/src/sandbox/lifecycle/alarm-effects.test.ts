@@ -250,4 +250,56 @@ describe("cross-path alarm effects", () => {
       expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    {
+      path: "connecting watchdog",
+      overrides: {
+        status: "connecting" as const,
+        created_at: Date.now() - DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs - 10_000,
+        last_heartbeat: null,
+      },
+      reason: "connecting_timeout",
+    },
+    {
+      path: "boot budget",
+      overrides: {
+        status: "connecting" as const,
+        created_at: Date.now() - DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs - 10_000,
+        last_heartbeat: Date.now() - 1_000,
+      },
+      reason: "boot_budget_exceeded",
+    },
+  ])(
+    "$path stops the generation it observed, not a replacement installed mid-alarm",
+    async ({ overrides, reason }) => {
+      // A replacement spawn can install a new row while the alarm is still
+      // running. Re-reading the row for the provider handle at stop time would
+      // destroy that replacement instead of the generation that timed out.
+      const doomed = createMockSandbox({ ...overrides, modal_object_id: "modal-obj-doomed" });
+      const replacement = createMockSandbox({
+        status: "connecting",
+        modal_sandbox_id: "sandbox-replacement",
+        modal_object_id: "modal-obj-replacement",
+        created_at: Date.now(),
+        last_heartbeat: null,
+      });
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const h = createAlarmFixture(
+        doomed,
+        createMockProvider({ capabilities: { supportsExplicitStop: true }, stopSandbox })
+      );
+      let reads = 0;
+      vi.mocked(h.storage.getSandbox).mockImplementation(() =>
+        ++reads === 1 ? doomed : replacement
+      );
+
+      await h.manager.handleAlarm();
+
+      expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ providerObjectId: "modal-obj-doomed", reason })
+      );
+      expect(replacement.status).toBe("connecting");
+    }
+  );
 });

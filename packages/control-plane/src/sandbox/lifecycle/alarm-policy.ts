@@ -1,7 +1,3 @@
-import {
-  sandboxBootPhaseSchema,
-  type SandboxBootPhase,
-} from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxRow } from "../../session/types";
 import {
   evaluateBootBudget,
@@ -16,7 +12,7 @@ import {
 } from "./decisions";
 
 export type AlarmSandbox = Readonly<
-  Pick<SandboxRow, "status" | "created_at" | "last_heartbeat" | "last_activity" | "boot_phase">
+  Pick<SandboxRow, "status" | "created_at" | "last_heartbeat" | "last_activity">
 >;
 
 export interface AlarmPolicyConfig {
@@ -26,23 +22,28 @@ export interface AlarmPolicyConfig {
   inactivity: InactivityConfig;
 }
 
-export type AlarmDecision =
-  | { action: "no_action" }
-  | { action: "connecting_timeout"; elapsedMs: number }
-  | { action: "heartbeat_stale"; ageMs: number; isBooting: boolean }
-  | { action: "boot_budget_exceeded"; elapsedMs: number; reason: string }
-  | { action: "inactivity_timeout" }
-  | { action: "extend"; extensionMs: number }
-  | { action: "schedule"; nextCheckMs: number };
+/**
+ * What the alarm found, never what to do about it. Every variant names a
+ * condition the manager then chooses a recovery for, so the policy carries no
+ * rendered text and no effect ordering.
+ */
+export type AlarmFinding =
+  | { outcome: "terminal" }
+  | { outcome: "connecting_timeout"; elapsedMs: number }
+  | { outcome: "heartbeat_stale"; ageMs: number; isBooting: boolean }
+  | { outcome: "boot_budget_exceeded"; elapsedMs: number }
+  | { outcome: "inactivity_timeout" }
+  | { outcome: "inactivity_warning"; extensionMs: number }
+  | { outcome: "healthy"; nextCheckMs: number };
 
 /** Ordered policy only; storage, socket and provider effects belong to the manager. */
 export function evaluateAlarmPolicy(
-  sandbox: AlarmSandbox | null,
+  sandbox: AlarmSandbox,
   config: AlarmPolicyConfig,
   now: number,
   connectedClientCount: number
-): AlarmDecision {
-  if (!sandbox || isDeadSandboxStatus(sandbox.status)) return { action: "no_action" };
+): AlarmFinding {
+  if (isDeadSandboxStatus(sandbox.status)) return { outcome: "terminal" };
 
   const connecting = evaluateConnectingTimeout(
     sandbox.status,
@@ -52,14 +53,14 @@ export function evaluateAlarmPolicy(
     sandbox.last_heartbeat !== null
   );
   if (connecting.isTimedOut) {
-    return { action: "connecting_timeout", elapsedMs: connecting.elapsedMs };
+    return { outcome: "connecting_timeout", elapsedMs: connecting.elapsedMs };
   }
 
   const heartbeat = evaluateHeartbeatHealth(sandbox.last_heartbeat, config.heartbeat, now);
   if (heartbeat.isStale) {
     // A stale boot counts toward the breaker and must never become a restore point.
     return {
-      action: "heartbeat_stale",
+      outcome: "heartbeat_stale",
       ageMs: heartbeat.ageMs,
       isBooting: sandbox.status === "spawning" || sandbox.status === "connecting",
     };
@@ -67,14 +68,7 @@ export function evaluateAlarmPolicy(
 
   const budget = evaluateBootBudget(sandbox.status, sandbox.created_at, config.bootBudget, now);
   if (budget.isExceeded) {
-    const budgetMinutes = Math.round(config.bootBudget.timeoutMs / 60_000);
-    return {
-      action: "boot_budget_exceeded",
-      elapsedMs: budget.elapsedMs,
-      reason:
-        `Sandbox boot exceeded ${budgetMinutes} minutes while ${describeBootPhase(sandbox.boot_phase)}. ` +
-        "Raise SANDBOX_BOOT_TIMEOUT_MS if the boot legitimately needs longer, or make it return sooner.",
-    };
+    return { outcome: "boot_budget_exceeded", elapsedMs: budget.elapsedMs };
   }
 
   const inactivity = evaluateInactivityTimeout(
@@ -82,34 +76,12 @@ export function evaluateAlarmPolicy(
     config.inactivity,
     now
   );
-  return inactivity.action === "timeout" ? { action: "inactivity_timeout" } : inactivity;
-}
-
-/** Name the script where possible so operators know which boot step to inspect. */
-function describeBootPhase(bootPhaseJson: string | null): string {
-  let phase: SandboxBootPhase | null = null;
-  if (bootPhaseJson) {
-    try {
-      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(bootPhaseJson));
-      phase = parsed.success ? parsed.data : null;
-    } catch {
-      phase = null;
-    }
-  }
-  if (!phase) return "booting";
-  const repo = phase.repoOwner && phase.repoName ? ` for ${phase.repoOwner}/${phase.repoName}` : "";
-  switch (phase.phase) {
-    case "starting":
-      return "starting the runtime";
-    case "sync":
-      return `cloning${repo}`;
-    case "setup":
-      return `running setup.sh${repo}`;
-    case "start":
-      return `running start.sh${repo}`;
-    case "skills":
-      return "installing managed skills";
-    case "harness":
-      return "starting the agent";
+  switch (inactivity.action) {
+    case "timeout":
+      return { outcome: "inactivity_timeout" };
+    case "extend":
+      return { outcome: "inactivity_warning", extensionMs: inactivity.extensionMs };
+    case "schedule":
+      return { outcome: "healthy", nextCheckMs: inactivity.nextCheckMs };
   }
 }
