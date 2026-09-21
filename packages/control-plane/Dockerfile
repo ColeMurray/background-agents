@@ -4,20 +4,31 @@
 # by `build:node`, the D1 migrations it applies at boot, and the litestream
 # binary the entrypoint uses to restore the global store from a replica.
 #
-# Build from the repository root so the shared package and the migrations
-# are in the context:
+# Build from the repository root so the integration packages, shared package,
+# and migrations are in the context:
 #   docker build -f packages/control-plane/Dockerfile -t open-inspect-control-plane .
 
 FROM node:22-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
+COPY packages/slack-bot/package.json packages/slack-bot/
+COPY packages/linear-bot/package.json packages/linear-bot/
+COPY packages/github-bot/package.json packages/github-bot/
 COPY packages/control-plane/package.json packages/control-plane/
 # --ignore-scripts: the root package's prepare script installs git hooks
 # through husky, which a workspace-scoped install does not bring along.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --ignore-scripts --workspace=@open-inspect/shared --workspace=@open-inspect/control-plane
+    npm ci --ignore-scripts \
+      --workspace=@open-inspect/shared \
+      --workspace=@open-inspect/slack-bot \
+      --workspace=@open-inspect/linear-bot \
+      --workspace=@open-inspect/github-bot \
+      --workspace=@open-inspect/control-plane
 COPY packages/shared/ packages/shared/
+COPY packages/slack-bot/ packages/slack-bot/
+COPY packages/linear-bot/ packages/linear-bot/
+COPY packages/github-bot/ packages/github-bot/
 COPY packages/control-plane/ packages/control-plane/
 # Contracts the control plane shares with the sandbox runtime, imported by path.
 COPY packages/sandbox-runtime/src/sandbox_runtime/*.json packages/sandbox-runtime/src/sandbox_runtime/
