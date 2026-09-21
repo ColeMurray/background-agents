@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
+import { SandboxRecoveryPointRepository } from "./sandbox-recovery-point-repository";
 import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
@@ -26,6 +27,9 @@ function provider(overrides: Partial<SandboxProvider> = {}): SandboxProvider {
       supportsPersistentResume: false,
       supportsExplicitStop: true,
     },
+    restoreFromSnapshot: async () => {
+      throw new Error("not used by shutdown coordinator tests");
+    },
     ...overrides,
   } as SandboxProvider;
 }
@@ -36,6 +40,7 @@ function fixture(providerValue = provider()) {
   const calls: string[] = [];
   const backgroundTasks: Array<() => Promise<void>> = [];
   const socket = {};
+  const transaction = <T>(fn: () => T): T => fn();
   const sandboxRow = {
     modal_sandbox_id: GENERATION.sandboxId,
     modal_object_id: "provider-object-1" as string | null,
@@ -74,7 +79,7 @@ function fixture(providerValue = provider()) {
         session_name: "external-session-1",
         sandbox_settings: JSON.stringify({ finalSnapshotBufferMs: 600_000 }),
       })),
-      transaction: vi.fn((fn: () => unknown) => fn()),
+      transaction: vi.fn(transaction),
     },
     messages: {
       getProcessingMessage: vi.fn<() => { id: string } | null>(() => null),
@@ -100,10 +105,19 @@ function fixture(providerValue = provider()) {
     retireAccess: vi.fn(() => calls.push("access-retired")),
     now: () => now,
   };
-  const shutdown = new SandboxShutdownCoordinator(deps as never);
+  const fullDeps = {
+    ...deps,
+    recoveryPoints: new SandboxRecoveryPointRepository(
+      transaction,
+      store,
+      deps.sandbox as never,
+      () => now
+    ),
+  };
+  const shutdown = new SandboxShutdownCoordinator(fullDeps as never);
   return {
     shutdown,
-    deps,
+    deps: fullDeps,
     store,
     calls,
     backgroundTasks,
@@ -351,6 +365,34 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.shutdown.admissionDecision()).not.toBe("held");
   });
 
+  it("keeps fresh-start admission after an ordinary checkpoint restore fails", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "ordinary-checkpoint",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: "v72-runtime",
+      },
+    });
+    const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
+    reserveGeneration(f, replacement, "confirmed");
+    f.sandboxRow.modal_object_id = null;
+    f.sandboxRow.status = "failed";
+
+    expect(f.store.value).toMatchObject({
+      phase: "running",
+      generation: replacement,
+      receipt: { artifactId: "ordinary-checkpoint" },
+    });
+    expect(f.shutdown.admissionDecision()).toBe("spawn_required");
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    expect(restarted.admissionDecision()).toBe("spawn_required");
+  });
+
   it("serializes final preparation behind an ordinary checkpoint", async () => {
     let resolve!: (value: { success: true; imageId: string }) => void;
     const f = fixture(
@@ -497,6 +539,31 @@ describe("SandboxShutdownCoordinator", () => {
     expect(restarted.snapshot()).toMatchObject({ hasRecoveryPoint: true, savedAtMs: 100_000 });
   });
 
+  it("does not reclassify a committed checkpoint when notification fails", async () => {
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({
+          success: true,
+          imageId: "committed-checkpoint",
+          sourceStopped: false,
+        })),
+      })
+    );
+    await readyWithoutDeadline(f);
+    f.deps.messenger.broadcast.mockImplementation((message) => {
+      if (message.type === "sandbox_preservation") throw new Error("notification unavailable");
+    });
+
+    await expect(f.shutdown.captureCheckpoint(GENERATION, "execution_complete")).rejects.toThrow(
+      "notification unavailable"
+    );
+    expect(f.store.value).toMatchObject({
+      phase: "running",
+      checkpointInFlight: false,
+      receipt: { artifactId: "committed-checkpoint" },
+    });
+  });
+
   it("settles the active message once when duplicate shutdown requests race", async () => {
     const f = fixture();
     f.deps.messages.getProcessingMessage.mockReturnValue({ id: "message-1" });
@@ -613,6 +680,41 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.calls.indexOf("snapshot-recorded")).toBeLessThan(f.calls.indexOf("phase:retiring"));
     expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("provider-stop"));
     expect(f.calls).toContain("access-retired");
+  });
+
+  it("continues final settlement after a committed receipt notification fails", async () => {
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({
+          success: true,
+          imageId: "committed-final-image",
+          sourceStopped: false,
+        })),
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    const broadcast = f.deps.messenger.broadcast.getMockImplementation()!;
+    f.deps.messenger.broadcast.mockImplementation((message) => {
+      broadcast(message);
+      if (message.type === "sandbox_preservation" && message.preservation?.phase === "retiring")
+        throw new Error("notification unavailable");
+    });
+
+    await expect(f.shutdown.handleAlarm()).rejects.toThrow("notification unavailable");
+
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(f.store.value).toMatchObject({
+      phase: "retiring",
+      receipt: { artifactId: "committed-final-image" },
+    });
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    await restarted.handleAlarm();
+    expect(stopSandbox).toHaveBeenCalledOnce();
+    expect(f.store.value?.phase).toBe("saved");
   });
 
   it("reconciles a committed receipt by retiring after coordinator restart", async () => {
@@ -878,7 +980,7 @@ describe("SandboxShutdownCoordinator", () => {
       artifactId: "last-good-image",
       provider: "modal",
       savedAtMs: 50_000,
-      runtimeVersion: "runtime-1",
+      runtimeVersion: "v72-runtime",
     };
     f.store.write({ ...f.store.value!, phase: "unknown", receipt });
     expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
@@ -943,7 +1045,7 @@ describe("SandboxShutdownCoordinator", () => {
             artifactId: "saved-image",
             provider: "modal",
             savedAtMs: 50_000,
-            runtimeVersion: "runtime-1",
+            runtimeVersion: "v72-runtime",
           },
         });
       },
@@ -1014,7 +1116,7 @@ describe("SandboxShutdownCoordinator", () => {
         artifactId: "last-good-image",
         provider: "modal",
         savedAtMs: 50_000,
-        runtimeVersion: "runtime-1",
+        runtimeVersion: "v72-runtime",
       },
     });
     f.deps.background.submit.mockClear();
@@ -1042,7 +1144,7 @@ describe("SandboxShutdownCoordinator", () => {
         artifactId: "saved-image",
         provider: "modal",
         savedAtMs: 50_000,
-        runtimeVersion: "runtime-1",
+        runtimeVersion: "v72-runtime",
       },
     });
     const next = { ...GENERATION, createdAt: GENERATION.createdAt + 1 };
@@ -1071,7 +1173,7 @@ describe("SandboxShutdownCoordinator", () => {
         artifactId: "saved-image",
         provider: "modal",
         savedAtMs: 50_000,
-        runtimeVersion: "runtime-1",
+        runtimeVersion: "v72-runtime",
       },
     });
     const next = { sandboxId: "sandbox-2", createdAt: 2_000 };

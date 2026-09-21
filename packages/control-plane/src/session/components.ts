@@ -98,6 +98,7 @@ import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import { MessageFailureService } from "./message-failure-service";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import { SandboxShutdownRepository } from "./sandbox-shutdown-repository";
+import { SandboxRecoveryPointRepository } from "./sandbox-recovery-point-repository";
 import { SandboxArtifactEventHandler } from "./sandbox-events/artifact.handler";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
@@ -279,6 +280,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
   // for access secrets, so it takes the key.
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
+  const shutdownStore = new SandboxShutdownRepository(sql);
+  const recoveryPoints = new SandboxRecoveryPointRepository(
+    transaction,
+    shutdownStore,
+    sandboxRepository
+  );
 
   // Tier 2 — sockets and alarm scheduling.
   const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
@@ -435,7 +442,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   );
   const shutdown = new SandboxShutdownCoordinator({
     log,
-    store: new SandboxShutdownRepository(sql),
+    store: shutdownStore,
+    recoveryPoints,
     provider: sandboxProvider,
     sandbox: sandboxRepository,
     session: sessionCoreRepository,

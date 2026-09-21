@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
+import { SandboxRecoveryPointRepository } from "./sandbox-recovery-point-repository";
 import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const GENERATION = { sandboxId: "sandbox-current", createdAt: 1_000 };
@@ -77,6 +78,9 @@ function fixture(
     createSandbox: async () => {
       throw new Error("not used by shutdown safety tests");
     },
+    restoreFromSnapshot: async () => {
+      throw new Error("not used by shutdown safety tests");
+    },
     stopSandbox,
     takeSnapshot: options.takeSnapshot,
   };
@@ -87,31 +91,39 @@ function fixture(
     runtime_version: "v72-runtime",
     status: "ready",
   };
+  const transaction = <T>(callback: () => T): T => callback();
+  const sandbox = {
+    getSandbox: () => sandboxRow,
+    updateSandboxStatus: vi.fn((status: SandboxStatus) => {
+      sandboxRow.status = status;
+    }),
+    transitionSandboxStatus: vi.fn(
+      (generation: typeof GENERATION, from: SandboxStatus, to: SandboxStatus) => {
+        if (
+          generation.sandboxId !== sandboxRow.modal_sandbox_id ||
+          generation.createdAt !== sandboxRow.created_at ||
+          sandboxRow.status !== from
+        )
+          return false;
+        sandboxRow.status = to;
+        return true;
+      }
+    ),
+    recordSandboxSnapshot: vi.fn(() => true),
+  };
   const shutdown = new SandboxShutdownCoordinator({
     store,
+    recoveryPoints: new SandboxRecoveryPointRepository(
+      transaction,
+      store,
+      sandbox as never,
+      () => options.now ?? 100_000
+    ),
     provider,
-    sandbox: {
-      getSandbox: () => sandboxRow,
-      updateSandboxStatus: vi.fn((status: SandboxStatus) => {
-        sandboxRow.status = status;
-      }),
-      transitionSandboxStatus: vi.fn(
-        (generation: typeof GENERATION, from: SandboxStatus, to: SandboxStatus) => {
-          if (
-            generation.sandboxId !== sandboxRow.modal_sandbox_id ||
-            generation.createdAt !== sandboxRow.created_at ||
-            sandboxRow.status !== from
-          )
-            return false;
-          sandboxRow.status = to;
-          return true;
-        }
-      ),
-      recordSandboxSnapshot: vi.fn(() => true),
-    },
+    sandbox,
     session: {
       getSession: () => ({ id: "session-1", session_name: "shutdown-safety" }),
-      transaction: (callback: () => unknown) => callback(),
+      transaction,
     },
     messages: { getProcessingMessage: () => null },
     failures: { record: vi.fn(), deliver: vi.fn() },
@@ -237,6 +249,34 @@ describe("sandbox shutdown safety", () => {
       receipt: { artifactId: "verified-ordinary-checkpoint" },
     });
   });
+
+  it.each([null, "v61-incompatible"])(
+    "does not retire a live source for an unrestorable snapshot runtime %s",
+    async (runtimeVersion) => {
+      const h = fixture(
+        recoveryRecord({
+          receipt: {
+            kind: "snapshot",
+            artifactId: "unrestorable-checkpoint",
+            provider: "modal",
+            savedAtMs: 75_000,
+            runtimeVersion,
+          },
+        })
+      );
+      const before = structuredClone(h.store.value);
+
+      expect(h.shutdown.snapshot()).toMatchObject({
+        hasRecoveryPoint: true,
+        availableRecoveryActions: [],
+      });
+      await expect(h.shutdown.recover("restore_saved")).rejects.toThrow(
+        "Shutdown recovery is unavailable"
+      );
+      expect(h.stopSandbox).not.toHaveBeenCalled();
+      expect(h.store.value).toEqual(before);
+    }
+  );
 
   it("projects legacy interrupted saved state as paused until explicit resume", async () => {
     const h = fixture(

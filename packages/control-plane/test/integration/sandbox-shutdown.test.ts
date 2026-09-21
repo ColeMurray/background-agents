@@ -12,8 +12,10 @@ import { MessageRepository } from "../../src/session/message-repository";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
+import { SandboxRecoveryPointRepository } from "../../src/session/sandbox-recovery-point-repository";
 import {
   SandboxShutdownRepository,
+  type ShutdownRecord,
   type ShutdownStore,
 } from "../../src/session/sandbox-shutdown-repository";
 import { SessionAttachmentRepository } from "../../src/session/session-attachment-repository";
@@ -86,9 +88,11 @@ function realLifecycleHarness(
   } = {}
 ) {
   const sandbox = componentsOf(instance).sandboxRepository;
+  const transaction = <T>(callback: () => T) => durableState.storage.transactionSync(callback);
   const sessions = new SessionCoreRepository(durableState.storage.sql, (callback) =>
     durableState.storage.transactionSync(callback)
   );
+  const store = options.store ?? new SandboxShutdownRepository(durableState.storage.sql);
   const sessionContext = new LifecycleSessionContext(sessions, {
     getUserEnvVars: async () => undefined,
   } as never);
@@ -101,7 +105,8 @@ function realLifecycleHarness(
     options.onQueueAdmission?.(decision);
   };
   const shutdown = new SandboxShutdownCoordinator({
-    store: options.store ?? new SandboxShutdownRepository(durableState.storage.sql),
+    store,
+    recoveryPoints: new SandboxRecoveryPointRepository(transaction, store, sandbox),
     provider,
     sandbox,
     session: sessions,
@@ -583,13 +588,16 @@ describe("sandbox graceful shutdown wiring", () => {
         },
       };
       const sandbox = componentsOf(instance).sandboxRepository;
+      const store = new SandboxShutdownRepository(durableState.storage.sql);
+      const transaction = <T>(callback: () => T) => durableState.storage.transactionSync(callback);
       const shutdown = new SandboxShutdownCoordinator({
-        store: new SandboxShutdownRepository(durableState.storage.sql),
+        store,
+        recoveryPoints: new SandboxRecoveryPointRepository(transaction, store, sandbox),
         provider,
         sandbox,
         session: {
           getSession: () => ({ id: "session-1", session_name: "legacy-session" }),
-          transaction: <T>(callback: () => T) => durableState.storage.transactionSync(callback),
+          transaction,
         },
         messenger: { broadcast: () => undefined },
         background: {
@@ -685,6 +693,9 @@ describe("sandbox graceful shutdown wiring", () => {
         createSandbox: async () => {
           throw new Error("not used by ordinary recovery regression");
         },
+        restoreFromSnapshot: async () => {
+          throw new Error("not invoked before explicit recovery completes");
+        },
         takeSnapshot,
         stopSandbox,
       };
@@ -726,6 +737,185 @@ describe("sandbox graceful shutdown wiring", () => {
       receipt: { artifactId: "verified-ordinary-checkpoint" },
     });
   });
+
+  it("keeps startup retryable when automatic restore of an ordinary checkpoint fails", async () => {
+    const { stub } = await initNamedSession(`shutdown-ordinary-restore-failure-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    await runInSessionDO(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, runtime_version = ?",
+        "provider-current",
+        "v72-runtime"
+      );
+    });
+    const generation = await seedShutdown(stub, {
+      provider: "modal",
+      providerObjectId: "provider-current",
+      sourceRetired: false,
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+
+    const result = await runInSessionDO(stub, async (instance, durableState) => {
+      const restoreFromSnapshot = vi.fn(async () => ({
+        success: false as const,
+        error: "snapshot unavailable",
+      }));
+      const createSandbox = vi.fn(async () => {
+        throw new Error("fresh creation is not part of the first retry");
+      });
+      const provider: SandboxProvider = {
+        name: "modal",
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: true,
+          supportsRestore: true,
+          supportsExplicitStop: true,
+          supportsPersistentResume: false,
+        },
+        createSandbox,
+        takeSnapshot: async () => ({
+          success: true,
+          imageId: "ordinary-auto-restore-checkpoint",
+          sourceStopped: false,
+        }),
+        restoreFromSnapshot,
+        stopSandbox: async () => ({ success: true }),
+      };
+      const first = realLifecycleHarness(instance, durableState, provider);
+      await first.shutdown.captureCheckpoint(generation, "execution_complete");
+      first.sandbox.updateSandboxStatus("stopped");
+
+      await first.manager.spawnSandbox();
+
+      const restarted = realLifecycleHarness(instance, durableState, provider).shutdown;
+      return {
+        admission: first.shutdown.admissionDecision(),
+        restartedAdmission: restarted.admissionDecision(),
+        restoreCalls: restoreFromSnapshot.mock.calls.length,
+        createCalls: createSandbox.mock.calls.length,
+      };
+    });
+
+    expect(result).toEqual({
+      admission: "spawn_required",
+      restartedAdmission: "spawn_required",
+      restoreCalls: 1,
+      createCalls: 0,
+    });
+    expect(await readShutdown(stub)).toMatchObject({
+      phase: "running",
+      receipt: { artifactId: "ordinary-auto-restore-checkpoint" },
+    });
+  });
+
+  it.each(["checkpoint", "final"] as const)(
+    "rolls back both recovery projections when a %s receipt write fails",
+    async (kind) => {
+      const { stub } = await initNamedSession(`shutdown-rollback-${kind}-${Date.now()}`);
+      await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+      const generation = await seedShutdown(stub);
+
+      await runInSessionDO(stub, (instance, durableState) => {
+        const sql = durableState.storage.sql;
+        const transaction = <T>(callback: () => T) =>
+          durableState.storage.transactionSync(callback);
+        const sandbox = componentsOf(instance).sandboxRepository;
+        sql.exec(
+          `UPDATE sandbox SET modal_object_id = ?, runtime_version = ?,
+             snapshot_image_id = ?, snapshot_runtime_version = ?`,
+          "provider-current",
+          "v72-runtime",
+          "prior-checkpoint",
+          "v71-runtime"
+        );
+        const previousReceipt = {
+          kind: "snapshot" as const,
+          artifactId: "prior-checkpoint",
+          provider: "modal",
+          savedAtMs: 50_000,
+          runtimeVersion: "v71-runtime",
+        };
+        const operationId = `${kind}-operation`;
+        const initial: ShutdownRecord = {
+          phase: kind === "checkpoint" ? "running" : "capturing",
+          generation,
+          provider: "modal",
+          providerObjectId: "provider-current",
+          sourceRetired: false,
+          lifetimeKind: "none",
+          expiresAtMs: null,
+          drainAtMs: null,
+          generationReady: true,
+          lifecyclePolicy: "legacy",
+          receipt: previousReceipt,
+          savedAtMs: previousReceipt.savedAtMs,
+          ...(kind === "checkpoint"
+            ? { checkpointInFlight: true, checkpointOperationId: operationId }
+            : {
+                operationId,
+                stopByMs: 100_000,
+                captureByMs: 200_000,
+                retireByMs: 300_000,
+              }),
+        };
+        const realStore = new SandboxShutdownRepository(sql);
+        realStore.write(initial);
+        const throwingStore: ShutdownStore = {
+          read: () => realStore.read(),
+          write: (record) => {
+            if (record.receipt?.artifactId === "new-checkpoint")
+              throw new Error("injected receipt write failure");
+            realStore.write(record);
+          },
+        };
+        const recoveryPoints = new SandboxRecoveryPointRepository(
+          transaction,
+          throwingStore,
+          sandbox,
+          () => 75_000
+        );
+        const command = {
+          operationId,
+          generation,
+          provider: "modal",
+          providerObjectId: "provider-current",
+        };
+
+        expect(() =>
+          kind === "checkpoint"
+            ? recoveryPoints.commitCheckpointSnapshot({
+                ...command,
+                kind: "snapshot",
+                artifactId: "new-checkpoint",
+                runtimeVersion: "v72-runtime",
+              })
+            : recoveryPoints.commitFinalCapture({
+                ...command,
+                artifact: {
+                  kind: "snapshot",
+                  artifactId: "new-checkpoint",
+                  runtimeVersion: "v72-runtime",
+                },
+              })
+        ).toThrow("injected receipt write failure");
+        expect(realStore.read()).toEqual(initial);
+        expect(
+          sql.exec("SELECT snapshot_image_id, snapshot_runtime_version FROM sandbox").toArray()
+        ).toEqual([
+          {
+            snapshot_image_id: "prior-checkpoint",
+            snapshot_runtime_version: "v71-runtime",
+          },
+        ]);
+      });
+    }
+  );
 
   it("holds queued work until a versioned runtime acknowledges its sandbox generation", async () => {
     const name = `shutdown-generation-${Date.now()}`;
@@ -949,8 +1139,14 @@ describe("sandbox graceful shutdown wiring", () => {
         { notifyComplete: async () => undefined } as never,
         async () => undefined
       );
+      const store = new SandboxShutdownRepository(sql);
       const coordinator = new SandboxShutdownCoordinator({
-        store: new SandboxShutdownRepository(sql),
+        store,
+        recoveryPoints: new SandboxRecoveryPointRepository(
+          transaction,
+          store,
+          componentsOf(instance).sandboxRepository
+        ),
         provider,
         sandbox: componentsOf(instance).sandboxRepository,
         session: sessions,
