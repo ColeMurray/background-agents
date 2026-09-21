@@ -2,6 +2,36 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 20, 2026
+
+**Graceful sandbox shutdown and recovery.** Sandboxes approaching their provider lifetime now stop
+admitting new work, preserve the filesystem, and confirm retirement before expiry, reserving a
+configurable **Final snapshot buffer** set globally or per repository and environment. Sessions show
+shutdown and recovery progress: work queued at a clean prompt boundary continues automatically in a
+new sandbox, while an interrupted prompt fails once and stays paused until you choose **Resume
+queued work** — it is never replayed automatically. Recovery failures stay held rather than falling
+back to a fresh checkout.
+
+**Provider-aware sandbox settings.** Sandbox settings now show only the controls the configured
+provider can honor. Daytona sandboxes inherit CPU and memory from their snapshot, so those controls
+and the per-session timeout are hidden with an explanation, and stored values a provider cannot
+apply are stripped before a session starts instead of blocking the spawn.
+
+## September 19, 2026
+
+**Prebuilt images for Daytona.** Daytona can now build, reuse, and clean up repository and
+environment images at parity with Modal, E2B, Vercel, and OpenComputer, so sessions start from a
+prebuilt snapshot. The feature is opt-in behind `DAYTONA_PREBUILDS_ENABLED` and off by default;
+while it is closed, manual triggers, save hooks, and the rebuild cron skip Daytona scopes and
+session spawns never select a prebuilt image. Remaining live verification gates are listed in
+[Image prebuilds](docs/IMAGE_PREBUILD.md#verification-gates).
+
+**Slack model flags set session defaults.** A `!model` or `!reasoning` flag on the message that
+opens a session now becomes that session's default for every following turn, instead of applying
+only to the first prompt. Flags on a follow-up still apply to that one request. The "Starting
+work..." acknowledgement names the resulting defaults whenever they differ from your App Home
+preferences.
+
 ## September 17, 2026
 
 **Repository-less Slack sessions.** The Slack target classifier can start suitable work in an empty
