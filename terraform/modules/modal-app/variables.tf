@@ -69,6 +69,12 @@ variable "secrets" {
   sensitive = true
 }
 
+variable "provision_modal_vm_sandboxes" {
+  description = "Also build and verify the Docker-capable sandbox image; the deployed app then serves Docker-enabled sessions"
+  type        = bool
+  default     = false
+}
+
 variable "fetch_app_info" {
   description = "Whether to fetch app info after deployment"
   type        = bool

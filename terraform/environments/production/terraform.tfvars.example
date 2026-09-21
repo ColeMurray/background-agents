@@ -71,6 +71,11 @@ modal_token_secret = ""
 modal_workspace               = ""
 modal_environment             = "main"
 modal_environment_web_suffix  = ""
+# Docker-enabled sessions on Modal's VM runtime (docs/MODAL_DOCKER.md). Provision the
+# Docker image first; admit new Docker sessions only after every service understands the
+# setting. Closing admission is the rollback; keep provisioning on while such sessions exist.
+# provision_modal_vm_sandboxes = false
+# enable_modal_vm_sandboxes    = false
 
 # Daytona REST API
 # Only required when sandbox_provider = "daytona"

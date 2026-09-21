@@ -113,6 +113,7 @@ module "control_plane_worker" {
       MODAL_WORKSPACE              = { value = var.modal_workspace }
       MODAL_ENVIRONMENT            = { value = var.modal_environment }
       MODAL_ENVIRONMENT_WEB_SUFFIX = { value = var.modal_environment_web_suffix }
+      ENABLE_MODAL_VM_SANDBOXES    = { value = tostring(var.enable_modal_vm_sandboxes) }
     } : {},
     # Bound whenever Daytona credentials exist, not only while it is the
     # active backend: a deployment that has switched providers still has

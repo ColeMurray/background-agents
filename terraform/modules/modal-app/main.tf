@@ -41,6 +41,8 @@ resource "null_resource" "modal_deploy" {
     app_name = var.app_name
     # Re-deploy when Modal environment changes
     modal_environment = var.modal_environment
+    # Re-deploy when the Docker image variant is provisioned or retired
+    provision_modal_vm_sandboxes = tostring(var.provision_modal_vm_sandboxes)
     # Ensure secrets are created first
     secrets_created = length(var.secrets) > 0 ? null_resource.modal_secrets[0].id : "no-secrets"
   }
@@ -56,6 +58,9 @@ resource "null_resource" "modal_deploy" {
       APP_NAME           = var.app_name
       DEPLOY_PATH        = var.deploy_path
       DEPLOY_MODULE      = var.deploy_module
+      # Read by deploy.py: build and verify the Docker variant too, and
+      # refuse to deploy functions without a verified Docker image reference.
+      BUILD_MODAL_VM_IMAGE = tostring(var.provision_modal_vm_sandboxes)
     }
   }
 

@@ -41,8 +41,11 @@ if [[ -z "${DEPLOY_MODULE:-}" ]]; then
     exit 1
 fi
 
+export BUILD_MODAL_VM_IMAGE="${BUILD_MODAL_VM_IMAGE:-false}"
+
 echo "Deploying Modal app: ${APP_NAME}"
 echo "Modal environment: ${MODAL_ENVIRONMENT}"
+echo "Docker sandbox image: ${BUILD_MODAL_VM_IMAGE}"
 echo "Deploy path: ${DEPLOY_PATH}"
 echo "Deploy module: ${DEPLOY_MODULE}"
 

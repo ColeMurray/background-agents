@@ -110,6 +110,8 @@ pip install -e ".[dev]"
 ```bash
 # Build the dynamic Sandbox image, then deploy the app (recommended)
 uv run python deploy.py --build-sandbox-image
+# Also build and verify the Docker-capable image variant (docs/MODAL_DOCKER.md):
+# BUILD_MODAL_VM_IMAGE=true uv run python deploy.py --build-sandbox-image
 uv run modal deploy deploy.py
 
 # Alternative app deployment after the same eager image-build step

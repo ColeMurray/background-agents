@@ -237,6 +237,8 @@ jobs:
           TF_VAR_modal_workspace: ${{ vars.MODAL_WORKSPACE || secrets.MODAL_WORKSPACE }}
           TF_VAR_modal_environment: "${{ vars.MODAL_ENVIRONMENT || secrets.MODAL_ENVIRONMENT || 'main' }}"
           TF_VAR_modal_environment_web_suffix: ${{ vars.MODAL_ENVIRONMENT_WEB_SUFFIX || secrets.MODAL_ENVIRONMENT_WEB_SUFFIX }}
+          TF_VAR_provision_modal_vm_sandboxes: "${{ vars.PROVISION_MODAL_VM_SANDBOXES || secrets.PROVISION_MODAL_VM_SANDBOXES || 'false' }}"
+          TF_VAR_enable_modal_vm_sandboxes: "${{ vars.ENABLE_MODAL_VM_SANDBOXES || secrets.ENABLE_MODAL_VM_SANDBOXES || 'false' }}"
           TF_VAR_github_client_id: ${{ vars.GH_OAUTH_CLIENT_ID || secrets.GH_OAUTH_CLIENT_ID }}
           TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
           TF_VAR_google_client_id: ${{ vars.GOOGLE_CLIENT_ID || secrets.GOOGLE_CLIENT_ID }}
@@ -427,6 +429,8 @@ jobs:
           TF_VAR_modal_workspace: ${{ vars.MODAL_WORKSPACE || secrets.MODAL_WORKSPACE }}
           TF_VAR_modal_environment: "${{ vars.MODAL_ENVIRONMENT || secrets.MODAL_ENVIRONMENT || 'main' }}"
           TF_VAR_modal_environment_web_suffix: ${{ vars.MODAL_ENVIRONMENT_WEB_SUFFIX || secrets.MODAL_ENVIRONMENT_WEB_SUFFIX }}
+          TF_VAR_provision_modal_vm_sandboxes: "${{ vars.PROVISION_MODAL_VM_SANDBOXES || secrets.PROVISION_MODAL_VM_SANDBOXES || 'false' }}"
+          TF_VAR_enable_modal_vm_sandboxes: "${{ vars.ENABLE_MODAL_VM_SANDBOXES || secrets.ENABLE_MODAL_VM_SANDBOXES || 'false' }}"
           TF_VAR_github_client_id: ${{ vars.GH_OAUTH_CLIENT_ID || secrets.GH_OAUTH_CLIENT_ID }}
           TF_VAR_github_client_secret: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
           TF_VAR_google_client_id: ${{ vars.GOOGLE_CLIENT_ID || secrets.GOOGLE_CLIENT_ID }}

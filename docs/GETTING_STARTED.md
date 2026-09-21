@@ -159,6 +159,8 @@ Create an R2 API Token:
 5. Note the environment's **Web suffix** from Modal's environment settings. Use the normalized
    lowercase suffix made of letters, digits, and dashes. Leave it empty for the environment whose
    endpoints use `https://<workspace>--...modal.run`.
+6. Optionally let sessions run Docker on Modal's VM runtime. It is off by default and rolled out
+   with two Terraform variables; see [Docker in Modal Sandboxes](MODAL_DOCKER.md).
 
 ### Daytona
 

@@ -109,6 +109,28 @@ variable "modal_environment_web_suffix" {
   }
 }
 
+variable "provision_modal_vm_sandboxes" {
+  description = "Build, verify and deploy the Docker-capable Modal sandbox image alongside the default one. Keep it on while any Docker-enabled session exists, independently of whether new ones are admitted."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.provision_modal_vm_sandboxes || var.sandbox_provider == "modal"
+    error_message = "provision_modal_vm_sandboxes requires sandbox_provider = 'modal'."
+  }
+}
+
+variable "enable_modal_vm_sandboxes" {
+  description = "Admit new Docker-enabled sessions, children and image builds, which launch on Modal's VM runtime. Off by default. Closing it is the rollback control: sessions already admitted keep restoring, and provisioning stays on for them."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_modal_vm_sandboxes || var.provision_modal_vm_sandboxes
+    error_message = "enable_modal_vm_sandboxes requires provision_modal_vm_sandboxes = true, and provisioning must stay on after admission is closed while Docker sessions exist."
+  }
+}
+
 # =============================================================================
 # GitHub OAuth Sign-In Credentials
 # =============================================================================
