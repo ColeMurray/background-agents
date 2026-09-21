@@ -84,7 +84,7 @@ function fixture(providerValue = provider()) {
       submit: vi.fn((task: () => Promise<void>) => backgroundTasks.push(task)),
     },
     onLifecycleChange: vi.fn(async () => undefined),
-    reconcileStatus: vi.fn(async () => undefined),
+    reconcileStatusFromMessages: vi.fn(async () => undefined),
     retireAccess: vi.fn(() => calls.push("access-retired")),
     now: () => now,
   };
@@ -230,6 +230,18 @@ describe("SandboxShutdownCoordinator", () => {
       })
     );
     expect(f.shutdown.admissionDecision()).toBe("held");
+  });
+
+  it("settles session status from message state when shutdown begins between prompts", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.backgroundTasks.length = 0;
+
+    await expect(f.shutdown.requestShutdown("inactivity_timeout")).resolves.toBe("owned");
+    await Promise.all(f.backgroundTasks.map((task) => task()));
+
+    expect(f.deps.failures.record).not.toHaveBeenCalled();
+    expect(f.deps.reconcileStatusFromMessages).toHaveBeenCalledOnce();
   });
 
   it("requires a matching generation acknowledgement and ignores a late generation", async () => {
@@ -426,9 +438,19 @@ describe("SandboxShutdownCoordinator", () => {
     f.deps.messages.getProcessingMessage.mockReturnValue({ id: "message-1" });
     f.deps.failures.record.mockReturnValue({ id: "failure-1" });
     await readyFinite(f);
+    f.backgroundTasks.length = 0;
+    f.deps.reconcileStatusFromMessages.mockImplementation(async () => {
+      expect(f.deps.failures.record).toHaveBeenCalledWith(
+        "message-1",
+        "sandbox_lifetime_expiring",
+        100_000,
+        "processing"
+      );
+    });
 
     await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    await Promise.all(f.backgroundTasks.map((task) => task()));
 
     expect(f.deps.failures.record).toHaveBeenCalledOnce();
     expect(f.deps.failures.record).toHaveBeenCalledWith(
@@ -439,6 +461,7 @@ describe("SandboxShutdownCoordinator", () => {
     );
     expect(f.deps.failures.deliver).toHaveBeenCalledOnce();
     expect(f.store.value?.messageId).toBe("message-1");
+    expect(f.deps.reconcileStatusFromMessages).toHaveBeenCalledOnce();
   });
 
   it("ignores duplicate prepared evidence after the durable phase transition", async () => {
