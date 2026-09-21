@@ -16,6 +16,8 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   reasoningEffort?: string;
   skillSelection: SessionSkillSelection;
   providerSelections: ModelProviderSelections;
+  /** One-off Docker choice; part of the launch identity, so changing it retires the draft. */
+  dockerEnabled?: boolean;
 };
 
 export function warmDraftSessionIdentity(
@@ -48,6 +50,7 @@ export function useWarmDraftSession(
   const sessionIdRef = useRef<string | null>(null);
   const creationRef = useRef<Promise<string | null> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const lastErrorRef = useRef<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isWarming, setIsWarming] = useState(false);
 
@@ -97,7 +100,16 @@ export function useWarmDraftSession(
           body: JSON.stringify(launchRequest),
           signal: abortController.signal,
         });
-        if (!response.ok) return null;
+        if (!response.ok) {
+          // Keep the control plane's reason (a closed Docker gate, for
+          // instance) so the composer can show it instead of a generic failure.
+          const body = await response.json().catch(() => null);
+          const message =
+            body && typeof body === "object" && typeof body.error === "string" ? body.error : null;
+          lastErrorRef.current = message;
+          return null;
+        }
+        lastErrorRef.current = null;
 
         const parsed = createSessionResponseSchema.safeParse(
           await response.json().catch(() => null)
@@ -136,5 +148,7 @@ export function useWarmDraftSession(
     setSessionId(null);
   }, []);
 
-  return { sessionId, isWarming, warm, consume };
+  const readLastError = useCallback(() => lastErrorRef.current, []);
+
+  return { sessionId, isWarming, warm, consume, readLastError };
 }

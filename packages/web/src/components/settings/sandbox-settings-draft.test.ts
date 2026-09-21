@@ -36,6 +36,7 @@ describe("resolveSandboxSettingsDraft", () => {
       values: {
         tunnelPorts: ["3000", "5173"],
         terminalEnabled: true,
+        dockerEnabled: "",
         maxSessionCostUsd: "",
         codeServerPort: "8081",
         vncPort: "6081",
@@ -475,4 +476,52 @@ describe("resolveSandboxSettingsDraft", () => {
       }
     }
   );
+});
+
+describe("dockerEnabled draft", () => {
+  it("shows inherit at repo scope regardless of the inherited value and pins only explicit choices", () => {
+    const inheritedOn = resolveSandboxSettingsDraft({
+      isGlobal: false,
+      baseDefaults: { ...baseDefaults, dockerEnabled: true },
+      draft: {},
+    });
+    expect(inheritedOn.values.dockerEnabled).toBe("");
+    expect(inheritedOn.result).toEqual({ settings: {} });
+
+    expect(resolve({ dockerEnabled: "true" }).result).toEqual({
+      settings: { dockerEnabled: true },
+    });
+    expect(resolve({ dockerEnabled: "false" }).result).toEqual({
+      settings: { dockerEnabled: false },
+    });
+  });
+
+  it("clears a repo override back to inherit by omitting the property", () => {
+    const resolved = resolve({ dockerEnabled: "" }, { dockerEnabled: true, tunnelPorts: [1] });
+    expect(resolved.hasChanges).toBe(true);
+    expect(resolved.result).toEqual({ settings: { tunnelPorts: [1] } });
+    expect(resolved.result.settings).not.toHaveProperty("dockerEnabled");
+  });
+
+  it("treats the global default as absence until an explicit choice is saved", () => {
+    const untouched = resolveSandboxSettingsDraft({ isGlobal: true, draft: {} });
+    expect(untouched.values.dockerEnabled).toBe("");
+    expect(untouched.result.settings).not.toHaveProperty("dockerEnabled");
+
+    const enabled = resolveSandboxSettingsDraft({
+      isGlobal: true,
+      draft: { dockerEnabled: "true" },
+    });
+    expect(enabled.result.settings).toMatchObject({ dockerEnabled: true });
+  });
+
+  it("preserves a stored Docker choice when the provider hides the field", () => {
+    const resolved = resolveSandboxSettingsDraft({
+      isGlobal: false,
+      ownSettings: { dockerEnabled: true },
+      draft: { dockerEnabled: "false" },
+      hiddenFields: new Set(["dockerEnabled"]),
+    });
+    expect(resolved.result).toEqual({ settings: { dockerEnabled: true } });
+  });
 });

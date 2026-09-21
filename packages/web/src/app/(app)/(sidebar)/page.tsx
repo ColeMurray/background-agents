@@ -64,6 +64,12 @@ import type {
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
+import {
+  DockerModeSelect,
+  dockerEnabledForMode,
+  type DockerMode,
+} from "@/components/docker-mode-select";
+import { getPublicSandboxProvider } from "@/lib/sandbox-provider";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   buildInteractiveProviderRoutingIdentity,
@@ -109,6 +115,8 @@ export default function Home() {
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
+  const [dockerMode, setDockerMode] = useState<DockerMode>("default");
+  const dockerAvailable = getPublicSandboxProvider() === "modal";
   const [prompt, setPrompt] = useState("");
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
@@ -234,6 +242,7 @@ export default function Home() {
           reasoningEffort,
           skillSelection,
           providerSelections: availableProviderSelections,
+          dockerEnabled: dockerEnabledForMode(dockerMode),
         }
       : null;
   const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
@@ -246,6 +255,7 @@ export default function Home() {
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
+    readLastError: readWarmError,
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
@@ -346,7 +356,7 @@ export default function Home() {
       }
 
       if (!sessionId) {
-        setError("Failed to create session");
+        setError(readWarmError() ?? "Failed to create session");
         return;
       }
 
@@ -400,6 +410,9 @@ export default function Home() {
       setReasoningEffort={handleReasoningEffortChange}
       harness={harness}
       setHarness={handleHarnessChange}
+      dockerMode={dockerMode}
+      setDockerMode={setDockerMode}
+      dockerAvailable={dockerAvailable}
       prompt={prompt}
       handlePromptChange={handlePromptChange}
       attachments={{
@@ -438,6 +451,9 @@ function HomeContent({
   setReasoningEffort,
   harness,
   setHarness,
+  dockerMode,
+  setDockerMode,
+  dockerAvailable,
   prompt,
   handlePromptChange,
   attachments,
@@ -466,6 +482,9 @@ function HomeContent({
   setReasoningEffort: (value: ReasoningEffort | undefined) => void;
   harness: HarnessId;
   setHarness: (value: HarnessId) => void;
+  dockerMode: DockerMode;
+  setDockerMode: (mode: DockerMode) => void;
+  dockerAvailable: boolean;
   prompt: string;
   handlePromptChange: (value: string) => void;
   attachments: {
@@ -655,6 +674,14 @@ function HomeContent({
                       previewLoading={skillPreviewLoading}
                       disabled={creating}
                     />
+
+                    {dockerAvailable && (
+                      <DockerModeSelect
+                        value={dockerMode}
+                        onChange={setDockerMode}
+                        disabled={creating}
+                      />
+                    )}
 
                     {selectedProvider && (
                       <ProviderAuthControls

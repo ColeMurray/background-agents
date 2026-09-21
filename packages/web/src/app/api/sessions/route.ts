@@ -57,6 +57,9 @@ export async function POST(request: NextRequest) {
       repositories: body.repositories,
       skillSelection: body.skillSelection,
       providerSelections: body.providerSelections,
+      // A one-off Docker choice is forwarded only as a boolean; the control
+      // plane admits or refuses it.
+      ...(typeof body.dockerEnabled === "boolean" ? { dockerEnabled: body.dockerEnabled } : {}),
     };
 
     const response = await controlPlaneUserFetch("/sessions", {

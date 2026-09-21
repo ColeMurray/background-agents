@@ -261,6 +261,25 @@ describe("sessions API route (POST)", () => {
     });
   });
 
+  it("forwards a boolean Docker choice and drops anything else", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-docker" }, { status: 201 })
+    );
+
+    await POST(postRequest({ repoOwner: "acme", repoName: "web", dockerEnabled: true }));
+    expect(controlPlaneBody(0)).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      dockerEnabled: true,
+    });
+
+    await POST(postRequest({ repoOwner: "acme", repoName: "web", dockerEnabled: "true" }));
+    expect(controlPlaneBody(1)).toEqual({ repoOwner: "acme", repoName: "web" });
+  });
+
   it("still strips fields outside the allowlist", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "0123456789abcdef0123456789abcdef" },

@@ -43,7 +43,15 @@ type Field<K extends keyof SandboxSettings> = {
     current: SandboxSettingsDraftValues[DraftKey<K>]
   ) => boolean;
   clearValue?: SandboxSettings[K];
+  /**
+   * Display the scope's own value rather than the inherited one, so a
+   * tri-state field can show "inherit" instead of pinning the parent's value.
+   */
+  ownOnly?: boolean;
 };
+
+/** Draft encoding of the tri-state Docker choice: "" inherits, otherwise a boolean string. */
+export type DockerDraftChoice = "" | "true" | "false";
 
 const positiveInteger = (value: string) => /^\d+$/.test(value) && Number(value) >= 1;
 const validPort = (value: string) => positiveInteger(value) && Number(value) <= 65535;
@@ -96,6 +104,13 @@ const fields: FieldRegistry = {
     draftKey: "terminalEnabled",
     format: (value) => value ?? false,
     parse: (value) => ({ value }),
+    isChanged: (value, current) => value !== current,
+  },
+  dockerEnabled: {
+    draftKey: "dockerEnabled",
+    ownOnly: true,
+    format: (value) => (value === undefined ? "" : String(value)),
+    parse: (value) => (value === "" ? { value: undefined } : { value: value === "true" }),
     isChanged: (value, current) => value !== current,
   },
   maxSessionCostUsd: {
@@ -209,7 +224,9 @@ export function resolveSandboxSettingsDraft({
     const field: Field<K> = fields[key];
     const prior = ownSettings?.[key];
     // Explicit resource nulls mask inheritance, rather than falling through it.
-    const current = field.format(prior !== undefined ? prior : baseDefaults?.[key]);
+    const current = field.format(
+      prior !== undefined || (field.ownOnly && !isGlobal) ? prior : baseDefaults?.[key]
+    );
     const edit = draft[field.draftKey];
     const value = edit ?? current;
     values[field.draftKey] = value;

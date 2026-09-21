@@ -164,6 +164,46 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     }
   });
 
+  it("offers the Docker choice on Modal and hides it elsewhere", () => {
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+    expect(screen.getByRole("combobox", { name: "Docker" })).toHaveTextContent("Disabled");
+    cleanup();
+
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "e2b");
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+    expect(screen.queryByRole("combobox", { name: "Docker" })).not.toBeInTheDocument();
+  });
+
+  it("does not write a Docker choice the operator never made", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByLabelText("Web Terminal"));
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const request = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+    const body = JSON.parse(String(request?.body));
+    expect(body.settings.defaults).not.toHaveProperty("dockerEnabled");
+  });
+
   it("hides unsupported Daytona controls and preserves stored intent when saving", async () => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

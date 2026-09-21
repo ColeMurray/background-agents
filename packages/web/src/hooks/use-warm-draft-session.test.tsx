@@ -57,6 +57,39 @@ describe("useWarmDraftSession", () => {
     );
   });
 
+  it("includes the one-off Docker choice in the launch identity", () => {
+    const base = warmDraftSessionIdentity(request(), routing());
+    expect(warmDraftSessionIdentity({ ...request(), dockerEnabled: undefined }, routing())).toBe(
+      base
+    );
+    expect(warmDraftSessionIdentity({ ...request(), dockerEnabled: true }, routing())).not.toBe(
+      base
+    );
+    expect(warmDraftSessionIdentity({ ...request(), dockerEnabled: false }, routing())).not.toBe(
+      base
+    );
+  });
+
+  it("keeps the control plane's refusal for the composer to show", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: "Docker sessions are not enabled", code: "docker_not_available" }),
+        { status: 403 }
+      )
+    );
+    const { result } = renderHook(() =>
+      useWarmDraftSession({ ...request(), dockerEnabled: true }, routing())
+    );
+
+    let created: string | null = "unset";
+    await act(async () => {
+      created = await result.current.warm();
+    });
+
+    expect(created).toBeNull();
+    expect(result.current.readLastError()).toBe("Docker sessions are not enabled");
+  });
+
   it("retires a completed draft when any launch input changes", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ sessionId: "session-1", status: "created" })

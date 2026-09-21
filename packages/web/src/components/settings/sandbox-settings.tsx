@@ -6,6 +6,13 @@ import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import useSWR from "swr";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
@@ -23,7 +30,11 @@ import {
   MIN_FINAL_SNAPSHOT_BUFFER_MINUTES,
   MIN_SANDBOX_TIMEOUT_MINUTES,
 } from "./sandbox-timeout";
-import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
+import {
+  resolveSandboxSettingsDraft,
+  type SandboxSettingsDraft,
+  type DockerDraftChoice,
+} from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import {
   parseSandboxEnvironmentSettingsResponse,
@@ -146,6 +157,8 @@ export function SandboxSettingsEditor({
     hiddenFields.add("memoryMib");
   }
   if (!configurableTimeout) hiddenFields.add("sandboxTimeoutMs");
+  const dockerAvailable = sandboxProvider === "modal";
+  if (!dockerAvailable) hiddenFields.add("dockerEnabled");
   const isGlobal = scope === "global";
   const canManage = hasPermission(
     scope === "global"
@@ -270,6 +283,35 @@ export function SandboxSettingsEditor({
           </button>
         </div>
       </div>
+
+      {dockerAvailable ? (
+        <div className="max-w-sm">
+          <label htmlFor="docker-enabled" className="block text-sm font-medium text-foreground">
+            Docker
+          </label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Launch sessions on a Docker-capable VM with a running daemon, so hooks and the agent can
+            run containers such as PostgreSQL. Uses more resources than the standard sandbox.
+          </p>
+          <Select
+            value={isGlobal && values.dockerEnabled === "" ? "false" : values.dockerEnabled}
+            onValueChange={(value) => updateField("dockerEnabled", value as DockerDraftChoice)}
+          >
+            <SelectTrigger id="docker-enabled" className="w-56" aria-label="Docker">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {!isGlobal && (
+                <SelectItem value="">
+                  Inherit ({baseDefaults?.dockerEnabled ? "enabled" : "disabled"})
+                </SelectItem>
+              )}
+              <SelectItem value="true">Enabled</SelectItem>
+              <SelectItem value="false">Disabled</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       <fieldset className="min-w-0">
         <legend className="block text-sm font-medium text-foreground mb-1.5">Service Ports</legend>
