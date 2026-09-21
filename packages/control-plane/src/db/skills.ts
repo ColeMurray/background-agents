@@ -26,6 +26,7 @@ const RESERVED_SKILL_NAMES = new Set([
   "upload-screenshot",
   "visual-verification",
   "customize-opencode",
+  "pstack",
 ]);
 
 interface SkillRow {

@@ -260,7 +260,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
         [
             "python3",
             "-c",
-            "import os, pathlib, shutil, tempfile; assert shutil.which('gh') == '/usr/local/bin/gh'; assert os.access('/usr/bin/gh', os.X_OK); assert pathlib.Path('/app/sandbox_runtime/skills/agent-browser/SKILL.md').is_file(); f=tempfile.TemporaryFile(dir='/workspace'); f.close(); f=tempfile.TemporaryFile(dir=pathlib.Path.home()); f.close()",
+            "import os, pathlib, shutil, tempfile; assert shutil.which('gh') == '/usr/local/bin/gh'; assert os.access('/usr/bin/gh', os.X_OK); assert pathlib.Path('/app/sandbox_runtime/skills/agent-browser/SKILL.md').is_file(); assert pathlib.Path('/app/sandbox_runtime/skills/pstack/SKILL.md').is_file(); assert pathlib.Path('/app/sandbox_runtime/tools/wait-for-children.js').is_file(); f=tempfile.TemporaryFile(dir='/workspace'); f.close(); f=tempfile.TemporaryFile(dir=pathlib.Path.home()); f.close()",
         ]
     )
     probe.run(["gh", "--version"])

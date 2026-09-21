@@ -144,6 +144,53 @@ async def test_get_child_status_detail_builds_the_include_query(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_wait_for_children_returns_every_terminal_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    list_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal list_calls
+        if request.url.path == "/sessions/s1/children":
+            list_calls += 1
+            return httpx.Response(
+                200,
+                json={
+                    "children": [
+                        {
+                            "id": "c1",
+                            "status": "active" if list_calls == 1 else "completed",
+                        },
+                        {"id": "c2", "status": "completed"},
+                    ]
+                },
+            )
+        child_id = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(
+            200,
+            json={
+                "session": {"id": child_id, "status": "completed"},
+                "artifacts": [],
+                "recentEvents": [],
+                "finalResponse": {"success": True, "textContent": f"{child_id} result"},
+            },
+        )
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("sandbox_runtime.harness.claude_tools.asyncio.sleep", no_delay)
+    tools, seen = _tools(tmp_path, handler)
+    text = _text(await tools.wait_for_children({"childIds": ["c1", "c2"], "timeoutSeconds": 10}))
+
+    assert text.startswith("All 2 child session(s) reached terminal states.")
+    assert "c1 result" in text and "c2 result" in text
+    assert [request.url.path for request in seen].count("/sessions/s1/children") == 2
+    detail_requests = [request for request in seen if request.url.path != "/sessions/s1/children"]
+    assert all(request.url.params["include"] == "result" for request in detail_requests)
+
+
+@pytest.mark.asyncio
 async def test_get_child_status_detail_forwards_the_cursor_and_ends_when_none_remains(
     tmp_path: Path,
 ) -> None:
@@ -351,7 +398,14 @@ def test_build_tool_server_registers_the_gated_tools(tmp_path: Path) -> None:
         return {tool.name for tool in build_tools(tools.client)}
 
     everything = names(has_repository=True, slack_notify_enabled=True)
-    assert {"spawn-child", "send-child-prompt", "cancel-child", "get-child-status"} <= everything
+
+    assert {
+        "spawn-child",
+        "send-child-prompt",
+        "cancel-child",
+        "get-child-status",
+        "wait-for-children",
+    } <= everything
     assert {"create-pull-request", "slack-notify", "upload-media"} <= everything
     minimal = names(has_repository=False, slack_notify_enabled=False)
     assert "create-pull-request" not in minimal

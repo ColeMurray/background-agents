@@ -277,7 +277,10 @@ Agents can decompose work into parallel child sessions:
 - `spawn-child` creates a child session in its own sandbox and returns immediately
 - Parent continues working while children run in parallel on separate branches
 - `send-child-prompt` queues follow-up instructions in an existing direct child session
-- `get-child-status` and `cancel-child` coordinate child sessions
+- `get-child-status` snapshots progress; `wait-for-children` blocks an aggregation workflow until
+  named children finish; `cancel-child` stops obsolete work
+- The bundled `pstack` skill routes swarm, arena, interrogate, architecture, TDD, and blast-radius
+  workflows onto direct work, in-process delegation, or isolated child sandboxes
 - Depth limits and per-repo guardrails enforced
 
 ### Repository Lifecycle Scripts

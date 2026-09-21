@@ -208,6 +208,7 @@ describe("managed skill import provenance", () => {
     expect(await skills.nameAvailable("acme-deploy")).toBe(false);
     expect((await skills.latestImportSource(skill.id))?.commitSha).toBe(source.commitSha);
     expect(await skills.nameAvailable("agent-browser")).toBe(false);
+    expect(await skills.nameAvailable("pstack")).toBe(false);
     expect(await skills.nameAvailable("free-name")).toBe(true);
   });
 });

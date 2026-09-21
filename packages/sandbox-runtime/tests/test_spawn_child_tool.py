@@ -57,6 +57,7 @@ def _run_tool(tmp_path: Path, args: dict[str, str] | None = None) -> dict[str, A
         await tool.execute(JSON.parse(process.argv[2]));
       }
       process.stdout.write(JSON.stringify({
+        description: tool.description,
         request: globalThis.capturedRequest,
       }));
     """
@@ -106,3 +107,10 @@ def test_omits_reasoning_effort_to_inherit_parent_setting(tmp_path: Path) -> Non
         "title": "Child task",
         "prompt": "Do the thing",
     }
+
+
+def test_explicit_pstack_workflow_authorizes_child_sessions(tmp_path: Path) -> None:
+    result = _run_tool(tmp_path)
+
+    assert "pstack swarm, arena, interrogate, or architect" in result["description"]
+    assert "user invokes it in the current request" in result["description"]

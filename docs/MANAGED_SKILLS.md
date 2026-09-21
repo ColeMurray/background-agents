@@ -301,8 +301,9 @@ Supporting-file paths must:
 - Be unique and not conflict with another file or directory path
 - Not use `SKILL.md`, which Open-Inspect generates
 
-Canonical names must be unique. The names `agent-browser`, `record-video`, `upload-screenshot`,
-`visual-verification`, and `customize-opencode` are reserved by the sandbox runtime.
+Canonical names must be unique. The names `agent-browser`, `pstack`, `record-video`,
+`upload-screenshot`, `visual-verification`, and `customize-opencode` are reserved by the sandbox
+runtime.
 
 ---
 

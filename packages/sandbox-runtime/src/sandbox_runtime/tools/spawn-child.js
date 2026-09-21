@@ -11,7 +11,7 @@ import { bridgeFetch, extractError } from "./_bridge-client.js";
 export default tool({
   name: "spawn-child",
   description:
-    "Use this tool ONLY when the user's current request explicitly and affirmatively asks to create a 'child session' or 'child sessions' in a separate sandbox. DO NOT use it for 'sub-agent', 'subagent', 'sub agent', 'sub-task', 'subtask', or Task tool requests; use the Task tool for those in-process delegations instead. Merely mentioning, comparing, or rejecting child sessions does not authorize this tool. Never infer permission or suggest creating a child session. The child inherits the repository, not conversation context, and continues running after the parent responds. Returns a child ID; check status only when its result is needed.",
+    "Use this tool ONLY when the user's current request explicitly asks to create child sessions, isolated sandbox workers, or explicitly invokes a loaded workflow such as pstack swarm, arena, interrogate, or architect that requires child sessions. A workflow authorizes child sessions only when the user invokes it in the current request. DO NOT use it for generic 'sub-agent', 'subagent', 'sub-task', or Task tool requests; use the Task tool for those in-process delegations instead. Merely mentioning child sessions or having a workflow available does not authorize this tool. The child inherits the repository, not conversation context, and continues independently. Returns a child ID.",
   args: {
     title: z.string().describe("Short title describing the child session (shown in the UI)."),
     prompt: z

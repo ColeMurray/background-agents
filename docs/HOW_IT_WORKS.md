@@ -514,12 +514,15 @@ the parent session, verifies the direct parent-child relationship in D1, verifie
 child Durable Object, and attributes the queued prompt to the child owner with source `agent`.
 
 `send-child-prompt` returns after the prompt is durably queued. The parent calls `get-child-status`
-when it needs the follow-up result. An earlier completed response is labeled as such while newer
-child work is still running.
+for an ad hoc snapshot. Workflows that must aggregate several children in the same turn call
+`wait-for-children` with the exact child IDs. That tool backs off while the named children run, then
+returns every terminal response. Its timeout leaves children running and returns their current
+statuses; it never cancels them.
 
-The runtime tool is installed when a sandbox starts from a runtime image that includes it. A parent
-restored from a snapshot created before this capability shipped keeps the older captured runtime and
-will not see `send-child-prompt` until it starts in a fresh sandbox built from the newer runtime.
+The runtime tools are installed when a sandbox starts from a runtime image that includes them. A
+parent restored from a snapshot created before these capabilities shipped keeps the older captured
+runtime and will not see the newer tools until it starts in a fresh sandbox built from the newer
+runtime.
 
 ---
 

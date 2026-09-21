@@ -1,8 +1,7 @@
 """Open Inspect tools for the Claude harness, as one in-process SDK MCP server.
 
-These are the same seven tools OpenCode gets as ``.opencode/tool/*.js``
-plugins, ported over the same control-plane side channels
-(``/sessions/:id/children``, ``/pr``, ``/slack-notify``, ``/media``). They run
+These are the OpenInspect tools that OpenCode gets as `.opencode/tool/*.js` plugins, ported over the
+same control-plane side channels (`/sessions/:id/children`, `/pr`, `/slack-notify`, `/media`). They run
 inside the bridge process, so they see the bridge's environment rather than
 the child's clean one, and no credential has to reach the ``claude`` process
 for them to work.
@@ -10,6 +9,7 @@ for them to work.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import mimetypes
 import subprocess
@@ -43,6 +43,7 @@ _STATUS_LABELS: Final = {
     "cancelled": "CANCELLED",
     "archived": "DONE",
 }
+_INACTIVE_CHILD_STATUSES: Final = {"completed", "failed", "cancelled", "archived"}
 
 _SLACK_REASON_GUIDANCE: Final = {
     "feature_unavailable": "The deployment is not configured to send agent notifications. Tell the user this is unavailable.",
@@ -356,6 +357,87 @@ class OpenInspectTools:
             return _text_result(await self._list_children())
         except httpx.HTTPError as error:
             return _text_result(f"Failed to get child status: {error}")
+
+    async def wait_for_children(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        raw_child_ids = args.get("childIds")
+        if not isinstance(raw_child_ids, list) or not raw_child_ids:
+            return _text_result("childIds must contain at least one direct child session ID.")
+        child_ids = list(dict.fromkeys(str(child_id) for child_id in raw_child_ids))
+        timeout_seconds = int(args.get("timeoutSeconds") or 900)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        delay_seconds = 1.0
+
+        while True:
+            try:
+                response = await self.client.request("GET", "/children")
+            except httpx.HTTPError as error:
+                return _text_result(f"Failed to wait for child sessions: {error}")
+            if response.status_code >= 400:
+                return _text_result(
+                    f"Failed to list children: {_error_text(response)} "
+                    f"(HTTP {response.status_code})"
+                )
+
+            body = response.json()
+            raw_children = body.get("children") if isinstance(body, Mapping) else None
+            children = (
+                [child for child in raw_children if isinstance(child, Mapping)]
+                if isinstance(raw_children, list)
+                else []
+            )
+            children_by_id = {str(child.get("id")): child for child in children}
+            missing = [child_id for child_id in child_ids if child_id not in children_by_id]
+            if missing:
+                return _text_result(
+                    f"Cannot wait for unknown direct child session(s): {', '.join(missing)}"
+                )
+
+            active = [
+                child_id
+                for child_id in child_ids
+                if children_by_id[child_id].get("status") not in _INACTIVE_CHILD_STATUSES
+            ]
+            if not active:
+                try:
+                    details = await asyncio.gather(
+                        *(
+                            self._child_detail(child_id, {"includeResponse": True})
+                            for child_id in child_ids
+                        )
+                    )
+                except httpx.HTTPError as error:
+                    return _text_result(f"Failed to load child results: {error}")
+                return _text_result(
+                    "\n\n---\n\n".join(
+                        [
+                            f"All {len(child_ids)} child session(s) reached terminal states.",
+                            *details,
+                        ]
+                    )
+                )
+
+            remaining_seconds = deadline - loop.time()
+            if remaining_seconds <= 0:
+                statuses = [
+                    f"  [{_format_status(str(children_by_id[child_id].get('status') or 'unknown'))}] "
+                    f"{child_id}"
+                    for child_id in child_ids
+                ]
+                return _text_result(
+                    "\n".join(
+                        [
+                            f"Timed out after {timeout_seconds}s waiting for "
+                            f"{len(active)} child session(s).",
+                            *statuses,
+                            "Call wait-for-children again with the same IDs when their results "
+                            "are needed.",
+                        ]
+                    )
+                )
+
+            await asyncio.sleep(min(delay_seconds, remaining_seconds))
+            delay_seconds = min(delay_seconds * 2, 10.0)
 
     async def _list_children(self) -> str:
         response = await self.client.request("GET", "/children")
@@ -687,14 +769,14 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
     tools.append(
         tool(
             "spawn-child",
-            "Use this tool ONLY when the user's current request explicitly and affirmatively asks to "
-            "create a 'child session' or 'child sessions' in a separate sandbox. DO NOT use it for "
-            "'sub-agent', 'subagent', 'sub agent', 'sub-task', 'subtask', or Agent tool requests; use "
-            "the Agent tool for those in-process delegations instead. Merely mentioning, comparing, or "
-            "rejecting child sessions does not authorize this tool. Never infer permission or suggest "
-            "creating a child session. The child inherits the repository, not conversation context, "
-            "and continues running after the parent responds. Returns a child ID; check status only "
-            "when its result is needed.",
+            "Use this tool ONLY when the user's current request explicitly asks to create child "
+            "sessions, isolated sandbox workers, or explicitly invokes a loaded workflow such as "
+            "pstack swarm, arena, interrogate, or architect that requires child sessions. A workflow "
+            "authorizes child sessions only when the user invokes it in the current request. DO NOT "
+            "use it for generic 'sub-agent', 'subagent', 'sub-task', or Agent tool requests; use the "
+            "Agent tool for those in-process delegations instead. Merely mentioning child sessions "
+            "or having a workflow available does not authorize this tool. The child inherits the "
+            "repository, not conversation context, and continues independently. Returns a child ID.",
             {
                 "type": "object",
                 "properties": {
@@ -803,6 +885,36 @@ def build_tools(client: ControlPlaneToolClient) -> list[Any]:
                 },
             },
         )(handlers.get_child_status)
+    )
+    tools.append(
+        tool(
+            "wait-for-children",
+            "Wait for specific direct child sessions previously created with spawn-child, then "
+            "return their terminal statuses and final responses. Use this instead of repeatedly "
+            "polling get-child-status when a workflow must aggregate child results in the current "
+            "turn. It never cancels children.",
+            {
+                "type": "object",
+                "properties": {
+                    "childIds": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "uniqueItems": True,
+                        "description": "Direct child session IDs returned by spawn-child.",
+                    },
+                    "timeoutSeconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1800,
+                        "default": 900,
+                        "description": "Maximum seconds to wait.",
+                    },
+                },
+                "required": ["childIds"],
+            },
+        )(handlers.wait_for_children)
     )
     if config.has_repository:
         tools.append(

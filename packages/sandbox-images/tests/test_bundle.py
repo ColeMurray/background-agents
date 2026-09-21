@@ -111,6 +111,11 @@ def test_runtime_assets_are_packed_without_per_file_manifest(checkout, tmp_path)
     (checkout / skill).write_text("updated skill")
     packed = pack_bundle(checkout, "e2b", tmp_path / "bundles")
     assert (packed.directory / skill).read_text() == "updated skill"
+    for runtime_asset in (
+        "packages/sandbox-runtime/src/sandbox_runtime/skills/pstack/SKILL.md",
+        "packages/sandbox-runtime/src/sandbox_runtime/tools/wait-for-children.js",
+    ):
+        assert (packed.directory / runtime_asset).is_file()
     config = json.loads((packed.directory / "build-config.json").read_text())
     assert config == packed.plan
     assert set(config) == {"provider", "target", "runtimeVersion", "runtimeEnv", "buildHash"}
