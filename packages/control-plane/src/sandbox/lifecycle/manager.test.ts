@@ -201,7 +201,7 @@ function createCheckpointShutdown(
     alarm: createMockAlarmScheduler(),
     background: { submit: vi.fn((task: () => Promise<void>) => void task()) },
     onLifecycleChange: vi.fn(onLifecycleChange),
-    reconcileStatus: vi.fn(async () => {}),
+    reconcileStatusFromMessages: vi.fn(async () => {}),
     retireAccess: vi.fn(),
   } as never);
   return {

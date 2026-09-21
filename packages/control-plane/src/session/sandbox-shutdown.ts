@@ -46,7 +46,8 @@ interface ShutdownDependencies {
   background: BackgroundTasks;
   /** Notifies the lifecycle boundary to re-evaluate queued work under current policy. */
   onLifecycleChange(): Promise<void>;
-  reconcileStatus(): Promise<void>;
+  /** Re-derives session status after any interrupted message has been persisted. */
+  reconcileStatusFromMessages(): Promise<void>;
   retireAccess(): void;
   now?: () => number;
   log?: Logger;
@@ -625,7 +626,7 @@ export class SandboxShutdownCoordinator {
     this.publish(next);
     if (failure) this.deps.failures.deliver(failure);
     this.deps.messenger.broadcast({ type: "processing_status", isProcessing: false });
-    this.deps.background.submit(() => this.deps.reconcileStatus(), {
+    this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
       name: "sandbox.preservation_status",
     });
     await this.advance();

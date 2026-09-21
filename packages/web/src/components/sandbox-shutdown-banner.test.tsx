@@ -78,6 +78,23 @@ describe("SandboxShutdownBanner", () => {
     expect(screen.queryByRole("button", { name: "Resume queued work" })).not.toBeInTheDocument();
   });
 
+  it("does not expose the internal reason for a successful saved shutdown", () => {
+    render(
+      <Banner
+        shutdown={{
+          phase: "saved",
+          expiresAtMs: 2,
+          drainAtMs: 1,
+          reason: "inactivity_timeout",
+          hasRecoveryPoint: true,
+        }}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Sandbox saved and stopped");
+    expect(screen.getByRole("status")).not.toHaveTextContent("inactivity_timeout");
+  });
+
   it("clears the paused-continuation action when newer state no longer requires it", () => {
     const onRecover = acceptedRecovery();
     const { rerender } = render(

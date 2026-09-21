@@ -197,6 +197,7 @@ export interface SessionComponents {
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
   lifecycleManager: SandboxLifecycleManager;
+  shutdown: SandboxShutdownCoordinator;
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
@@ -448,7 +449,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // These closures are invoked only by later lifecycle work, after this
     // composition function has constructed and returned the complete graph.
     onLifecycleChange: () => messageQueue.processMessageQueue(),
-    reconcileStatus: () => statusService.reconcileAfterExecution(false),
+    reconcileStatusFromMessages: () => statusService.reconcileFromMessageState(),
     retireAccess: () => lifecycleManager.retireShutdownAccess(),
   });
   const lifecycleManager = createLifecycleManager({
@@ -954,6 +955,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     },
     userEnvResolver,
     lifecycleManager,
+    shutdown,
     messageQueue,
     presenceService,
     sandboxEventProcessor,
