@@ -111,6 +111,7 @@ function fixture(
     },
     session: {
       getSession: () => ({ id: "session-1", session_name: "shutdown-safety" }),
+      transaction: (callback: () => unknown) => callback(),
     },
     messages: { getProcessingMessage: () => null },
     failures: { record: vi.fn(), deliver: vi.fn() },
@@ -194,6 +195,48 @@ describe("sandbox shutdown safety", () => {
       expect(h.shutdown.admissionDecision()).toBe("held");
     }
   );
+
+  it("keeps an ordinary recovery point actionable after a later response is lost", async () => {
+    const takeSnapshot = vi
+      .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+      .mockResolvedValueOnce({
+        success: true,
+        imageId: "verified-ordinary-checkpoint",
+        sourceStopped: false,
+      })
+      .mockRejectedValueOnce(new Error("provider transport response lost"));
+    const h = fixture(runningRecord(), { takeSnapshot });
+
+    await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual({
+      outcome: "saved",
+      imageId: "verified-ordinary-checkpoint",
+      sourceStopped: false,
+    });
+    await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual({
+      outcome: "unknown",
+    });
+
+    expect(h.store.value).toMatchObject({
+      phase: "unknown",
+      sourceRetired: false,
+      receipt: { artifactId: "verified-ordinary-checkpoint" },
+    });
+    expect(h.shutdown.snapshot()).toMatchObject({
+      hasRecoveryPoint: true,
+      availableRecoveryActions: ["restore_saved"],
+    });
+    expect(h.shutdown.admissionDecision()).toBe("held");
+    expect(h.stopSandbox).not.toHaveBeenCalled();
+
+    await h.shutdown.recover("restore_saved");
+
+    expect(h.stopSandbox).toHaveBeenCalledOnce();
+    expect(h.store.value).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: { artifactId: "verified-ordinary-checkpoint" },
+    });
+  });
 
   it("projects legacy interrupted saved state as paused until explicit resume", async () => {
     const h = fixture(

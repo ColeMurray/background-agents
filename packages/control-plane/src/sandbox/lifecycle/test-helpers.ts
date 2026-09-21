@@ -221,9 +221,14 @@ export function createMockStorage(
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
     recordSandboxSnapshot: vi.fn(
-      (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {
+      (generation: SandboxGeneration, imageId: string, runtimeVersion: string | null) => {
         calls.push(`recordSandboxSnapshot:${imageId}:${runtimeVersion}`);
-        if (!sandbox || sandbox.modal_sandbox_id !== sandboxId) return false;
+        if (
+          !sandbox ||
+          sandbox.modal_sandbox_id !== generation.sandboxId ||
+          sandbox.created_at !== generation.createdAt
+        )
+          return false;
         sandbox.snapshot_image_id = imageId;
         sandbox.snapshot_runtime_version = runtimeVersion;
         return true;

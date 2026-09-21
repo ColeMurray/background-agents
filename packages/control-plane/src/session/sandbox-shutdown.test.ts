@@ -41,6 +41,8 @@ function fixture(providerValue = provider()) {
     modal_object_id: "provider-object-1" as string | null,
     created_at: GENERATION.createdAt,
     runtime_version: "runtime-1",
+    snapshot_image_id: null as string | null,
+    snapshot_runtime_version: null as string | null,
     status: "ready",
   };
   const deps = {
@@ -48,7 +50,17 @@ function fixture(providerValue = provider()) {
     provider: providerValue,
     sandbox: {
       getSandbox: vi.fn(() => sandboxRow),
-      recordSandboxSnapshot: vi.fn(() => calls.push("snapshot-recorded")),
+      recordSandboxSnapshot: vi.fn((generation, imageId, runtimeVersion) => {
+        calls.push("snapshot-recorded");
+        if (
+          sandboxRow.modal_sandbox_id !== generation.sandboxId ||
+          sandboxRow.created_at !== generation.createdAt
+        )
+          return false;
+        sandboxRow.snapshot_image_id = imageId;
+        sandboxRow.snapshot_runtime_version = runtimeVersion;
+        return true;
+      }),
       updateSandboxStatus: vi.fn(() => calls.push("sandbox-stopped")),
       transitionSandboxStatus: vi.fn((_generation, from, to) => {
         if (sandboxRow.status !== from) return false;
@@ -359,6 +371,11 @@ describe("SandboxShutdownCoordinator", () => {
 
     resolve({ success: true, imageId: "checkpoint-image" });
     await expect(checkpoint).resolves.toMatchObject({ outcome: "saved" });
+    expect(f.store.value).toMatchObject({
+      phase: "draining",
+      sourceRetired: false,
+      receipt: { kind: "snapshot", artifactId: "checkpoint-image" },
+    });
     await f.backgroundTasks.at(-1)!();
     expect(f.deps.sockets.send).toHaveBeenCalledWith(
       expect.anything(),
@@ -424,13 +441,60 @@ describe("SandboxShutdownCoordinator", () => {
     );
     await readyWithoutDeadline(f);
     const oldCapture = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
-    const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
+    const replacement = { sandboxId: GENERATION.sandboxId, createdAt: 2_000 };
     f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
     f.sandboxRow.created_at = replacement.createdAt;
     reserveGeneration(f, replacement, "legacy");
     resolve({ success: true, imageId: "late-image" });
     await expect(oldCapture).resolves.toEqual({ outcome: "unknown" });
     expect(f.store.value).toMatchObject({ generation: replacement });
+  });
+
+  it("replaces an older final receipt with a newer ordinary checkpoint", async () => {
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({
+          success: true,
+          imageId: "new-checkpoint",
+          sourceStopped: false,
+        })),
+      })
+    );
+    await readyWithoutDeadline(f);
+    f.store.write({
+      ...f.store.value!,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "old-final-snapshot",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: "old-runtime",
+      },
+      savedAtMs: 50_000,
+    });
+
+    await expect(f.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual({
+      outcome: "saved",
+      imageId: "new-checkpoint",
+      sourceStopped: false,
+    });
+
+    expect(f.store.value).toMatchObject({
+      phase: "running",
+      sourceRetired: false,
+      savedAtMs: 100_000,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "new-checkpoint",
+        runtimeVersion: "runtime-1",
+      },
+    });
+    expect(f.sandboxRow).toMatchObject({
+      snapshot_image_id: "new-checkpoint",
+      snapshot_runtime_version: "runtime-1",
+    });
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    expect(restarted.snapshot()).toMatchObject({ hasRecoveryPoint: true, savedAtMs: 100_000 });
   });
 
   it("settles the active message once when duplicate shutdown requests race", async () => {
@@ -546,8 +610,8 @@ describe("SandboxShutdownCoordinator", () => {
       phase: "saved",
       receipt: { kind: "snapshot", artifactId: "image-1", provider: "modal" },
     });
-    expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("snapshot-recorded"));
-    expect(f.calls.indexOf("snapshot-recorded")).toBeLessThan(f.calls.indexOf("provider-stop"));
+    expect(f.calls.indexOf("snapshot-recorded")).toBeLessThan(f.calls.indexOf("phase:retiring"));
+    expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("provider-stop"));
     expect(f.calls).toContain("access-retired");
   });
 

@@ -24,7 +24,11 @@ import type { MessageRepository } from "./message-repository";
 import type { MessageFailureService } from "./message-failure-service";
 import type { SessionMessenger } from "./messenger";
 import type { SessionWebSocketManager } from "./websocket-manager";
-import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
+import type {
+  ShutdownRecord,
+  ShutdownRecoveryReceipt,
+  ShutdownStore,
+} from "./sandbox-shutdown-repository";
 
 const STOP_MS = 60_000;
 const CAPTURE_MS = 300_000;
@@ -449,6 +453,60 @@ export class SandboxShutdownCoordinator {
     );
   }
 
+  /** Atomically records a provider-verified recovery point for its owning operation. */
+  private recordVerifiedRecoveryPoint(
+    owner: { kind: "checkpoint" | "shutdown"; operationId: string },
+    generation: SandboxGeneration,
+    providerObjectId: string,
+    artifact: Pick<ShutdownRecoveryReceipt, "kind" | "artifactId" | "runtimeVersion">
+  ): ShutdownRecord | null {
+    const savedAtMs = this.now();
+    const receipt: ShutdownRecoveryReceipt = {
+      ...artifact,
+      provider: this.deps.provider.name,
+      savedAtMs,
+    };
+    let committed: ShutdownRecord | null = null;
+    this.deps.session.transaction(() => {
+      const state = this.deps.store.read();
+      const row = this.deps.sandbox.getSandbox();
+      const ownsOperation =
+        owner.kind === "checkpoint"
+          ? this.checkpointOperationId === owner.operationId &&
+            state?.checkpointInFlight === true &&
+            (state.phase === "running" || state.phase === "draining")
+          : state?.operationId === owner.operationId && state.phase === "capturing";
+      if (
+        !state ||
+        !ownsOperation ||
+        !this.matches(state, generation) ||
+        row?.modal_sandbox_id !== generation.sandboxId ||
+        row.created_at !== generation.createdAt ||
+        row.modal_object_id !== providerObjectId ||
+        (state.provider ?? this.deps.provider.name) !== this.deps.provider.name ||
+        state.providerObjectId !== providerObjectId
+      )
+        return;
+      if (
+        receipt.kind === "snapshot" &&
+        !this.deps.sandbox.recordSandboxSnapshot(
+          generation,
+          receipt.artifactId,
+          receipt.runtimeVersion
+        )
+      )
+        return;
+      committed = {
+        ...state,
+        phase: owner.kind === "shutdown" ? "retiring" : state.phase,
+        receipt,
+        savedAtMs,
+      };
+      this.deps.store.write(committed);
+    });
+    return committed;
+  }
+
   /** Owns an ordinary capture from admission through durable outcome classification. */
   async captureCheckpoint(
     generation: SandboxGeneration,
@@ -521,20 +579,17 @@ export class SandboxShutdownCoordinator {
         reason,
         deadlineAtMs
       );
-      const current = this.deps.sandbox.getSandbox();
-      if (
-        this.checkpointOperationId !== id ||
-        current?.modal_sandbox_id !== checkpointGeneration.sandboxId ||
-        current.created_at !== checkpointGeneration.createdAt ||
-        !this.deps.sandbox.recordSandboxSnapshot(
-          checkpointGeneration.sandboxId,
-          result.imageId,
-          row.runtime_version
-        )
-      ) {
+      const committed = this.recordVerifiedRecoveryPoint(
+        { kind: "checkpoint", operationId: id },
+        checkpointGeneration,
+        row.modal_object_id,
+        { kind: "snapshot", artifactId: result.imageId, runtimeVersion: row.runtime_version }
+      );
+      if (!committed) {
         this.endCheckpoint(id, true);
         return { outcome: "unknown" };
       }
+      this.announce(committed);
       this.deps.messenger.broadcast({ type: "snapshot_saved", imageId: result.imageId, reason });
       if (result.sourceStopped) {
         this.deps.sandbox.updateSandboxStatus("stopped");
@@ -781,27 +836,18 @@ export class SandboxShutdownCoordinator {
         artifactId = result.imageId;
         sourceStopped = result.sourceStopped;
       }
-      if (!this.owns(capturing)) return;
-      const receipt = {
-        kind: retained ? ("retained" as const) : ("snapshot" as const),
-        artifactId,
-        provider: provider.name,
-        savedAtMs: this.now(),
-        runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
-      };
-      const retiring: ShutdownRecord = {
-        ...capturing,
-        phase: "retiring",
-        receipt,
-        savedAtMs: receipt.savedAtMs,
-      };
-      this.publish(retiring); // Commit recovery locator BEFORE separately retiring the source.
-      if (!retained)
-        this.deps.sandbox.recordSandboxSnapshot(
-          state.generation.sandboxId,
+      const retiring = this.recordVerifiedRecoveryPoint(
+        { kind: "shutdown", operationId: state.operationId! },
+        state.generation,
+        state.providerObjectId,
+        {
+          kind: retained ? "retained" : "snapshot",
           artifactId,
-          receipt.runtimeVersion
-        );
+          runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
+        }
+      );
+      if (!retiring) return;
+      this.announce(retiring);
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
     } catch (error) {

@@ -291,25 +291,29 @@ describe("SandboxRepository", () => {
 
   describe("recordSandboxSnapshot", () => {
     const query = `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
-       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`;
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`;
+    const generation = { sandboxId: "modal-sb-1", createdAt: 1_000 };
 
     it("stamps the snapshot with the runtime that produced it, for the sandbox it was taken of", () => {
       mock.setRowsWritten(query, 1);
 
-      expect(repository.recordSandboxSnapshot("modal-sb-1", "img-123", "v59-runtime")).toBe(true);
+      expect(repository.recordSandboxSnapshot(generation, "img-123", "v59-runtime")).toBe(true);
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(query);
-      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "modal-sb-1", 1_000]);
     });
 
     it("records a null runtime when the sandbox never reported one", () => {
-      repository.recordSandboxSnapshot("modal-sb-1", "img-123", null);
+      repository.recordSandboxSnapshot(generation, "img-123", null);
 
-      expect(mock.calls[0].params).toEqual(["img-123", null, "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["img-123", null, "modal-sb-1", 1_000]);
     });
 
-    it("reports a replaced sandbox instead of stamping its successor", () => {
-      expect(repository.recordSandboxSnapshot("modal-sb-old", "img-123", null)).toBe(false);
+    it("reports a replaced sandbox generation instead of stamping its successor", () => {
+      expect(
+        repository.recordSandboxSnapshot({ ...generation, createdAt: 2_000 }, "img-123", null)
+      ).toBe(false);
     });
   });
 

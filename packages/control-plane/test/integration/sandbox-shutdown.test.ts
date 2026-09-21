@@ -589,6 +589,7 @@ describe("sandbox graceful shutdown wiring", () => {
         sandbox,
         session: {
           getSession: () => ({ id: "session-1", session_name: "legacy-session" }),
+          transaction: <T>(callback: () => T) => durableState.storage.transactionSync(callback),
         },
         messenger: { broadcast: () => undefined },
         background: {
@@ -633,6 +634,97 @@ describe("sandbox graceful shutdown wiring", () => {
         "SELECT snapshot_image_id FROM sandbox"
       )
     ).toEqual([{ snapshot_image_id: "legacy-vercel-snapshot" }]);
+    expect(await readShutdown(stub)).toMatchObject({
+      phase: "running",
+      sourceRetired: false,
+      receipt: { kind: "snapshot", artifactId: "legacy-vercel-snapshot" },
+    });
+  });
+
+  it("recovers an ordinary checkpoint after a later capture response is lost", async () => {
+    const { stub } = await initNamedSession(`shutdown-ordinary-recovery-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    await runInSessionDO(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, runtime_version = ?",
+        "provider-current",
+        "v72-runtime"
+      );
+    });
+    const generation = await seedShutdown(stub, {
+      provider: "modal",
+      providerObjectId: "provider-current",
+      sourceRetired: false,
+      lifetimeKind: "none",
+      expiresAtMs: null,
+      drainAtMs: null,
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "legacy",
+    });
+
+    const result = await runInSessionDO(stub, async (instance, durableState) => {
+      const takeSnapshot = vi
+        .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+        .mockResolvedValueOnce({
+          success: true,
+          imageId: "verified-ordinary-checkpoint",
+          sourceStopped: false,
+        })
+        .mockRejectedValueOnce(new Error("provider response lost"));
+      const stopSandbox = vi.fn(async () => ({ success: true as const }));
+      const provider: SandboxProvider = {
+        name: "modal",
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: true,
+          supportsRestore: true,
+          supportsExplicitStop: true,
+          supportsPersistentResume: false,
+        },
+        createSandbox: async () => {
+          throw new Error("not used by ordinary recovery regression");
+        },
+        takeSnapshot,
+        stopSandbox,
+      };
+      const first = realLifecycleHarness(instance, durableState, provider);
+      const saved = await first.shutdown.captureCheckpoint(generation, "execution_complete");
+      const unknown = await first.shutdown.captureCheckpoint(generation, "execution_complete");
+      const beforeRestart = first.shutdown.snapshot();
+
+      const restarted = realLifecycleHarness(instance, durableState, provider).shutdown;
+      const afterRestart = restarted.snapshot();
+      await restarted.recover("restore_saved");
+      return {
+        saved,
+        unknown,
+        beforeRestart,
+        afterRestart,
+        stopCalls: stopSandbox.mock.calls.length,
+      };
+    });
+
+    expect(result).toMatchObject({
+      saved: { outcome: "saved", imageId: "verified-ordinary-checkpoint" },
+      unknown: { outcome: "unknown" },
+      beforeRestart: {
+        phase: "unknown",
+        hasRecoveryPoint: true,
+        availableRecoveryActions: ["restore_saved"],
+      },
+      afterRestart: {
+        phase: "unknown",
+        hasRecoveryPoint: true,
+        availableRecoveryActions: ["restore_saved"],
+      },
+      stopCalls: 1,
+    });
+    expect(await readShutdown(stub)).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: { artifactId: "verified-ordinary-checkpoint" },
+    });
   });
 
   it("holds queued work until a versioned runtime acknowledges its sandbox generation", async () => {
