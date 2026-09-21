@@ -119,7 +119,7 @@ describe("processSlackCompletion", () => {
       .mockResolvedValueOnce(Response.json({ ok: true, channel: "C123", ts: "333.444" }))
       .mockResolvedValueOnce(Response.json({ ok: true }));
 
-    await processSlackCompletion(job(), makeEnv());
+    await expect(processSlackCompletion(job(), makeEnv())).resolves.toBe(true);
 
     expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -135,12 +135,28 @@ describe("processSlackCompletion", () => {
       .mockResolvedValueOnce(Response.json({ ok: true, channel: "C123", ts: "333.444" }))
       .mockResolvedValueOnce(Response.json({ ok: true }));
 
-    await processSlackCompletion(job(), makeEnv());
+    await expect(processSlackCompletion(job(), makeEnv())).resolves.toBe(true);
 
     const request = fetchMock.mock.calls[0]?.[1];
     const body = JSON.parse(String(request?.body)) as Record<string, unknown>;
     expect(body).not.toHaveProperty("text");
     expect(body.blocks).toBeDefined();
+  });
+
+  it("uses the stable message id to deduplicate the terminal Slack post", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      ...successfulAgentResponse(),
+      mediaArtifacts: [],
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ ok: true, channel: "C123", ts: "333.444" }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    await processSlackCompletion(job({ messageId: "00112233445566778899aabbccddeeff" }), makeEnv());
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.client_msg_id).toBe("00112233-4455-4677-8899-aabbccddeeff");
   });
 
   it("skips media when the ordinary completion post fails", async () => {
@@ -150,7 +166,7 @@ describe("processSlackCompletion", () => {
       .mockResolvedValueOnce(Response.json({ ok: false, error: "channel_not_found" }))
       .mockResolvedValueOnce(Response.json({ ok: true }));
 
-    await processSlackCompletion(job(), makeEnv());
+    await expect(processSlackCompletion(job(), makeEnv())).resolves.toBe(false);
 
     expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("reactions.remove");
@@ -160,7 +176,7 @@ describe("processSlackCompletion", () => {
     vi.mocked(extractAgentResponse).mockRejectedValue(new Error("control plane unavailable"));
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true }));
 
-    await expect(processSlackCompletion(job(), makeEnv())).resolves.toBeUndefined();
+    await expect(processSlackCompletion(job(), makeEnv())).resolves.toBe(false);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("reactions.remove");

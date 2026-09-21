@@ -3,13 +3,18 @@
  */
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
+import type { KeyValueStore } from "@open-inspect/shared/cache-store";
+
+interface AutofixQueue {
+  send(message: GitHubAutofixEnvelope): Promise<unknown>;
+}
 
 export interface Env {
   /** KV namespace for deduplicating webhook deliveries. */
-  GITHUB_KV: KVNamespace;
+  GITHUB_KV: KeyValueStore;
 
   /** Durable handoff for pull request feedback that may trigger Autofix. */
-  AUTOFIX_QUEUE: Queue<GitHubAutofixEnvelope>;
+  AUTOFIX_QUEUE: AutofixQueue;
 
   /** Service binding to the control plane worker. */
   CONTROL_PLANE: ControlPlaneFetcher;

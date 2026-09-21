@@ -22,6 +22,7 @@ import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
 import { rejectInvalidCallback } from "./callbacks/reject-invalid-callback";
+import { createLinearCompletionJob } from "./completion/job";
 
 const log = createLogger("callback");
 
@@ -70,7 +71,20 @@ callbacksRouter.post("/complete", async (c) => {
   });
   if (rejection) return rejection;
 
-  c.executionCtx.waitUntil(handleCompletionCallback(payload, c.env, traceId));
+  if (c.env.LINEAR_COMPLETION_QUEUE) {
+    try {
+      await c.env.LINEAR_COMPLETION_QUEUE.send(createLinearCompletionJob(payload));
+    } catch (error) {
+      log.error("callback.complete_enqueue", {
+        trace_id: traceId,
+        session_id: payload.sessionId,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return c.json({ error: "completion enqueue failed" }, 503);
+    }
+  } else {
+    c.executionCtx.waitUntil(processLinearCompletion(payload, c.env, traceId));
+  }
 
   return c.json({ ok: true });
 });
@@ -224,11 +238,11 @@ callbacksRouter.post("/tool_call", async (c) => {
 
 // ─── Completion Callback ─────────────────────────────────────────────────────
 
-async function handleCompletionCallback(
-  payload: LinearCompletionCallback,
+export async function processLinearCompletion(
+  payload: Omit<LinearCompletionCallback, "signature">,
   env: Env,
   traceId?: string
-): Promise<void> {
+): Promise<boolean> {
   const startTime = Date.now();
   const { sessionId, context } = payload;
 
@@ -272,22 +286,32 @@ async function handleCompletionCallback(
             delivery_outcome: "error",
             duration_ms: Date.now() - startTime,
           });
-          return;
+          return false;
         }
 
-        // Update plan to completed/failed
-        await updateAgentSession(client, context.agentSessionId, {
-          plan: makePlan(payload.success ? "completed" : "failed"),
-        });
+        try {
+          await updateAgentSession(client, context.agentSessionId, {
+            plan: makePlan(payload.success ? "completed" : "failed"),
+          });
 
-        // Update externalUrls with PR link if available
-        const prArtifact = agentResponse.artifacts.find((a) => a.type === "pr" && a.url);
-        if (prArtifact) {
-          const urls = [
-            { label: "View Session", url: `${env.WEB_APP_URL}/session/${sessionId}` },
-            { label: "Pull Request", url: prArtifact.url },
-          ];
-          await updateAgentSession(client, context.agentSessionId, { externalUrls: urls });
+          const prArtifact = agentResponse.artifacts.find((a) => a.type === "pr" && a.url);
+          if (prArtifact) {
+            await updateAgentSession(client, context.agentSessionId, {
+              externalUrls: [
+                { label: "View Session", url: `${env.WEB_APP_URL}/session/${sessionId}` },
+                { label: "Pull Request", url: prArtifact.url },
+              ],
+            });
+          }
+        } catch (error) {
+          // The terminal activity already landed. Do not duplicate it just to
+          // retry optional plan or link decoration.
+          log.warn("callback.complete_metadata", {
+            trace_id: traceId,
+            session_id: sessionId,
+            agent_session_id: context.agentSessionId,
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
         }
 
         log.info("callback.complete", {
@@ -305,7 +329,7 @@ async function handleCompletionCallback(
           delivery_outcome: "success",
           duration_ms: Date.now() - startTime,
         });
-        return;
+        return true;
       }
       log.warn("callback.no_oauth_token", {
         trace_id: traceId,
@@ -321,7 +345,7 @@ async function handleCompletionCallback(
         issue_id: context.issueId,
         message: "LINEAR_API_KEY not configured, cannot post fallback comment",
       });
-      return;
+      return false;
     }
 
     const commentBody = formatCompletionComment(resolveAppName(env), payload.success, message);
@@ -338,6 +362,7 @@ async function handleCompletionCallback(
       delivery_outcome: result.success ? "success" : "error",
       duration_ms: Date.now() - startTime,
     });
+    return result.success;
   } catch (error) {
     log.error("callback.complete", {
       trace_id: traceId,
@@ -347,5 +372,6 @@ async function handleCompletionCallback(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
+    return false;
   }
 }

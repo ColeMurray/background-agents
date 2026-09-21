@@ -8,7 +8,7 @@ const slackCompletionContextSchema = z.object({
 
 export const slackCompletionJobSchema = z.object({
   version: z.literal(1),
-  deliveryId: z.string().uuid(),
+  deliveryId: z.string().min(1),
   source: z.enum(["session", "automation"]),
   sessionId: z.string().min(1),
   messageId: z.string().min(1),
@@ -28,7 +28,7 @@ type SlackCompletionJobInput = Omit<SlackCompletionJob, "version" | "deliveryId"
 export function createSlackCompletionJob(input: SlackCompletionJobInput): SlackCompletionJob {
   return {
     version: 1,
-    deliveryId: crypto.randomUUID(),
+    deliveryId: `slack:${input.sessionId}:${input.messageId}`,
     ...input,
   };
 }

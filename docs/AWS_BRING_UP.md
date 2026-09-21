@@ -122,8 +122,8 @@ put() { # value on stdin
 
 ### The whole inventory
 
-Sixteen keys. The first five are the only ones the host refuses to start without; the rest disable a
-feature when unset rather than blocking a boot.
+Twenty-three keys. The first five are the only ones the host refuses to start without; the rest
+disable a feature when unset rather than blocking a boot.
 
 ```bash
 # Required at boot. 32 bytes each, rejected at any other length. Generate once
@@ -134,9 +134,9 @@ openssl rand -base64 32 | put REPO_SECRETS_ENCRYPTION_KEY
 openssl rand -base64 32 | put BROWSER_AUTH_SECRET
 openssl rand -base64 32 | put IMAGE_CALLBACK_TOKEN_PEPPER
 
-# Service-to-service signing keys, one per caller. Set the ones you run; the
-# others stay unset, which is a refusal rather than a weak key. The web app's
-# own SERVICE_AUTH_SECRET must equal SERVICE_AUTH_SECRET_WEB.
+# Callback signing keys, one per caller. Set the ones you run; the others stay
+# unset, which is a refusal rather than a weak key. The web app's own
+# SERVICE_AUTH_SECRET must equal SERVICE_AUTH_SECRET_WEB.
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_WEB
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_SLACK_BOT
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_GITHUB_BOT
@@ -156,6 +156,15 @@ printf '....'     | put GITHUB_CLIENT_SECRET
 
 # Models.
 printf 'sk-ant-....' | put ANTHROPIC_API_KEY
+printf 'sk-....'     | put OPENAI_API_KEY
+
+# Co-located integrations. Set only the providers this deployment uses.
+printf 'xoxb-....' | put SLACK_BOT_TOKEN
+printf '....'      | put SLACK_SIGNING_SECRET
+printf '....'      | put GITHUB_WEBHOOK_SECRET
+printf '....'      | put LINEAR_CLIENT_SECRET
+printf '....'      | put LINEAR_WEBHOOK_SECRET
+printf '....'      | put LINEAR_API_KEY
 ```
 
 **The GitHub App private key has to be on one line.** `.env` is one assignment per line, so a PEM
@@ -177,9 +186,9 @@ files, and as the app's environment — and both readers expand `$VAR` and strip
 comment from an unquoted value, so every value is written single-quoted, which is the one form that
 cannot contain its own quote. The instance rejects such a value rather than corrupting it.
 
-Non-secret values — access-control lists, `WEB_APP_URL`, the sandbox provider's non-secret settings
-— go in the `config` map in `terraform.tfvars`, not here. **Anything in that map lands in the state
-file**, so nothing secret belongs in it.
+Non-secret values — access-control lists, `WEB_APP_URL`, `LINEAR_CLIENT_ID`, and the sandbox
+provider's non-secret settings — go in the `config` map in `terraform.tfvars`, not here. **Anything
+in that map lands in the state file**, so nothing secret belongs in it.
 
 Adding a key the module does not know about — another provider's token — means adding it to the
 `secret_names` variable, which replaces the inventory rather than extending it. Removing a name from

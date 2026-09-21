@@ -19,6 +19,13 @@ export const NO_REPLY_SENTINEL = "NO_REPLY";
 /** Tolerates the trailing period a model tends to add to a bare sentinel. */
 const NO_REPLY_PATTERN = new RegExp(`^${NO_REPLY_SENTINEL}\\.?$`, "i");
 
+/** Format the control plane's 128-bit message id as Slack's UUID idempotency key. */
+function clientMessageId(messageId: string): string | undefined {
+  if (!/^[0-9a-f]{32}$/i.test(messageId)) return undefined;
+  const variant = ((parseInt(messageId[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${messageId.slice(0, 8)}-${messageId.slice(8, 12)}-4${messageId.slice(13, 16)}-${variant}${messageId.slice(17, 20)}-${messageId.slice(20)}`;
+}
+
 /**
  * Whether a finished run has declined to say anything in Slack.
  *
@@ -48,7 +55,7 @@ export function shouldDeclineReply(
   return text === "" || NO_REPLY_PATTERN.test(text);
 }
 
-export async function processSlackCompletion(job: SlackCompletionJob, env: Env): Promise<void> {
+export async function processSlackCompletion(job: SlackCompletionJob, env: Env): Promise<boolean> {
   const startTime = Date.now();
   const base = {
     trace_id: job.traceId,
@@ -77,27 +84,33 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         agent_error: agentResponse.error || "Unknown error",
         duration_ms: Date.now() - startTime,
       });
-      await postMessage(env.SLACK_BOT_TOKEN, job.channel, `The agent failed: ${displayError}`, {
-        thread_ts: job.threadTs,
-        blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: `:x: *Agent failed:* ${displayError}` },
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: { type: "plain_text", text: "View Session" },
-                url: `${env.WEB_APP_URL}/session/${job.sessionId}`,
-                action_id: "view_session",
-              },
-            ],
-          },
-        ],
-      });
-      return;
+      const postResult = await postMessage(
+        env.SLACK_BOT_TOKEN,
+        job.channel,
+        `The agent failed: ${displayError}`,
+        {
+          thread_ts: job.threadTs,
+          client_msg_id: clientMessageId(job.messageId),
+          blocks: [
+            {
+              type: "section",
+              text: { type: "mrkdwn", text: `:x: *Agent failed:* ${displayError}` },
+            },
+            {
+              type: "actions",
+              elements: [
+                {
+                  type: "button",
+                  text: { type: "plain_text", text: "View Session" },
+                  url: `${env.WEB_APP_URL}/session/${job.sessionId}`,
+                  action_id: "view_session",
+                },
+              ],
+            },
+          ],
+        }
+      );
+      return postResult.ok;
     }
 
     if (shouldDeclineReply(job, agentResponse)) {
@@ -109,7 +122,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         tool_call_count: agentResponse.toolCalls.length,
         duration_ms: Date.now() - startTime,
       });
-      return;
+      return true;
     }
 
     const blocks = buildCompletionBlocks(
@@ -127,6 +140,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
     // Without top-level text, Slack derives screen-reader text from the blocks.
     const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
       thread_ts: job.threadTs,
+      client_msg_id: clientMessageId(job.messageId),
     });
     if (!postResult.ok) {
       log.warn("slack.completion.post", {
@@ -136,7 +150,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
         retry_after: postResult.retryAfter,
       });
       // A network error can be ambiguous; replaying the job may duplicate a Slack completion.
-      return;
+      return false;
     }
 
     const mediaArtifacts = agentResponse.mediaArtifacts ?? [];
@@ -171,6 +185,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       has_text: Boolean(agentResponse.textContent),
       duration_ms: Date.now() - startTime,
     });
+    return true;
   } catch (error) {
     log.error("callback.complete", {
       ...base,
@@ -178,6 +193,7 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
+    return false;
   } finally {
     if (job.reactionMessageTs) {
       await clearThinkingReaction(env, job.channel, job.reactionMessageTs, job.traceId);

@@ -3,17 +3,24 @@
  */
 
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import type { KeyValueStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
+import type { LinearCompletionJob } from "./completion/job";
+
+interface LinearCompletionQueue {
+  send(message: LinearCompletionJob): Promise<unknown>;
+}
 
 /**
  * Cloudflare Worker environment bindings.
  */
 export interface Env {
   // KV namespace for config, runtime-token cache, and issue-to-session mapping
-  LINEAR_KV: KVNamespace;
+  LINEAR_KV: KeyValueStore;
 
   // Service binding to control plane
   CONTROL_PLANE: ControlPlaneFetcher;
+  LINEAR_COMPLETION_QUEUE?: LinearCompletionQueue;
 
   // Environment variables
   DEPLOYMENT_NAME: string;

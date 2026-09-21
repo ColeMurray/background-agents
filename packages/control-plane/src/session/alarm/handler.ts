@@ -6,6 +6,7 @@ import type { SessionMessageQueue } from "../message-queue";
 import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
+import type { CallbackNotificationService } from "../callback-notification-service";
 
 export interface AlarmHandlerDeps {
   preserveBeforeWatchdogs?: () => Promise<"continue" | "hold_watchdogs">;
@@ -17,6 +18,7 @@ export interface AlarmHandlerDeps {
   >;
   lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
+  terminalCallbacks: Pick<CallbackNotificationService, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
@@ -42,16 +44,23 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       // Graceful shutdown must not wait behind a remote index projection or a
       // generic stop timeout. Recheck below if projection I/O crosses D.
       await deps.preserveBeforeWatchdogs?.();
-      let projectionFailure: { error: unknown } | undefined;
+      let deferredFailure: { error: unknown } | undefined;
       try {
         await deps.terminalMessageProjection.flushPending();
       } catch (error) {
         // A malformed unread projection must not prevent lifecycle recovery.
         // Rethrow after recovery so transient storage failures still retry.
-        projectionFailure = { error };
+        deferredFailure = { error };
+      }
+      try {
+        await deps.terminalCallbacks.flushPending();
+      } catch (error) {
+        // Callback recovery is independent of the unread projection and the
+        // lifecycle watchdogs. Preserve the first failure for the alarm retry.
+        deferredFailure ??= { error };
       }
       if ((await deps.preserveBeforeWatchdogs?.()) === "hold_watchdogs") {
-        if (projectionFailure) throw projectionFailure.error;
+        if (deferredFailure) throw deferredFailure.error;
         return;
       }
       await deps.executionStop.recoverStopConfirmationTimeout();
@@ -104,7 +113,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // sees, and nothing re-drives it onto a fresh sandbox.
         await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
       }
-      if (projectionFailure) throw projectionFailure.error;
+      if (deferredFailure) throw deferredFailure.error;
     },
   };
 }

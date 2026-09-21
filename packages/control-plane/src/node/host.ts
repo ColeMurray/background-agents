@@ -30,6 +30,8 @@ import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { SessionIndexStore } from "../db/session-index";
 import { SqlCacheStore } from "../db/sql-cache-store";
+import { SqlKeyValueStore } from "../db/sql-key-value-store";
+import { prefixKeyValueStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "../db/sql-database";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 import { createLogger, parseLogLevel, type Logger } from "../logger";
@@ -60,6 +62,8 @@ import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { createFileSessionStoreProvider } from "./session-store";
 import { openNodeSqlDatabase } from "./sqlite-database";
 import { createSessionUpgradeHandler, MAX_MESSAGE_BYTES } from "./websocket-upgrade";
+import { attachIntegrationClients, handleIntegrationHttp } from "../integrations/http";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 
 /** The global store's file inside the data directory. */
 export const GLOBAL_STORE_FILE = "global.db";
@@ -150,9 +154,18 @@ async function boot(
   const migrationsApplied = await countMigrations(db);
 
   const cacheDb = ownStore(openNodeCacheDatabase(settings.dataDir, log));
+  const cache = new SqlCacheStore(cacheDb);
+  const integrationState = new SqlKeyValueStore(db);
 
+  const controlPlane: ControlPlaneFetcher = {
+    fetch: (input, init) => Promise.resolve(app.fetch(new Request(input, init), env)),
+  };
   const jobStore = ownStore(openJobStore(settings.dataDir));
-  const jobs = new NodeJobs({ store: jobStore, deps: () => ({ env, db, log }), log });
+  const jobs = new NodeJobs({
+    store: jobStore,
+    deps: () => ({ env, db, log, controlPlane }),
+    log,
+  });
 
   const alarmIndex = ownStore(openHostAlarmIndex(settings.dataDir));
   // Before anything can arm a deadline: a stop that left no clean marker may
@@ -190,7 +203,10 @@ async function boot(
   const platform: Platform = {
     DB: db,
     SESSION: createNodeSessionRuntimeDispatch(registry),
-    REPOS_CACHE: new SqlCacheStore(cacheDb),
+    REPOS_CACHE: cache,
+    SLACK_KV: prefixKeyValueStore(integrationState, "slack"),
+    LINEAR_KV: prefixKeyValueStore(integrationState, "linear"),
+    GITHUB_KV: prefixKeyValueStore(integrationState, "github"),
     MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
     JOBS: jobs,
   };
@@ -199,6 +215,14 @@ async function boot(
   const processTasks = createNodeBackgroundTasks(log);
   const host: ControlPlaneHost = { backgroundTasks: () => processTasks };
   const app = createControlPlaneApp(options.routes ?? catalog, host);
+  const integrationExecutionContext = {
+    waitUntil(promise: Promise<unknown>): void {
+      processTasks.submit(() => promise, { name: "integration.request" });
+    },
+    passThroughOnException(): void {},
+    props: {},
+  };
+  attachIntegrationClients(env, integrationExecutionContext, controlPlane);
   const webSocketServer = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const upgrade = createSessionUpgradeHandler({ db, runtimes: registry, log, webSocketServer });
   const cron = new CronLoop({
@@ -234,7 +258,9 @@ async function boot(
     jobs: { poller: clocksRunning ? "running" : "stopped", ...jobs.stats() },
   });
   const http = createNodeHttpServer({
-    fetch: (request) => Promise.resolve(app.fetch(request, env)),
+    fetch: async (request) =>
+      (await handleIntegrationHttp(request, env, integrationExecutionContext, controlPlane)) ??
+      app.fetch(request, env),
     upgrade,
     health,
     log,

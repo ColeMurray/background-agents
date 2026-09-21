@@ -244,16 +244,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const attachmentRepository = new SessionAttachmentRepository(sql);
   const artifactRepository = new ArtifactRepository(sql);
   const eventRepository = new EventRepository(sql, transaction);
+  const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
   const messageRepository = new MessageRepository(
     sql,
     transaction,
     attachmentRepository,
-    eventRepository
+    eventRepository,
+    alarmDeadlines
   );
   const participantRepository = new ParticipantRepository(sql);
   const wsClientMappingRepository = new WsClientMappingRepository(sql);
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
-  const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
   const terminalMessageProjectionStore = new PersistedTerminalMessageProjectionStore(sql);
 
   // Secrets-at-rest encryption is not optional. Every consumer below takes
@@ -381,6 +382,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageRepository,
     env,
     completeAutomationRun: (completion) => scheduler.runComplete(completion),
+    alarmScheduler,
     log,
     getSessionId: () => resolvePublicSessionId(sessionCoreRepository.getSession(), durableObjectId),
   });
@@ -609,6 +611,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     lifecycleManager,
     terminalMessageProjection,
+    terminalCallbacks: callbackService,
     alarmScheduler,
     getExecutionTimeoutMs,
     now: () => Date.now(),

@@ -26,7 +26,7 @@ function createMockKV() {
 
 function makeEnv(): Env {
   return {
-    SLACK_KV: createMockKV() as unknown as KVNamespace,
+    SLACK_KV: createMockKV() as unknown as Env["SLACK_KV"],
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
   } as Env;
 }

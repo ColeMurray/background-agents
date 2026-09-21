@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
+  callback_delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  callback_delivery_next_at INTEGER,
+  callback_delivered_at INTEGER,
   FOREIGN KEY (author_id) REFERENCES participants(id)
 );
 
@@ -722,6 +725,18 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
     )`,
+  },
+  {
+    id: 55,
+    description: "Persist terminal callback delivery state",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN callback_delivery_attempts INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN callback_delivery_next_at INTEGER`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN callback_delivered_at INTEGER`);
+    },
   },
 ];
 

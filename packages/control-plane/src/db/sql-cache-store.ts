@@ -4,8 +4,7 @@
  * The port has one other implementation, `createKvCacheStore`, which the
  * Cloudflare host keeps. This one is engine-neutral — it runs on any
  * `SqlDatabase`, D1 and `node:sqlite` alike — so it lives with the stores
- * rather than under `src/node/`, and the same adapter serves the bots' caches
- * when they move off KV.
+ * rather than under `src/node/`.
  *
  * The table is not part of the global store's schema. Nothing on Cloudflare
  * reads or writes it, so it is not in `terraform/d1/migrations`, where every

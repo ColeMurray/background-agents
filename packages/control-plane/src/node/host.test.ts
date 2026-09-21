@@ -143,6 +143,28 @@ describe("startNodeHost", () => {
     expect(listed.status).toBe(401);
   });
 
+  it("serves configured integrations in the control-plane process", async () => {
+    host = await start({
+      config: {
+        ...CONFIG,
+        WEB_APP_URL: "https://app.example.test",
+        SLACK_BOT_TOKEN: "xoxb-test",
+        SLACK_SIGNING_SECRET: "signing-secret",
+        SLACK_BOT_DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
+        CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
+        SERVICE_AUTH_SECRET_SLACK_BOT: "service-secret",
+      },
+    });
+
+    const response = await fetch(`http://127.0.0.1:${host.address.port}/integrations/slack/health`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "healthy",
+      service: "open-inspect-slack-bot",
+    });
+  });
+
   it("refuses a WebSocket upgrade for an unknown session and any other upgrade path", async () => {
     host = await start();
     const base = `ws://127.0.0.1:${host.address.port}`;

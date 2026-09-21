@@ -34,11 +34,22 @@ module "control_plane_worker" {
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.control_plane_script_path
 
-  kv_namespaces = {
-    REPOS_CACHE = {
-      namespace_id = module.session_index_kv.namespace_id
-    }
-  }
+  kv_namespaces = merge(
+    {
+      REPOS_CACHE = {
+        namespace_id = module.session_index_kv.namespace_id
+      }
+    },
+    var.enable_slack_bot ? {
+      SLACK_KV = { namespace_id = module.slack_kv[0].namespace_id }
+    } : {},
+    var.enable_linear_bot ? {
+      LINEAR_KV = { namespace_id = module.linear_kv[0].namespace_id }
+    } : {},
+    var.enable_github_bot ? {
+      GITHUB_KV = { namespace_id = module.github_kv[0].namespace_id }
+    } : {}
+  )
 
   d1_databases = {
     DB = {
@@ -69,23 +80,18 @@ module "control_plane_worker" {
       AUTOFIX_DLQ = {
         queue_name = cloudflare_queue.github_autofix_dlq[0].queue_name
       }
-    } : {}
-  )
-
-  service_bindings = merge(
+    } : {},
     var.enable_slack_bot ? {
-      SLACK_BOT = {
-        service_name = "open-inspect-slack-bot-${local.name_suffix}"
+      SLACK_COMPLETION_QUEUE = {
+        queue_name = cloudflare_queue.slack_completion_delivery[0].queue_name
       }
     } : {},
     var.enable_linear_bot ? {
-      LINEAR_BOT = {
-        service_name = "open-inspect-linear-bot-${local.name_suffix}"
+      LINEAR_COMPLETION_QUEUE = {
+        queue_name = cloudflare_queue.linear_completion_delivery[0].queue_name
       }
     } : {}
   )
-
-  enable_service_bindings = var.enable_service_bindings
 
   plain_text_bindings = merge(
     {
@@ -99,12 +105,23 @@ module "control_plane_worker" {
       DEPLOYMENT_NAME               = { value = var.deployment_name }
       APP_NAME                      = { value = var.app_name }
       GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
+      CLASSIFICATION_MODEL          = { value = var.classification_model }
       SANDBOX_PROVIDER              = { value = var.sandbox_provider }
       SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
       SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
+    } : {},
+    var.enable_slack_bot ? {
+      SLACK_BOT_DEFAULT_MODEL = { value = var.slack_bot_default_model }
+    } : {},
+    var.enable_linear_bot ? {
+      LINEAR_BOT_DEFAULT_MODEL = { value = var.linear_bot_default_model }
+      LINEAR_CLIENT_ID         = { value = var.linear_client_id }
+    } : {},
+    var.enable_github_bot ? {
+      GITHUB_BOT_DEFAULT_MODEL = { value = var.github_bot_default_model }
     } : {},
     local.google_enabled ? {
       GOOGLE_CLIENT_ID = { value = trimspace(var.google_client_id) }
@@ -214,12 +231,19 @@ module "control_plane_worker" {
     local.use_e2b_backend ? {
       E2B_API_KEY = { value = var.e2b_api_key }
     } : {},
-    # Slack bot token enables the agent-initiated `slack-notify` endpoint.
-    # Shares the variable with the slack-bot worker; bound here so the same
-    # token can authorize chat.postMessage from agent tool calls.
-    length(var.slack_bot_token) > 0 ? {
-      SLACK_BOT_TOKEN = { value = var.slack_bot_token }
-    } : {}
+    var.enable_slack_bot ? {
+      SLACK_BOT_TOKEN      = { value = var.slack_bot_token }
+      SLACK_SIGNING_SECRET = { value = var.slack_signing_secret }
+    } : {},
+    var.enable_linear_bot ? {
+      LINEAR_CLIENT_SECRET  = { value = var.linear_client_secret }
+      LINEAR_WEBHOOK_SECRET = { value = var.linear_webhook_secret }
+      LINEAR_API_KEY        = { value = var.linear_api_key }
+    } : {},
+    var.enable_github_bot ? {
+      GITHUB_WEBHOOK_SECRET = { value = var.github_webhook_secret }
+    } : {},
+    var.enable_slack_bot || var.enable_linear_bot ? local.classifier_secret_bindings : {}
   )
 
   durable_objects = {

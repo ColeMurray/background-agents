@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./app": "./src/index.ts",
+    "./callbacks": "./src/callbacks.ts",
+    "./completion/job": "./src/completion/job.ts",
+    "./types": "./src/types.ts"
+  },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
     "test": "vitest run",

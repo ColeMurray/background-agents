@@ -43,6 +43,13 @@ function createMockRepository() {
     getProcessingMessageWithStartedAt: vi.fn<
       MessageRepository["getProcessingMessageWithStartedAt"]
     >(() => null),
+    claimTerminalCallback: vi.fn<MessageRepository["claimTerminalCallback"]>(() => ({
+      attempts: 0,
+    })),
+    listDueTerminalCallbacks: vi.fn<MessageRepository["listDueTerminalCallbacks"]>(() => []),
+    nextTerminalCallbackAt: vi.fn<MessageRepository["nextTerminalCallbackAt"]>(() => null),
+    completeTerminalCallback: vi.fn<MessageRepository["completeTerminalCallback"]>(),
+    retryTerminalCallback: vi.fn<MessageRepository["retryTerminalCallback"]>(),
     getSession: vi.fn(() => null),
   };
 }
@@ -62,6 +69,11 @@ function createTestHarness(overrides?: {
   const slackBot = createMockFetcher();
   const linearBot = createMockFetcher();
   const sleep = vi.fn(async () => {});
+  const alarmScheduler = {
+    schedule: vi.fn(async () => undefined),
+    cancel: vi.fn(async () => undefined),
+    current: vi.fn(async () => null),
+  };
 
   const env: CallbackServiceEnv = {
     SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
@@ -78,6 +90,7 @@ function createTestHarness(overrides?: {
     log,
     getSessionId: overrides?.getSessionId ?? (() => "session-123"),
     completeAutomationRun: overrides?.completeAutomationRun,
+    alarmScheduler,
     sleep,
   };
 
@@ -89,6 +102,7 @@ function createTestHarness(overrides?: {
     slackBot,
     linearBot,
     sleep,
+    alarmScheduler,
   };
 }
 
@@ -259,6 +273,10 @@ describe("CallbackNotificationService", () => {
           http_status: 200,
         })
       );
+      expect(harness.repository.completeTerminalCallback).toHaveBeenCalledWith(
+        "msg-1",
+        expect.any(Number)
+      );
     });
 
     it("retries once on fetch failure", async () => {
@@ -304,6 +322,11 @@ describe("CallbackNotificationService", () => {
           retries: 1,
           http_status: 503,
         })
+      );
+      expect(harness.repository.retryTerminalCallback).toHaveBeenCalledWith(
+        "msg-1",
+        1,
+        expect.any(Number)
       );
     });
 
@@ -354,6 +377,48 @@ describe("CallbackNotificationService", () => {
       expect(body.context.issueId).toBe("issue-1");
       expect(linearCompletionCallbackSchema.safeParse(body).success).toBe(true);
       expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+  });
+
+  describe("durable terminal callbacks", () => {
+    it("replays due callback intents from the alarm path", async () => {
+      vi.mocked(harness.repository.listDueTerminalCallbacks).mockReturnValue([
+        { messageId: "msg-1", success: false, error: "sandbox failed" },
+      ]);
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C123", threadTs: "123.456" }),
+        source: "slack",
+      });
+      harness.slackBot.fetch.mockResolvedValue(new Response("ok"));
+
+      await harness.service.flushPending();
+
+      expect(harness.slackBot.fetch).toHaveBeenCalledOnce();
+      const body = JSON.parse(String(harness.slackBot.fetch.mock.calls[0]![1]?.body));
+      expect(body).toMatchObject({ messageId: "msg-1", success: false, error: "sandbox failed" });
+      expect(harness.repository.completeTerminalCallback).toHaveBeenCalledOnce();
+    });
+
+    it("does not redeliver an intent another delivery already claimed", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({ channel: "C123" }),
+        source: "slack",
+      });
+      vi.mocked(harness.repository.claimTerminalCallback).mockReturnValue(null);
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.repository.completeTerminalCallback).not.toHaveBeenCalled();
+      expect(harness.repository.retryTerminalCallback).not.toHaveBeenCalled();
+    });
+
+    it("rearms the earliest leased callback after an earlier alarm fires", async () => {
+      vi.mocked(harness.repository.nextTerminalCallbackAt).mockReturnValue(5_000);
+
+      await harness.service.flushPending();
+
+      expect(harness.alarmScheduler.schedule).toHaveBeenCalledWith(5_000);
     });
   });
 

@@ -114,6 +114,10 @@ describe("jobKindForQueue", () => {
       "image_build.finalize"
     );
     expect(jobKindForQueue("open-inspect-github-autofix-prod", "prod")).toBe("github.autofix");
+    expect(jobKindForQueue("open-inspect-slack-completion-prod", "prod")).toBe("slack.completion");
+    expect(jobKindForQueue("open-inspect-linear-completion-prod", "prod")).toBe(
+      "linear.completion"
+    );
     expect(jobQueueName("github.autofix", "prod")).toBe("open-inspect-github-autofix-prod");
   });
 
@@ -123,7 +127,7 @@ describe("jobKindForQueue", () => {
     expect(
       jobKindForQueue("open-inspect-image-build-finalization-dlq-prod", "prod")
     ).toBeUndefined();
-    expect(jobKindForQueue("open-inspect-slack-completion-prod", "prod")).toBeUndefined();
+    expect(jobKindForQueue("open-inspect-slack-completion-dlq-prod", "prod")).toBeUndefined();
     expect(jobKindForQueue("open-inspect-github-autofix", "prod")).toBeUndefined();
   });
 
@@ -286,7 +290,7 @@ describe("consumeJobBatch", () => {
   it("retries a whole batch from a queue no kind owns, so it dead-letters rather than vanishes", async () => {
     const host = fakeHost();
     const stray = message("message-1", FINALIZE_PAYLOAD);
-    const unknown = batch("open-inspect-slack-completion-prod", stray);
+    const unknown = batch("open-inspect-foreign-prod", stray);
 
     await consumeJobBatch(unknown, host);
 
@@ -296,10 +300,12 @@ describe("consumeJobBatch", () => {
     expect(host.log.error).toHaveBeenCalledWith(
       "job.queue_unknown",
       expect.objectContaining({
-        queue: "open-inspect-slack-completion-prod",
+        queue: "open-inspect-foreign-prod",
         known_queues: [
           "open-inspect-image-build-finalization-prod",
           "open-inspect-github-autofix-prod",
+          "open-inspect-slack-completion-prod",
+          "open-inspect-linear-completion-prod",
         ],
         messages: 1,
       })

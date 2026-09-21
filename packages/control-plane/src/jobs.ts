@@ -21,6 +21,17 @@
  */
 
 import { githubAutofixEnvelopeSchema, type GitHubAutofixEnvelope } from "@open-inspect/shared";
+import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import { processSlackCompletion } from "@open-inspect/slack-bot/completion/delivery";
+import {
+  slackCompletionJobSchema,
+  type SlackCompletionJob,
+} from "@open-inspect/slack-bot/completion/job";
+import { processLinearCompletion } from "@open-inspect/linear-bot/callbacks";
+import {
+  linearCompletionJobSchema,
+  type LinearCompletionJob,
+} from "@open-inspect/linear-bot/completion/job";
 import type { z } from "zod";
 import { handleAutofixJob } from "./autofix/handler";
 import type { SqlDatabase } from "./db/sql-database";
@@ -32,6 +43,7 @@ import {
 import { IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS } from "./image-builds/finalizer";
 import type { CorrelationContext, Logger } from "./logger";
 import type { Env } from "./types";
+import { buildLinearEnv, buildSlackEnv } from "./integrations/http";
 
 /** How a host redelivers a kind's failed jobs. */
 export interface JobRetryPolicy {
@@ -54,6 +66,7 @@ export interface JobDeps {
   env: Env;
   db: SqlDatabase;
   log: Logger;
+  controlPlane?: ControlPlaneFetcher;
   /** Identifies this delivery in logs; the host mints one per delivery. */
   correlation: CorrelationContext;
 }
@@ -99,6 +112,37 @@ export const JOB_KINDS = {
     payload: githubAutofixEnvelopeSchema,
     retry: { maxAttempts: 5, retryDelayMs: 30_000 },
     handle: handleAutofixJob,
+  }),
+  "slack.completion": defineJobKind<SlackCompletionJob>({
+    payload: slackCompletionJobSchema,
+    retry: { maxAttempts: 3, retryDelayMs: 30_000 },
+    async handle(payload, _delivery, deps) {
+      if (!deps.controlPlane) return { retry: true };
+      const env = buildSlackEnv(deps.env, deps.controlPlane);
+      if (!env) return { retry: true };
+      return (await processSlackCompletion(payload, env)) ? "ack" : { retry: true };
+    },
+  }),
+  "linear.completion": defineJobKind<LinearCompletionJob>({
+    payload: linearCompletionJobSchema,
+    retry: { maxAttempts: 5, retryDelayMs: 30_000 },
+    async handle(payload, _delivery, deps) {
+      if (!deps.controlPlane) return { retry: true };
+      const env = buildLinearEnv(
+        deps.env,
+        deps.controlPlane,
+        deps.env.WORKER_URL ?? "https://internal"
+      );
+      if (!env) return { retry: true };
+
+      const deliveredKey = `terminal-effect:${payload.deliveryId}`;
+      if (await env.LINEAR_KV.get(deliveredKey)) return "ack";
+      if (!(await processLinearCompletion(payload, env, deps.correlation.trace_id))) {
+        return { retry: true };
+      }
+      await env.LINEAR_KV.put(deliveredKey, "1", { expirationTtl: 30 * 24 * 60 * 60 });
+      return "ack";
+    },
   }),
 };
 
