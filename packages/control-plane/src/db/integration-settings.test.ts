@@ -1065,6 +1065,25 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("does not grandfather an unchanged stored invalid global timeout", async () => {
+      await db
+        .prepare(
+          `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind("sandbox", JSON.stringify({ defaults: { sandboxTimeoutMs: 300_000 } }), 1, 1)
+        .run();
+
+      const stored = await store.getGlobal("sandbox");
+      expect(stored).toEqual({ defaults: {} });
+
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { sandboxTimeoutMs: 300_000, terminalEnabled: true },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("normalizes cross-field violations that only appear after merge", async () => {
       // Each blob is individually valid — neither write throws — because the
       // invariant (concurrent <= total) spans two fields set in different scopes.

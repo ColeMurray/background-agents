@@ -25,7 +25,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionEventStream } from "./event-stream";
 import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
-import type { SandboxPreservationState } from "@open-inspect/shared/types/sandbox-preservation";
+import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-shutdown";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 export interface SessionSnapshotEnrichment {
@@ -34,7 +34,7 @@ export interface SessionSnapshotEnrichment {
 }
 
 export interface SessionSnapshotReaderDeps {
-  getShutdown?: () => SandboxPreservationState | null;
+  getShutdown?: () => SandboxShutdownState | null;
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxStateReader;
   messageRepository: MessageRepository;

@@ -1,4 +1,4 @@
-"""Preservation-stop deadline tests for the OpenCode harness."""
+"""Shutdown-stop deadline tests for the OpenCode harness."""
 
 import asyncio
 from types import SimpleNamespace

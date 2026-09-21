@@ -232,6 +232,23 @@ describe("session view contracts", () => {
     ).toMatchObject({ clientRequestId: "request-1" });
   });
 
+  it("parses correlated graceful shutdown recovery acceptance", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "recovery-1",
+        action: "restore_saved",
+      })
+    ).toMatchObject({ clientRequestId: "recovery-1", action: "restore_saved" });
+    expect(
+      serverMessageSchema.safeParse({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "recovery-1",
+        action: "resume",
+      }).success
+    ).toBe(false);
+  });
+
   it("parses budget state in snapshots and subscriptions", () => {
     const parsed = serverMessageSchema.parse({
       type: "subscribed",

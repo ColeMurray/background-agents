@@ -64,6 +64,7 @@ import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
+import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -97,6 +98,7 @@ export default function SessionPage() {
     sendPrompt,
     cancelPrompt,
     stopExecution,
+    recoverShutdown,
     sendTyping,
     reconnect,
     loadOlderEvents,
@@ -446,6 +448,13 @@ export default function SessionPage() {
             Reconnect
           </button>
         </div>
+      )}
+
+      {capabilities.read && (
+        <SandboxShutdownBanner
+          shutdown={sessionState?.sandboxPreservation}
+          onRecover={capabilities.lifecycle && ready ? recoverShutdown : undefined}
+        />
       )}
 
       {/* Main content */}

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
+import { shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 
 export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 
@@ -39,7 +40,8 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stop") }),
   z.object({
     type: z.literal("recover_preservation"),
-    action: z.enum(["retry", "restore_saved"]),
+    action: shutdownRecoveryActionSchema,
+    clientRequestId: clientRequestIdSchema.optional(),
   }),
   z.object({ type: z.literal("typing") }),
   z.object({

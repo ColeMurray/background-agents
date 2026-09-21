@@ -24,7 +24,7 @@ import {
 import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
-import { MIN_PRESERVATION_RUNTIME_GENERATION } from "../runtime-manifest";
+import { MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION } from "../runtime-manifest";
 import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
@@ -774,7 +774,9 @@ describe("final graceful shutdown lifecycle integration", () => {
 
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: false });
-    await saved.shutdown.recover("restore_saved");
+    await expect(saved.shutdown.recover("restore_saved")).rejects.toThrow(
+      "Shutdown recovery is unavailable"
+    );
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({
       phase: "unknown",
@@ -856,7 +858,7 @@ describe("final graceful shutdown lifecycle integration", () => {
   it.each([
     ["v62-compatible", "legacy"],
     ["v70-before-shutdown", "legacy"],
-    [`v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`, "confirmed"],
+    [`v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-confirmed`, "confirmed"],
   ] as const)("restores snapshot runtime %s with %s policy", async (runtimeVersion, policy) => {
     const f = fixture(
       createMockProvider(),
@@ -883,7 +885,7 @@ describe("final graceful shutdown lifecycle integration", () => {
   it.each([
     [null, "legacy"],
     ["v70-before-shutdown", "legacy"],
-    [`v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`, "confirmed"],
+    [`v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-confirmed`, "confirmed"],
   ] as const)("resumes retained runtime %s with %s policy", async (runtimeVersion, policy) => {
     const f = fixture(
       createMockProvider({
@@ -1008,7 +1010,7 @@ describe("final graceful shutdown lifecycle integration", () => {
           })),
         })
       );
-      f.storage.getSandbox()!.runtime_version = `v${MIN_PRESERVATION_RUNTIME_GENERATION}-different-row`;
+      f.storage.getSandbox()!.runtime_version = `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-different-row`;
       f.shutdown.startupDecision.mockReturnValue({
         kind: "resume_retained",
         providerObjectId: "retained-source",
@@ -4652,7 +4654,7 @@ describe("SandboxLifecycleManager", () => {
       const imageBuildLookup: ImageBuildLookup = {
         getLatestReady: vi.fn(async () =>
           repoImageRow({
-            runtime_version: `v${MIN_PRESERVATION_RUNTIME_GENERATION - 1}-before-preservation`,
+            runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
           })
         ),
         markRestoreFailed: vi.fn(async () => true),

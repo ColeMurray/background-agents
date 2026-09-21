@@ -64,10 +64,10 @@ from .harness import (
     parse_harness_id,
 )
 from .log_config import configure_logging, get_logger
-from .preservation import PreservationCoordinator
 from .prompt_budgets import resolve_prompt_limits
 from .push_operation import PushOperation, PushRejected, PushRequest
 from .repo_config import load_repo_manifest
+from .shutdown_preparation import ShutdownPreparationCoordinator
 from .types import GitUser
 
 if TYPE_CHECKING:
@@ -210,7 +210,7 @@ class AgentBridge:
                 opencode_port=opencode_port,
             )
         )
-        self.preservation = PreservationCoordinator()
+        self.shutdown_preparation = ShutdownPreparationCoordinator()
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -607,7 +607,7 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-            if self.preservation.fenced:
+            if self.shutdown_preparation.fenced:
                 await self._send_event(
                     {
                         "type": "execution_complete",
@@ -630,18 +630,18 @@ class AgentBridge:
         elif cmd_type == "sandbox_generation":
             await self._handle_sandbox_generation(cmd)
         elif cmd_type == "prepare_preservation":
-            await self._handle_prepare_preservation(cmd)
+            await self._handle_prepare_shutdown(cmd)
         elif cmd_type == "shutdown":
             await self._handle_shutdown()
         elif cmd_type == "git_sync_complete":
             self.git_sync_complete.set()
         elif cmd_type == "push":
-            if self.preservation.fenced:
-                await self._refuse_push_for_preservation(cmd)
+            if self.shutdown_preparation.fenced:
+                await self._refuse_push_for_shutdown(cmd)
             else:
                 self._start_push(cmd)
         elif cmd_type == "refresh_diff":
-            if self.preservation.fenced:
+            if self.shutdown_preparation.fenced:
                 self.log.warn("bridge.command_refused_for_preservation", cmd_type=cmd_type)
             else:
                 self.diff_refresh.request(None)
@@ -787,7 +787,7 @@ class AgentBridge:
         running turn.
         """
         try:
-            if self.preservation.fenced:
+            if self.shutdown_preparation.fenced:
                 raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 await self.boot_attach.wait_until_ready(message_id, deadline)
@@ -812,7 +812,7 @@ class AgentBridge:
             if self.boot_attach.booting:
                 raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
             raise RuntimeError(f"prompt could not start within {budget} s") from None
-        if self.preservation.fenced:
+        if self.shutdown_preparation.fenced:
             raise RuntimeError("sandbox_lifetime_expiring")
         return harness, attachments
 
@@ -860,9 +860,9 @@ class AgentBridge:
         if generation is None or generation["sandboxId"] != self.sandbox_id:
             self.log.warn("bridge.sandbox_generation_invalid")
             return
-        await self._send_event(self.preservation.establish_generation(generation))
+        await self._send_event(self.shutdown_preparation.establish_generation(generation))
 
-    async def _handle_prepare_preservation(self, cmd: dict[str, Any]) -> None:
+    async def _handle_prepare_shutdown(self, cmd: dict[str, Any]) -> None:
         """Fence admission and confirm the active harness execution stopped."""
         generation = self._parse_generation(cmd.get("generation"))
         if generation is None:
@@ -871,17 +871,17 @@ class AgentBridge:
 
         async def contain_activity(deadline: float) -> bool:
             harness = self._require_harness()
-            return await self.activity.drain_for_preservation(
+            return await self.activity.drain_for_shutdown(
                 deadline=deadline,
                 prompt_error="sandbox_lifetime_expiring",
-                push_cancellation_event=self._preservation_push_error_event,
+                push_cancellation_event=self._shutdown_push_error_event,
                 stop_execution=harness.stop_execution,
             )
 
         async def persist_session() -> None:
             await self._persist_rotated_session_id(self._require_harness(), strict=True)
 
-        result = await self.preservation.prepare(
+        result = await self.shutdown_preparation.prepare(
             cmd,
             parsed_generation=generation,
             contain_activity=contain_activity,
@@ -908,17 +908,17 @@ class AgentBridge:
         await self.activity.shutdown()
         await self.boot_attach.end_run("shutdown")
 
-    async def _refuse_push_for_preservation(self, cmd: dict[str, Any]) -> None:
-        await self._send_event(self._preservation_push_error_event(cmd))
+    async def _refuse_push_for_shutdown(self, cmd: dict[str, Any]) -> None:
+        await self._send_event(self._shutdown_push_error_event(cmd))
 
-    def _preservation_push_error_event(self, cmd: dict[str, Any]) -> dict[str, Any]:
+    def _shutdown_push_error_event(self, cmd: dict[str, Any]) -> dict[str, Any]:
         try:
             request: PushRequest | None = PushRequest.from_push_spec(cmd.get("pushSpec"))
         except PushRejected as rejected:
             request = rejected.request
         return {
             "type": "push_error",
-            "error": "Push failed - final sandbox preservation is in progress",
+            "error": "Push failed — the sandbox is shutting down.",
             "branchName": request.branch_name if request is not None else "",
             **(request.repo_fields() if request is not None else {}),
             "timestamp": time.time(),
@@ -926,8 +926,8 @@ class AgentBridge:
 
     def _start_push(self, cmd: dict[str, Any]) -> None:
         async def execute() -> dict[str, Any]:
-            if self.preservation.fenced:
-                return self._preservation_push_error_event(cmd)
+            if self.shutdown_preparation.fenced:
+                return self._shutdown_push_error_event(cmd)
             return await self._handle_push(cmd)
 
         self.activity.start_push(cmd, execute)

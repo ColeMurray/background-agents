@@ -146,6 +146,7 @@ describe("useSessionSocket", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {
@@ -170,6 +171,178 @@ describe("useSessionSocket", () => {
       "/api/sessions/session-1/ws-token",
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  it("settles shutdown recovery only from the matching action and request acknowledgement", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+
+    await expect(result.current.recoverShutdown("retry")).resolves.toEqual({
+      ok: false,
+      reason: "disconnected",
+    });
+    expect(socket.sentMessages).toHaveLength(0);
+
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    const recovery = result.current.recoverShutdown("restore_saved");
+
+    expect(socket.sentMessages).toContainEqual({
+      type: "recover_preservation",
+      action: "restore_saved",
+      clientRequestId: "client-id",
+    });
+
+    act(() => {
+      socket.receive({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "another-request",
+        action: "restore_saved",
+      } as ServerMessage);
+      socket.receive({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "client-id",
+        action: "retry",
+      } as ServerMessage);
+    });
+    let settled = false;
+    void recovery.then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    act(() => {
+      socket.receive({
+        type: "shutdown_recovery_accepted",
+        clientRequestId: "client-id",
+        action: "restore_saved",
+      } as ServerMessage);
+    });
+    await expect(recovery).resolves.toEqual({ ok: true, action: "restore_saved" });
+  });
+
+  it("rejects duplicate shutdown recovery while acknowledgement is pending", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    const first = result.current.recoverShutdown("retry");
+    await expect(result.current.recoverShutdown("retry")).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "A recovery request is awaiting confirmation",
+    });
+    expect(
+      socket.sentMessages.filter((message) => message.type === "recover_preservation")
+    ).toHaveLength(1);
+    act(() => socket.close());
+    await expect(first).resolves.toEqual({ ok: false, reason: "disconnected" });
+  });
+
+  it("returns correlated recovery rejection and disconnect failures", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    const rejected = result.current.recoverShutdown("retry");
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "SHUTDOWN_RECOVERY_UNAVAILABLE",
+        message: "Recovery is no longer available",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+    await expect(rejected).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "Recovery is no longer available",
+    });
+
+    const disconnected = result.current.recoverShutdown("restore_saved");
+    act(() => socket.close());
+    await expect(disconnected).resolves.toEqual({ ok: false, reason: "disconnected" });
+  });
+
+  it("settles recovery when the socket closes between precheck and send", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    vi.spyOn(socket, "send").mockImplementation(() => {
+      socket.readyState = FakeWebSocket.CLOSING;
+      throw new Error("closed during send");
+    });
+
+    await expect(result.current.recoverShutdown("retry")).resolves.toEqual({
+      ok: false,
+      reason: "disconnected",
+    });
+  });
+
+  it("times out recovery independently of prompt acknowledgement timing", async () => {
+    const { result } = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    vi.useFakeTimers();
+    const recovery = result.current.recoverShutdown("retry");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000);
+    });
+    await expect(recovery).resolves.toEqual({ ok: false, reason: "timeout" });
+    vi.useRealTimers();
+  });
+
+  it("settles pending recovery when the hook unmounts", async () => {
+    const rendered = renderHook(() =>
+      useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES)
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => expect(rendered.result.current.ready).toBe(true));
+    const recovery = rendered.result.current.recoverShutdown("retry");
+
+    rendered.unmount();
+
+    await expect(recovery).resolves.toEqual({ ok: false, reason: "disconnected" });
   });
 
   it("keeps sendPrompt pending until the server acknowledges the queued prompt", async () => {
