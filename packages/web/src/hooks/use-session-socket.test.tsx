@@ -10,6 +10,7 @@ import type {
   SessionState,
 } from "@open-inspect/shared/types/server-messages";
 import type * as SwrModule from "swr";
+import { SWRConfig } from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
@@ -147,6 +148,98 @@ describe("useSessionSocket", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([
+    "waiting_for_checkpoint",
+    "draining",
+    "prepared",
+    "capturing",
+    "retiring",
+    "saved",
+    "failed",
+    "unknown",
+  ] as const)(
+    "withdraws cached access during %s and ignores access refresh notifications",
+    async (phase) => {
+      vi.mocked(fetch).mockImplementation(async (input) =>
+        String(input).endsWith("/sandbox-access")
+          ? Response.json({
+              codeServer: { url: "https://code.example", password: "secret" },
+              vnc: { url: "https://desktop.example", password: "vnc-secret" },
+              ttyd: { url: "https://terminal.example", token: "token" },
+              tunnelUrls: { "3000": "https://app.example" },
+              sandboxDashboardUrl: "https://provider.example/sandbox",
+            })
+          : Response.json({ token: "ws-token" })
+      );
+      const { result } = renderHook(
+        () => useSessionSocket("session-1", createSnapshot(), FULL_CAPABILITIES),
+        {
+          wrapper: ({ children }) => (
+            <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+              {children}
+            </SWRConfig>
+          ),
+        }
+      );
+      await waitFor(() => expect(result.current.sessionState?.ttydToken).toBe("token"));
+      const socket = FakeWebSocket.instances[0];
+      act(() => {
+        socket.open();
+        socket.receive({
+          type: "sandbox_preservation",
+          preservation: { phase, expiresAtMs: null, drainAtMs: null },
+        });
+      });
+      expect(result.current.sessionState).toMatchObject({
+        sandboxStatus: "ready",
+        codeServerUrl: null,
+        codeServerPassword: null,
+        vncUrl: null,
+        vncPassword: null,
+        ttydUrl: null,
+        ttydToken: null,
+        tunnelUrls: null,
+        sandboxDashboardUrl: null,
+      });
+      const fetchCount = vi.mocked(fetch).mock.calls.length;
+      await act(async () => {
+        socket.receive({ type: "sandbox_access_changed" });
+      });
+      expect(fetch).toHaveBeenCalledTimes(fetchCount);
+      expect(result.current.sessionState?.ttydToken).toBeNull();
+    }
+  );
+
+  it("masks legacy credentials in held initial and reconnect snapshots", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session = createSessionState({
+      codeServerUrl: "https://code.example",
+      codeServerPassword: "secret",
+      ttydUrl: "https://terminal.example",
+      ttydToken: "token",
+      sandboxPreservation: { phase: "draining", expiresAtMs: null, drainAtMs: null },
+    });
+    const { result } = renderHook(
+      () => useSessionSocket("held-session", snapshot, FULL_CAPABILITIES),
+      {
+        wrapper: ({ children }) => (
+          <SWRConfig value={{ provider: () => new Map() }}>{children}</SWRConfig>
+        ),
+      }
+    );
+    expect(result.current.sessionState?.ttydToken).toBeNull();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await act(async () => {
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive({ ...createSubscribedMessage(), session: snapshot.session });
+    });
+    expect(result.current.sessionState?.codeServerPassword).toBeNull();
+    expect(
+      vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/sandbox-access"))
+    ).toBe(false);
   });
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {
@@ -1327,7 +1420,7 @@ describe("useSessionSocket", () => {
       expect(result.current.sessionState?.sandboxDashboardUrl).toBe(
         "https://provider.example/new-sandbox"
       );
-      expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
+      expect(result.current.sessionState?.codeServerUrl).toBeNull();
     });
   });
 

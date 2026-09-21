@@ -409,11 +409,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     now: () => Date.now(),
   });
 
+  let mayDispatchDiffRefresh = () => false;
   const diffService = new SessionDiffService(
     new SessionDiffStore(sql),
     sessionCoreRepository,
     messenger,
-    log
+    log,
+    () => mayDispatchDiffRefresh()
   );
   const diffsHandler = new SessionDiffsHandler(diffService);
   const eventStream = new SessionEventStream(eventRepository);
@@ -465,6 +467,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     sandboxDashboardSettings,
   });
+  mayDispatchDiffRefresh = () => {
+    const admission = lifecycleManager.pushAdmissionDecision();
+    return admission === "ready" || admission === "unmanaged";
+  };
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
     sessionCoreRepository,
@@ -555,7 +561,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => lifecycleManager.triggerSnapshot(reason),
+    async (reason) => {
+      await lifecycleManager.triggerSnapshot(reason);
+    },
     updateLastActivity,
     () => lifecycleManager.scheduleInactivityCheck(),
     () => messageQueue.processMessageQueue(),
@@ -793,6 +801,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     repoSecretsEncryptionKey,
     sandboxDashboardSettings,
     log,
+    mayAccess: () => {
+      const admission = shutdown.admissionDecision();
+      return admission === "ready" || admission === "unmanaged";
+    },
   });
 
   const connectionAuthenticator = new SessionConnectionAuthenticator({

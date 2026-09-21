@@ -7,7 +7,7 @@ import { encryptToken, generateEncryptionKey } from "../auth/crypto";
 
 const encryptionKey = generateEncryptionKey();
 
-async function harness() {
+async function harness(mayAccess?: () => boolean) {
   const row = {
     id: "sb-row",
     modal_sandbox_id: "attempt",
@@ -25,6 +25,7 @@ async function harness() {
   const getSandbox = vi.fn<() => SandboxRow | null>(() => row);
   const getSession = vi.fn(() => ({ id: "session" }));
   const reader = new SessionAccessReader({
+    mayAccess,
     sandboxRepository: { getSandbox },
     sessionCoreRepository: { getSession } as unknown as SessionCoreRepository,
     // Exercise real encryption and the async decrypt seam without a crypto mock.
@@ -40,6 +41,17 @@ async function harness() {
 }
 
 describe("SessionAccessReader lifecycle eligibility", () => {
+  it("honors shutdown admission before and after asynchronous decryption", async () => {
+    let allowed = true;
+    const h = await harness(() => allowed);
+    const pending = h.reader.handleSandboxAccess();
+    allowed = false;
+    expect((await pending).status).toBe(409);
+    expect((await h.reader.handleSandboxAccess()).status).toBe(409);
+    allowed = true;
+    expect((await h.reader.handleSandboxAccess()).status).toBe(200);
+  });
+
   it("serves ready access with private no-store headers", async () => {
     const h = await harness();
     const response = await h.reader.handleSandboxAccess();

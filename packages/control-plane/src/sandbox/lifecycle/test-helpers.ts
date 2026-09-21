@@ -361,6 +361,7 @@ export function createMockProvider(
     capabilities: {
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
+      snapshotStopsSandbox: false,
       supportsRestore: true,
       ...overrides.capabilities,
     },
@@ -413,9 +414,12 @@ export function createUnmanagedShutdown() {
     requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
     captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
       outcome: "saved",
+      operationId: "checkpoint-operation",
       imageId: "snapshot-img-123",
-      sourceStopped: false,
     })),
+    retireHeartbeatCheckpoint: vi.fn<SandboxShutdownLifecycle["retireHeartbeatCheckpoint"]>(
+      async () => true
+    ),
     startupDecision: vi.fn<SandboxShutdownLifecycle["startupDecision"]>(() => ({
       kind: "normal",
     })),
@@ -450,6 +454,8 @@ export function createCheckpointShutdown(
       getSession: () => storage.getSession(),
       transaction: <T>(operation: () => T): T => operation(),
     },
+    messages: { getProcessingMessage: () => null },
+    failures: { record: () => null, deliver: () => undefined },
     messenger,
     sockets: { getSandboxSocket: () => null },
     alarm: createMockAlarmScheduler(),
@@ -458,9 +464,54 @@ export function createCheckpointShutdown(
     reconcileStatusFromMessages: vi.fn(async () => {}),
     retireAccess: vi.fn(),
   } as never);
+  const ensureState = (generation?: SandboxGeneration) => {
+    const row = storage.getSandbox();
+    const currentGeneration = generation ?? {
+      sandboxId: row?.modal_sandbox_id ?? null,
+      createdAt: row?.created_at ?? 0,
+    };
+    if (
+      currentGeneration.sandboxId !== null &&
+      row?.modal_sandbox_id === currentGeneration.sandboxId &&
+      row.created_at === currentGeneration.createdAt &&
+      (!state ||
+        state.generation.sandboxId !== currentGeneration.sandboxId ||
+        state.generation.createdAt !== currentGeneration.createdAt)
+    )
+      state = {
+        phase: "running",
+        generation: {
+          sandboxId: currentGeneration.sandboxId,
+          createdAt: currentGeneration.createdAt,
+        },
+        provider: provider.name,
+        providerObjectId: row.modal_object_id,
+        sourceRetired: false,
+        lifetimeKind: "none",
+        expiresAtMs: null,
+        drainAtMs: null,
+        protocolVersion: 1,
+        runtimeReady: true,
+        generationReady: true,
+        lifecyclePolicy: "confirmed",
+      };
+  };
   return {
     ...createUnmanagedShutdown(),
-    captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    requestShutdown: (reason) => {
+      ensureState();
+      return coordinator.requestShutdown(reason);
+    },
+    captureCheckpoint: (generation, reason) => {
+      ensureState(generation);
+      return coordinator.captureCheckpoint(generation, reason);
+    },
+    retireHeartbeatCheckpoint: (operationId) => coordinator.retireHeartbeatCheckpoint(operationId),
+    startupDecision: () => coordinator.startupDecision(),
+    admissionDecision: () => coordinator.admissionDecision(),
+    handleAlarm: () => coordinator.handleAlarm(),
+    recover: (action) => coordinator.recover(action),
+    snapshot: () => coordinator.snapshot(),
   };
 }
 

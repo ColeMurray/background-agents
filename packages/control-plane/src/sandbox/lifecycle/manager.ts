@@ -119,6 +119,8 @@ export interface SandboxShutdownLifecycle {
     generation: SandboxGeneration,
     reason: string
   ): Promise<SandboxCheckpointOutcome>;
+  /** Retires only the exact completed heartbeat checkpoint while it still owns the source. */
+  retireHeartbeatCheckpoint(operationId: string): Promise<boolean>;
   /** Decides startup without exposing the coordinator's persisted receipt representation. */
   startupDecision(): SandboxStartupDecision;
   /** Converts a failed or interrupted saved-state startup into a durable safety hold. */
@@ -1357,17 +1359,17 @@ export class SandboxLifecycleManager
   /**
    * Trigger a filesystem snapshot of the sandbox.
    */
-  async triggerSnapshot(reason: string): Promise<void> {
-    if (this.shutdown.isHolding()) return;
+  async triggerSnapshot(reason: string): Promise<SandboxCheckpointOutcome> {
+    if (this.shutdown.isHolding()) return { outcome: "held", reason: "shutdown_held" };
     // A Vercel snapshot stops the source. It requires the same preparation
     // and replacement ordering as a final snapshot, even after a prompt.
     if (this.provider.capabilities.snapshotStopsSandbox) {
       const ownership = await this.shutdown.requestShutdown(reason);
-      if (ownership !== "unmanaged") return;
+      if (ownership !== "unmanaged") return { outcome: "held", reason: "final_shutdown_requested" };
     }
     if (!this.provider.takeSnapshot) {
       this.log.debug("Provider does not support snapshots");
-      return;
+      return { outcome: "held", reason: "snapshot_not_supported" };
     }
 
     const sandbox = this.storage.getSandbox();
@@ -1375,13 +1377,13 @@ export class SandboxLifecycleManager
 
     if (!sandbox?.modal_object_id || !session) {
       this.log.debug("Cannot snapshot: no modal_object_id or session");
-      return;
+      return { outcome: "held", reason: "sandbox_not_ready" };
     }
 
     // Don't snapshot if already snapshotting
     if (sandbox.status === "snapshotting") {
       this.log.debug("Already snapshotting, skipping");
-      return;
+      return { outcome: "held", reason: "legacy_snapshot_in_progress" };
     }
     const generation: SandboxGeneration = {
       sandboxId: sandbox.modal_sandbox_id,
@@ -1394,6 +1396,7 @@ export class SandboxLifecycleManager
         reason,
         modal_object_id: sandbox.modal_object_id,
       });
+    return result;
   }
 
   /**
@@ -1692,7 +1695,8 @@ export class SandboxLifecycleManager
         });
       }
     } else {
-      if ((await this.snapshotAndStopStaleSandbox(ctx)) === "abandoned") return "no_action";
+      const recovery = await this.snapshotAndStopStaleSandbox(ctx);
+      if (recovery !== "stopped") return "no_action";
       if (!ctx.isCurrentGeneration()) return "no_action";
       this.wsManager.sendToSandbox({ type: "shutdown" });
     }
@@ -1712,7 +1716,9 @@ export class SandboxLifecycleManager
    * the snapshot was in flight, which is the caller's cue to touch nothing
    * further.
    */
-  private async snapshotAndStopStaleSandbox(ctx: AlarmContext): Promise<"stopped" | "abandoned"> {
+  private async snapshotAndStopStaleSandbox(
+    ctx: AlarmContext
+  ): Promise<"stopped" | "abandoned" | "owned"> {
     if (!this.canStopProviderSandbox()) {
       // Fire-and-forget snapshot so status broadcast isn't delayed.
       this.triggerSnapshot("heartbeat_timeout").catch((e) =>
@@ -1723,16 +1729,13 @@ export class SandboxLifecycleManager
       return "stopped";
     }
 
-    await this.triggerSnapshot("heartbeat_timeout");
-    if (this.shutdown.isHolding()) return "abandoned";
-    if (!ctx.isCurrentGeneration()) return "abandoned";
-    await this.stopProviderSandboxSafely({
-      reason: "heartbeat_timeout",
-      intent: "destroy",
-      providerObjectId: ctx.providerObjectId,
-      failureMessage: "Provider stop failed after heartbeat timeout",
-    });
-    return "stopped";
+    const checkpoint = await this.triggerSnapshot("heartbeat_timeout");
+    if (checkpoint.outcome === "saved") {
+      await this.shutdown.retireHeartbeatCheckpoint(checkpoint.operationId);
+      return "owned";
+    }
+    await this.shutdown.requestShutdown("heartbeat_timeout");
+    return ctx.isCurrentGeneration() ? "owned" : "abandoned";
   }
 
   /**

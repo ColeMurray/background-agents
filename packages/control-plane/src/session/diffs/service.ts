@@ -40,6 +40,7 @@ export class SessionDiffService {
     private readonly repository: SessionCoreRepository,
     private readonly messenger: SessionMessenger,
     private readonly log: Logger,
+    private readonly mayDispatch: () => boolean = () => true,
     private readonly generateRevisionId: () => string = () => generateId(),
     private readonly now: () => number = () => Date.now()
   ) {}
@@ -159,6 +160,7 @@ export class SessionDiffService {
 
   /** Request a non-blocking refresh from the connected session sandbox. */
   async requestRefresh(): Promise<void> {
+    if (!this.mayDispatch()) throw new SandboxNotConnectedError();
     try {
       await this.messenger.sendToSandbox({ type: "refresh_diff" });
     } catch (error) {

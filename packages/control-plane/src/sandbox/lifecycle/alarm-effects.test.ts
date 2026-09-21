@@ -65,10 +65,21 @@ describe("cross-path alarm effects", () => {
         return result;
       });
 
+      if (trigger === "inactivity") {
+        await expect(pending).resolves.toBe("no_action");
+        expect(takeSnapshot).not.toHaveBeenCalled();
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(h.shutdown.snapshot()).toMatchObject({ phase: "draining" });
+        expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_access_changed" });
+        expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+        expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+        return;
+      }
+
       try {
         await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
         expect(settled).not.toHaveBeenCalled();
-        const status = trigger === "heartbeat" ? "stale" : "stopped";
+        const status = "stale";
         expect(sandbox).toMatchObject({
           status,
           code_server_url: null,
@@ -79,10 +90,7 @@ describe("cross-path alarm effects", () => {
           ttyd_token: null,
           tunnel_urls: null,
         });
-        expect(h.broadcaster.messages).toEqual([
-          { type: "sandbox_access_changed" },
-          { type: "sandbox_status", status },
-        ]);
+        expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_status", status });
         expect(order).toEqual(["snapshot:start"]);
         expect(sandbox.snapshot_image_id).toBeNull();
         expect(stopSandbox).not.toHaveBeenCalled();
@@ -92,20 +100,16 @@ describe("cross-path alarm effects", () => {
         releaseSnapshot();
         await vi.waitFor(() => expect(stopSandbox).toHaveBeenCalledOnce());
         expect(settled).not.toHaveBeenCalled();
-        expect(h.wsManager.sendToSandbox).toHaveBeenCalledTimes(trigger === "heartbeat" ? 0 : 1);
+        expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
         expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
-        expect(order).toEqual([
-          "snapshot:start",
-          "snapshot:complete",
-          ...(trigger === "inactivity" ? ["shutdown"] : []),
-        ]);
+        expect(order).toEqual(["snapshot:start", "snapshot:complete"]);
       } finally {
         releaseSnapshot();
         releaseStop();
         await pending;
       }
 
-      await expect(pending).resolves.toBe("sandbox_terminated");
+      await expect(pending).resolves.toBe("no_action");
       expect(takeSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           providerObjectId: sandbox.modal_object_id,
@@ -119,55 +123,48 @@ describe("cross-path alarm effects", () => {
           intent: "destroy",
         })
       );
-      expect(order).toEqual([
-        "snapshot:start",
-        "snapshot:complete",
-        ...(trigger === "heartbeat" ? ["stop", "shutdown"] : ["shutdown", "stop"]),
-        "detach",
-      ]);
+      expect(order).toEqual(["snapshot:start", "snapshot:complete", "stop"]);
       expect(sandbox.snapshot_image_id).toBe("snapshot-complete");
-      expect(sandbox.status).toBe(trigger === "heartbeat" ? "stale" : "stopped");
+      expect(sandbox.status).toBe("stopped");
+      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
       expect(sandbox.spawn_failure_count).toBe(0);
     }
   );
 
-  it.each(["heartbeat", "inactivity"] as const)(
-    "does not stop or detach a replacement admitted after %s checkpoint completion",
-    async (trigger) => {
-      const now = Date.now();
-      const sandbox = createMockSandbox({
-        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now - 10_000,
-        last_activity:
-          trigger === "inactivity" ? now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1 : now,
-      });
-      const stopSandbox = vi.fn(async () => ({ success: true }));
-      const h = createAlarmFixture(
-        sandbox,
-        createMockProvider({
-          capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
-          stopSandbox,
-        }),
-        0,
-        async () => {
+  it("does not stop or detach a replacement admitted after heartbeat checkpoint completion", async () => {
+    const now = Date.now();
+    const sandbox = createMockSandbox({
+      last_heartbeat: now - 100_000,
+      last_activity: now,
+    });
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
+        takeSnapshot: vi.fn(async () => {
           sandbox.modal_sandbox_id = "replacement-sandbox";
           sandbox.modal_object_id = "replacement-provider-object";
           sandbox.created_at += 1;
           sandbox.status = "connecting";
-        }
-      );
+          return { success: true, imageId: "checkpoint" };
+        }),
+        stopSandbox,
+      })
+    );
 
-      await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
-      expect(stopSandbox).not.toHaveBeenCalled();
-      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalledWith({ type: "shutdown" });
-      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
-      expect(sandbox).toMatchObject({
-        modal_sandbox_id: "replacement-sandbox",
-        modal_object_id: "replacement-provider-object",
-        status: "connecting",
-      });
-    }
-  );
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(h.wsManager.sendToSandbox).not.toHaveBeenCalledWith({ type: "shutdown" });
+    expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+    expect(sandbox).toMatchObject({
+      modal_sandbox_id: "replacement-sandbox",
+      modal_object_id: "replacement-provider-object",
+      status: "connecting",
+    });
+  });
 
   it.each(["heartbeat", "budget"] as const)(
     "continues the failure streak and blocks replacement after a long %s boot",

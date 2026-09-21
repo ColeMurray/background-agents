@@ -26,6 +26,90 @@ function repository() {
 }
 
 describe("SandboxShutdownRepository", () => {
+  const checkpoint = {
+    version: 1 as const,
+    operationId: "capture-1",
+    generation: { sandboxId: "sandbox-1", createdAt: 1_000 },
+    provider: "modal",
+    providerObjectId: "provider-1",
+    runtimeVersion: "v71-test",
+    reason: "execution_complete",
+    startedAtMs: 2_000,
+    deadlineAtMs: 9_000,
+    nonDestructive: true as const,
+    phase: "capturing" as const,
+  };
+
+  it("round-trips capture ownership, uncertainty, and completion", () => {
+    const fixture = repository();
+    for (const operation of [
+      checkpoint,
+      { ...checkpoint, phase: "unknown" as const, error: "deadline" },
+      { ...checkpoint, phase: "completed" as const, imageId: "image", savedAtMs: 8_000 },
+    ]) {
+      const state = record({ provider: "modal", checkpoint: operation });
+      fixture.repository.write(state);
+      expect(fixture.repository.read()).toEqual(state);
+    }
+    fixture.db.close();
+  });
+
+  it("round-trips a checkpoint wait without starting a preparation budget", () => {
+    const fixture = repository();
+    const state = record({
+      provider: "modal",
+      phase: "waiting_for_checkpoint",
+      operationId: "final-1",
+      waitByMs: 9_000,
+      retireByMs: 19_000,
+      checkpoint,
+    });
+    fixture.repository.write(state);
+    expect(fixture.repository.read()).toEqual(state);
+    expect(fixture.repository.read()?.stopByMs).toBeUndefined();
+    fixture.db.close();
+  });
+
+  it.each(["operationId", "waitByMs", "retireByMs"] as const)(
+    "rejects persisted waiting state without %s",
+    (field) => {
+      const fixture = repository();
+      const state = record({
+        phase: "waiting_for_checkpoint",
+        operationId: "final-1",
+        waitByMs: 9_000,
+        retireByMs: 19_000,
+      });
+      delete state[field];
+      fixture.sql.exec(
+        "INSERT INTO sandbox_preservation (singleton, state) VALUES (1, ?)",
+        JSON.stringify(state)
+      );
+      expect(() => fixture.repository.read()).toThrow(SessionStorageIntegrityError);
+      fixture.db.close();
+    }
+  );
+
+  it.each([
+    { version: 2 },
+    { operationId: "" },
+    { generation: { sandboxId: "other", createdAt: 1_000 } },
+    { providerObjectId: "other" },
+    { provider: "other" },
+    { nonDestructive: false },
+    { deadlineAtMs: 1_000 },
+    { phase: "unknown" },
+    { phase: "completed" },
+  ])("rejects malformed checkpoint metadata %j", (bad) => {
+    const fixture = repository();
+    fixture.sql.exec(
+      "INSERT INTO sandbox_preservation (singleton, state) VALUES (1, ?)",
+      JSON.stringify(record({ provider: "modal", checkpoint: { ...checkpoint, ...bad } as never }))
+    );
+    expect(() => fixture.repository.read()).toThrow(SessionStorageIntegrityError);
+    fixture.db.close();
+  });
+
   it("distinguishes missing state from a stored running generation", () => {
     const fixture = repository();
     expect(fixture.repository.read()).toBeNull();

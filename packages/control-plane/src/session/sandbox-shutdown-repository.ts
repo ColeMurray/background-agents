@@ -12,6 +12,30 @@ const receiptSchema = z.object({
   runtimeVersion: z.string().nullable(),
 });
 
+const checkpointIdentity = z.object({
+  version: z.literal(1),
+  operationId: z.string().min(1),
+  generation: sandboxGenerationSchema,
+  provider: z.string().min(1),
+  providerObjectId: z.string().min(1),
+  runtimeVersion: z.string().nullable(),
+  reason: z.string().min(1),
+  startedAtMs: z.number().finite(),
+  deadlineAtMs: z.number().finite(),
+  nonDestructive: z.literal(true),
+});
+
+const checkpointSchema = z.discriminatedUnion("phase", [
+  checkpointIdentity.extend({ phase: z.literal("capturing") }),
+  checkpointIdentity.extend({ phase: z.literal("unknown"), error: z.string().min(1) }),
+  checkpointIdentity.extend({
+    phase: z.literal("completed"),
+    imageId: z.string().min(1),
+    savedAtMs: z.number().finite(),
+  }),
+]);
+export type CheckpointOperation = z.infer<typeof checkpointSchema>;
+
 const stateSchema = sandboxShutdownSchema
   .extend({
     generation: sandboxGenerationSchema,
@@ -26,16 +50,31 @@ const stateSchema = sandboxShutdownSchema
     runtimeReady: z.boolean().optional(),
     lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
     restoreInvoked: z.boolean().optional(),
+    // Retained only to fail closed on records written by the pre-operation implementation.
     checkpointInFlight: z.boolean().optional(),
+    checkpoint: checkpointSchema.optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
+    waitByMs: z.number().finite().optional(),
     stopByMs: z.number().optional(),
     captureByMs: z.number().optional(),
     retireByMs: z.number().optional(),
     receipt: receiptSchema.optional(),
   })
   .superRefine((state, context) => {
+    const checkpoint = state.checkpoint;
+    if (
+      checkpoint &&
+      (checkpoint.deadlineAtMs <= checkpoint.startedAtMs ||
+        checkpoint.generation.sandboxId !== state.generation.sandboxId ||
+        checkpoint.generation.createdAt !== state.generation.createdAt ||
+        checkpoint.provider !== state.provider ||
+        checkpoint.providerObjectId !== state.providerObjectId)
+    )
+      context.addIssue({ code: "custom", message: "Invalid checkpoint ownership" });
     const incomplete =
+      (state.phase === "waiting_for_checkpoint" &&
+        (!state.operationId || state.waitByMs === undefined || state.retireByMs === undefined)) ||
       (state.lifetimeKind === "finite" &&
         (state.expiresAtMs === null ||
           (state.lifecyclePolicy !== "legacy" && state.drainAtMs === null))) ||

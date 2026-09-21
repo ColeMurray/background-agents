@@ -86,7 +86,7 @@ const upload = {
   ],
 };
 
-function harness() {
+function harness(mayDispatch: () => boolean = () => true) {
   const sql = new MemoryDiffSql();
   const repository = {
     getSessionRepositories: () => [
@@ -116,6 +116,7 @@ function harness() {
     repository,
     messenger,
     log,
+    mayDispatch,
     () => "revision-1",
     () => 200
   );
@@ -123,6 +124,13 @@ function harness() {
 }
 
 describe("SessionDiffService", () => {
+  it("rejects refresh while lifecycle admission is held", async () => {
+    const { service, messenger } = harness(() => false);
+
+    await expect(service.requestRefresh()).rejects.toBeInstanceOf(SandboxNotConnectedError);
+    expect(messenger.sendToSandbox).not.toHaveBeenCalled();
+  });
+
   it("publishes one matching bundle and serves a revision-pinned patch", () => {
     const { service, messenger } = harness();
 

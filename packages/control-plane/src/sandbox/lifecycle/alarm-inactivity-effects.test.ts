@@ -55,54 +55,41 @@ describe("inactivity alarm effects", () => {
   });
 
   describe.each(["rejected", "unsuccessful"] as const)("%s provider stop", (failure) => {
-    it.each([false, true])("still retires and warns (resumable=%s)", async (resumable) => {
-      const sandbox = createMockSandbox({
-        last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
-        code_server_url: "https://code.test",
-      });
-      const stopSandbox = vi.fn(async () => {
-        if (failure === "rejected") throw new Error("provider stop unavailable");
-        return { success: false, error: "provider stop unavailable" };
-      });
-      const stopLog = vi.spyOn(console, "error").mockImplementation(() => {});
-      const h = createAlarmFixture(
-        sandbox,
-        createMockProvider({
-          capabilities: { supportsExplicitStop: true, supportsPersistentResume: resumable },
-          stopSandbox,
-        })
-      );
+    it.each([false, true])(
+      "defers provider I/O to final shutdown (resumable=%s)",
+      async (resumable) => {
+        const sandbox = createMockSandbox({
+          last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
+          code_server_url: "https://code.test",
+        });
+        const stopSandbox = vi.fn(async () => {
+          if (failure === "rejected") throw new Error("provider stop unavailable");
+          return { success: false, error: "provider stop unavailable" };
+        });
+        const stopLog = vi.spyOn(console, "error").mockImplementation(() => {});
+        const h = createAlarmFixture(
+          sandbox,
+          createMockProvider({
+            capabilities: { supportsExplicitStop: true, supportsPersistentResume: resumable },
+            stopSandbox,
+          })
+        );
 
-      await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+        await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
-      expect(stopSandbox).toHaveBeenCalledOnce();
-      expect(stopSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: "inactivity_timeout",
-          intent: resumable ? "preserve" : "destroy",
-        })
-      );
-      expect(stopLog).toHaveBeenCalledWith(
-        expect.stringContaining('"error":"provider stop unavailable"')
-      );
-      expect(sandbox.code_server_url).toBeNull();
-      expect(sandbox.status).toBe("stopped");
-      expect(h.manager.isSpawning()).toBe(false);
-      expect(h.alarmScheduler.schedule).not.toHaveBeenCalled();
-      expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stopped" });
-      expect(h.broadcaster.messages).toContainEqual({
-        type: "sandbox_warning",
-        message: resumable
-          ? "Sandbox stopped due to inactivity"
-          : "Sandbox stopped due to inactivity, snapshot saved",
-      });
-      expect(h.wsManager.detachSandboxWebSocket).toHaveBeenCalledExactlyOnceWith(
-        1000,
-        "Inactivity timeout"
-      );
-      expect(h.provider.takeSnapshot).toHaveBeenCalledTimes(resumable ? 0 : 1);
-      expect(h.wsManager.sendToSandbox).toHaveBeenCalledTimes(resumable ? 0 : 1);
-    });
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(stopLog).not.toHaveBeenCalled();
+        expect(sandbox.code_server_url).toBe("https://code.test");
+        expect(sandbox.status).toBe("ready");
+        expect(h.shutdown.snapshot()).toMatchObject({
+          phase: "draining",
+          availableRecoveryActions: [],
+        });
+        expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_access_changed" });
+        expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+        expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+      }
+    );
   });
 
   it("does not explicitly stop providers when the capability is disabled", async () => {
@@ -118,17 +105,13 @@ describe("inactivity alarm effects", () => {
       })
     );
 
-    await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
-    expect(sandbox.status).toBe("stopped");
-    expect(h.provider.takeSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerObjectId: sandbox.modal_object_id,
-        reason: "inactivity_timeout",
-      })
-    );
+    expect(sandbox.status).toBe("ready");
+    expect(h.shutdown.snapshot()).toMatchObject({ phase: "draining" });
+    expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
     expect(stopSandbox).not.toHaveBeenCalled();
-    expect(h.wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
+    expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
   });
 
   it("preserves a destructive-snapshot sandbox before inactivity destroys it", async () => {
@@ -155,10 +138,11 @@ describe("inactivity alarm effects", () => {
       })
     );
 
-    await h.manager.handleAlarm();
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
-    expect(order).toEqual(["snapshot", "stop"]);
-    expect(sandbox.snapshot_image_id).toBe("legacy-vercel-snapshot");
+    expect(order).toEqual([]);
+    expect(h.shutdown.snapshot()).toMatchObject({ phase: "draining" });
+    expect(sandbox.snapshot_image_id).toBeNull();
   });
 
   it("stops resumable sandboxes without snapshotting, preserving code-server and VNC secrets", async () => {
@@ -181,27 +165,21 @@ describe("inactivity alarm effects", () => {
       })
     );
 
-    await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
     expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
     expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
-    expect(stopSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerObjectId: sandbox.modal_object_id,
-        reason: "inactivity_timeout",
-        intent: "preserve",
-      })
-    );
+    expect(stopSandbox).not.toHaveBeenCalled();
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("codeServer");
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("vnc");
     expect(sandbox).toMatchObject({
-      code_server_url: null,
+      code_server_url: "https://code.test",
       code_server_password: "code-secret",
-      vnc_url: null,
+      vnc_url: "https://vnc.test",
       vnc_password: "vnc-secret",
-      ttyd_url: null,
-      ttyd_token: null,
-      tunnel_urls: null,
+      ttyd_url: "https://terminal.test",
+      ttyd_token: "terminal-secret",
+      tunnel_urls: '{"3000":"https://preview.test"}',
     });
   });
 
@@ -222,8 +200,9 @@ describe("inactivity alarm effects", () => {
 
     await h.manager.handleAlarm();
 
-    expect(h.storage.calls).toContain("clearSandboxAccess:vnc");
-    expect(sandbox.vnc_url).toBeNull();
-    expect(sandbox.vnc_password).toBeNull();
+    expect(h.storage.calls).not.toContain("clearSandboxAccess:vnc");
+    expect(h.shutdown.snapshot()).toMatchObject({ phase: "draining" });
+    expect(sandbox.vnc_url).toBe("https://vnc.test");
+    expect(sandbox.vnc_password).toBe("encrypted-vnc-password");
   });
 });

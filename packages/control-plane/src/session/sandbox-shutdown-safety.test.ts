@@ -70,6 +70,7 @@ function fixture(
     capabilities: {
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
+      snapshotStopsSandbox: false,
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
@@ -111,6 +112,7 @@ function fixture(
     },
     session: {
       getSession: () => ({ id: "session-1", session_name: "shutdown-safety" }),
+      transaction: <T>(operation: () => T): T => operation(),
     },
     messages: { getProcessingMessage: () => null },
     failures: { record: vi.fn(), deliver: vi.fn() },
@@ -127,7 +129,7 @@ function fixture(
 }
 
 describe("sandbox shutdown safety", () => {
-  it("holds destructive watchdogs while an ordinary checkpoint is in flight", async () => {
+  it("keeps ordinary watchdogs nondestructive while a checkpoint is in flight", async () => {
     let resolveSnapshot!: (result: {
       success: true;
       imageId: string;
@@ -144,18 +146,18 @@ describe("sandbox shutdown safety", () => {
     const capture = h.shutdown.captureCheckpoint(GENERATION, "execution_complete");
     await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
 
-    await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+    await expect(h.shutdown.handleAlarm()).resolves.toBe("continue");
     await expect(h.shutdown.captureCheckpoint(GENERATION, "inactivity_timeout")).resolves.toEqual({
       outcome: "held",
+      reason: "capture_owned",
     });
     expect(takeSnapshot).toHaveBeenCalledOnce();
     expect(h.stopSandbox).not.toHaveBeenCalled();
 
     resolveSnapshot({ success: true, imageId: "checkpoint-image", sourceStopped: false });
-    await expect(capture).resolves.toEqual({
+    await expect(capture).resolves.toMatchObject({
       outcome: "saved",
       imageId: "checkpoint-image",
-      sourceStopped: false,
     });
   });
 
@@ -169,29 +171,31 @@ describe("sandbox shutdown safety", () => {
     ["an unsuccessful provider result", async () => ({ success: false, error: "transport lost" })],
     ["a successful result without an image ID", async () => ({ success: true })],
   ] satisfies Array<[string, NonNullable<SandboxProvider["takeSnapshot"]>]>)(
-    "holds admission when an ordinary checkpoint gets %s",
+    "retains operation ownership without blocking ordinary work when a checkpoint gets %s",
     async (_label, providerCapture) => {
       const takeSnapshot = vi.fn(providerCapture);
       const h = fixture(runningRecord(), { takeSnapshot });
 
-      await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual(
-        { outcome: "unknown" }
-      );
+      await expect(
+        h.shutdown.captureCheckpoint(GENERATION, "execution_complete")
+      ).resolves.toMatchObject({ outcome: "unknown", operationId: expect.any(String) });
 
       expect(h.store.value).toMatchObject({
-        phase: "unknown",
-        checkpointInFlight: false,
-        error: expect.stringMatching(/checkpoint/i),
+        phase: "running",
+        checkpoint: {
+          phase: "unknown",
+          error: expect.stringMatching(/checkpoint/i),
+        },
       });
-      expect(h.shutdown.admissionDecision()).toBe("held");
-      await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+      expect(h.shutdown.admissionDecision()).toBe("ready");
+      expect(h.shutdown.startupDecision()).toMatchObject({ kind: "hold" });
+      await expect(h.shutdown.handleAlarm()).resolves.toBe("continue");
       expect(h.stopSandbox).not.toHaveBeenCalled();
-      await expect(h.shutdown.recover("retry")).rejects.toThrow("cannot be retried safely");
       await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual(
-        { outcome: "held" }
+        { outcome: "held", reason: "shutdown_held" }
       );
       expect(takeSnapshot).toHaveBeenCalledOnce();
-      expect(h.shutdown.admissionDecision()).toBe("held");
+      expect(h.shutdown.admissionDecision()).toBe("ready");
     }
   );
 

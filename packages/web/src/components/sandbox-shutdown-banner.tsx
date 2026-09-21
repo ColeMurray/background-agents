@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { ShutdownRecoveryResult } from "@/hooks/use-session-socket";
 
 const PHASE_MESSAGES: Record<Exclude<SandboxShutdownState["phase"], "running">, string> = {
+  waiting_for_checkpoint: "Waiting for the active checkpoint before stopping the sandbox.",
   draining: "Stopping the prompt to save your sandbox state.",
   prepared: "Prompt stopped. Preparing final sandbox state.",
   capturing: "Saving final sandbox state.",

@@ -8,6 +8,7 @@ export const sandboxShutdownSchema = z.object({
   phase: z.enum([
     "running",
     "restoring",
+    "waiting_for_checkpoint",
     "draining",
     "prepared",
     "capturing",
