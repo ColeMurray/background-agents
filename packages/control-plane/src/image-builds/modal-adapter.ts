@@ -30,6 +30,7 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter {
       cloneUsername:
         plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.username : undefined,
       userEnvVars: plan.userEnvVars,
+      sandboxSettings: plan.sandboxSettings,
       buildExecutionTimeoutSeconds: Math.ceil(plan.buildTimeoutMs / 1000),
       providerSessionTimeoutSeconds: resolveImageBuildProviderSessionTimeoutSeconds(
         plan.buildTimeoutMs

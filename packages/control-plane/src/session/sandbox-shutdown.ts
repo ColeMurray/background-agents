@@ -9,6 +9,7 @@ import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
+import { sandboxArtifactVariantFor, type SandboxArtifactVariant } from "../sandbox/modal-docker";
 import type {
   SandboxCheckpointOutcome,
   SandboxGeneration,
@@ -529,7 +530,8 @@ export class SandboxShutdownCoordinator {
         !this.deps.sandbox.recordSandboxSnapshot(
           checkpointGeneration.sandboxId,
           result.imageId,
-          row.runtime_version
+          row.runtime_version,
+          this.sessionArtifactVariant()
         )
       ) {
         this.endCheckpoint(id, true);
@@ -800,7 +802,8 @@ export class SandboxShutdownCoordinator {
         this.deps.sandbox.recordSandboxSnapshot(
           state.generation.sandboxId,
           artifactId,
-          receipt.runtimeVersion
+          receipt.runtimeVersion,
+          this.sessionArtifactVariant()
         );
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
@@ -942,6 +945,13 @@ export class SandboxShutdownCoordinator {
   }
 
   /** Shared snapshot invocation and conservative classification for checkpoint and shutdown. */
+  /** The runtime variant this session's sandboxes are launched on, from its frozen settings. */
+  private sessionArtifactVariant(): SandboxArtifactVariant {
+    return sandboxArtifactVariantFor(
+      parsePersistedSandboxSettings(this.deps.session.getSession()?.sandbox_settings ?? null)
+    );
+  }
+
   private async captureSnapshot(
     providerObjectId: string,
     sessionId: string,

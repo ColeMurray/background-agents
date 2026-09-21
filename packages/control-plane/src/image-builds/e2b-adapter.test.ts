@@ -36,6 +36,7 @@ function createPlan(): ImageBuildPlan {
       token: "clone-token",
     },
     buildTimeoutMs: 1_800_001,
+    sandboxSettings: {},
     userEnvVars: { FOO: "bar" },
     correlation: { request_id: "request-1", trace_id: "trace-1" },
   };

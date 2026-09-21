@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { SandboxArtifactVariant } from "../modal-docker";
 import {
   SandboxLifecycleManager,
   DEFAULT_LIFECYCLE_CONFIG,
@@ -77,6 +78,7 @@ export function createMockSandbox(
     snapshot_id: null,
     snapshot_image_id: null,
     snapshot_runtime_version: null,
+    snapshot_artifact_variant: null,
     runtime_version: COMPATIBLE_RUNTIME_VERSION,
     auth_token: "auth-token-123",
     auth_token_hash: "auth-token-hash-123",
@@ -221,11 +223,17 @@ export function createMockStorage(
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
     recordSandboxSnapshot: vi.fn(
-      (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {
+      (
+        sandboxId: string | null,
+        imageId: string,
+        runtimeVersion: string | null,
+        artifactVariant: SandboxArtifactVariant
+      ) => {
         calls.push(`recordSandboxSnapshot:${imageId}:${runtimeVersion}`);
         if (!sandbox || sandbox.modal_sandbox_id !== sandboxId) return false;
         sandbox.snapshot_image_id = imageId;
         sandbox.snapshot_runtime_version = runtimeVersion;
+        sandbox.snapshot_artifact_variant = artifactVariant;
         return true;
       }
     ),

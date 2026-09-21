@@ -241,12 +241,17 @@ export class ImageBuildScheduler {
     for (const scope of scopes) {
       try {
         const target = await this.resolveTarget(this.env, this.db, scope);
-        const rows = await this.store.getReconciliationStatus(scope, provider);
+        const rows = await this.store.getReconciliationStatus(
+          scope,
+          provider,
+          target.artifactVariant
+        );
         const decision = evaluateImageBuildRebuildPolicy(
           {
             scope,
             repositories: target.repositories,
             repositoriesFingerprint: target.repositoriesFingerprint,
+            artifactVariant: target.artifactVariant,
           },
           rows,
           provider

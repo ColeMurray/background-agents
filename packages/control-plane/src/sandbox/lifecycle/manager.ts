@@ -64,7 +64,11 @@ import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import { parsePersistedSandboxSettings, SandboxDockerSettingValidationError } from "../settings";
-import { isDockerSandbox } from "../modal-docker";
+import {
+  isDockerSandbox,
+  sandboxArtifactVariantFor,
+  type SandboxArtifactVariant,
+} from "../modal-docker";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import {
   evaluateImageBuildForSpawn,
@@ -256,7 +260,8 @@ export interface SandboxStorage {
   recordSandboxSnapshot(
     sandboxId: string | null,
     imageId: string,
-    runtimeVersion: string | null
+    runtimeVersion: string | null,
+    artifactVariant: SandboxArtifactVariant
   ): boolean;
   /** Update last activity timestamp */
   updateSandboxLastActivity(timestamp: number): void;
@@ -364,6 +369,31 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
 };
+
+/**
+ * A Docker session's snapshot must have been taken on the Docker runtime,
+ * and a standard session must never restore a Docker snapshot. A mismatch
+ * fails the attempt and keeps the snapshot reference; it never launches
+ * fresh over saved work. Standard sessions predating the recorded variant
+ * keep restoring exactly as before.
+ */
+function assertSnapshotVariantMatches(
+  row: Pick<SandboxRow, "snapshot_image_id" | "snapshot_artifact_variant"> | null,
+  snapshotImageId: string,
+  sandboxSettings: SandboxSettings
+): void {
+  const expected = sandboxArtifactVariantFor(sandboxSettings);
+  const recorded =
+    row?.snapshot_image_id === snapshotImageId ? row.snapshot_artifact_variant : null;
+  const compatible =
+    expected === "modal-docker-v1" ? recorded === expected : recorded !== "modal-docker-v1";
+  if (!compatible) {
+    throw new SandboxProviderError(
+      `Saved snapshot was taken on the ${recorded ?? "unknown"} runtime but this session requires ${expected}`,
+      "permanent"
+    );
+  }
+}
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -704,6 +734,7 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const hasRepository = sessionHasRepository(session);
+      const priorSandboxId = this.storage.getSandbox()?.modal_sandbox_id ?? null;
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
@@ -713,6 +744,9 @@ export class SandboxLifecycleManager
 
       await this.stopPriorProviderSandbox();
 
+      const sandboxSettings = this.parseSandboxSettings(session);
+      const artifactVariant = sandboxArtifactVariantFor(sandboxSettings);
+      const retireSandboxId = isDockerSandbox(sandboxSettings) ? priorSandboxId : null;
       const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
       const repositories = this.sessionContext.getSessionRepositories();
@@ -732,13 +766,15 @@ export class SandboxLifecycleManager
         selectedImage = await this.lookupImageBuildForSpawn(
           { kind: "environment", id: session.environment_id },
           repositories,
-          getValidHarnessOrDefault(session.harness)
+          getValidHarnessOrDefault(session.harness),
+          artifactVariant
         );
       } else if (hasRepository && repositories.length === 1) {
         selectedImage = await this.lookupImageBuildForSpawn(
           repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
           repositories,
-          getValidHarnessOrDefault(session.harness)
+          getValidHarnessOrDefault(session.harness),
+          artifactVariant
         );
       }
 
@@ -750,11 +786,11 @@ export class SandboxLifecycleManager
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         sandboxId: expectedSandboxId,
+        retireSandboxId,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
         controlPlaneUrl: this.config.controlPlaneUrl,
@@ -903,11 +939,12 @@ export class SandboxLifecycleManager
   private async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
     repositories: SessionRepositoryInfo[],
-    harness: HarnessId
+    harness: HarnessId,
+    artifactVariant: SandboxArtifactVariant
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
-      const image = await this.imageBuildLookup.getLatestReady(scope);
+      const image = await this.imageBuildLookup.getLatestReady(scope, artifactVariant);
       const result = await evaluateImageBuildForSpawn(image, repositories, harness);
       if (result.outcome === "selected") {
         this.log.info("Using prebuilt image", {
@@ -1129,6 +1166,7 @@ export class SandboxLifecycleManager
 
       this.storage.setLastSpawnError(null, null);
 
+      const priorRow = this.storage.getSandbox();
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
@@ -1146,6 +1184,11 @@ export class SandboxLifecycleManager
 
       await this.stopPriorProviderSandbox();
 
+      const sandboxSettings = this.parseSandboxSettings(session);
+      assertSnapshotVariantMatches(priorRow, snapshotImageId, sandboxSettings);
+      const retireSandboxId = isDockerSandbox(sandboxSettings)
+        ? (priorRow?.modal_sandbox_id ?? null)
+        : null;
       const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
@@ -1154,13 +1197,13 @@ export class SandboxLifecycleManager
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
-      const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
+        retireSandboxId,
         sandboxAuthToken,
         controlPlaneUrl: this.config.controlPlaneUrl,
         repoOwner: session.repo_owner,

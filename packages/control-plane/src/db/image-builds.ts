@@ -1,3 +1,4 @@
+import type { SandboxArtifactVariant } from "../sandbox/modal-docker";
 import {
   imageBuildScopeKindSchema,
   imageBuildStatusSchema,
@@ -64,6 +65,8 @@ export interface ImageBuildRegistration {
   scope: ImageBuildScope;
   provider: ImageBuildProvider;
   repositoriesFingerprint: string;
+  /** Runtime variant the image is prepared for; frozen at registration. Absent means the default. */
+  artifactVariant?: SandboxArtifactVariant;
   callbackTokenHash?: string;
   callbackTokenExpiresAt?: number;
 }
@@ -127,6 +130,7 @@ function parseImageBuildStatusRows(rows: unknown[] | undefined): ImageBuildStatu
  * `ImageBuildStatusRow`, and status reads project exactly its columns.
  */
 export interface ImageBuildRow extends ImageBuildStatusRow {
+  artifact_variant: string;
   provider_image_id: string | null;
   provider_session_id: string | null;
   provider_operation_ref: string | null;
@@ -315,6 +319,7 @@ export class ImageBuildStore {
            scope_id,
            provider,
            repositories_fingerprint,
+           artifact_variant,
            repository_shas,
            runtime_version,
            status,
@@ -322,7 +327,7 @@ export class ImageBuildStore {
            callback_token_expires_at,
            created_at
          )
-         SELECT ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, ?, '[]', '', 'building', ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM image_builds
            WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
@@ -334,6 +339,7 @@ export class ImageBuildStore {
         build.scope.id,
         build.provider,
         build.repositoriesFingerprint,
+        build.artifactVariant ?? "default",
         build.callbackTokenHash ?? null,
         build.callbackTokenExpiresAt ?? null,
         Date.now(),
@@ -497,16 +503,17 @@ export class ImageBuildStore {
   async hasReadyImageForFingerprint(
     scope: ImageBuildScope,
     provider: ImageBuildProvider,
-    repositoriesFingerprint: string
+    repositoriesFingerprint: string,
+    artifactVariant: SandboxArtifactVariant
   ): Promise<boolean> {
     const row = await this.db
       .prepare(
         `SELECT 1 AS present FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
-           AND repositories_fingerprint = ?
+           AND repositories_fingerprint = ? AND artifact_variant = ?
          LIMIT 1`
       )
-      .bind(scope.kind, scope.id, provider, repositoriesFingerprint)
+      .bind(scope.kind, scope.id, provider, repositoriesFingerprint, artifactVariant)
       .first<{ present: number }>();
     return row !== null;
   }
@@ -803,15 +810,17 @@ export class ImageBuildStore {
    */
   async getLatestReadyForSpawn(
     scope: ImageBuildScope,
-    provider: ImageBuildProvider
+    provider: ImageBuildProvider,
+    artifactVariant: SandboxArtifactVariant
   ): Promise<ImageBuildRow | null> {
     return await this.db
       .prepare(
         `SELECT * FROM image_builds
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'ready'
+           AND artifact_variant = ?
          ORDER BY created_at DESC LIMIT 1`
       )
-      .bind(scope.kind, scope.id, provider)
+      .bind(scope.kind, scope.id, provider, artifactVariant)
       .first<ImageBuildRow>();
   }
 
@@ -834,16 +843,17 @@ export class ImageBuildStore {
    */
   async getReconciliationStatus(
     scope: ImageBuildScope,
-    provider: ImageBuildProvider
+    provider: ImageBuildProvider,
+    artifactVariant: SandboxArtifactVariant
   ): Promise<ImageBuildRecordView[]> {
     const result = await this.db
       .prepare(
         `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
-         WHERE scope_kind = ? AND scope_id = ? AND provider = ?
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND artifact_variant = ?
            AND status IN ('building', 'ready')
          ORDER BY created_at DESC`
       )
-      .bind(scope.kind, scope.id, provider)
+      .bind(scope.kind, scope.id, provider, artifactVariant)
       .all<ImageBuildStatusRow>();
 
     return parseImageBuildStatusRows(result.results).map(toImageBuildRecordView);

@@ -182,6 +182,8 @@ export const sandboxRowSchema = z.object({
   snapshot_id: z.string().nullable(),
   snapshot_image_id: z.string().nullable(), // Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version: z.string().nullable(), // SANDBOX_VERSION that produced snapshot_image_id
+  /** Runtime variant that produced snapshot_image_id; NULL on rows snapshotted before the column existed. */
+  snapshot_artifact_variant: z.string().nullable(),
   runtime_version: z.string().nullable(), // SANDBOX_VERSION reported by the running sandbox
   auth_token: z.string().nullable(),
   auth_token_hash: z.string().nullable(), // SHA-256 hash of sandbox auth token

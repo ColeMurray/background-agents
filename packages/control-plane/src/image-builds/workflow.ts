@@ -27,6 +27,7 @@ import {
   type ResolvedImageBuildTarget,
 } from "./planner";
 import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
+import { resolveDockerSandboxAdmission } from "../sandbox/modal-docker";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import type {
   ImageBuildAdapter,
@@ -219,7 +220,8 @@ export class ImageBuildWorkflow {
         (await this.store.hasReadyImageForFingerprint(
           scope,
           provider,
-          target.repositoriesFingerprint
+          target.repositoriesFingerprint,
+          target.artifactVariant
         ))
       ) {
         return { type: "up_to_date" };
@@ -245,6 +247,16 @@ export class ImageBuildWorkflow {
       throw new ImageBuildTriggerFailedError("Failed to trigger build", e);
     }
 
+    // A Docker-variant image is only admitted where Docker sessions are; a
+    // scope that turned Docker on under a closed gate keeps its default
+    // images rather than registering a build no session could launch from.
+    if (target.artifactVariant === "modal-docker-v1") {
+      const dockerAdmission = resolveDockerSandboxAdmission(this.env);
+      if (!dockerAdmission.admitted) {
+        throw new ImageBuildAdmissionClosedError(dockerAdmission.message, dockerAdmission.reason);
+      }
+    }
+
     let providerSessionIdForCleanup: string | null = null;
     try {
       const registered = await this.store.registerBuild({
@@ -252,6 +264,7 @@ export class ImageBuildWorkflow {
         scope,
         provider,
         repositoriesFingerprint: target.repositoriesFingerprint,
+        artifactVariant: target.artifactVariant,
         ...callbackAuthRegistration(callbackAuth),
       });
       if (!registered) {

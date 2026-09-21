@@ -6,6 +6,8 @@
  */
 
 import { ModalApiError } from "../client";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import { isDockerSandbox } from "../modal-docker";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
 import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
@@ -39,6 +41,8 @@ interface StartModalImageBuildConfig {
 export interface ModalImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
   cloneHost?: string;
   cloneUsername?: string;
+  /** Frozen scope settings; the Docker subset selects the runtime the image is prepared on. */
+  sandboxSettings?: SandboxSettings;
 }
 
 export interface TerminateModalImageBuildConfig {
@@ -130,9 +134,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
           repositories: config.repositories,
+          retireSandboxId: config.retireSandboxId,
         },
         config.correlation
       );
+      await this.assertDockerLaunchHonored(config, result, config.correlation);
 
       return {
         sandboxId: result.sandboxId,
@@ -186,9 +192,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
           repositories: config.repositories,
+          retireSandboxId: config.retireSandboxId,
         },
         config.correlation
       );
+      await this.assertDockerLaunchHonored(config, result, config.correlation);
 
       return {
         success: true,
@@ -218,6 +226,34 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       }
       throw this.classifyError("Failed to restore sandbox from snapshot", error);
     }
+  }
+
+  /**
+   * A Docker session must run on the Docker runtime. A Modal deployment that
+   * predates the setting ignores it and launches the default sandbox, and
+   * reports no `dockerEnabled`; that sandbox is stopped and the launch fails
+   * permanently rather than letting the session continue without Docker.
+   */
+  private async assertDockerLaunchHonored(
+    config: Pick<CreateSandboxConfig, "sessionId" | "sandboxSettings">,
+    result: { modalObjectId?: string; dockerEnabled?: boolean },
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    if (!isDockerSandbox(config.sandboxSettings) || result.dockerEnabled === true) return;
+    if (result.modalObjectId) {
+      try {
+        await this.client.stopSandbox(
+          { providerObjectId: result.modalObjectId, sessionId: config.sessionId },
+          correlation
+        );
+      } catch {
+        // The launch already failed; the cleanup path reports the sandbox.
+      }
+    }
+    throw new SandboxProviderError(
+      "Modal deployment did not launch the Docker runtime; deploy Docker-aware Modal endpoints",
+      "permanent"
+    );
   }
 
   /**
@@ -309,6 +345,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           cloneToken: config.cloneToken,
           ...(config.cloneHost ? { cloneHost: config.cloneHost } : {}),
           ...(config.cloneUsername ? { cloneUsername: config.cloneUsername } : {}),
+          sandboxSettings: config.sandboxSettings,
           callbackUrl: config.callbackUrl,
           failureCallbackUrl: config.failureCallbackUrl,
           userEnvVars: config.userEnvVars,

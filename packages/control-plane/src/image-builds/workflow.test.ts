@@ -89,6 +89,7 @@ function plannedBuild(overrides: Record<string, unknown> = {}): ImageBuildPlan {
     callbackUrl: "https://worker.test/image-builds/build-complete",
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1800_000,
+    sandboxSettings: {},
     correlation: { trace_id: "t", request_id: "r" },
     callbackToken: MODAL_CALLBACK_TOKEN,
     cloneAuth: { type: "unavailable" },
@@ -105,6 +106,7 @@ function vercelPlannedBuild(): ImageBuildPlan {
     callbackUrl: "https://worker.test/image-builds/build-complete",
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1800_000,
+    sandboxSettings: {},
     correlation: { trace_id: "t", request_id: "r" },
     callbackToken: "callback-token",
     cloneAuth: { type: "unavailable" },
@@ -131,6 +133,7 @@ function createWorkflow(options: {
     vi.fn().mockResolvedValue({
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-1",
+      artifactVariant: "default",
     });
   const createCallbackAuth =
     options.createCallbackAuth ??
@@ -184,6 +187,7 @@ describe("ImageBuildWorkflow", () => {
         scope: ENV_SCOPE,
         provider: "modal",
         repositoriesFingerprint: "fp-1",
+        artifactVariant: "default",
         callbackTokenHash: "hash-modal",
         callbackTokenExpiresAt: 9_999_999_999_999,
       });
@@ -196,6 +200,7 @@ describe("ImageBuildWorkflow", () => {
         kind: "environment" as const,
         repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
         repositoriesFingerprint: "fp-reconciled",
+        artifactVariant: "default" as const,
       };
 
       await workflow.triggerBuildWithTarget(ENV_SCOPE, target, ctx);
@@ -447,7 +452,12 @@ describe("ImageBuildWorkflow", () => {
       const result = await workflow.triggerBuildIfStale(ENV_SCOPE, ctx);
 
       expect(result).toEqual({ type: "up_to_date" });
-      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(ENV_SCOPE, "modal", "fp-1");
+      expect(store.hasReadyImageForFingerprint).toHaveBeenCalledWith(
+        ENV_SCOPE,
+        "modal",
+        "fp-1",
+        "default"
+      );
       expect(store.registerBuild).not.toHaveBeenCalled();
       // A no-op save must not decrypt secrets or mint clone tokens.
       expect(planBuild).not.toHaveBeenCalled();
@@ -936,6 +946,44 @@ describe("ImageBuildWorkflow admission", () => {
     // no partial build to clean up afterwards.
     expect(store.registerBuild).not.toHaveBeenCalled();
     expect(adapter.startBuild).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Docker-variant build while Docker admission is closed", async () => {
+    const store = createStore();
+    const resolveTarget = vi.fn().mockResolvedValue({
+      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+      repositoriesFingerprint: "fp-1",
+      artifactVariant: "modal-docker-v1",
+    });
+    const { workflow, adapter } = createWorkflow({ store, resolveTarget });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toMatchObject({
+      code: "admission_closed",
+      reason: "docker_not_available",
+    });
+    expect(store.registerBuild).not.toHaveBeenCalled();
+    expect(adapter.startBuild).not.toHaveBeenCalled();
+  });
+
+  it("registers a Docker-variant build once Docker admission is open", async () => {
+    const store = createStore();
+    const resolveTarget = vi.fn().mockResolvedValue({
+      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+      repositoriesFingerprint: "fp-1",
+      artifactVariant: "modal-docker-v1",
+    });
+    const { workflow } = createWorkflow({
+      store,
+      resolveTarget,
+      env: createEnv({ ENABLE_MODAL_VM_SANDBOXES: "true" }),
+    });
+
+    await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).resolves.toMatchObject({
+      type: "triggered",
+    });
+    expect(store.registerBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactVariant: "modal-docker-v1" })
+    );
   });
 
   it("triggers normally once an operator opens admission", async () => {

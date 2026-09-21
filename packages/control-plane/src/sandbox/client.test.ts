@@ -816,6 +816,7 @@ describe("ModalClient", () => {
       failure_callback_url: "https://worker.test/image-builds/build-failed",
       build_execution_timeout_seconds: 1800,
       provider_session_timeout_seconds: 2400,
+      sandbox_settings: null,
     });
     expect(result).toEqual({ providerSessionId: "modal-session-1" });
   });
@@ -889,5 +890,64 @@ describe("ModalClient", () => {
         callbackToken: "cb-token-1",
       })
     ).rejects.toThrow("Modal API error: Invalid response");
+  });
+});
+
+describe("ModalClient Docker launch fields", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function okResponse(data: Record<string, unknown>): Response {
+    return new Response(JSON.stringify({ success: true, data }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("forwards the prior generation on create and restore and reads back the Docker flag", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        okResponse({ sandbox_id: "sb", modal_object_id: "mo", created_at: 1, docker_enabled: true })
+      )
+      .mockResolvedValueOnce(okResponse({ sandbox_id: "sb", modal_object_id: "mo" }));
+    const client = createModalClient("secret", "acme", "prod-web");
+
+    const created = await client.createSandbox({
+      sessionId: "session-123",
+      repoOwner: null,
+      repoName: null,
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      harness: "opencode",
+      sandboxSettings: { dockerEnabled: true, cpuCores: 2, memoryMib: 4096 },
+      retireSandboxId: "sandbox-prior",
+    });
+    const restored = await client.restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: null,
+      repoName: null,
+      harness: "opencode",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+    });
+
+    const createBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(createBody.retire_sandbox_id).toBe("sandbox-prior");
+    expect(createBody.sandbox_settings).toEqual({
+      dockerEnabled: true,
+      cpuCores: 2,
+      memoryMib: 4096,
+    });
+    expect(created.dockerEnabled).toBe(true);
+    const restoreBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(restoreBody.retire_sandbox_id).toBeNull();
+    // A pre-feature deployment reports no flag; the provider treats that as not honored.
+    expect(restored.dockerEnabled).toBeUndefined();
   });
 });

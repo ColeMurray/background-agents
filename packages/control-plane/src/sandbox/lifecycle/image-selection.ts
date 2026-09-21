@@ -28,6 +28,7 @@ import {
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
 import { supportsConfirmedShutdown } from "./shutdown-policy";
+import type { SandboxArtifactVariant } from "../modal-docker";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -47,8 +48,14 @@ export interface ImageBuildSpawnRow {
  * Object.
  */
 export interface ImageBuildLookup {
-  /** Latest ready image for the scope on the active provider, enablement-gated. */
-  getLatestReady(scope: ImageBuildScope): Promise<ImageBuildSpawnRow | null>;
+  /**
+   * Latest ready image for the scope on the active provider that was prepared
+   * for the session's runtime variant, enablement-gated.
+   */
+  getLatestReady(
+    scope: ImageBuildScope,
+    artifactVariant: SandboxArtifactVariant
+  ): Promise<ImageBuildSpawnRow | null>;
   /**
    * Fail a ready image whose provider artifact could not be restored, so the
    * rebuild cron sees no ready image and rebuilds it.

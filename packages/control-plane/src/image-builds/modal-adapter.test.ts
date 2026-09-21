@@ -32,6 +32,7 @@ function createPlan(): ImageBuildPlan {
       token: "clone-token",
     },
     buildTimeoutMs: 1_800_000,
+    sandboxSettings: {},
     userEnvVars: { FOO: "bar" },
     correlation: {
       request_id: "request-1",
@@ -60,6 +61,7 @@ describe("ModalImageBuildAdapter", () => {
       buildExecutionTimeoutSeconds: 1800,
       providerSessionTimeoutSeconds: 2400,
       userEnvVars: { FOO: "bar" },
+      sandboxSettings: {},
       callbackUrl: "https://worker.test/image-builds/build-complete",
       failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       callbackToken: "modal-callback-token",

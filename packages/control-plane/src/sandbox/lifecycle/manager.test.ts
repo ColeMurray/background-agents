@@ -3255,10 +3255,13 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "repo",
-        id: "testowner/testrepo",
-      });
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "repo",
+          id: "testowner/testrepo",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           prebuiltImageId: "img-abc123",
@@ -3306,10 +3309,13 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "repo",
-        id: "testowner/testrepo",
-      });
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "repo",
+          id: "testowner/testrepo",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
@@ -3566,10 +3572,13 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.spawnSandbox();
 
-      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "environment",
-        id: "env-1",
-      });
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "environment",
+          id: "env-1",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           prebuiltImageId: "im-env-123",
@@ -3616,10 +3625,13 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(environmentImageLookup.getLatestReady).toHaveBeenCalledTimes(1);
-      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith({
-        kind: "environment",
-        id: "env-1",
-      });
+      expect(environmentImageLookup.getLatestReady).toHaveBeenCalledWith(
+        {
+          kind: "environment",
+          id: "env-1",
+        },
+        "default"
+      );
       expect(provider.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null })
       );
@@ -3924,6 +3936,145 @@ describe("SandboxLifecycleManager", () => {
         expect(mockStorage.calls).toContain("transitionSandboxStatus:spawning->failed");
       }
     );
+
+    function createSettingsManager(
+      sandboxSettings: string,
+      sandbox: ReturnType<typeof createMockSandbox>,
+      overrides?: {
+        imageBuildLookup?: ImageBuildLookup;
+        sessionRepositories?: SessionRepositoryInfo[];
+      }
+    ) {
+      // Docker sessions are only admitted on Modal; the mock stands in for it.
+      const provider = Object.assign(createMockProvider(), { name: "modal" });
+      const storage = createMockStorage(
+        createMockSession({ sandbox_settings: sandboxSettings }),
+        sandbox,
+        undefined,
+        overrides?.sessionRepositories
+      );
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        createTestConfig(),
+        overrides?.imageBuildLookup
+      );
+      return { manager, provider, storage };
+    }
+
+    const DOCKER_SETTINGS = '{"dockerEnabled":true,"cpuCores":2,"memoryMib":4096}';
+
+    it("looks up prepared images of the session's runtime variant only", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => null),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const members: SessionRepositoryInfo[] = [
+        { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+      ];
+      const { manager } = createSettingsManager(
+        DOCKER_SETTINGS,
+        createMockSandbox({ status: "pending", created_at: Date.now() - 60000 }),
+        { imageBuildLookup, sessionRepositories: members }
+      );
+
+      await manager.spawnSandbox();
+
+      expect(imageBuildLookup.getLatestReady).toHaveBeenCalledWith(
+        { kind: "repo", id: "testowner/testrepo" },
+        "modal-docker-v1"
+      );
+    });
+
+    it("hands the prior generation to the provider so an orphaned Docker VM can be retired", async () => {
+      const { manager, provider } = createSettingsManager(
+        DOCKER_SETTINGS,
+        createMockSandbox({
+          status: "failed",
+          modal_sandbox_id: "sandbox-prior-generation",
+          modal_object_id: null,
+          created_at: Date.now() - 60000,
+        })
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ retireSandboxId: "sandbox-prior-generation" })
+      );
+    });
+
+    it("never asks the provider to retire anything for standard sessions", async () => {
+      const { manager, provider } = createSettingsManager(
+        "{}",
+        createMockSandbox({
+          status: "failed",
+          modal_sandbox_id: "sandbox-prior-generation",
+          created_at: Date.now() - 60000,
+        })
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ retireSandboxId: null })
+      );
+    });
+
+    it.each([
+      ["a Docker session", DOCKER_SETTINGS, "default"],
+      ["a Docker session with an unlabeled snapshot", DOCKER_SETTINGS, null],
+      ["a standard session", "{}", "modal-docker-v1"],
+    ])(
+      "refuses to restore %s from a snapshot of the other runtime and keeps the snapshot",
+      async (_, settings, recordedVariant) => {
+        const { manager, provider, storage } = createSettingsManager(
+          settings,
+          createMockSandbox({
+            status: "stopped",
+            snapshot_image_id: "img-saved",
+            snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+            snapshot_artifact_variant: recordedVariant,
+          })
+        );
+
+        await manager.spawnSandbox();
+
+        expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
+        expect(storage.getSandbox()?.snapshot_image_id).toBe("img-saved");
+        expect(storage.getSandbox()?.last_spawn_error).toContain("runtime");
+      }
+    );
+
+    it.each([
+      ["a Docker session", DOCKER_SETTINGS, "modal-docker-v1"],
+      ["a standard session with a labeled snapshot", "{}", "default"],
+      ["a standard session with a pre-feature snapshot", "{}", null],
+    ])("restores %s from a matching snapshot", async (_, settings, recordedVariant) => {
+      const { manager, provider } = createSettingsManager(
+        settings,
+        createMockSandbox({
+          status: "stopped",
+          snapshot_image_id: "img-saved",
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+          snapshot_artifact_variant: recordedVariant,
+        })
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ snapshotImageId: "img-saved" })
+      );
+    });
 
     it("uses the configured sandbox timeout for fresh spawns", async () => {
       const session = createMockSession({

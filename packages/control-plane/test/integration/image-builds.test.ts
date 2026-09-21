@@ -8,6 +8,7 @@
  * deployment, and the SCM-less harness split is the same as PR-4/PR-8.
  */
 
+import type { SandboxArtifactVariant } from "../../src/sandbox/modal-docker";
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { ImageBuildStore } from "../../src/db/image-builds";
@@ -107,13 +108,21 @@ async function seedRowWithInternalColumns(scope: ImageBuildScope, id: string): P
  * resolver answers enablement (and entity existence), then the store serves
  * the plain row read.
  */
-async function selectScopeForSpawn(scope: ImageBuildScope, provider: "modal" | "vercel") {
+async function selectScopeForSpawn(
+  scope: ImageBuildScope,
+  provider: "modal" | "vercel",
+  artifactVariant: SandboxArtifactVariant = "default"
+) {
   if (!(await resolveScopeEnabled(env.DB, scope))) return null;
-  return new ImageBuildStore(env.DB).getLatestReadyForSpawn(scope, provider);
+  return new ImageBuildStore(env.DB).getLatestReadyForSpawn(scope, provider, artifactVariant);
 }
 
-async function selectForSpawn(environmentId: string, provider: "modal" | "vercel") {
-  return selectScopeForSpawn(environmentScope(environmentId), provider);
+async function selectForSpawn(
+  environmentId: string,
+  provider: "modal" | "vercel",
+  artifactVariant: SandboxArtifactVariant = "default"
+) {
+  return selectScopeForSpawn(environmentScope(environmentId), provider, artifactVariant);
 }
 
 describe("Image builds", () => {
@@ -254,8 +263,45 @@ describe("Image builds", () => {
       });
 
       const scope = environmentScope(environmentId);
-      expect(await store.hasReadyImageForFingerprint(scope, "modal", "fp-x")).toBe(true);
-      expect(await store.hasReadyImageForFingerprint(scope, "modal", "fp-y")).toBe(false);
+      expect(await store.hasReadyImageForFingerprint(scope, "modal", "fp-x", "default")).toBe(true);
+      expect(await store.hasReadyImageForFingerprint(scope, "modal", "fp-y", "default")).toBe(
+        false
+      );
+      expect(
+        await store.hasReadyImageForFingerprint(scope, "modal", "fp-x", "modal-docker-v1")
+      ).toBe(false);
+    });
+
+    it("keeps default and Docker-variant images apart at registration and lookup", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      const scope = environmentScope(environmentId);
+      const store = new ImageBuildStore(env.DB);
+
+      await store.registerBuild({
+        id: "docker-build",
+        scope,
+        provider: "modal",
+        repositoriesFingerprint: "fp-x",
+        artifactVariant: "modal-docker-v1",
+      });
+      const row = await env.DB.prepare(`SELECT artifact_variant FROM image_builds WHERE id = ?`)
+        .bind("docker-build")
+        .first<{ artifact_variant: string }>();
+      expect(row?.artifact_variant).toBe("modal-docker-v1");
+      // Unlabeled registrations are default-runtime images, like every pre-feature row.
+      await store.markBuildFailed("docker-build", "modal", "test");
+      await store.registerBuild({
+        id: "default-build",
+        scope,
+        provider: "modal",
+        repositoriesFingerprint: "fp-x",
+      });
+      const defaultRow = await env.DB.prepare(
+        `SELECT artifact_variant FROM image_builds WHERE id = ?`
+      )
+        .bind("default-build")
+        .first<{ artifact_variant: string }>();
+      expect(defaultRow?.artifact_variant).toBe("default");
     });
   });
 
@@ -309,6 +355,32 @@ describe("Image builds", () => {
       expect(selected?.id).toBe("sp-latest");
       expect(selected?.provider_image_id).toBe("im-latest");
       expect((await selectForSpawn(environmentId, "vercel"))?.id).toBe("sp-vercel");
+    });
+
+    it("serves only images prepared for the session's runtime variant", async () => {
+      const environmentId = await seedEnvironment({ prebuildEnabled: true });
+      const now = Date.now();
+      await seedImageRow({
+        id: "sp-default",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-default",
+        createdAt: now - 1000,
+      });
+      await seedImageRow({
+        id: "sp-docker",
+        environmentId,
+        status: "ready",
+        providerImageId: "im-docker",
+        createdAt: now,
+        artifactVariant: "modal-docker-v1",
+      });
+
+      // The newer Docker image never serves a standard session, and vice versa.
+      expect((await selectForSpawn(environmentId, "modal"))?.id).toBe("sp-default");
+      expect((await selectForSpawn(environmentId, "modal", "modal-docker-v1"))?.id).toBe(
+        "sp-docker"
+      );
     });
 
     it("never serves a deleted environment's lingering row", async () => {

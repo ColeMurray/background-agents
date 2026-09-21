@@ -27,6 +27,9 @@ export function evaluateImageBuildRebuildPolicy(
     return { type: "skip", reason: "building" };
   }
 
+  // Rows are already scoped to the unit's runtime variant by the store read
+  // (getReconciliationStatus); an image of the other variant is invisible
+  // here and never satisfies the scope.
   const ready = providerRows.find(
     (row) => row.status === "ready" && row.repositoriesFingerprint === unit.repositoriesFingerprint
   );

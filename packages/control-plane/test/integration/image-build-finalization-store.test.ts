@@ -442,7 +442,7 @@ describe("ImageBuildStore finalization state", () => {
     }
 
     expect((await store.getStatus(scope)).some((row) => row.id === "ready-build")).toBe(false);
-    expect(await store.getReconciliationStatus(scope, "modal")).toEqual([
+    expect(await store.getReconciliationStatus(scope, "modal", "default")).toEqual([
       expect.objectContaining({ id: "ready-build", status: "ready" }),
     ]);
   });

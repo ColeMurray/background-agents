@@ -178,6 +178,7 @@ it.each(["probe-unavailable", "probe-exited", "stdin-response-lost"])(
         kind: "environment" as const,
         repositories,
         repositoriesFingerprint: "fp",
+        artifactVariant: "default" as const,
       }),
       createCallbackAuth: async () => ({
         token: "b".repeat(64),
@@ -193,6 +194,7 @@ it.each(["probe-unavailable", "probe-exited", "stdin-response-lost"])(
           repositoriesFingerprint: "fp",
           callbackToken: "b".repeat(64),
           buildTimeoutMs: 1_800_000,
+          sandboxSettings: {},
           correlation,
           cloneAuth: { type: "unavailable" as const },
         };

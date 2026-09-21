@@ -1,4 +1,5 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
 import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
@@ -45,6 +46,11 @@ export interface ImageBuildPlan {
   failureCallbackUrl: string;
   /** User-configured build-execution budget; provider sessions add finalization headroom. */
   buildTimeoutMs: number;
+  /**
+   * The scope's frozen sandbox settings at planning time. Modal reads the
+   * Docker subset to prepare the image on the same runtime its sessions use.
+   */
+  sandboxSettings: SandboxSettings;
   userEnvVars?: Record<string, string>;
   correlation: CorrelationContext;
   callbackToken: string;

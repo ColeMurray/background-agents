@@ -1,4 +1,5 @@
 import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxArtifactVariant } from "../sandbox/modal-docker";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SandboxRow } from "./types";
 
@@ -26,7 +27,8 @@ export interface SandboxShutdownStorage extends SandboxStateReader {
   recordSandboxSnapshot(
     sandboxId: string | null,
     snapshotId: string,
-    runtimeVersion: string | null
+    runtimeVersion: string | null,
+    artifactVariant: SandboxArtifactVariant
   ): boolean;
   updateSandboxStatus(status: SandboxStatus): void;
   transitionSandboxStatus(

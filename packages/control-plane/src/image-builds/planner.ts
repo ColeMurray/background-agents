@@ -3,6 +3,7 @@ import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import { prepareLegacyManagedProviderEnv } from "../sandbox/managed-provider-env";
+import { freezeDockerSandboxSettings, sandboxArtifactVariantFor } from "../sandbox/modal-docker";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -10,6 +11,7 @@ import {
   hashImageBuildCallbackToken,
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
+import { ImageBuildPlanningError } from "./errors";
 import type { ImageBuildScope } from "./model";
 import {
   loadScopeBuildSecrets,
@@ -85,11 +87,18 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
     const { repositories, repositoriesFingerprint } = params.target;
     const primary = repositories[0];
 
-    const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
+    const [resolvedSandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       resolveScopeSandboxSettings(this.db, params.scope, primary),
       loadScopeBuildSecrets(this.env, this.db, params.scope, params.target),
       this.resolveCloneAuth(params.scope),
     ]);
+    // The registered row already carries the variant the target resolved; a
+    // settings change between the two reads must not prepare an image under
+    // the wrong label.
+    const sandboxSettings = freezeDockerSandboxSettings(resolvedSandboxSettings);
+    if (sandboxArtifactVariantFor(sandboxSettings) !== params.target.artifactVariant) {
+      throw new ImageBuildPlanningError("Sandbox settings changed while the build was planned");
+    }
 
     const basePlan = {
       buildId: params.buildId,
@@ -99,6 +108,7 @@ export class ImageBuildPlanner implements ImageBuildPlannerPort {
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
+      sandboxSettings,
       userEnvVars: userEnvVars
         ? prepareLegacyManagedProviderEnv({
             exposedSecrets: userEnvVars,

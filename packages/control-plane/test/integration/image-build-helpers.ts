@@ -55,13 +55,14 @@ export async function seedImageRowForScope(
     repositoriesFingerprint?: string;
     runtimeVersion?: string;
     createdAt?: number;
+    artifactVariant?: string;
   }
 ): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO image_builds
        (id, scope_kind, scope_id, provider, provider_image_id, repositories_fingerprint,
-        repository_shas, runtime_version, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        repository_shas, runtime_version, status, created_at, artifact_variant)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       row.id,
@@ -73,7 +74,8 @@ export async function seedImageRowForScope(
       JSON.stringify(REPOSITORY_SHAS),
       row.runtimeVersion ?? RUNTIME_VERSION,
       row.status,
-      row.createdAt ?? Date.now()
+      row.createdAt ?? Date.now(),
+      row.artifactVariant ?? "default"
     )
     .run();
 }
@@ -86,6 +88,7 @@ export async function seedImageRow(row: {
   providerImageId?: string | null;
   repositoriesFingerprint?: string;
   createdAt?: number;
+  artifactVariant?: string;
 }): Promise<void> {
   await seedImageRowForScope(environmentScope(row.environmentId), row);
 }

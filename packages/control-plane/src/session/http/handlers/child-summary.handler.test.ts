@@ -55,6 +55,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     snapshot_id: null,
     snapshot_image_id: null,
     snapshot_runtime_version: null,
+    snapshot_artifact_variant: null,
     runtime_version: null,
     auth_token: null,
     auth_token_hash: null,

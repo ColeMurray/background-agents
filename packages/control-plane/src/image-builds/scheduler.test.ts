@@ -116,6 +116,7 @@ function harness(
       repoId: 1,
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-current",
+      artifactVariant: "default",
     })
   );
   const scheduler = new ImageBuildScheduler(
@@ -170,7 +171,8 @@ describe("ImageBuildScheduler", () => {
     expect(resolveTarget).toHaveBeenCalledOnce();
     expect(store.getReconciliationStatus).toHaveBeenCalledWith(
       { kind: "repo", id: "acme/web" },
-      "modal"
+      "modal",
+      "default"
     );
   });
 
@@ -240,6 +242,7 @@ describe("ImageBuildScheduler", () => {
             },
           ],
           repositoriesFingerprint: `fp-${scope.id}`,
+          artifactVariant: "default" as const,
         };
       }
     );

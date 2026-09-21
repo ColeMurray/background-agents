@@ -37,6 +37,7 @@ const createSandboxModalResponseSchema = z.object({
     sandbox_id: z.string(),
     modal_object_id: z.string().nullable().optional(),
     created_at: z.number(),
+    docker_enabled: z.boolean().optional(),
     code_server_url: z.string().nullable().optional(),
     code_server_password: z.string().nullable().optional(),
     vnc_url: z.string().nullable().optional(),
@@ -51,6 +52,7 @@ const restoreSandboxModalResponseSchema = z.object({
   data: z.object({
     sandbox_id: z.string().min(1),
     modal_object_id: z.string().nullable().optional(),
+    docker_enabled: z.boolean().optional(),
     code_server_url: z.string().nullable().optional(),
     code_server_password: z.string().nullable().optional(),
     vnc_url: z.string().nullable().optional(),
@@ -162,6 +164,7 @@ export interface CreateSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
+  retireSandboxId?: string | null;
   signal?: AbortSignal;
 }
 
@@ -169,6 +172,8 @@ export interface CreateSandboxResponse {
   sandboxId: string;
   modalObjectId?: string; // Modal's internal object ID for snapshot API
   createdAt: number;
+  /** Whether Modal launched the Docker-capable runtime; absent from pre-feature deployments. */
+  dockerEnabled?: boolean;
   codeServerUrl?: string;
   codeServerPassword?: string;
   vncUrl?: string;
@@ -197,12 +202,14 @@ export interface RestoreSandboxRequest {
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
+  retireSandboxId?: string | null;
   signal?: AbortSignal;
 }
 
 export interface RestoreSandboxResponse {
   sandboxId: string;
   modalObjectId?: string;
+  dockerEnabled?: boolean;
   codeServerUrl?: string;
   codeServerPassword?: string;
   vncUrl?: string;
@@ -245,6 +252,7 @@ export interface CreateImageBuildSandboxRequest {
   cloneToken?: string;
   cloneHost?: string;
   cloneUsername?: string;
+  sandboxSettings?: SandboxSettings;
   callbackUrl: string;
   failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
@@ -410,6 +418,7 @@ export class ModalClient {
             ? request.repositories.map(toRepositoryConfigPayload)
             : null,
           bridge_early_connect: true,
+          retire_sandbox_id: request.retireSandboxId ?? null,
         },
         createSandboxModalResponseSchema,
         correlation,
@@ -421,6 +430,7 @@ export class ModalClient {
       return {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
+        dockerEnabled: result.data.docker_enabled,
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
@@ -473,6 +483,7 @@ export class ModalClient {
           vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
+          retire_sandbox_id: request.retireSandboxId ?? null,
         },
         restoreSandboxModalResponseSchema,
         correlation,
@@ -484,6 +495,7 @@ export class ModalClient {
       return {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
+        dockerEnabled: result.data.docker_enabled,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
         vncUrl: result.data.vnc_url ?? undefined,
@@ -632,6 +644,7 @@ export class ModalClient {
           clone_token: request.cloneToken,
           clone_host: request.cloneHost,
           clone_username: request.cloneUsername,
+          sandbox_settings: request.sandboxSettings ?? null,
           callback_url: request.callbackUrl,
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,

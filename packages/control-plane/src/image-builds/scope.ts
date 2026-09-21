@@ -23,6 +23,7 @@ import {
 } from "../db/secrets-validation";
 import { createLogger } from "../logger";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
+import { sandboxArtifactVariantFor, type SandboxArtifactVariant } from "../sandbox/modal-docker";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -40,6 +41,8 @@ const logger = createLogger("image-builds:scope");
 interface ResolvedImageBuildTargetBase {
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
+  /** Runtime variant the scope's sessions launch on, from its resolved sandbox settings. */
+  artifactVariant: SandboxArtifactVariant;
 }
 
 /**
@@ -65,6 +68,7 @@ export interface EnabledScopeUnit {
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
+  artifactVariant: SandboxArtifactVariant;
 }
 
 /** The scope's buildable repository set, in position order ([0] = primary). */
@@ -98,6 +102,7 @@ export async function resolveScopeTarget(
         kind: "environment",
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        artifactVariant: await resolveScopeArtifactVariant(db, scope, repositories[0]),
       };
     }
     case "repo": {
@@ -126,6 +131,7 @@ export async function resolveScopeTarget(
         kind: "repo",
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        artifactVariant: await resolveScopeArtifactVariant(db, scope, repositories[0]),
         repoId: resolved.repoId,
       };
     }
@@ -215,10 +221,14 @@ export async function listEnabledScopeUnits(
         repoName: repo.repo_name,
         baseBranch: repo.base_branch,
       }));
+      const scope = { kind: "environment" as const, id: row.id };
       return {
-        scope: { kind: "environment" as const, id: row.id },
+        scope,
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+        artifactVariant: repositories[0]
+          ? await resolveScopeArtifactVariant(db, scope, repositories[0])
+          : ("default" as const),
       };
     })
   );
@@ -233,6 +243,7 @@ export async function listEnabledScopeUnits(
           scope,
           repositories: target.repositories,
           repositoriesFingerprint: target.repositoriesFingerprint,
+          artifactVariant: target.artifactVariant,
         };
       } catch (e) {
         logger.warn("image_build.enabled_unit_skipped", {
@@ -253,6 +264,15 @@ export async function listEnabledScopeUnits(
  * settings, with the environment's own overrides layered on top for
  * environment scopes (a repo scope has no environment layer by definition).
  */
+/** The runtime variant the scope's sessions launch on: a Docker scope prepares Docker images. */
+export async function resolveScopeArtifactVariant(
+  db: SqlDatabase,
+  scope: ImageBuildScope,
+  primary: ImageBuildRepository
+): Promise<SandboxArtifactVariant> {
+  return sandboxArtifactVariantFor(await resolveScopeSandboxSettings(db, scope, primary));
+}
+
 export async function resolveScopeSandboxSettings(
   db: SqlDatabase,
   scope: ImageBuildScope,

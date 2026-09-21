@@ -16,11 +16,11 @@ export function createImageBuildLookup(
 ): ImageBuildLookup {
   const store = new ImageBuildStore(db);
   return {
-    getLatestReady: async (scope) => {
+    getLatestReady: async (scope, artifactVariant) => {
       // Enablement (and entity existence) is the scope resolver's answer;
       // the store read is a plain row lookup.
       if (!(await resolveScopeEnabled(db, scope))) return null;
-      return store.getLatestReadyForSpawn(scope, provider);
+      return store.getLatestReadyForSpawn(scope, provider, artifactVariant);
     },
     markRestoreFailed: (imageBuildId, error) => store.markRestoreFailed(imageBuildId, error),
   };

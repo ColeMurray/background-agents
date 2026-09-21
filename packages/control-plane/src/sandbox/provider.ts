@@ -154,6 +154,11 @@ export interface CreateSandboxConfig {
    * (pull-request-service) and travel in per-repo push specs.
    */
   repositories?: SessionRepositoryInfo[];
+  /**
+   * The previous generation's sandbox id, so a provider that names its
+   * allocations can retire a predecessor whose object id was never learned.
+   */
+  retireSandboxId?: string | null;
 }
 
 /** Complete browser-desktop access credential returned by sandbox providers. */
@@ -235,6 +240,8 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** See CreateSandboxConfig.retireSandboxId. */
+  retireSandboxId?: string | null;
   /** Multi-repo member list — see CreateSandboxConfig. */
   repositories?: SessionRepositoryInfo[];
 }

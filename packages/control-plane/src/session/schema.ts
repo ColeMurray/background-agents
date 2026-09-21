@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   snapshot_id TEXT,
   snapshot_image_id TEXT,                           -- Modal Image ID for filesystem snapshot restoration
   snapshot_runtime_version TEXT,                    -- SANDBOX_VERSION that produced snapshot_image_id (restore compatibility floor)
+  snapshot_artifact_variant TEXT,                   -- Runtime variant that produced snapshot_image_id ('default' | 'modal-docker-v1'); NULL on pre-feature rows
   runtime_version TEXT,                             -- SANDBOX_VERSION reported by the running sandbox
   auth_token TEXT,                                  -- Token for sandbox to authenticate back to control plane
   auth_token_hash TEXT,                             -- SHA-256 hash of sandbox auth token (preferred)
@@ -722,6 +723,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
     )`,
+  },
+  {
+    id: 55,
+    description: "Record the runtime variant that produced the sandbox snapshot",
+    run: `ALTER TABLE sandbox ADD COLUMN snapshot_artifact_variant TEXT`,
   },
 ];
 

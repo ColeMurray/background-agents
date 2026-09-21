@@ -16,6 +16,7 @@ function sandboxRow(overrides: Partial<SandboxRow> = {}): SandboxRow {
     snapshot_id: null,
     snapshot_image_id: null,
     snapshot_runtime_version: null,
+    snapshot_artifact_variant: null,
     runtime_version: null,
     auth_token: null,
     auth_token_hash: null,
@@ -290,26 +291,36 @@ describe("SandboxRepository", () => {
   });
 
   describe("recordSandboxSnapshot", () => {
-    const query = `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
+    const query = `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?,
+         snapshot_artifact_variant = ?
        WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`;
 
-    it("stamps the snapshot with the runtime that produced it, for the sandbox it was taken of", () => {
+    it("stamps the snapshot with the runtime and variant that produced it, for the sandbox it was taken of", () => {
       mock.setRowsWritten(query, 1);
 
-      expect(repository.recordSandboxSnapshot("modal-sb-1", "img-123", "v59-runtime")).toBe(true);
+      expect(
+        repository.recordSandboxSnapshot("modal-sb-1", "img-123", "v59-runtime", "modal-docker-v1")
+      ).toBe(true);
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(query);
-      expect(mock.calls[0].params).toEqual(["img-123", "v59-runtime", "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual([
+        "img-123",
+        "v59-runtime",
+        "modal-docker-v1",
+        "modal-sb-1",
+      ]);
     });
 
     it("records a null runtime when the sandbox never reported one", () => {
-      repository.recordSandboxSnapshot("modal-sb-1", "img-123", null);
+      repository.recordSandboxSnapshot("modal-sb-1", "img-123", null, "default");
 
-      expect(mock.calls[0].params).toEqual(["img-123", null, "modal-sb-1"]);
+      expect(mock.calls[0].params).toEqual(["img-123", null, "default", "modal-sb-1"]);
     });
 
     it("reports a replaced sandbox instead of stamping its successor", () => {
-      expect(repository.recordSandboxSnapshot("modal-sb-old", "img-123", null)).toBe(false);
+      expect(repository.recordSandboxSnapshot("modal-sb-old", "img-123", null, "default")).toBe(
+        false
+      );
     });
   });
 

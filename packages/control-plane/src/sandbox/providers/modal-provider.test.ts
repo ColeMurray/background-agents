@@ -536,6 +536,72 @@ describe("ModalSandboxProvider", () => {
       );
     });
 
+    it("forwards the frozen Docker settings and prior generation, and accepts an honored launch", async () => {
+      const client = createMockModalClient({
+        createSandbox: vi.fn(async () => ({
+          sandboxId: "sandbox-abc",
+          modalObjectId: "modal-obj-xyz",
+          createdAt: 1,
+          dockerEnabled: true,
+        })),
+      });
+      const dockerSettings = { dockerEnabled: true, cpuCores: 2, memoryMib: 4096 };
+
+      const result = await new ModalSandboxProvider(client).createSandbox({
+        ...testConfig,
+        sandboxSettings: dockerSettings,
+        retireSandboxId: "sandbox-prior",
+      });
+
+      expect(result.providerObjectId).toBe("modal-obj-xyz");
+      expect(client.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSettings: dockerSettings,
+          retireSandboxId: "sandbox-prior",
+        }),
+        undefined
+      );
+      expect(client.stopSandbox).not.toHaveBeenCalled();
+    });
+
+    it.each(["createSandbox", "restoreFromSnapshot"] as const)(
+      "%s stops a sandbox that was not launched on the Docker runtime and fails permanently",
+      async (method) => {
+        // A pre-feature Modal deployment ignores dockerEnabled and reports nothing.
+        const client = createMockModalClient();
+        const provider = new ModalSandboxProvider(client);
+        const dockerSettings = { dockerEnabled: true, cpuCores: 2, memoryMib: 4096 };
+
+        const call =
+          method === "createSandbox"
+            ? provider.createSandbox({ ...testConfig, sandboxSettings: dockerSettings })
+            : provider.restoreFromSnapshot({
+                ...testConfig,
+                snapshotImageId: "img-1",
+                provider: "anthropic",
+                model: "anthropic/claude-sonnet-4-6",
+                sandboxSettings: dockerSettings,
+              });
+
+        await expect(call).rejects.toMatchObject({
+          errorType: "permanent",
+          message: expect.stringContaining("did not launch the Docker runtime"),
+        });
+        expect(client.stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ providerObjectId: "modal-obj-123" }),
+          undefined
+        );
+      }
+    );
+
+    it("never inspects the Docker flag for standard sessions", async () => {
+      const client = createMockModalClient();
+      await expect(
+        new ModalSandboxProvider(client).createSandbox({ ...testConfig, sandboxSettings: {} })
+      ).resolves.toMatchObject({ providerObjectId: "modal-obj-123" });
+      expect(client.stopSandbox).not.toHaveBeenCalled();
+    });
+
     it("reports a missing prebuilt image explicitly", async () => {
       const error = new ModalApiError("Repository image unavailable", 410);
       const client = createMockModalClient({

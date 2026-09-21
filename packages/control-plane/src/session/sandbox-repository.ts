@@ -1,4 +1,5 @@
 import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxArtifactVariant } from "../sandbox/modal-docker";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
@@ -352,13 +353,16 @@ export class SandboxRepository {
   recordSandboxSnapshot(
     sandboxId: string | null,
     imageId: string,
-    runtimeVersion: string | null
+    runtimeVersion: string | null,
+    artifactVariant: SandboxArtifactVariant
   ): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
+      `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?,
+         snapshot_artifact_variant = ?
        WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`,
       imageId,
       runtimeVersion,
+      artifactVariant,
       sandboxId
     );
     // Consume the result before reading rowsWritten so the count is final.

@@ -1,4 +1,5 @@
 import { resolveSandboxBackendName, type SandboxBackendName } from "../sandbox/provider-name";
+import type { DockerSandboxAdmissionClosedReason } from "../sandbox/modal-docker";
 import type { Env } from "../types";
 import {
   IMAGE_BUILD_PROVIDER_IDS,
@@ -27,7 +28,10 @@ export function resolveImageBuildProvider(value: string | undefined): ImageBuild
 }
 
 /** Why a deployment is not starting new builds or selecting prebuilt images. */
-export type ImageBuildAdmissionClosedReason = "provider_unsupported" | "daytona_prebuilds_disabled";
+export type ImageBuildAdmissionClosedReason =
+  | "provider_unsupported"
+  | "daytona_prebuilds_disabled"
+  | DockerSandboxAdmissionClosedReason;
 
 /**
  * Whether this deployment admits NEW image-build work.
