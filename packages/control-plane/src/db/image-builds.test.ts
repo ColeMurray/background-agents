@@ -101,6 +101,28 @@ describe("ImageBuildStore status projection", () => {
   });
 
   it.each([
+    ["provider", { provider: "unknown" }],
+    ["status", { status: "queued" }],
+    ["scope kind", { scope_kind: "workspace" }],
+  ])("rejects a status row with invalid %s", async (_field, overrides) => {
+    const rows = await new ImageBuildStore(fakeDb(overrides)).getStatus({
+      kind: "environment",
+      id: "env_1",
+    });
+
+    expect(rows).toEqual([]);
+  });
+
+  it("rejects a partial status row", async () => {
+    const rows = await new ImageBuildStore(fakeDb({ runtime_version: undefined })).getStatus({
+      kind: "environment",
+      id: "env_1",
+    });
+
+    expect(rows).toEqual([]);
+  });
+
+  it.each([
     ["empty", "[]", []],
     ["malformed JSON", "not-json", null],
     ["invalid entry", JSON.stringify([{ repoOwner: "acme", repoName: "web" }]), null],
