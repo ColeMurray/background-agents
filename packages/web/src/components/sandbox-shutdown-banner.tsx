@@ -30,8 +30,12 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
 
   if (!shutdown || shutdown.phase === "running") return null;
 
-  const isError = shutdown.phase === "failed" || shutdown.phase === "unknown";
   const isContinuationPaused = shutdown.phase === "saved" && shutdown.continuationPaused === true;
+  // A save that interrupted nothing — an idle timeout or a lifetime expiry — is already
+  // reported by the sandbox status and carries no recovery action, so it stays silent.
+  if (shutdown.phase === "saved" && !isContinuationPaused) return null;
+
+  const isError = shutdown.phase === "failed" || shutdown.phase === "unknown";
   const recoveryActions = shutdown.availableRecoveryActions ?? [];
   const canRetry = recoveryActions.includes("retry");
   const canRestoreSaved = recoveryActions.includes("restore_saved");

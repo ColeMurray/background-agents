@@ -26,7 +26,6 @@ describe("SandboxShutdownBanner", () => {
     ["prepared", "Prompt stopped"],
     ["capturing", "Saving final sandbox state"],
     ["retiring", "Confirming sandbox shutdown"],
-    ["saved", "Sandbox saved and stopped"],
     ["restoring", "Restoring the saved sandbox state"],
   ] as const)("shows the %s phase", (phase, text) => {
     render(<Banner shutdown={{ phase, expiresAtMs: 2, drainAtMs: 1 }} />);
@@ -62,8 +61,8 @@ describe("SandboxShutdownBanner", () => {
     expect(onRecover).toHaveBeenCalledWith("restore_saved");
   });
 
-  it("does not offer resume when a saved shutdown did not pause continuation", () => {
-    render(
+  it("stays silent for a saved shutdown that did not pause continuation", () => {
+    const { container } = render(
       <Banner
         shutdown={{
           phase: "saved",
@@ -75,25 +74,27 @@ describe("SandboxShutdownBanner", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: "Resume queued work" })).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it("does not expose the internal reason for a successful saved shutdown", () => {
-    render(
-      <Banner
-        shutdown={{
-          phase: "saved",
-          expiresAtMs: 2,
-          drainAtMs: 1,
-          reason: "inactivity_timeout",
-          hasRecoveryPoint: true,
-        }}
-      />
-    );
+  it.each(["inactivity_timeout", "sandbox_lifetime_expiring"])(
+    "stays silent, and leaks no internal reason, for a routine %s save",
+    (reason) => {
+      const { container } = render(
+        <Banner
+          shutdown={{
+            phase: "saved",
+            expiresAtMs: 2,
+            drainAtMs: 1,
+            reason,
+            hasRecoveryPoint: true,
+          }}
+        />
+      );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Sandbox saved and stopped");
-    expect(screen.getByRole("status")).not.toHaveTextContent("inactivity_timeout");
-  });
+      expect(container).toBeEmptyDOMElement();
+    }
+  );
 
   it("clears the paused-continuation action when newer state no longer requires it", () => {
     const onRecover = acceptedRecovery();
