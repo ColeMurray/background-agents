@@ -24,6 +24,13 @@ const stateSchema = sandboxShutdownSchema
     protocolVersion: z.literal(1).optional(),
     generationReady: z.boolean(),
     runtimeReady: z.boolean().optional(),
+    /**
+     * Marks a generation this coordinator adopted rather than started, because a
+     * deploy landed while it was already serving. Diagnostic only — an adopted
+     * record is always `legacy`, so nothing branches on this — but it is the
+     * durable record of why a generation has no lifetime and no drain.
+     */
+    adopted: z.boolean().optional(),
     lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
     restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
