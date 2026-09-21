@@ -165,7 +165,7 @@ describe("sandbox graceful shutdown wiring", () => {
     const name = `shutdown-completed-status-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
-    await seedShutdown(stub);
+    await seedShutdown(stub, { drainAtMs: Date.now() - 1 });
     const [{ id: authorId }] = await queryDO<{ id: string }>(
       stub,
       "SELECT id FROM participants LIMIT 1"
@@ -181,9 +181,9 @@ describe("sandbox graceful shutdown wiring", () => {
     await queryDO(stub, "UPDATE session SET status = 'completed'");
 
     await runInSessionDO(stub, async (instance) => {
-      await expect(
-        componentsOf(instance).shutdown.requestShutdown("inactivity_timeout")
-      ).resolves.toBe("owned");
+      await expect(componentsOf(instance).lifecycleManager.handleShutdownAlarm()).resolves.toBe(
+        "hold_watchdogs"
+      );
     });
 
     await vi.waitFor(async () => {
@@ -200,7 +200,7 @@ describe("sandbox graceful shutdown wiring", () => {
     const name = `shutdown-interrupted-status-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
-    await seedShutdown(stub);
+    await seedShutdown(stub, { drainAtMs: Date.now() - 1 });
     const [{ id: authorId }] = await queryDO<{ id: string }>(
       stub,
       "SELECT id FROM participants LIMIT 1"
@@ -218,9 +218,9 @@ describe("sandbox graceful shutdown wiring", () => {
     await queryDO(stub, "UPDATE session SET status = 'active'");
 
     await runInSessionDO(stub, async (instance) => {
-      await expect(
-        componentsOf(instance).shutdown.requestShutdown("inactivity_timeout")
-      ).resolves.toBe("owned");
+      await expect(componentsOf(instance).lifecycleManager.handleShutdownAlarm()).resolves.toBe(
+        "hold_watchdogs"
+      );
     });
 
     await vi.waitFor(async () => {

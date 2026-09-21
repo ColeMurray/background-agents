@@ -197,7 +197,6 @@ export interface SessionComponents {
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
   lifecycleManager: SandboxLifecycleManager;
-  shutdown: SandboxShutdownCoordinator;
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
@@ -955,7 +954,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     },
     userEnvResolver,
     lifecycleManager,
-    shutdown,
     messageQueue,
     presenceService,
     sandboxEventProcessor,
