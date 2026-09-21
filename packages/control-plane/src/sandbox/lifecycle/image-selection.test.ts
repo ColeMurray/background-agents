@@ -7,7 +7,7 @@ import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-sel
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { minCompatibleRuntimeVersionFor } from "../../image-builds/model";
-import { MIN_PRESERVATION_RUNTIME_GENERATION } from "../runtime-manifest";
+import { MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION } from "../runtime-manifest";
 
 const SESSION_REPOSITORIES = [
   { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -86,12 +86,12 @@ describe("evaluateImageBuildForSpawn", () => {
     });
   });
 
-  it("enforces the preservation protocol floor", async () => {
+  it("enforces the shutdown protocol floor", async () => {
     expect(
       (
         await evaluateImageBuildForSpawn(
           await readyImage({
-            runtime_version: `v${MIN_PRESERVATION_RUNTIME_GENERATION}-preservation-runtime`,
+            runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-preservation-runtime`,
           }),
           SESSION_REPOSITORIES
         )
@@ -99,7 +99,7 @@ describe("evaluateImageBuildForSpawn", () => {
     ).toBe("selected");
 
     for (const runtimeVersion of [
-      `v${MIN_PRESERVATION_RUNTIME_GENERATION - 1}-before-preservation`,
+      `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
       "dev",
       "",
     ]) {
@@ -113,11 +113,11 @@ describe("evaluateImageBuildForSpawn", () => {
     }
   });
 
-  it("applies the higher of the harness and preservation floors", async () => {
+  it("applies the higher of the harness and shutdown protocol floors", async () => {
     const claudeFloor = minCompatibleRuntimeVersionFor("claude");
-    expect(MIN_PRESERVATION_RUNTIME_GENERATION).toBeGreaterThan(claudeFloor);
+    expect(MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION).toBeGreaterThan(claudeFloor);
     const image = await readyImage({
-      runtime_version: `v${MIN_PRESERVATION_RUNTIME_GENERATION - 1}-before-preservation`,
+      runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
     });
 
     expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "claude")).toEqual({
@@ -131,7 +131,7 @@ describe("evaluateImageBuildForSpawn", () => {
       imageBuildId: "imgb-1",
     });
     const current = await readyImage({
-      runtime_version: `v${MIN_PRESERVATION_RUNTIME_GENERATION}-preservation`,
+      runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-preservation`,
     });
     expect(
       (await evaluateImageBuildForSpawn(current, SESSION_REPOSITORIES, "claude")).outcome

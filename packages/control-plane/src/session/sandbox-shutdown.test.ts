@@ -773,7 +773,15 @@ describe("SandboxShutdownCoordinator", () => {
   });
 
   it("retries only a confirmed pre-capture failure with a new operation", async () => {
-    const f = fixture();
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({
+          success: true,
+          imageId: "snapshot-1",
+          sourceStopped: true,
+        })),
+      })
+    );
     await readyFinite(f);
     await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
     const firstOperation = f.store.value!.operationId;
@@ -810,6 +818,257 @@ describe("SandboxShutdownCoordinator", () => {
     );
     expect(f.deps.provider.takeSnapshot).not.toHaveBeenCalled();
     expect(f.store.value?.phase).toBe("unknown");
+  });
+
+  it("projects exactly the recovery actions accepted for the current provider and phase", async () => {
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({
+          success: true,
+          imageId: "snapshot-1",
+          sourceStopped: true,
+        })),
+        stopSandbox: vi.fn(async () => ({ success: true })),
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared({
+      ...preparedEvent(f.store.value!),
+      executionStopped: false,
+      error: "execution_stop_unconfirmed",
+    });
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual(["retry"]);
+
+    const receipt = {
+      kind: "snapshot" as const,
+      artifactId: "last-good-image",
+      provider: "modal",
+      savedAtMs: 50_000,
+      runtimeVersion: "runtime-1",
+      executionProfile: "default" as const,
+    };
+    f.store.write({ ...f.store.value!, phase: "unknown", receipt });
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
+
+    f.store.write({ ...f.store.value!, receipt: undefined });
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+
+    f.store.write({ ...f.store.value!, receipt, provider: "other" });
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+
+    f.store.write({
+      ...f.store.value!,
+      provider: "modal",
+      receipt: { ...receipt, provider: "other" },
+    });
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+    await expect(f.shutdown.recover("restore_saved")).rejects.toThrow(
+      "Shutdown recovery is unavailable"
+    );
+    expect(f.store.value).toMatchObject({ phase: "unknown", receipt: { provider: "other" } });
+  });
+
+  it("does not clear a paused saved continuation with a mismatched receipt provider", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "saved",
+      continuationPaused: true,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "saved-image",
+        provider: "other",
+        savedAtMs: 50_000,
+        runtimeVersion: "runtime-1",
+        executionProfile: "default",
+      },
+    });
+
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+    await expect(f.shutdown.recover("restore_saved")).rejects.toThrow();
+    expect(f.store.value).toMatchObject({ phase: "saved", continuationPaused: true });
+  });
+
+  it.each([
+    ["malformed session execution", "{", "docker-v1", "v73-current"],
+    ["receipt profile mismatch", DOCKER_EXECUTION, "default", "v73-current"],
+    ["Docker runtime below its floor", DOCKER_EXECUTION, "docker-v1", "v71-legacy"],
+  ] as const)(
+    "does not advertise or accept recovery for %s",
+    async (_case, sandboxExecution, executionProfile, runtimeVersion) => {
+      const stopSandbox = vi.fn(async () => ({ success: true as const }));
+      const f = fixture(provider({ stopSandbox }));
+      await readyFinite(f);
+      f.deps.session.getSession.mockReturnValue({
+        id: "session-1",
+        session_name: "external-session-1",
+        sandbox_settings: JSON.stringify({ finalSnapshotBufferMs: 600_000 }),
+        sandbox_execution: sandboxExecution,
+      });
+      f.store.write({
+        ...f.store.value!,
+        phase: "unknown",
+        receipt: {
+          kind: "snapshot",
+          artifactId: "saved-image",
+          provider: "modal",
+          savedAtMs: 50_000,
+          runtimeVersion,
+          executionProfile,
+        },
+      });
+
+      expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+      await expect(f.shutdown.recover("restore_saved")).rejects.toThrow(
+        "Shutdown recovery is unavailable"
+      );
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(f.store.value).toMatchObject({ phase: "unknown" });
+    }
+  );
+
+  it.each([["malformed execution", "{"]])(
+    "does not advertise or accept shutdown retry for %s",
+    async (_case, sandboxExecution) => {
+      const takeSnapshot = vi.fn();
+      const f = fixture(provider({ takeSnapshot }));
+      await readyFinite(f);
+      f.deps.session.getSession.mockReturnValue({
+        id: "session-1",
+        session_name: "external-session-1",
+        sandbox_settings: JSON.stringify({ finalSnapshotBufferMs: 600_000 }),
+        sandbox_execution: sandboxExecution,
+      });
+      f.store.write({ ...f.store.value!, phase: "failed" });
+
+      expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+      await expect(f.shutdown.recover("retry")).rejects.toThrow("Shutdown recovery is unavailable");
+      expect(takeSnapshot).not.toHaveBeenCalled();
+      expect(f.store.value).toMatchObject({ phase: "failed" });
+    }
+  );
+
+  it.each(["retry", "restore_saved"] as const)(
+    "does not advertise or accept %s when valid Docker execution is bound to Modal but the configured provider changed",
+    async (action) => {
+      const stopSandbox = vi.fn(async () => ({ success: true as const }));
+      const takeSnapshot = vi.fn();
+      const f = fixture(provider({ name: "other", stopSandbox, takeSnapshot }));
+      await readyFinite(f);
+      f.deps.session.getSession.mockReturnValue({
+        id: "session-1",
+        session_name: "external-session-1",
+        sandbox_settings: JSON.stringify({ finalSnapshotBufferMs: 600_000 }),
+        sandbox_execution: DOCKER_EXECUTION,
+      });
+      f.store.write({
+        ...f.store.value!,
+        phase: action === "retry" ? "failed" : "unknown",
+        provider: "other",
+        receipt:
+          action === "restore_saved"
+            ? {
+                kind: "snapshot",
+                artifactId: "saved-image",
+                provider: "other",
+                savedAtMs: 50_000,
+                runtimeVersion: "v73-current",
+                executionProfile: "docker-v1",
+              }
+            : undefined,
+      });
+
+      expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+      await expect(f.shutdown.recover(action)).rejects.toThrow("Shutdown recovery is unavailable");
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(takeSnapshot).not.toHaveBeenCalled();
+      expect(f.store.value).toMatchObject({
+        phase: action === "retry" ? "failed" : "unknown",
+        provider: "other",
+      });
+    }
+  );
+
+  it.each([
+    {
+      name: "stale generation",
+      action: "retry" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.sandboxRow.created_at += 1;
+      },
+    },
+    {
+      name: "missing source retirement operation",
+      action: "restore_saved" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.store.write({
+          ...f.store.value!,
+          phase: "unknown",
+          sourceRetired: false,
+          receipt: {
+            kind: "snapshot",
+            artifactId: "saved-image",
+            provider: "modal",
+            savedAtMs: 50_000,
+            runtimeVersion: "runtime-1",
+            executionProfile: "default",
+          },
+        });
+      },
+    },
+    {
+      name: "expired retry window",
+      action: "retry" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.store.write({ ...f.store.value!, expiresAtMs: 100_000 });
+      },
+    },
+    {
+      name: "legacy lifecycle retry",
+      action: "retry" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.store.write({ ...f.store.value!, lifecyclePolicy: "legacy" });
+      },
+    },
+    {
+      name: "missing runtime protocol",
+      action: "retry" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.store.write({ ...f.store.value!, protocolVersion: undefined });
+      },
+    },
+    {
+      name: "missing provider handle",
+      action: "retry" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.store.write({ ...f.store.value!, providerObjectId: null });
+      },
+    },
+  ])("rejects $name without advertising it", async ({ action, mutate }) => {
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({
+          success: true,
+          imageId: "snapshot-1",
+          sourceStopped: true,
+        })),
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared({
+      ...preparedEvent(f.store.value!),
+      executionStopped: false,
+      error: "execution_stop_unconfirmed",
+    });
+    mutate(f);
+    const before = structuredClone(f.store.value);
+
+    expect(f.shutdown.snapshot()?.availableRecoveryActions).not.toContain(action);
+    await expect(f.shutdown.recover(action)).rejects.toThrow("Shutdown recovery is unavailable");
+    expect(f.store.value).toEqual(before);
   });
 
   it("retires an unexpired source before restoring the last saved receipt", async () => {
@@ -913,7 +1172,9 @@ describe("SandboxShutdownCoordinator", () => {
       providerObjectId: "restored-provider-object",
       receipt: { artifactId: "saved-image" },
     });
-    await interrupted.recover("restore_saved");
+    await expect(interrupted.recover("restore_saved")).rejects.toThrow(
+      "Shutdown recovery is unavailable"
+    );
     expect(f.store.value).toMatchObject({
       phase: "unknown",
       receipt: { artifactId: "saved-image" },

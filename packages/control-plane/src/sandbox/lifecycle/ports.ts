@@ -42,6 +42,14 @@ export type SandboxWorkAdmission =
 /** Only unmanaged sessions retain the legacy manual-push fallback when no socket exists. */
 export type SandboxPushAdmission = "ready" | "unmanaged" | "held" | "start_required";
 
+/** A recovery command was well formed but is unsafe for the current durable generation. */
+export class ShutdownRecoveryRejectedError extends Error {
+  constructor(message = "Shutdown recovery is unavailable") {
+    super(message);
+    this.name = "ShutdownRecoveryRejectedError";
+  }
+}
+
 /** Accepts an authenticated runtime observation; false means no transition. */
 export interface SandboxReadiness {
   onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MIN_PRESERVATION_RUNTIME_GENERATION } from "../runtime-manifest";
+import { MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION } from "../runtime-manifest";
 import { shutdownPolicyForLaunch, supportsConfirmedShutdown } from "./shutdown-policy";
 
 describe("shutdown lifecycle policy", () => {
@@ -11,10 +11,10 @@ describe("shutdown lifecycle policy", () => {
   it("keeps existing state legacy until its runtime is known capable", () => {
     expect(shutdownPolicyForLaunch("existing", null)).toBe("legacy");
     expect(
-      shutdownPolicyForLaunch("existing", `v${MIN_PRESERVATION_RUNTIME_GENERATION - 1}-legacy`)
+      shutdownPolicyForLaunch("existing", `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-legacy`)
     ).toBe("legacy");
     expect(
-      shutdownPolicyForLaunch("existing", `v${MIN_PRESERVATION_RUNTIME_GENERATION}-confirmed`)
+      shutdownPolicyForLaunch("existing", `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-confirmed`)
     ).toBe("confirmed");
     expect(supportsConfirmedShutdown("invalid")).toBe(false);
   });

@@ -1,4 +1,4 @@
-"""Claude harness execution containment for final preservation."""
+"""Claude harness execution containment for shutdown."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-class TestPreservationStop:
+class TestShutdownStop:
     @pytest.mark.asyncio
     async def test_disconnects_owned_child_after_interrupt(self, tmp_path: Path) -> None:
         h = Harness(tmp_path, turns=[[_result(0.1)]])

@@ -25,7 +25,10 @@ import {
   type SandboxBootPhase,
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
-import type { SandboxPreservationState } from "@open-inspect/shared/types/sandbox-preservation";
+import type {
+  SandboxShutdownState,
+  ShutdownRecoveryAction,
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import {
   sessionHasRepository,
   type SandboxAccessKind,
@@ -161,9 +164,9 @@ export interface SandboxShutdownLifecycle {
   /** Advances shutdown and prevents generic watchdogs from competing with unresolved work. */
   handleAlarm(): Promise<"continue" | "hold_watchdogs">;
   /** Applies an already-authorized recovery choice; only explicit restore releases a saved pause. */
-  recover(action: "retry" | "restore_saved"): Promise<void>;
+  recover(action: ShutdownRecoveryAction): Promise<void>;
   /** Returns the safe public projection, excluding private provider handles and recovery receipts. */
-  snapshot(): SandboxPreservationState | null;
+  snapshot(): SandboxShutdownState | null;
 }
 
 export type { SandboxPushAdmission } from "./ports";
@@ -2377,11 +2380,11 @@ export class SandboxLifecycleManager
     return this.shutdown.handleAlarm();
   }
 
-  recoverShutdown(action: "retry" | "restore_saved"): Promise<void> {
+  recoverShutdown(action: ShutdownRecoveryAction): Promise<void> {
     return this.shutdown.recover(action);
   }
 
-  shutdownSnapshot(): SandboxPreservationState | null {
+  shutdownSnapshot(): SandboxShutdownState | null {
     return this.shutdown.snapshot();
   }
 

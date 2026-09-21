@@ -174,7 +174,7 @@ class ActivitySupervisor:
 
         task.add_done_callback(finish)
 
-    async def drain_for_preservation(
+    async def drain_for_shutdown(
         self,
         *,
         deadline: float,

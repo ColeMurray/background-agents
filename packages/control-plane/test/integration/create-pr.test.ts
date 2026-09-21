@@ -16,7 +16,7 @@ describe("POST /internal/create-pr", () => {
   async function modelLegacyManualPushSession(stub: DurableObjectStub) {
     // These PR tests exercise the legacy/manual-push fallback, not a managed
     // sandbox push. Let the integration provider's warm spawn settle before
-    // removing the preservation record so it cannot race this fixture reset.
+    // removing the shutdown record so it cannot race this fixture reset.
     await waitForSandboxStatus(stub, "failed");
     await runInSessionDO(stub, (_instance: SessionDO, state) => {
       state.storage.sql.exec("DELETE FROM sandbox_preservation");
@@ -452,7 +452,7 @@ describe("POST /internal/create-pr", () => {
         const sandbox = state.storage.sql
           .exec("SELECT modal_sandbox_id, created_at FROM sandbox")
           .toArray()[0] as { modal_sandbox_id: string; created_at: number };
-        const preservation = {
+        const shutdown = {
           phase,
           generation: {
             sandboxId: sandbox.modal_sandbox_id,
@@ -468,7 +468,7 @@ describe("POST /internal/create-pr", () => {
           lifecyclePolicy: "confirmed",
           ...(phase === "draining"
             ? {
-                operationId: "test-preservation-operation",
+                operationId: "test-shutdown-operation",
                 stopByMs: now + 60_000,
                 captureByMs: now + 120_000,
                 retireByMs: now + 180_000,
@@ -486,7 +486,7 @@ describe("POST /internal/create-pr", () => {
         state.storage.sql.exec(
           `INSERT INTO sandbox_preservation (singleton, state) VALUES (1, ?)
            ON CONFLICT(singleton) DO UPDATE SET state = excluded.state`,
-          JSON.stringify(preservation)
+          JSON.stringify(shutdown)
         );
       });
 

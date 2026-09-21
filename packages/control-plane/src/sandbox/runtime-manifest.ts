@@ -8,7 +8,8 @@ if (Number(parsedGeneration) !== runtimeManifest.generation) {
 export const SANDBOX_RUNTIME_VERSION = runtimeManifest.runtimeVersion;
 export const SANDBOX_RUNTIME_GENERATION = runtimeManifest.generation;
 export const MIN_COMPATIBLE_RUNTIME_GENERATION = runtimeManifest.minimumCompatibleGeneration;
-export const MIN_PRESERVATION_RUNTIME_GENERATION = runtimeManifest.minimumPreservationGeneration;
+export const MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION =
+  runtimeManifest.minimumPreservationGeneration;
 export const MIN_REBUILD_RUNTIME_GENERATION = runtimeManifest.minimumRebuildGeneration;
 export const EXECUTION_PROFILE_MIN_RUNTIME_GENERATION =
   runtimeManifest.executionProfileMinimumGeneration;

@@ -653,7 +653,7 @@ class ClaudeHarness:
     async def stop_execution(self, timeout_seconds: float) -> bool:
         """Contain the SDK-owned Claude child, escalating to disconnect.
 
-        An interrupt acknowledgement is only a request, so preservation also
+        An interrupt acknowledgement is only a request, so shutdown preparation also
         disconnects the client. The SDK transport owns and reaps the Claude
         subprocess; unrelated sandbox services are left running.
         """

@@ -29,8 +29,8 @@ import {
 } from "./helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
-const AUTH_TOKEN = "preservation-integration-token";
-const SANDBOX_ID = "preservation-sandbox";
+const AUTH_TOKEN = "shutdown-integration-token";
+const SANDBOX_ID = "shutdown-sandbox";
 
 beforeEach(cleanD1Tables);
 afterEach(cleanD1Tables);
@@ -91,15 +91,15 @@ function realLifecycleHarness(
   const sessionContext = new LifecycleSessionContext(sessions, {
     getUserEnvVars: async () => undefined,
   } as never);
-  const preservationAnnouncements: object[] = [];
+  const shutdownAnnouncements: object[] = [];
   const lifecycleAnnouncements: object[] = [];
   const queueAdmissions: string[] = [];
   const processQueue = async () => {
-    const decision = preservation.admissionDecision();
+    const decision = shutdown.admissionDecision();
     queueAdmissions.push(decision);
     options.onQueueAdmission?.(decision);
   };
-  const preservation = new SandboxShutdownCoordinator({
+  const shutdown = new SandboxShutdownCoordinator({
     store: options.store ?? new SandboxShutdownRepository(durableState.storage.sql),
     provider,
     sandbox,
@@ -107,7 +107,7 @@ function realLifecycleHarness(
     messages: { getProcessingMessage: () => null },
     failures: { record: () => undefined, deliver: () => undefined },
     messenger: {
-      broadcast: (message: object) => preservationAnnouncements.push(message),
+      broadcast: (message: object) => shutdownAnnouncements.push(message),
     },
     sockets: {
       getSandboxSocket: () => null,
@@ -140,7 +140,7 @@ function realLifecycleHarness(
       current: async () => null,
     },
     { generateId: () => "integration-sandbox-token" },
-    preservation,
+    shutdown,
     {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl: "https://control-plane.test",
@@ -149,8 +149,8 @@ function realLifecycleHarness(
   );
   return {
     manager,
-    preservation,
-    preservationAnnouncements,
+    shutdown,
+    shutdownAnnouncements,
     lifecycleAnnouncements,
     queueAdmissions,
     processQueue,
@@ -160,8 +160,8 @@ function realLifecycleHarness(
 }
 
 describe("sandbox graceful shutdown wiring", () => {
-  it("rolls back the sandbox reservation when the matching preservation write fails", async () => {
-    const { stub } = await initNamedSession(`preservation-reservation-rollback-${Date.now()}`);
+  it("rolls back the sandbox reservation when the matching shutdown write fails", async () => {
+    const { stub } = await initNamedSession(`shutdown-reservation-rollback-${Date.now()}`);
     await seedSandboxAuth(stub, {
       authToken: AUTH_TOKEN,
       sandboxId: SANDBOX_ID,
@@ -199,7 +199,7 @@ describe("sandbox graceful shutdown wiring", () => {
       created_at: number;
       status: string;
     }>(stub, "SELECT modal_sandbox_id, modal_object_id, created_at, status FROM sandbox");
-    const preservationBefore = await readShutdown(stub);
+    const shutdownBefore = await readShutdown(stub);
 
     const restoreFromSnapshot = vi.fn(async (): Promise<RestoreResult> => {
       throw new Error("provider must not run when reservation fails");
@@ -223,7 +223,7 @@ describe("sandbox graceful shutdown wiring", () => {
       const throwingStore: ShutdownStore = {
         read: () => realStore.read(),
         write: () => {
-          throw new Error("injected preservation write failure");
+          throw new Error("injected shutdown write failure");
         },
       };
       const harness = realLifecycleHarness(instance, durableState, provider, {
@@ -232,7 +232,7 @@ describe("sandbox graceful shutdown wiring", () => {
 
       await harness.manager.spawnSandbox();
       return {
-        preservationAnnouncements: harness.preservationAnnouncements,
+        shutdownAnnouncements: harness.shutdownAnnouncements,
         lifecycleAnnouncements: harness.lifecycleAnnouncements,
       };
     });
@@ -244,8 +244,8 @@ describe("sandbox graceful shutdown wiring", () => {
         "SELECT modal_sandbox_id, modal_object_id, created_at, status FROM sandbox"
       )
     ).toEqual([sandboxBefore]);
-    expect(await readShutdown(stub)).toEqual(preservationBefore);
-    expect(result.preservationAnnouncements).toEqual([]);
+    expect(await readShutdown(stub)).toEqual(shutdownBefore);
+    expect(result.shutdownAnnouncements).toEqual([]);
     expect(result.lifecycleAnnouncements).not.toContainEqual({
       type: "sandbox_status",
       status: "spawning",
@@ -253,7 +253,7 @@ describe("sandbox graceful shutdown wiring", () => {
   });
 
   it("accepts early ready for a saved restore but gates the queue until provider lifetime settles", async () => {
-    const { stub } = await initNamedSession(`preservation-early-ready-${Date.now()}`);
+    const { stub } = await initNamedSession(`shutdown-early-ready-${Date.now()}`);
     await seedSandboxAuth(stub, {
       authToken: AUTH_TOKEN,
       sandboxId: SANDBOX_ID,
@@ -418,7 +418,7 @@ describe("sandbox graceful shutdown wiring", () => {
   });
 
   it("rejects push from saved state when no live sandbox is available", async () => {
-    const { stub } = await initNamedSession(`preservation-saved-push-${Date.now()}`);
+    const { stub } = await initNamedSession(`shutdown-saved-push-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
     await seedShutdown(stub, {
       phase: "saved",
@@ -457,7 +457,7 @@ describe("sandbox graceful shutdown wiring", () => {
   });
 
   it("snapshots an unmanaged destructive provider before inactivity destroys it", async () => {
-    const { stub } = await initNamedSession(`preservation-unmanaged-${Date.now()}`);
+    const { stub } = await initNamedSession(`shutdown-unmanaged-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
     const now = Date.now();
     await runInSessionDO(stub, (_instance, durableState) => {
@@ -504,7 +504,7 @@ describe("sandbox graceful shutdown wiring", () => {
         },
       };
       const sandbox = componentsOf(instance).sandboxRepository;
-      const preservation = new SandboxShutdownCoordinator({
+      const shutdown = new SandboxShutdownCoordinator({
         store: new SandboxShutdownRepository(durableState.storage.sql),
         provider,
         sandbox,
@@ -536,7 +536,7 @@ describe("sandbox graceful shutdown wiring", () => {
         } as never,
         { schedule: async () => undefined, cancel: async () => undefined } as never,
         { generateId: () => "generated-id" },
-        preservation,
+        shutdown,
         {
           ...DEFAULT_LIFECYCLE_CONFIG,
           controlPlaneUrl: "https://control-plane.test",
@@ -557,7 +557,7 @@ describe("sandbox graceful shutdown wiring", () => {
   });
 
   it("holds queued work until a versioned runtime acknowledges its sandbox generation", async () => {
-    const name = `preservation-generation-${Date.now()}`;
+    const name = `shutdown-generation-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
     const generation = await seedShutdown(stub);
@@ -566,7 +566,7 @@ describe("sandbox graceful shutdown wiring", () => {
       "SELECT id FROM participants LIMIT 1"
     );
     await seedMessage(stub, {
-      id: "preservation-pending",
+      id: "shutdown-pending",
       authorId,
       content: "Run only after generation acknowledgement",
       source: "web",
@@ -598,7 +598,7 @@ describe("sandbox graceful shutdown wiring", () => {
       await queryDO<{ status: string }>(
         stub,
         "SELECT status FROM messages WHERE id = ?",
-        "preservation-pending"
+        "shutdown-pending"
       )
     ).toEqual([{ status: "pending" }]);
 
@@ -618,13 +618,13 @@ describe("sandbox graceful shutdown wiring", () => {
     const messages = await delivered;
     expect(messages).toContainEqual({ type: "ack", ackId: "generation-ready-ack" });
     expect(messages).toContainEqual(
-      expect.objectContaining({ type: "prompt", messageId: "preservation-pending" })
+      expect.objectContaining({ type: "prompt", messageId: "shutdown-pending" })
     );
     ws!.close();
   });
 
-  it("dispatches restored legacy work when ready omits the preservation protocol", async () => {
-    const name = `preservation-legacy-${Date.now()}`;
+  it("dispatches restored legacy work when ready omits the shutdown protocol", async () => {
+    const name = `shutdown-legacy-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, {
       authToken: AUTH_TOKEN,
@@ -683,7 +683,7 @@ describe("sandbox graceful shutdown wiring", () => {
   });
 
   it("keeps interrupted continuation paused across restart until an authenticated restore", async () => {
-    const name = `preservation-paused-continuation-${Date.now()}`;
+    const name = `shutdown-paused-continuation-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
     await runInSessionDO(stub, (_instance, durableState) => {
@@ -886,11 +886,39 @@ describe("sandbox graceful shutdown wiring", () => {
     anonymous.ws.close();
 
     const authenticated = await openClientWs(name, { subscribe: true });
+    const accepted = collectMessages(authenticated.ws, {
+      until: (message) => message.type === "shutdown_recovery_accepted",
+    });
     authenticated.ws.send(
-      JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "resume-1",
+      })
     );
+    await expect(accepted).resolves.toContainEqual({
+      type: "shutdown_recovery_accepted",
+      clientRequestId: "resume-1",
+      action: "restore_saved",
+    });
     await vi.waitFor(async () => {
       expect(await readShutdown(stub)).not.toMatchObject({ continuationPaused: true });
+    });
+    const rejected = collectMessages(authenticated.ws, {
+      until: (message) => message.type === "error",
+    });
+    authenticated.ws.send(
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "stale-1",
+      })
+    );
+    await expect(rejected).resolves.toContainEqual({
+      type: "error",
+      code: "RECOVERY_UNAVAILABLE",
+      message: "Shutdown recovery is unavailable",
+      clientRequestId: "stale-1",
     });
     authenticated.ws.close();
 
@@ -917,7 +945,7 @@ describe("sandbox graceful shutdown wiring", () => {
   });
 
   it("drains once, holds pending work, and acknowledges only matching preparation state", async () => {
-    const name = `preservation-drain-${Date.now()}`;
+    const name = `shutdown-drain-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
     const generation = await seedShutdown(stub, {
@@ -931,16 +959,16 @@ describe("sandbox graceful shutdown wiring", () => {
       "SELECT id FROM participants LIMIT 1"
     );
     await seedMessage(stub, {
-      id: "preservation-processing",
+      id: "shutdown-processing",
       authorId,
-      content: "Stop before preservation",
+      content: "Stop before shutdown",
       source: "web",
       status: "processing",
       createdAt: Date.now() - 2_000,
       startedAt: Date.now() - 1_000,
     });
     await seedMessage(stub, {
-      id: "preservation-held",
+      id: "shutdown-held",
       authorId,
       content: "Remain pending",
       source: "web",
@@ -962,26 +990,26 @@ describe("sandbox graceful shutdown wiring", () => {
     const prepare = (await preparation).find((message) => message.type === "prepare_preservation");
     expect(prepare).toMatchObject({
       generation,
-      messageId: "preservation-processing",
+      messageId: "shutdown-processing",
       operationId: expect.any(String),
     });
     expect(
       await queryDO<{ id: string; status: string }>(
         stub,
         "SELECT id, status FROM messages WHERE id IN (?, ?) ORDER BY id",
-        "preservation-processing",
-        "preservation-held"
+        "shutdown-processing",
+        "shutdown-held"
       )
     ).toEqual([
-      { id: "preservation-held", status: "pending" },
-      { id: "preservation-processing", status: "failed" },
+      { id: "shutdown-held", status: "pending" },
+      { id: "shutdown-processing", status: "failed" },
     ]);
     await runInSessionDO(stub, (instance: SessionDO) => instance.alarm());
     expect(
       await queryDO<{ count: number }>(
         stub,
         "SELECT COUNT(*) AS count FROM events WHERE type = 'execution_complete' AND message_id = ?",
-        "preservation-processing"
+        "shutdown-processing"
       )
     ).toEqual([{ count: 1 }]);
 
