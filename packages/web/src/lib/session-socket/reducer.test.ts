@@ -87,6 +87,42 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  it("hydrates shutdown state from snapshots and replaces it with semantic updates", () => {
+    const saved = {
+      phase: "saved" as const,
+      expiresAtMs: 20_000,
+      drainAtMs: 10_000,
+      savedAtMs: 15_000,
+    };
+    const failed = {
+      phase: "failed" as const,
+      expiresAtMs: 20_000,
+      drainAtMs: 10_000,
+      error: "provider_capture_failed",
+    };
+    const hydrated = createSessionSocketState(
+      createSnapshot({ session: createSessionState({ sandboxPreservation: saved }) })
+    );
+
+    expect(hydrated.sessionState?.sandboxPreservation).toEqual(saved);
+
+    const updated = reduce(
+      hydrated,
+      serverMessage({ type: "sandbox_preservation", preservation: failed })
+    );
+    expect(updated.sessionState?.sandboxPreservation).toEqual(failed);
+
+    const reconnected = reduce(
+      updated,
+      serverMessage(
+        createSubscribedMessage({
+          session: createSessionState({ sandboxPreservation: saved }),
+        })
+      )
+    );
+    expect(reconnected.sessionState?.sandboxPreservation).toEqual(saved);
+  });
+
   it("uses authoritative totals for duplicate steps and final cost repairs", () => {
     const event = {
       type: "step_finish" as const,

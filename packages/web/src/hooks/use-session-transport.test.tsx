@@ -115,6 +115,23 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("reports a synchronous send refusal after the socket starts closing", async () => {
+    const { result, socket } = await openSocket();
+    socket.readyState = FakeWebSocket.CLOSING;
+
+    expect(result.current.send({ type: "recover_preservation" })).toBe(false);
+    expect(socket.sentMessages).toHaveLength(1);
+  });
+
+  it("reports a synchronous socket send exception", async () => {
+    const { result, socket } = await openSocket();
+    vi.spyOn(socket, "send").mockImplementation(() => {
+      throw new Error("socket closed during send");
+    });
+
+    expect(result.current.send({ type: "recover_preservation" })).toBe(false);
+  });
+
   it("does not fetch a token or open a socket when transport is disabled", async () => {
     const { result } = renderHook(() =>
       useSessionTransport("session-1", { onMessage, onClose }, false)

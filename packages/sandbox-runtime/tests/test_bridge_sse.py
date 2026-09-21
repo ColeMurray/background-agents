@@ -894,7 +894,7 @@ class TestSSEStreaming:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        await bridge._handle_prompt(
+        complete = await bridge._handle_prompt(
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
@@ -903,8 +903,6 @@ class TestSSEStreaming:
             }
         )
 
-        sent_events = [call.args[0] for call in bridge._send_event.await_args_list]
-        complete = sent_events[-1]
         assert complete["type"] == "execution_complete"
         assert complete["messageId"] == "cp-msg-1"
         assert complete["success"] is False
@@ -2766,7 +2764,7 @@ class TestCompactionHandling:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        await bridge._handle_prompt(
+        complete = await bridge._handle_prompt(
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
@@ -2786,10 +2784,10 @@ class TestCompactionHandling:
             "token",
             "context_compacted",
             "token",
-            "execution_complete",
         ]
+        assert complete["type"] == "execution_complete"
         assert [event for event in events if event["type"] == "error"] == []
-        assert events[-1] == {
+        assert complete == {
             "type": "execution_complete",
             "messageId": "cp-msg-1",
             "success": True,
@@ -2855,7 +2853,7 @@ class TestCompactionHandling:
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
-        await bridge._handle_prompt(
+        complete = await bridge._handle_prompt(
             {
                 "messageId": "cp-msg-1",
                 "content": "Test prompt",
@@ -2864,13 +2862,14 @@ class TestCompactionHandling:
         )
 
         events = [call.args[0] for call in bridge._send_event.await_args_list]
-        assert [event["type"] for event in events] == ["token", "error", "execution_complete"]
+        assert [event["type"] for event in events] == ["token", "error"]
+        assert complete["type"] == "execution_complete"
         assert events[1] == {
             "type": "error",
             "error": "Session too large to compact",
             "messageId": "cp-msg-1",
         }
-        assert events[-1] == {
+        assert complete == {
             "type": "execution_complete",
             "messageId": "cp-msg-1",
             "success": False,

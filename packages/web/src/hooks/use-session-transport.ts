@@ -131,8 +131,8 @@ export interface UseSessionTransportReturn {
   connectionError: string | null;
   /** Whether the socket is currently open. */
   isOpen: () => boolean;
-  /** Send a JSON payload; drops it silently when the socket is not open. */
-  send: (payload: Record<string, unknown>) => void;
+  /** Send a JSON payload, returning whether an open socket queued it without throwing. */
+  send: (payload: Record<string, unknown>) => boolean;
   /** Drop the connection and token, then connect fresh. */
   reconnect: () => void;
   /** Mark synchronization complete so future network retries start fresh. */
@@ -434,9 +434,15 @@ export function useSessionTransport(
 
   const send = useCallback((payload: Record<string, unknown>) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
-    wsRef.current.send(JSON.stringify(payload));
+    try {
+      wsRef.current.send(JSON.stringify(payload));
+      return true;
+    } catch (error) {
+      console.error("WebSocket send failed:", error);
+      return false;
+    }
   }, []);
 
   const reconnect = useCallback(() => {

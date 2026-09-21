@@ -77,6 +77,12 @@ class FakeD1Database {
     return new FakePreparedStatement(this, query);
   }
 
+  updateRawSessionRow(id: string, updates: Record<string, unknown>) {
+    const row = this.rows.get(id);
+    if (!row) throw new Error(`Missing session row: ${id}`);
+    Object.assign(row as Record<string, unknown>, updates);
+  }
+
   async batch(statements: FakePreparedStatement[]) {
     const results = [];
     for (const statement of statements) {
@@ -625,6 +631,23 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result).not.toBeNull();
       expect(result?.id).toBe("test-id");
+    });
+
+    it.each([
+      ["status", { status: "unknown" }],
+      ["spawn source", { spawn_source: "cron" }],
+    ])("rejects a persisted session row with invalid %s", async (_field, updates) => {
+      await store.create(makeSession());
+      db.updateRawSessionRow("test-id", updates);
+
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
+    });
+
+    it("rejects a partial persisted session row", async () => {
+      await store.create(makeSession());
+      db.updateRawSessionRow("test-id", { model: undefined });
+
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
     });
 
     it("returns null when not found", async () => {

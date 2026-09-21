@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { Logger } from "../logger";
 import { SessionInternalPaths } from "./contracts";
 import { SessionDisconnectHandler } from "./disconnect-handler";
@@ -54,6 +55,7 @@ function createHarness() {
     submitPrompt: vi.fn(async () => undefined),
     cancelPrompt: vi.fn(async () => undefined),
     stopExecution: vi.fn(async () => undefined),
+    recoverShutdown: vi.fn(async () => undefined),
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
@@ -229,6 +231,11 @@ describe("SessionServer", () => {
       callback: "cancelPrompt",
     },
     { type: "stop", message: { type: "stop" }, callback: "stopExecution" },
+    {
+      type: "recover_preservation",
+      message: { type: "recover_preservation", action: "retry" },
+      callback: "recoverShutdown",
+    },
     { type: "typing", message: { type: "typing" }, callback: "notifyTyping" },
     {
       type: "presence",
@@ -241,6 +248,173 @@ describe("SessionServer", () => {
     await server.onMessage("client", JSON.stringify(message));
 
     expect(clientCommands[callback as keyof typeof clientCommands]).toHaveBeenCalledOnce();
+  });
+
+  it("forwards the requested shutdown recovery action", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "recover_preservation", action: "restore_saved" })
+    );
+
+    expect(clientCommands.recoverShutdown).toHaveBeenCalledWith("restore_saved");
+    expect(sockets.send).not.toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({ type: "shutdown_recovery_accepted" })
+    );
+  });
+
+  it("acknowledges correlated recovery only after the authoritative command succeeds", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+    let completeRecovery!: () => void;
+    vi.mocked(clientCommands.recoverShutdown).mockImplementation(
+      () => new Promise<void>((resolve) => (completeRecovery = resolve))
+    );
+
+    const routing = server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "recovery-1",
+      })
+    );
+
+    await vi.waitFor(() => expect(clientCommands.recoverShutdown).toHaveBeenCalledOnce());
+    expect(sockets.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "shutdown_recovery_accepted" })
+    );
+    completeRecovery();
+    await routing;
+    expect(clientCommands.recoverShutdown).toHaveBeenCalledWith("restore_saved");
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "shutdown_recovery_accepted",
+      clientRequestId: "recovery-1",
+      action: "restore_saved",
+    });
+    expect(sockets.send).not.toHaveBeenCalledWith(
+      "other-client",
+      expect.objectContaining({ type: "shutdown_recovery_accepted" })
+    );
+  });
+
+  it("returns correlated generic errors for failed recovery commands", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+    vi.mocked(clientCommands.recoverShutdown).mockRejectedValue(new Error("provider secret"));
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "restore_saved",
+        clientRequestId: "recovery-1",
+      })
+    );
+
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "INVALID_MESSAGE",
+      message: "Failed to process message",
+      clientRequestId: "recovery-1",
+    });
+  });
+
+  it("correlates malformed, unauthenticated, denied, and safely rejected recovery commands", async () => {
+    const malformed = createHarness();
+    await malformed.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "resume",
+        clientRequestId: "malformed-1",
+      })
+    );
+    expect(malformed.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "INVALID_MESSAGE",
+        clientRequestId: "malformed-1",
+      })
+    );
+
+    const unauthenticated = createHarness();
+    unauthenticated.setClient(null);
+    await unauthenticated.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "auth-1",
+      })
+    );
+    expect(unauthenticated.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "AUTHENTICATION_REQUIRED",
+        clientRequestId: "auth-1",
+      })
+    );
+
+    const denied = createHarness();
+    vi.mocked(denied.clientCommands.authorize).mockResolvedValue("denied");
+    await denied.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "denied-1",
+      })
+    );
+    expect(denied.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "PERMISSION_REQUIRED",
+        clientRequestId: "denied-1",
+      })
+    );
+
+    const unavailable = createHarness();
+    vi.mocked(unavailable.clientCommands.authorize).mockResolvedValue("unavailable");
+    await unavailable.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "unavailable-1",
+      })
+    );
+    expect(unavailable.sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "AUTHORIZATION_UNAVAILABLE",
+        clientRequestId: "unavailable-1",
+      })
+    );
+
+    const rejected = createHarness();
+    vi.mocked(rejected.clientCommands.recoverShutdown).mockRejectedValue(
+      new ShutdownRecoveryRejectedError()
+    );
+    await rejected.server.onMessage(
+      "client",
+      JSON.stringify({
+        type: "recover_preservation",
+        action: "retry",
+        clientRequestId: "rejected-1",
+      })
+    );
+    expect(rejected.sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "RECOVERY_UNAVAILABLE",
+      message: "Shutdown recovery is unavailable",
+      clientRequestId: "rejected-1",
+    });
   });
 
   it("drops authenticated-only commands when no client mapping exists", async () => {
@@ -259,6 +433,7 @@ describe("SessionServer", () => {
       "sessions.lifecycle",
     ],
     [{ type: "stop" }, "sessions.lifecycle"],
+    [{ type: "recover_preservation", action: "restore_saved" }, "sessions.lifecycle"],
   ] as const)("rejects %s without its command permission", async (message, permission) => {
     const { server, sockets, clientCommands, client } = createHarness();
     vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
@@ -274,6 +449,7 @@ describe("SessionServer", () => {
     expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
     expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
+    expect(clientCommands.recoverShutdown).not.toHaveBeenCalled();
   });
 
   it("routes fetch_history and enforces throttling with the injected clock", async () => {

@@ -9,7 +9,34 @@ import {
   SessionAttachmentRepository,
 } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError, type MessageRow } from "./types";
 import { initSchema } from "./schema";
+
+function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
+  return {
+    id: "msg-1",
+    author_id: "p-1",
+    content: "Hello",
+    source: "web",
+    model: null,
+    reasoning_effort: null,
+    attachments: null,
+    callback_context: null,
+    client_request_id: null,
+    request_fingerprint: null,
+    autofix_feedback_key: null,
+    autofix_pr_key: null,
+    origin_context: null,
+    status: "pending",
+    error_message: null,
+    stop_confirmation_deadline: null,
+    reported_cost_usd: 0,
+    created_at: 1000,
+    started_at: null,
+    completed_at: null,
+    ...overrides,
+  };
+}
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -87,16 +114,23 @@ describe("MessageRepository", () => {
     const processingQuery = `SELECT id FROM messages WHERE status = 'processing' LIMIT 1`;
     const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
     mock.setData(processingQuery, [{ id: "msg-processing" }]);
-    mock.setData(pendingQuery, [{ id: "msg-pending", created_at: 1 }]);
+    const pending = messageRow({ id: "msg-pending", created_at: 1 });
+    mock.setData(pendingQuery, [pending]);
     expect(repository.getProcessingMessage()).toEqual({ id: "msg-processing" });
-    expect(repository.getNextPendingMessage()).toEqual({ id: "msg-pending", created_at: 1 });
+    expect(repository.getNextPendingMessage()).toEqual(pending);
+  });
+
+  it("throws on malformed persisted message rows", () => {
+    const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
+    mock.setData(pendingQuery, [{ ...messageRow(), source: "unknown" }]);
+
+    expect(() => repository.getNextPendingMessage()).toThrow(SessionStorageIntegrityError);
   });
 
   it("reads a message by id", () => {
-    mock.setData(`SELECT * FROM messages WHERE id = ? LIMIT 1`, [
-      { id: "msg-1", status: "pending" },
-    ]);
-    expect(repository.getMessageById("msg-1")).toEqual({ id: "msg-1", status: "pending" });
+    const row = messageRow();
+    mock.setData(`SELECT * FROM messages WHERE id = ? LIMIT 1`, [row]);
+    expect(repository.getMessageById("msg-1")).toEqual(row);
     expect(mock.calls.at(-1)?.params).toEqual(["msg-1"]);
   });
 
@@ -134,9 +168,11 @@ describe("MessageRepository", () => {
     const lookup = `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`;
     const positions = `SELECT id FROM messages WHERE status IN ('pending', 'processing')
        ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`;
-    mock.setData(lookup, [{ id: "msg-2" }]);
+    mock.setData(lookup, [messageRow({ id: "msg-2", client_request_id: "request-1" })]);
     mock.setData(positions, [{ id: "msg-1" }, { id: "msg-2" }]);
-    expect(repository.getMessageByClientRequestId("request-1")).toEqual({ id: "msg-2" });
+    expect(repository.getMessageByClientRequestId("request-1")).toEqual(
+      messageRow({ id: "msg-2", client_request_id: "request-1" })
+    );
     expect(repository.getUnfinishedMessagePosition("msg-2")).toBe(2);
     expect(repository.getUnfinishedMessagePosition("finished")).toBeNull();
   });

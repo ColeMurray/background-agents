@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 HTTP_CONNECT_TIMEOUT_SECONDS: Final = 30.0
 OPENCODE_REQUEST_TIMEOUT_SECONDS: Final = 30.0
+EXECUTION_STOP_POLL_SECONDS: Final = 0.1
 
 
 class SSEConnectionError(Exception):
@@ -145,7 +146,6 @@ class OpenCodeClient:
         """Best-effort abort of the active OpenCode prompt (saves LLM compute)."""
         if not opencode_session_id:
             return False
-
         try:
             await self._client().post(
                 f"{self._base_url}/session/{opencode_session_id}/abort",
@@ -155,6 +155,36 @@ class OpenCodeClient:
             return True
         except Exception as e:
             self._log.warn("bridge.stop_request_error", exc=e, reason=reason)
+            return False
+
+    async def wait_until_idle(self, *, timeout_seconds: float) -> bool:
+        """Confirm every session in OpenCode's execution domain is idle."""
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+        try:
+            async with asyncio.timeout_at(deadline):
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        return False
+                    try:
+                        response = await self._client().get(
+                            f"{self._base_url}/session/status",
+                            timeout=min(self._request_timeout_seconds, remaining),
+                        )
+                        if response.status_code == 200:
+                            statuses = response.json()
+                            if isinstance(statuses, dict) and all(
+                                isinstance(status, dict) and status.get("type") == "idle"
+                                for status in statuses.values()
+                            ):
+                                return True
+                    except Exception as error:
+                        self._log.warn("bridge.stop_status_error", exc=error)
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        return False
+                    await asyncio.sleep(min(EXECUTION_STOP_POLL_SECONDS, remaining))
+        except TimeoutError:
             return False
 
     async def get_messages(self, opencode_session_id: str) -> list[Any] | None:

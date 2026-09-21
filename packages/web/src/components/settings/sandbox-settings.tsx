@@ -7,7 +7,6 @@ import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -16,11 +15,21 @@ import {
   DEFAULT_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
+  type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
-import { MIN_SANDBOX_TIMEOUT_MINUTES } from "./sandbox-timeout";
+import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MINUTES,
+  MIN_FINAL_SNAPSHOT_BUFFER_MINUTES,
+  MIN_SANDBOX_TIMEOUT_MINUTES,
+} from "./sandbox-timeout";
 import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
+import {
+  parseSandboxEnvironmentSettingsResponse,
+  parseSandboxGlobalSettingsResponse,
+  parseSandboxRepoSettingsResponse,
+} from "./sandbox-settings-schema";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   getPublicSandboxProvider,
@@ -29,23 +38,6 @@ import {
 } from "@/lib/sandbox-provider";
 
 const GLOBAL_SCOPE = "__global__";
-
-interface GlobalSettingsResponse {
-  integrationId: string;
-  settings: { defaults?: SandboxSettings; enabledRepos?: string[] } | null;
-}
-
-interface RepoSettingsResponse {
-  integrationId: string;
-  repo: string;
-  settings: SandboxSettings | null;
-}
-
-interface EnvironmentSettingsResponse {
-  integrationId: string;
-  environmentId: string;
-  settings: SandboxSettings | null;
-}
 
 const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
 
@@ -57,7 +49,7 @@ interface SandboxScopeModel {
   /** The layer beneath this scope's overrides (undefined at global scope). */
   baseDefaults: SandboxSettings | undefined;
   /** Preserved on global saves so a defaults update can't drop the allowlist. */
-  enabledRepos: string[] | undefined;
+  enabledRepos: string[] | null | undefined;
   isLoading: boolean;
   mutate: () => Promise<unknown>;
 }
@@ -89,30 +81,31 @@ function useSandboxSettingsScope(
       ? repoApiUrl
       : `/api/integration-settings/sandbox/environments/${environmentId}`;
 
-  const { data, mutate, isLoading } = useSWR<
-    GlobalSettingsResponse | RepoSettingsResponse | EnvironmentSettingsResponse
-  >(apiUrl, fetcher);
-  const { data: globalData, isLoading: isLoadingGlobal } = useSWR<GlobalSettingsResponse>(
+  const { data, mutate, isLoading } = useSWR<unknown>(apiUrl, fetcher);
+  const { data: rawGlobalData, isLoading: isLoadingGlobal } = useSWR<unknown>(
     isGlobal ? null : globalApiUrl,
     fetcher
   );
-  const { data: primaryRepoData, isLoading: isLoadingPrimaryRepo } = useSWR<RepoSettingsResponse>(
+  const { data: rawPrimaryRepoData, isLoading: isLoadingPrimaryRepo } = useSWR<unknown>(
     scope === "environment" && owner && name ? repoApiUrl : null,
     fetcher
   );
 
-  const globalSettings = isGlobal
-    ? (data as GlobalSettingsResponse | undefined)?.settings
-    : undefined;
-  const ownSettings = isGlobal
-    ? globalSettings?.defaults
-    : ((data as RepoSettingsResponse | EnvironmentSettingsResponse | undefined)?.settings ??
-      undefined);
+  const globalResponse = parseSandboxGlobalSettingsResponse(isGlobal ? data : rawGlobalData);
+  const scopedResponse = isGlobal
+    ? undefined
+    : scope === "repo"
+      ? parseSandboxRepoSettingsResponse(data)
+      : parseSandboxEnvironmentSettingsResponse(data);
+  const primaryRepoResponse = parseSandboxRepoSettingsResponse(rawPrimaryRepoData);
+
+  const globalSettings = isGlobal ? globalResponse?.settings : undefined;
+  const ownSettings = isGlobal ? globalSettings?.defaults : (scopedResponse?.settings ?? undefined);
   const baseDefaults = isGlobal
     ? undefined
     : scope === "environment"
-      ? { ...globalData?.settings?.defaults, ...primaryRepoData?.settings }
-      : globalData?.settings?.defaults;
+      ? { ...globalResponse?.settings?.defaults, ...primaryRepoResponse?.settings }
+      : globalResponse?.settings?.defaults;
 
   return {
     apiUrl,
@@ -483,6 +476,32 @@ export function SandboxSettingsEditor({
           configured by the deployment.
         </p>
       )}
+
+      <div>
+        <label
+          htmlFor="sandbox-final-snapshot-buffer"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Final snapshot buffer (minutes)
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Time reserved before provider expiry to stop work, preserve the filesystem, and retire the
+          sandbox. Minimum {MIN_FINAL_SNAPSHOT_BUFFER_MINUTES} minutes; default{" "}
+          {DEFAULT_FINAL_SNAPSHOT_BUFFER_MINUTES} minutes.
+        </p>
+        <div className="max-w-sm">
+          <Input
+            id="sandbox-final-snapshot-buffer"
+            type="number"
+            min={MIN_FINAL_SNAPSHOT_BUFFER_MINUTES}
+            step={1 / 60}
+            inputMode="decimal"
+            value={values.finalSnapshotBufferMinutes}
+            onChange={(e) => updateField("finalSnapshotBufferMinutes", e.target.value)}
+            placeholder={String(DEFAULT_FINAL_SNAPSHOT_BUFFER_MINUTES)}
+          />
+        </div>
+      </div>
 
       {configurableTimeout ? (
         <div>

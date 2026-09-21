@@ -236,6 +236,7 @@ async function main() {
   const state = await fakeModalState();
   if (state.createRequests.length < 1) fail("no sandbox was requested", state);
   if (state.bridgeConnections < 1) fail("the bridge never connected", state);
+  if (state.generationHandshakes < 1) fail("the bridge never acknowledged its generation", state);
   if (state.rejectedTokens > 0) fail("the stand-in rejected a control-plane token", state);
   // The sandbox has to have been handed this exact prompt, not merely some
   // prompt: dispatch that dropped or rewrote the content would otherwise pass.
@@ -247,7 +248,7 @@ async function main() {
   pass(
     `stand-in Modal host: ${state.createRequests.length} create, ` +
       `${state.bridgeConnections} bridge connect, message ${messageId} delivered verbatim, ` +
-      "0 rejected tokens"
+      `${state.generationHandshakes} generation handshake, 0 rejected tokens`
   );
 
   console.log("\ncompose smoke: session round-trip passed");
