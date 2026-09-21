@@ -6,6 +6,40 @@ import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { decryptToken, generateEncryptionKey } from "../auth/crypto";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import type { Logger } from "../logger";
+import { SessionStorageIntegrityError, type SandboxRow } from "./types";
+
+function sandboxRow(overrides: Partial<SandboxRow> = {}): SandboxRow {
+  return {
+    id: "sb-1",
+    modal_sandbox_id: null,
+    modal_object_id: null,
+    snapshot_id: null,
+    snapshot_image_id: null,
+    snapshot_runtime_version: null,
+    runtime_version: null,
+    auth_token: null,
+    auth_token_hash: null,
+    status: "ready",
+    git_sync_status: "pending",
+    last_heartbeat: null,
+    last_activity: null,
+    last_spawn_error: null,
+    last_spawn_error_at: null,
+    code_server_url: null,
+    code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
+    tunnel_urls: null,
+    ttyd_url: null,
+    ttyd_token: null,
+    active_socket_id: null,
+    boot_phase: null,
+    boot_seq: null,
+    fenced: 0,
+    created_at: 1000,
+    ...overrides,
+  };
+}
 
 function createLog() {
   return {
@@ -59,9 +93,17 @@ describe("SandboxRepository", () => {
     });
 
     it("returns sandbox when it exists", () => {
-      const sandbox = { id: "sb-1", status: "ready" };
+      const sandbox = sandboxRow();
       mock.setData(`SELECT * FROM sandbox LIMIT 1`, [sandbox]);
       expect(repository.getSandbox()).toEqual(sandbox);
+    });
+
+    it("throws on malformed persisted sandbox rows", () => {
+      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [
+        sandboxRow({ git_sync_status: "unknown" as never }),
+      ]);
+
+      expect(() => repository.getSandbox()).toThrow(SessionStorageIntegrityError);
     });
 
     // This is the read boundary for the sandbox row: the column is bare TEXT
@@ -71,9 +113,9 @@ describe("SandboxRepository", () => {
     // refuses to reuse a sandbox we cannot classify while still allowing a
     // clean spawn, where `pending` would let it be picked up as if fresh.
     it("validates an unmodelled status to failed and warns", () => {
-      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [{ id: "sb-1", status: "running" }]);
+      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [{ ...sandboxRow(), status: "running" }]);
 
-      expect(repository.getSandbox()).toEqual({ id: "sb-1", status: "failed" });
+      expect(repository.getSandbox()).toEqual(sandboxRow({ status: "failed" }));
       expect(log.warn).toHaveBeenCalledWith(
         "sandbox.status.unrecognized",
         expect.objectContaining({ status: "running" })
@@ -81,10 +123,40 @@ describe("SandboxRepository", () => {
     });
 
     it("leaves a missing status as pending without warning", () => {
-      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [{ id: "sb-1", status: null }]);
+      const row = { ...sandboxRow(), status: undefined };
+      mock.setData(`SELECT * FROM sandbox LIMIT 1`, [row]);
 
-      expect(repository.getSandbox()).toEqual({ id: "sb-1", status: "pending" });
+      expect(repository.getSandbox()).toEqual(sandboxRow({ status: "pending" }));
       expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it("parses circuit breaker rows with nullable provider fields", () => {
+      mock.setData(
+        `SELECT status, created_at, last_heartbeat, modal_object_id, snapshot_image_id, snapshot_runtime_version, spawn_failure_count, last_spawn_failure FROM sandbox LIMIT 1`,
+        [
+          {
+            status: "ready",
+            created_at: 1000,
+            last_heartbeat: null,
+            modal_object_id: null,
+            snapshot_image_id: null,
+            snapshot_runtime_version: null,
+            spawn_failure_count: null,
+            last_spawn_failure: null,
+          },
+        ]
+      );
+
+      expect(repository.getSandboxWithCircuitBreaker()).toEqual({
+        status: "ready",
+        created_at: 1000,
+        last_heartbeat: null,
+        modal_object_id: null,
+        snapshot_image_id: null,
+        snapshot_runtime_version: null,
+        spawn_failure_count: null,
+        last_spawn_failure: null,
+      });
     });
   });
 
