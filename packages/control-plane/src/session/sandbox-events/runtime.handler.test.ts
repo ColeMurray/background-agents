@@ -88,7 +88,7 @@ describe("SandboxRuntimeEventHandler.handleReady", () => {
 
     await h.handler.handleReady(readyEvent, context);
 
-    expect(h.lifecycle.onRuntimeReady).toHaveBeenCalledWith(5000, "opencode");
+    expect(h.lifecycle.onRuntimeReady).toHaveBeenCalledWith(5000, "opencode", undefined);
     expect(order).toEqual(["event", "ready", "pump", "inactivity"]);
     expect(h.updateLastActivity).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledExactlyOnceWith({
@@ -102,6 +102,15 @@ describe("SandboxRuntimeEventHandler.handleReady", () => {
     expect(h.eventRepository.createEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: "ready" })
     );
+  });
+
+  it("passes shutdown protocol readiness through the lifecycle boundary", async () => {
+    const h = createHandler();
+
+    await h.handler.handleReady({ ...readyEvent, preservationProtocolVersion: 1 }, context);
+
+    expect(h.lifecycle.onRuntimeReady).toHaveBeenCalledWith(5000, "opencode", 1);
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
   });
 
   it("does not wake or schedule work when the lifecycle owner rejects readiness", async () => {

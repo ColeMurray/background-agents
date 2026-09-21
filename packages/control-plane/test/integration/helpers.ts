@@ -588,6 +588,9 @@ export async function seedSandboxAuth(
   const tokenHash = await hashToken(opts.authToken);
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
+    // This helper replaces the failed test spawn with a legacy fixture.
+    // Shutdown-aware tests seed their matching generation explicitly.
+    state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
       "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
@@ -612,6 +615,7 @@ export async function seedSandboxAuthHash(
   const tokenHash = await hashToken(opts.authToken);
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
       "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,

@@ -26,6 +26,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     model?: string;
     reasoningEffort?: string | null;
     sandboxTimeoutMs?: number;
+    finalSnapshotBufferMs?: number;
     sandboxExecution?: Record<string, unknown>;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -65,8 +66,13 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
       ...(opts?.model != null && { model: opts.model }),
       ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
-      ...(opts?.sandboxTimeoutMs != null && {
-        sandboxSettings: { sandboxTimeoutMs: opts.sandboxTimeoutMs },
+      ...((opts?.sandboxTimeoutMs != null || opts?.finalSnapshotBufferMs != null) && {
+        sandboxSettings: {
+          ...(opts?.sandboxTimeoutMs != null && { sandboxTimeoutMs: opts.sandboxTimeoutMs }),
+          ...(opts?.finalSnapshotBufferMs != null && {
+            finalSnapshotBufferMs: opts.finalSnapshotBufferMs,
+          }),
+        },
       }),
       ...(opts?.sandboxExecution != null && { sandboxExecution: opts.sandboxExecution }),
     });
@@ -170,6 +176,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     const { parentName, sandboxToken } = await setupParent({
       repoId: 12345,
       sandboxTimeoutMs: 7_200_000,
+      finalSnapshotBufferMs: 300_000,
       sandboxExecution: execution,
     });
     expect(
@@ -183,6 +190,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
                 cpuCores: 1,
                 memoryMib: 2048,
                 sandboxTimeoutMs: 3_600_000,
+                finalSnapshotBufferMs: 600_000,
               },
             },
           }),
@@ -213,6 +221,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       cpuCores: 4,
       memoryMib: 6144,
       sandboxTimeoutMs: 7_200_000,
+      finalSnapshotBufferMs: 300_000,
     });
     expect(JSON.parse(session.sandbox_settings)).not.toHaveProperty("dockerEnabled");
   });

@@ -230,6 +230,7 @@ export async function handleSpawnChild(
       inherited: {
         execution: spawnContext.sandboxExecution,
         sandboxTimeoutMs: spawnContext.sandboxTimeoutMs,
+        finalSnapshotBufferMs: spawnContext.finalSnapshotBufferMs,
       },
     });
   } catch (e) {

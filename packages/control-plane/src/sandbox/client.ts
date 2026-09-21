@@ -231,6 +231,13 @@ export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
+}
+
+export interface StopSandboxRequest {
+  providerObjectId: string;
+  sessionId: string;
+  signal?: AbortSignal;
 }
 
 export interface SnapshotSandboxResponse {
@@ -313,6 +320,7 @@ export class ModalClient {
   private snapshotSandboxUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
+  private stopSandboxUrl: string;
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
@@ -372,6 +380,7 @@ export class ModalClient {
     this.snapshotSandboxUrl = url("api-snapshot-sandbox");
     this.snapshotBuildSandboxUrl = url("api-snapshot-build-sandbox");
     this.restoreSandboxUrl = url("api-restore-sandbox");
+    this.stopSandboxUrl = url("api-stop-sandbox");
     this.createImageBuildSandboxUrl = url("api-create-build-sandbox");
     this.startImageBuildSandboxUrl = url("api-start-build-sandbox");
     this.terminateImageBuildSandboxUrl = url("api-terminate-build-sandbox");
@@ -697,9 +706,15 @@ export class ModalClient {
       const result = await this.postJson(
         this.snapshotSandboxUrl,
         endpoint,
-        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+        request.deadlineAtMs === undefined
+          ? MODAL_SNAPSHOT_REQUEST_DEADLINE_MS
+          : Math.max(
+              1,
+              Math.min(MODAL_SNAPSHOT_REQUEST_DEADLINE_MS, request.deadlineAtMs - Date.now())
+            ),
         {
           sandbox_id: request.providerObjectId,
+          deadline_at_ms: request.deadlineAtMs ?? null,
         },
         snapshotSandboxModalResponseSchema,
         correlation,
@@ -721,6 +736,19 @@ export class ModalClient {
         outcome,
       });
     }
+  }
+
+  async stopSandbox(request: StopSandboxRequest, correlation?: CorrelationContext): Promise<void> {
+    await this.postJson(
+      this.stopSandboxUrl,
+      "stopSandbox",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
+      { sandbox_id: request.providerObjectId },
+      imageBuildOperationModalResponseSchema,
+      correlation,
+      request.signal,
+      () => {}
+    );
   }
 
   /**

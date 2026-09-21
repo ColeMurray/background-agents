@@ -151,6 +151,29 @@ export class SandboxRepository {
     return (result.rowsWritten ?? 0) > 0;
   }
 
+  commitProviderStartup(
+    generation: { sandboxId: string | null; createdAt: number },
+    providerObjectId: string | null,
+    allowFailedSelfHeal: boolean
+  ): SandboxStatus | null {
+    const result = this.sql.exec(
+      `UPDATE sandbox
+       SET modal_object_id = COALESCE(?, modal_object_id),
+           status = CASE WHEN status = 'spawning' THEN 'connecting' ELSE status END
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND fenced = 0
+         AND (status IN ('spawning', 'connecting', 'warming', 'ready', 'busy')
+              OR (? = 1 AND status = 'failed'))
+       RETURNING status`,
+      providerObjectId,
+      generation.sandboxId,
+      generation.createdAt,
+      allowFailedSelfHeal ? 1 : 0
+    );
+    const row = result.toArray()[0] as { status?: SandboxStatus } | undefined;
+    return row?.status ?? null;
+  }
+
   /**
    * Move the row to `ready` if it is booting or self-healing, and report
    * whether it moved. `ready` is excluded so a reconnecting bridge's repeat

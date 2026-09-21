@@ -30,6 +30,7 @@ export interface SandboxLaunchOptions {
   readonly inherited?: {
     readonly execution: SessionSandboxExecution;
     readonly sandboxTimeoutMs?: number;
+    readonly finalSnapshotBufferMs?: number;
   };
 }
 
@@ -94,8 +95,12 @@ export function resolveSandboxLaunchSpec(
 
   if (options.inherited) {
     delete projected.sandboxTimeoutMs;
+    delete projected.finalSnapshotBufferMs;
     if (options.inherited.sandboxTimeoutMs !== undefined) {
       projected.sandboxTimeoutMs = options.inherited.sandboxTimeoutMs;
+    }
+    if (options.inherited.finalSnapshotBufferMs !== undefined) {
+      projected.finalSnapshotBufferMs = options.inherited.finalSnapshotBufferMs;
     }
   }
   if (execution.profile === "docker-v1") {

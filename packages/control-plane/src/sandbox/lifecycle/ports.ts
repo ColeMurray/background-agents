@@ -4,9 +4,47 @@ export interface SandboxGeneration {
   createdAt: number;
 }
 
+/** Coordinator-owned checkpoint result; unknown never authorizes a destructive retry. */
+export type SandboxCheckpointOutcome =
+  | { outcome: "saved"; imageId: string; sourceStopped: boolean }
+  | { outcome: "held" }
+  | { outcome: "unknown" };
+
+/**
+ * Startup policy hides persisted receipt representation from lifecycle consumers.
+ * `normal` defers to existing startup checks; it is not permission to discard saved state.
+ * Recovery variants keep snapshot locators distinct from retained provider-object locators.
+ */
+export type SandboxStartupDecision =
+  | { kind: "normal" }
+  | { kind: "hold"; reason: string }
+  | {
+      kind: "restore_snapshot";
+      snapshotId: string;
+      runtimeVersion: string | null;
+      executionProfile: "default" | "docker-v1";
+    }
+  | {
+      kind: "resume_retained";
+      providerObjectId: string;
+      runtimeVersion: string | null;
+      executionProfile: "default" | "docker-v1";
+    };
+
+/** Internal facts used by lifecycle queue and push policies, not a caller-assembled protocol. */
+export type SandboxWorkAdmission =
+  | "unmanaged"
+  | "ready"
+  | "restore_required"
+  | "spawn_required"
+  | "held";
+
+/** Only unmanaged sessions retain the legacy manual-push fallback when no socket exists. */
+export type SandboxPushAdmission = "ready" | "unmanaged" | "held" | "start_required";
+
 /** Accepts an authenticated runtime observation; false means no transition. */
 export interface SandboxReadiness {
-  onRuntimeReady(timestamp: number, harness?: string): boolean;
+  onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean;
 }
 
 /** Applies sandbox cancellation after session work has been cancelled. */

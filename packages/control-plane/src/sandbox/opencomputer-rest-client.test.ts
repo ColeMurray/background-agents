@@ -151,6 +151,31 @@ describe("OpenComputerRestClient request timeouts", () => {
 });
 
 describe("OpenComputerRestClient response validation", () => {
+  it("restores a checkpoint in place on the fresh target sandbox", async () => {
+    const client = new OpenComputerRestClient(config);
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await client.restoreCheckpoint("sb-new", "cp-old");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.opencomputer.dev/sandboxes/sb-new/checkpoints/cp-old/restore",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("lists checkpoints through the documented collection route and accepts sandboxID", async () => {
+    const client = new OpenComputerRestClient(config);
+    fetchSpy.mockResolvedValue(jsonResponse([{ id: "cp-1", sandboxID: "sb-1", status: "ready" }]));
+
+    await expect(client.listCheckpoints("sb-1")).resolves.toEqual([
+      { id: "cp-1", sandboxID: "sb-1", status: "ready" },
+    ]);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.opencomputer.dev/sandboxes/sb-1/checkpoints",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
   it("accepts sandboxID as the upstream sandbox identifier", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1", status: "running" }));
@@ -278,7 +303,12 @@ describe("OpenComputerRestClient wake responses", () => {
 
 describe("OpenComputer response schemas", () => {
   it("parses valid consumed response shapes", () => {
-    expect(openComputerSandboxApiResponseSchema.safeParse({ id: "sb-1" }).success).toBe(true);
+    expect(
+      openComputerSandboxApiResponseSchema.safeParse({
+        id: "sb-1",
+        endAt: "2032-03-04T05:06:07.000Z",
+      }).success
+    ).toBe(true);
     expect(
       openComputerSecretStoreResponseSchema.safeParse({
         id: "store-1",

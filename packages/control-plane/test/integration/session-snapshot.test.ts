@@ -179,13 +179,45 @@ describe("session snapshot synchronization", () => {
     expect(ws).not.toBeNull();
     ws!.accept();
     try {
-      const deliveries = collectMessages(ws!, { timeoutMs: 500 });
+      const generationCommand = collectMessages(ws!, {
+        until: (message) => message.type === "sandbox_generation",
+        timeoutMs: 2_000,
+      });
       const ready = JSON.stringify({
         type: "ready",
         sandboxId: restoreRequest!.sandbox_id,
         timestamp: Date.now() / 1000,
+        preservationProtocolVersion: 1,
       });
       ws!.send(ready);
+      const generationMessage = (await generationCommand).find(
+        (message) => message.type === "sandbox_generation"
+      );
+      expect(generationMessage).toMatchObject({ type: "sandbox_generation" });
+      if (!generationMessage || generationMessage.type !== "sandbox_generation") {
+        throw new Error("Expected sandbox generation command");
+      }
+      expect(
+        await queryDO<{ status: string }>(
+          stub,
+          "SELECT status FROM messages WHERE id = ?",
+          messageId
+        )
+      ).toEqual([{ status: "pending" }]);
+
+      const deliveries = collectMessages(ws!, {
+        until: (message) => message.type === "prompt",
+        timeoutMs: 2_000,
+      });
+      ws!.send(
+        JSON.stringify({
+          type: "sandbox_generation_ready",
+          generation: generationMessage.generation,
+          sandboxId: restoreRequest!.sandbox_id,
+          timestamp: Date.now() / 1000,
+          ackId: "snapshot-retry-generation-ready",
+        })
+      );
       await waitForSandboxStatus(stub, "ready");
       const snapshot = await (
         await stub.fetch("http://internal/internal/snapshot")
@@ -193,7 +225,12 @@ describe("session snapshot synchronization", () => {
       expect(snapshot.snapshotRecoveryError).toBeNull();
       expect(snapshot.session.sandboxExecution).toEqual(execution);
       ws!.send(ready);
-      expect((await deliveries).filter((message) => message.type === "prompt")).toHaveLength(1);
+      const delivered = await deliveries;
+      expect(delivered).toContainEqual({
+        type: "ack",
+        ackId: "snapshot-retry-generation-ready",
+      });
+      expect(delivered.filter((message) => message.type === "prompt")).toHaveLength(1);
     } finally {
       ws!.close();
     }

@@ -354,7 +354,8 @@ describe("ChildSessionsHandler", () => {
     getSession.mockReturnValue(
       createSession({
         reasoning_effort: "high",
-        sandbox_settings: '{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000]}',
+        sandbox_settings:
+          '{"sandboxTimeoutMs":14400000,"finalSnapshotBufferMs":600000,"tunnelPorts":[3000]}',
       })
     );
     repository.listParticipants.mockReturnValue([createParticipant()]);
@@ -372,6 +373,7 @@ describe("ChildSessionsHandler", () => {
       baseBranch: "main",
       sandboxTimeoutMs: 14_400_000,
       sandboxExecution: { profile: "default" },
+      finalSnapshotBufferMs: 600_000,
       promptAuthor: {
         userId: "user-1",
         scmUserId: null,

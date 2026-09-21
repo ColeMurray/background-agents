@@ -62,6 +62,7 @@ const reservation = {
   sandboxId: "sandbox-1",
   generationCreatedAt: 100,
   authTokenHash: "hash-1",
+  timeoutSeconds: 7200,
 };
 
 const intent = (): AllocationIntent => ({
@@ -75,6 +76,7 @@ const intent = (): AllocationIntent => ({
   recovery_attempts: 0,
   next_attempt_at: 0,
   cleanup_required: 0,
+  timeout_seconds: 7200,
 });
 
 const databases: DatabaseSync[] = [];
@@ -119,6 +121,9 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
       expect(sql.exec("SELECT modal_object_id FROM sandbox").toArray()).toEqual([
         { modal_object_id: "provider-1" },
       ]);
+      const boundIntent = coordinator.find("allocation-1");
+      expect(boundIntent).toMatchObject({ provider_object_id: "provider-1" });
+      coordinator.settleBound(boundIntent!);
       expect(coordinator.find("allocation-1")).toBeNull();
       expect(terminateAllocation).not.toHaveBeenCalled();
     }
@@ -184,6 +189,7 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
     await vi.waitFor(() => expect(reconcileAllocation).toHaveBeenCalledOnce());
 
     await coordinator.acceptProviderResult(intent(), "provider-1");
+    coordinator.settleBound(coordinator.find("allocation-1")!);
     lookup.resolve("provider-1");
     await recovery;
 
@@ -207,8 +213,8 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
     sql.exec(
       `INSERT INTO sandbox_allocation_intents
        (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-        provider_object_id, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        provider_object_id, timeout_seconds, created_at)
+       VALUES (?, ?, ?, ?, ?, NULL, 7200, ?)`,
       "allocation-1",
       "session-1",
       "sandbox-1",
@@ -237,8 +243,8 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
     sql.exec(
       `INSERT INTO sandbox_allocation_intents
        (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-        provider_object_id, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        provider_object_id, timeout_seconds, created_at)
+       VALUES (?, ?, ?, ?, ?, NULL, 7200, ?)`,
       "allocation-1",
       "session-1",
       "sandbox-1",
@@ -270,6 +276,7 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
     const { coordinator, sql } = trackedFixture({ provider: { terminateAllocation } });
     await coordinator.reserve(reservation);
     await coordinator.acceptProviderResult(intent(), "provider-1");
+    coordinator.settleBound(coordinator.find("allocation-1")!);
 
     await expect(coordinator.acceptProviderResult(intent(), "provider-1")).resolves.toBe(true);
 
@@ -290,8 +297,8 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
     sql.exec(
       `INSERT INTO sandbox_allocation_intents
        (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-        provider_object_id, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+        provider_object_id, timeout_seconds, created_at)
+       VALUES (?, ?, ?, ?, ?, NULL, 7200, ?)`,
       "allocation-bad",
       "session-1",
       "sandbox-1",
@@ -410,8 +417,9 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
       sql.exec(
         `INSERT INTO sandbox_allocation_intents
          (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-          provider_object_id, recovery_attempts, next_attempt_at, cleanup_required, created_at)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, ?)`,
+          provider_object_id, recovery_attempts, next_attempt_at, cleanup_required,
+          timeout_seconds, created_at)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, 7200, ?)`,
         `older-${index}`,
         "session-1",
         "sandbox-1",
@@ -442,8 +450,9 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
       sql.exec(
         `INSERT INTO sandbox_allocation_intents
          (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-          provider_object_id, recovery_attempts, next_attempt_at, cleanup_required, created_at)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, ?)`,
+          provider_object_id, recovery_attempts, next_attempt_at, cleanup_required,
+          timeout_seconds, created_at)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, 7200, ?)`,
         `malformed-${index}`,
         "session-1",
         "sandbox-1",
@@ -472,5 +481,121 @@ describe("SandboxAllocationCoordinator durable allocation contract", () => {
     ).toEqual([{ count: 25 }]);
     expect(alarmScheduler.schedule).toHaveBeenCalledTimes(2);
     expect(log.error).toHaveBeenCalledTimes(25);
+  });
+
+  it("settles recovered allocation debt only after publication observes the bound provider ID", async () => {
+    const reconcileAllocation = vi.fn(async () => "provider-recovered");
+    const { coordinator, sql } = trackedFixture({ provider: { reconcileAllocation } });
+    await coordinator.reserve(reservation);
+    const publisher = vi.fn(async (publishedIntent: AllocationIntent, providerObjectId: string) => {
+      expect(providerObjectId).toBe("provider-recovered");
+      expect(publishedIntent.timeout_seconds).toBe(7200);
+      expect(sql.exec("SELECT modal_object_id FROM sandbox").toArray()).toEqual([
+        { modal_object_id: "provider-recovered" },
+      ]);
+      expect(coordinator.find("allocation-1")).not.toBeNull();
+      return "published" as const;
+    });
+    coordinator.setRecoveryPublisher(publisher);
+
+    await expect(coordinator.recover()).resolves.toBe(false);
+
+    expect(publisher).toHaveBeenCalledOnce();
+    expect(coordinator.find("allocation-1")).toBeNull();
+  });
+
+  it("retains recovered allocation debt without termination when publication is held", async () => {
+    const reconcileAllocation = vi.fn(async () => "provider-held");
+    const terminateAllocation = vi.fn(async () => {});
+    const { coordinator } = trackedFixture({
+      provider: { reconcileAllocation, terminateAllocation },
+    });
+    await coordinator.reserve(reservation);
+    coordinator.setRecoveryPublisher(async () => "held");
+
+    await expect(coordinator.recover()).resolves.toBe(true);
+
+    expect(coordinator.find("allocation-1")).toMatchObject({
+      provider_object_id: "provider-held",
+      cleanup_required: 0,
+      recovery_attempts: 1,
+    });
+    expect(terminateAllocation).not.toHaveBeenCalled();
+  });
+
+  it("turns an explicitly rejected publication into cleanup-only debt", async () => {
+    const reconcileAllocation = vi.fn(async () => "provider-rejected");
+    const terminateAllocation = vi.fn(async () => {
+      throw new Error("termination retry required");
+    });
+    const { coordinator } = trackedFixture({
+      provider: { reconcileAllocation, terminateAllocation },
+    });
+    await coordinator.reserve(reservation);
+    coordinator.setRecoveryPublisher(async () => "rejected");
+
+    await expect(coordinator.recover()).resolves.toBe(true);
+
+    expect(coordinator.find("allocation-1")).toMatchObject({
+      provider_object_id: "provider-rejected",
+      cleanup_required: 1,
+    });
+    expect(terminateAllocation).toHaveBeenCalledOnce();
+  });
+
+  it("retains bound debt for retry when recovered-startup publication throws", async () => {
+    const reconcileAllocation = vi.fn(async () => "provider-recovered");
+    const terminateAllocation = vi.fn(async () => {});
+    const { coordinator } = trackedFixture({
+      provider: { reconcileAllocation, terminateAllocation },
+    });
+    await coordinator.reserve(reservation);
+    const publisher = vi.fn(async () => {
+      throw new Error("publisher unavailable");
+    });
+    coordinator.setRecoveryPublisher(publisher);
+
+    await expect(coordinator.recover()).resolves.toBe(true);
+
+    expect(coordinator.find("allocation-1")).toMatchObject({
+      provider_object_id: "provider-recovered",
+      cleanup_required: 0,
+      recovery_attempts: 1,
+    });
+    expect(terminateAllocation).not.toHaveBeenCalled();
+  });
+
+  it("cannot adopt a lookup result after the latest intent state switches to cleanup", async () => {
+    const lookup = deferred<string | null>();
+    const reconcileAllocation = vi.fn(() => lookup.promise);
+    const terminateAllocation = vi.fn(async () => {});
+    const { coordinator, sql } = trackedFixture({
+      provider: { reconcileAllocation, terminateAllocation },
+    });
+    await coordinator.reserve(reservation);
+    const publisher = vi.fn(async () => "published" as const);
+    coordinator.setRecoveryPublisher(publisher);
+    const recovery = coordinator.recover();
+    await vi.waitFor(() => expect(reconcileAllocation).toHaveBeenCalledOnce());
+    sql.exec(
+      `UPDATE sandbox_allocation_intents
+       SET provider_object_id = ?, cleanup_required = 1
+       WHERE allocation_name = ?`,
+      "provider-cleanup",
+      "allocation-1"
+    );
+
+    lookup.resolve("provider-stale");
+    await expect(recovery).resolves.toBe(true);
+
+    expect(sql.exec("SELECT modal_object_id FROM sandbox").toArray()).toEqual([
+      { modal_object_id: null },
+    ]);
+    expect(coordinator.find("allocation-1")).toMatchObject({
+      provider_object_id: "provider-cleanup",
+      cleanup_required: 1,
+    });
+    expect(publisher).not.toHaveBeenCalled();
+    expect(terminateAllocation).not.toHaveBeenCalled();
   });
 });

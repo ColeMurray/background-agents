@@ -80,10 +80,14 @@ export class ChildSessionsHandler {
     );
     if (promptAuthor instanceof Response) return promptAuthor;
     let sandboxTimeoutMs: number | undefined;
+    let finalSnapshotBufferMs: number | undefined;
     try {
-      sandboxTimeoutMs = parsePersistedSandboxSettings(session.sandbox_settings).sandboxTimeoutMs;
+      const sandboxSettings = parsePersistedSandboxSettings(session.sandbox_settings);
+      sandboxTimeoutMs = sandboxSettings.sandboxTimeoutMs;
+      finalSnapshotBufferMs = sandboxSettings.finalSnapshotBufferMs;
     } catch {
       sandboxTimeoutMs = undefined;
+      finalSnapshotBufferMs = undefined;
     }
     const context: SpawnContext = {
       repoOwner: session.repo_owner,
@@ -95,6 +99,7 @@ export class ChildSessionsHandler {
       baseBranch: session.base_branch,
       sandboxTimeoutMs,
       sandboxExecution: parseSessionSandboxExecution(session.sandbox_execution),
+      finalSnapshotBufferMs,
       promptAuthor: {
         userId: promptAuthor.user_id,
         ...(promptAuthor.canonical_user_id

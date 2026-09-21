@@ -197,4 +197,38 @@ describe("resolveSandboxLaunchSpec", () => {
       ).settings
     ).toEqual({ sandboxTimeoutMs: 3_600_000 });
   });
+
+  it("inherits the parent's timeout and final snapshot buffer together", () => {
+    expect(
+      resolveSandboxLaunchSpec(
+        {},
+        {
+          settings: { sandboxTimeoutMs: 28_800_000, finalSnapshotBufferMs: 600_000 },
+          scopeAllowed: true,
+          repository: "acme/web",
+        },
+        {
+          inherited: {
+            execution: { profile: "default" },
+            sandboxTimeoutMs: 7_200_000,
+            finalSnapshotBufferMs: 300_000,
+          },
+        }
+      ).settings
+    ).toEqual({ sandboxTimeoutMs: 7_200_000, finalSnapshotBufferMs: 300_000 });
+  });
+
+  it("does not fall back to newly configured timeout fields absent from the parent", () => {
+    expect(
+      resolveSandboxLaunchSpec(
+        {},
+        {
+          settings: { sandboxTimeoutMs: 28_800_000, finalSnapshotBufferMs: 600_000 },
+          scopeAllowed: true,
+          repository: "acme/web",
+        },
+        { inherited: { execution: { profile: "default" } } }
+      ).settings
+    ).toEqual({});
+  });
 });

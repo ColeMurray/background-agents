@@ -32,6 +32,7 @@ import type {
   SandboxExecutionProfile,
 } from "@open-inspect/shared/types/sandbox-execution";
 import { snapshotExecutionIssue } from "../snapshot-execution";
+import { supportsConfirmedShutdown } from "./shutdown-policy";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -113,7 +114,12 @@ export async function evaluateImageBuildForSpawn(
   }
 
   const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  if (runtimeVersion === null || runtimeVersion < minCompatibleRuntimeVersionFor(harness)) {
+  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness);
+  if (
+    runtimeVersion === null ||
+    runtimeVersion < minimumRuntimeVersion ||
+    !supportsConfirmedShutdown(image.runtime_version)
+  ) {
     return { outcome: "miss", reason: "runtime_below_floor", imageBuildId: image.id };
   }
 

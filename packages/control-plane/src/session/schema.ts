@@ -66,10 +66,15 @@ const SANDBOX_ALLOCATION_INTENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox
   cleanup_required INTEGER NOT NULL DEFAULT 0,
   recovery_attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  timeout_seconds INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );`;
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS sandbox_preservation (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  state TEXT NOT NULL
+);
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
@@ -731,6 +736,13 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 54,
+    description: "Persist final sandbox preservation and expiry fence",
+    run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
+    )`,
+  },
+  {
+    id: 55,
     description: "Persist immutable sandbox execution and snapshot recovery metadata",
     run: (sql) => {
       runMigration(sql, `ALTER TABLE session ADD COLUMN sandbox_execution TEXT DEFAULT NULL`);
@@ -739,7 +751,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     },
   },
   {
-    id: 55,
+    id: 56,
     description: "Persist sandbox allocation recovery intents",
     run: SANDBOX_ALLOCATION_INTENTS_TABLE_SQL,
   },

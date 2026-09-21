@@ -18,6 +18,7 @@ export interface AllocationIntent {
   cleanup_required: 0 | 1;
   recovery_attempts: number;
   next_attempt_at: number;
+  timeout_seconds: number;
   created_at: number;
 }
 
@@ -31,10 +32,15 @@ const allocationIntentSchema = z.object({
   cleanup_required: z.union([z.literal(0), z.literal(1)]),
   recovery_attempts: z.number().int().nonnegative(),
   next_attempt_at: z.number(),
+  timeout_seconds: z.number().int().positive(),
   created_at: z.number(),
 });
 
 export class SandboxAllocationCoordinator {
+  private recoveryPublisher?: (
+    intent: AllocationIntent,
+    providerObjectId: string
+  ) => Promise<"published" | "held" | "rejected">;
   constructor(
     private readonly sql: SqlStorage,
     private readonly transaction: TransactionSync,
@@ -49,14 +55,16 @@ export class SandboxAllocationCoordinator {
     sandboxId: string;
     generationCreatedAt: number;
     authTokenHash: string;
+    timeoutSeconds: number;
   }): Promise<void> {
     const deadline = Date.now() + ALLOCATION_RECOVERY_RETRY_MS;
     this.transaction(() => {
       const inserted = this.sql.exec(
         `INSERT INTO sandbox_allocation_intents
          (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-          provider_object_id, cleanup_required, recovery_attempts, next_attempt_at, created_at)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, ?)
+          provider_object_id, cleanup_required, recovery_attempts, next_attempt_at,
+          timeout_seconds, created_at)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, ?, ?)
          ON CONFLICT(allocation_name) DO NOTHING
          RETURNING allocation_name`,
         input.allocationName,
@@ -64,6 +72,7 @@ export class SandboxAllocationCoordinator {
         input.sandboxId,
         input.generationCreatedAt,
         input.authTokenHash,
+        input.timeoutSeconds,
         Date.now()
       );
       if (inserted.toArray().length !== 1) {
@@ -128,7 +137,6 @@ export class SandboxAllocationCoordinator {
         );
         return "cleanup";
       }
-      this.deleteExact(intent);
       return "bound";
     });
     if (outcome === "cleanup" && this.exactIntentExists(intent)) {
@@ -154,7 +162,15 @@ export class SandboxAllocationCoordinator {
           continue;
         }
         if (intent.cleanup_required) await this.cleanup(intent, providerObjectId);
-        else await this.acceptProviderResult(intent, providerObjectId);
+        else if (this.recoveryPublisher && this.currentAuthorityCanAdopt(intent)) {
+          if (!(await this.acceptProviderResult(intent, providerObjectId))) continue;
+          const publication = await this.recoveryPublisher(intent, providerObjectId);
+          if (publication === "published") this.settleBound(intent);
+          else if (publication === "held") this.defer(intent);
+          else await this.rejectProviderResult(intent, providerObjectId);
+        } else {
+          await this.acceptProviderResult(intent, providerObjectId);
+        }
       } catch (error) {
         this.log.warn("sandbox.allocation_recovery_retry", {
           allocation_name: intent.allocation_name,
@@ -182,6 +198,28 @@ export class SandboxAllocationCoordinator {
       intent.auth_token_hash
     );
     await this.cleanup(intent, providerObjectId);
+  }
+
+  setRecoveryPublisher(
+    publisher: (
+      intent: AllocationIntent,
+      providerObjectId: string
+    ) => Promise<"published" | "held" | "rejected">
+  ): void {
+    this.recoveryPublisher = publisher;
+  }
+
+  settleBound(intent: AllocationIntent): void {
+    this.transaction(() => {
+      const current = this.readExactIntent(intent);
+      if (!current || current.cleanup_required) return;
+      if (
+        !current.provider_object_id ||
+        !this.currentAuthorityHasProvider(intent, current.provider_object_id)
+      )
+        return;
+      this.deleteExact(intent);
+    });
   }
 
   find(allocationName: string): AllocationIntent | null {
@@ -311,6 +349,23 @@ export class SandboxAllocationCoordinator {
           intent.generation_created_at,
           intent.auth_token_hash,
           providerObjectId
+        )
+        .toArray().length === 1
+    );
+  }
+
+  private currentAuthorityCanAdopt(intent: AllocationIntent): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 AS present FROM sandbox
+           WHERE modal_sandbox_id = ? AND created_at = ? AND auth_token_hash = ?
+             AND fenced = 0
+             AND status IN ('spawning', 'connecting', 'warming', 'ready', 'busy', 'failed')
+             AND EXISTS (SELECT 1 FROM session WHERE status NOT IN ('cancelled', 'archived'))`,
+          intent.sandbox_id,
+          intent.generation_created_at,
+          intent.auth_token_hash
         )
         .toArray().length === 1
     );

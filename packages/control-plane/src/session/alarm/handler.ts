@@ -8,6 +8,7 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
 
 export interface AlarmHandlerDeps {
+  preserveBeforeWatchdogs?: () => Promise<"continue" | "hold_watchdogs">;
   repository: MessageRepository;
   messageQueue: Pick<
     SessionMessageQueue,
@@ -42,8 +43,11 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
-      // Cleanup-only provider reconciliation must precede every ordinary
-      // lifecycle early return, including stopped/failed/terminal sessions.
+      // Graceful shutdown must not wait behind a remote index projection or a
+      // generic stop timeout. Recheck below if projection I/O crosses D.
+      await deps.preserveBeforeWatchdogs?.();
+      // Cleanup-only provider reconciliation still runs for held and terminal
+      // sessions, but never delays the first preservation deadline check.
       await deps.lifecycleManager.recoverAllocations();
       let projectionFailure: { error: unknown } | undefined;
       try {
@@ -52,6 +56,10 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // A malformed unread projection must not prevent lifecycle recovery.
         // Rethrow after recovery so transient storage failures still retry.
         projectionFailure = { error };
+      }
+      if ((await deps.preserveBeforeWatchdogs?.()) === "hold_watchdogs") {
+        if (projectionFailure) throw projectionFailure.error;
+        return;
       }
       await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than

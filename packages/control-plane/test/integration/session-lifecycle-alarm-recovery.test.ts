@@ -75,8 +75,8 @@ describe("SessionDO lifecycle alarm recovery", () => {
       state.storage.sql.exec(
         `INSERT INTO sandbox_allocation_intents
          (allocation_name, session_id, sandbox_id, generation_created_at, auth_token_hash,
-          provider_object_id, created_at)
-         VALUES ('oi-eviction-test', ?, 'sandbox-eviction-test', ?, 'hash', NULL, ?)`,
+          provider_object_id, timeout_seconds, created_at)
+         VALUES ('oi-eviction-test', ?, 'sandbox-eviction-test', ?, 'hash', NULL, 7200, ?)`,
         sessionName,
         now,
         now
