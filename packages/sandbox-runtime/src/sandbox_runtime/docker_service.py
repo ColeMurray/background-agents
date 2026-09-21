@@ -124,8 +124,9 @@ class DockerService:
         except TimeoutError:
             return False
         finally:
-            cleanup = asyncio.create_task(terminate_owned_subprocess(probe))
-            await finish_cancellation_cleanup(cleanup)
+            if probe.returncode is None:
+                cleanup = asyncio.create_task(terminate_owned_subprocess(probe))
+                await finish_cancellation_cleanup(cleanup)
 
     async def wait(self) -> int:
         """Block until the daemon exits and return its exit code."""
@@ -151,12 +152,15 @@ class DockerService:
             async with asyncio.timeout(self.stop_timeout_seconds):
                 if await wait_for_process_exit(process) != 0:
                     raise RuntimeError("Docker build preparation did not stop cleanly")
-                await _wait_for_group_exit(process.pid)
         except TimeoutError:
             await self.stop()
             raise RuntimeError(
                 "Docker build preparation exceeded its clean shutdown deadline"
             ) from None
+        # A clean daemon exit means it already stopped containerd and BuildKit;
+        # anything still alive in the group is a straggler, not a dependency.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
         self._process = None
         self.log.info("docker.prepared")
 
@@ -180,13 +184,3 @@ class DockerService:
         cleanup = asyncio.create_task(terminate())
         await finish_cancellation_cleanup(cleanup)
         self.log.info("docker.stopped")
-
-
-async def _wait_for_group_exit(process_group: int) -> None:
-    """Wait until containerd and BuildKit children have left the daemon's group."""
-    while True:
-        try:
-            os.killpg(process_group, 0)
-        except ProcessLookupError:
-            return
-        await asyncio.sleep(0.01)

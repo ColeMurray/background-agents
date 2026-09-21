@@ -1248,6 +1248,23 @@ describe("SandboxSettingsEditor — environment scope", () => {
     return { fetchMock };
   }
 
+  it("shows Docker as inherited until the environment pins a choice", () => {
+    renderEnvironmentEditor({
+      [SETTINGS_KEY]: {
+        integrationId: "sandbox",
+        settings: { defaults: { dockerEnabled: true } },
+      },
+      [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
+      [environmentSettingsKey]: {
+        integrationId: "sandbox",
+        environmentId: "env_1",
+        settings: null,
+      },
+    });
+
+    expect(screen.getByRole("combobox", { name: "Docker" })).toHaveTextContent("Inherit (enabled)");
+  });
+
   it("shows the primary repo's override over the global default as the inherited value", () => {
     renderEnvironmentEditor({
       [SETTINGS_KEY]: {

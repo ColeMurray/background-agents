@@ -297,24 +297,32 @@ export const SANDBOX_PROVIDER_NAMES = [
 
 export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
 
-const DEFAULT_SANDBOX_SETTING_CAPABILITIES = { resources: true, timeout: true };
+interface SandboxSettingCapabilities {
+  resources: boolean;
+  timeout: boolean;
+  /** Whether the provider can launch a Docker-capable sandbox (`dockerEnabled`). */
+  docker: boolean;
+}
+
+const DEFAULT_SANDBOX_SETTING_CAPABILITIES: SandboxSettingCapabilities = {
+  resources: true,
+  timeout: true,
+  docker: false,
+};
 const SANDBOX_SETTING_CAPABILITIES = {
-  modal: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  daytona: { resources: false, timeout: false },
+  modal: { resources: true, timeout: true, docker: true },
+  daytona: { resources: false, timeout: false, docker: false },
   vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  opencomputer: { resources: false, timeout: true },
-  e2b: { resources: false, timeout: true },
-} satisfies Record<SandboxProviderName, { resources: boolean; timeout: boolean }>;
+  opencomputer: { resources: false, timeout: true, docker: false },
+  e2b: { resources: false, timeout: true, docker: false },
+} satisfies Record<SandboxProviderName, SandboxSettingCapabilities>;
 
 export function isSandboxProviderName(provider: string): provider is SandboxProviderName {
   return (SANDBOX_PROVIDER_NAMES as readonly string[]).includes(provider);
 }
 
 /** Resolve setting support, explicitly treating unvalidated provider names as fully capable. */
-export function sandboxSettingCapabilities(provider: string): {
-  resources: boolean;
-  timeout: boolean;
-} {
+export function sandboxSettingCapabilities(provider: string): SandboxSettingCapabilities {
   const normalized = provider.trim().toLowerCase();
   return isSandboxProviderName(normalized)
     ? SANDBOX_SETTING_CAPABILITIES[normalized]
@@ -329,6 +337,11 @@ export function supportsConfigurableSandboxResources(provider: string): boolean 
 /** Whether the provider honors a per-session sandbox lifetime. */
 export function supportsConfigurableSandboxTimeout(provider: string): boolean {
   return sandboxSettingCapabilities(provider).timeout;
+}
+
+/** Whether the provider can launch Docker-capable sandboxes. */
+export function supportsDockerSandboxes(provider: string): boolean {
+  return sandboxSettingCapabilities(provider).docker;
 }
 
 export type ProviderSpecificSandboxSetting = "cpuCores" | "memoryMib" | "sandboxTimeoutMs";

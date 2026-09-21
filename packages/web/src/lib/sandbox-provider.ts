@@ -6,6 +6,7 @@ import {
   isSandboxProviderName,
   supportsConfigurableSandboxResources as providerSupportsConfigurableSandboxResources,
   supportsConfigurableSandboxTimeout as providerSupportsConfigurableSandboxTimeout,
+  supportsDockerSandboxes as providerSupportsDockerSandboxes,
   type SandboxProviderName,
 } from "@open-inspect/shared/types/integrations";
 
@@ -49,6 +50,10 @@ export function supportsConfigurableSandboxResources(): boolean {
 
 export function supportsConfigurableSandboxTimeout(): boolean {
   return providerSupportsConfigurableSandboxTimeout(getPublicSandboxProvider());
+}
+
+export function supportsDockerSandboxes(): boolean {
+  return providerSupportsDockerSandboxes(getPublicSandboxProvider());
 }
 
 /** The providers named in the unsupported-provider copy, in display order. */

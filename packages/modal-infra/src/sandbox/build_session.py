@@ -6,10 +6,7 @@ from typing import cast
 
 import modal
 
-from sandbox_runtime.constants import (
-    DOCKER_ENABLED_ENV_VAR,
-    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
-)
+from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.modal_image_build_start import (
     MODAL_IMAGE_BUILD_START_ARGUMENT,
@@ -54,7 +51,6 @@ RESERVED_USER_ENV_KEYS = (
     CALLBACK_TOKEN_ENV,
     PROVIDER_SESSION_ID_ENV,
     MODAL_SANDBOX_ID_ENV,
-    DOCKER_ENABLED_ENV_VAR,
 )
 
 

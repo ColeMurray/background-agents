@@ -4,6 +4,7 @@ import { useLayoutEffect } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { dockerEnabledForMode } from "@/components/docker-mode-select";
 import { retireWarmDraftSession } from "@/lib/warm-session";
 import type { InteractiveProviderRoutingIdentity } from "@/lib/provider-selection";
 import {
@@ -88,6 +89,21 @@ describe("useWarmDraftSession", () => {
 
     expect(created).toBeNull();
     expect(result.current.readLastError()).toBe("Docker sessions are not enabled");
+
+    // Any other failure, and any later attempt, drops the stale refusal.
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      new Response(JSON.stringify({ error: "Spend limit reached" }), { status: 402 })
+    );
+    await act(async () => {
+      await result.current.warm();
+    });
+    expect(result.current.readLastError()).toBeNull();
+  });
+
+  it("maps the composer's one-off choice onto the request", () => {
+    expect(dockerEnabledForMode("default")).toBeUndefined();
+    expect(dockerEnabledForMode("standard")).toBe(false);
+    expect(dockerEnabledForMode("docker")).toBe(true);
   });
 
   it("retires a completed draft when any launch input changes", async () => {

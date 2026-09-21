@@ -10,7 +10,8 @@ if [[ "$OI_OS" != debian ]]; then
 fi
 export DEBIAN_FRONTEND=noninteractive
 package_dir="$(mktemp -d)"
-trap 'rm -rf "$package_dir"' EXIT
+rootfs="$(mktemp -d)"
+trap 'rm -rf "$package_dir" "$rootfs"' EXIT
 for tool in ENGINE CLI CONTAINERD BUILDX COMPOSE; do
   file_key="DOCKER_${tool}_FILE"
   hash_key="DOCKER_${tool}_SHA256"
@@ -26,13 +27,11 @@ install -m 0644 "$OI_INSTALL_DIR/docker-daemon.json" /etc/docker/daemon.json
 install -m 0644 "$OI_BUNDLE/packages/sandbox-images/verify/docker_smoke.py" /app/verify/docker_smoke.py
 # A registry-independent BusyBox root filesystem lets image verification run
 # a real build, container and Compose network without pulling anything.
-rootfs="$(mktemp -d)"
 mkdir -p "$rootfs/bin"
 cp /bin/busybox "$rootfs/bin/busybox"
 for applet in sh cat mkdir httpd wget sleep grep; do ln -s busybox "$rootfs/bin/$applet"; done
 install -d -m 0755 /opt/openinspect/docker-smoke
 tar --format=ustar --owner=0 --group=0 --numeric-owner -C "$rootfs" -cf /opt/openinspect/docker-smoke/rootfs.tar .
-rm -rf "$rootfs"
 docker --version
 docker buildx version
 docker compose version

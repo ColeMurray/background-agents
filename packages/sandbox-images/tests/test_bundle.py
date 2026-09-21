@@ -1,6 +1,7 @@
 """Shared payload staging and conservative build invalidation."""
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -193,3 +194,16 @@ def test_docker_pins_reach_the_installer_as_shell_variables(checkout, tmp_path):
     for package in ("ENGINE", "CLI", "CONTAINERD", "BUILDX", "COMPOSE"):
         assert f"export DOCKER_{package}_FILE=" in config
         assert f"export DOCKER_{package}_SHA256=" in config
+
+
+def test_docker_daemon_shutdown_timeout_fits_inside_the_runtime_stop_deadline():
+    config = json.loads(
+        (REPO_ROOT / "packages/sandbox-images/install/docker-daemon.json").read_text()
+    )
+    runtime = (
+        REPO_ROOT / "packages/sandbox-runtime/src/sandbox_runtime/docker_service.py"
+    ).read_text()
+    stop_deadline = float(
+        re.search(r"^DOCKER_STOP_TIMEOUT_SECONDS = ([0-9.]+)", runtime, re.M).group(1)
+    )
+    assert config["shutdown-timeout"] < stop_deadline

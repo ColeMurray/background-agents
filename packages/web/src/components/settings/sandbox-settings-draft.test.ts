@@ -515,6 +515,12 @@ describe("dockerEnabled draft", () => {
     expect(enabled.result.settings).toMatchObject({ dockerEnabled: true });
   });
 
+  it("rejects a Docker draft value that is neither a boolean nor inherit", () => {
+    expect(resolve({ dockerEnabled: "yes" }).result).toEqual({
+      error: "Docker must be enabled, disabled, or inherited.",
+    });
+  });
+
   it("preserves a stored Docker choice when the provider hides the field", () => {
     const resolved = resolveSandboxSettingsDraft({
       isGlobal: false,

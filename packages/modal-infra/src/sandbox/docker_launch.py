@@ -80,7 +80,11 @@ def docker_base_image() -> modal.Image:
 
 
 def docker_launch_kwargs(launch: DockerLaunch) -> dict[str, Any]:
-    """Extra `modal.Sandbox.create` kwargs for a Docker launch; empty otherwise."""
+    """Extra `modal.Sandbox.create` kwargs for a Docker launch; empty otherwise.
+
+    Modal sizes VM memory at create time, so the frozen resources are part of
+    the launch itself (session and build alike), not an optional reservation.
+    """
     if not launch.enabled:
         return {}
     return {

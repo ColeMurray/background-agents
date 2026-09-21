@@ -251,7 +251,6 @@ export class ImageBuildScheduler {
             scope,
             repositories: target.repositories,
             repositoriesFingerprint: target.repositoriesFingerprint,
-            artifactVariant: target.artifactVariant,
           },
           rows,
           provider

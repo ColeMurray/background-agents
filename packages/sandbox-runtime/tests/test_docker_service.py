@@ -27,12 +27,17 @@ class FakeProcesses:
     daemon_exit: int = 0
     probe_delay: float = 0.0
     fail_probe: bool = False
+    ignore_sigterm: bool = False
     children: list[asyncio.subprocess.Process] = field(default_factory=list)
+    spawns: list[tuple[str, ...]] = field(default_factory=list)
 
     def daemon_program(self) -> str:
+        handler = (
+            "signal.SIG_IGN" if self.ignore_sigterm else f"lambda *_: sys.exit({self.daemon_exit})"
+        )
         return (
             "import signal, sys, time, pathlib; "
-            f"signal.signal(signal.SIGTERM, lambda *_: sys.exit({self.daemon_exit})); "
+            f"signal.signal(signal.SIGTERM, {handler}); "
             f"pathlib.Path({self.ready_marker!r}).write_text('ready'); "
             "time.sleep(300)"
         )
@@ -51,6 +56,8 @@ def processes(monkeypatch, tmp_path):
     real_spawn = asyncio.create_subprocess_exec
 
     async def spawn(command, *args, **kwargs):
+        fakes.spawns.append((command, *args))
+        assert kwargs.get("start_new_session") is True
         if command == "dockerd":
             program = fakes.daemon_program()
         elif command == "docker":
@@ -92,13 +99,21 @@ def _group_gone(process: asyncio.subprocess.Process) -> bool:
     return False
 
 
+async def _until(predicate, timeout: float = 10.0) -> None:
+    """Bounded wait: a regression fails the test instead of hanging it."""
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
 async def test_ready_then_clean_preparation_leaves_no_owned_process(processes, tmp_path):
     service = _service(tmp_path)
 
     await service.start()
     daemon = processes.children[0]
     assert daemon.returncode is None
-    assert "docker.ready" in service.log.events
+    assert processes.spawns[0] == ("dockerd", "--host", "unix:///var/run/docker.sock")
+    assert processes.spawns[1] == ("docker", "--host", "unix:///var/run/docker.sock", "info")
 
     await service.prepare_for_snapshot()
 
@@ -107,7 +122,6 @@ async def test_ready_then_clean_preparation_leaves_no_owned_process(processes, t
     assert service.stopping is True
     await service.stop()
     assert all(child.returncode is not None for child in processes.children)
-    assert "docker.prepared" in service.log.events
 
 
 async def test_startup_deadline_has_its_own_diagnostic_and_reaps_the_daemon(processes, tmp_path):
@@ -123,10 +137,9 @@ async def test_startup_deadline_has_its_own_diagnostic_and_reaps_the_daemon(proc
 
 async def test_daemon_exit_during_startup_is_reported(processes, tmp_path):
     processes.fail_probe = True
-    service = _service(tmp_path, start_timeout_seconds=5)
+    service = _service(tmp_path, start_timeout_seconds=60)
     started = asyncio.create_task(service.start())
-    while not processes.children:
-        await asyncio.sleep(0.01)
+    await _until(lambda: bool(processes.children))
     processes.children[0].kill()
 
     with pytest.raises(RuntimeError, match="exited during startup"):
@@ -135,10 +148,9 @@ async def test_daemon_exit_during_startup_is_reported(processes, tmp_path):
 
 async def test_cancellation_during_probe_reaps_both_process_groups(processes, tmp_path):
     processes.probe_delay = 300
-    service = _service(tmp_path, start_timeout_seconds=30)
+    service = _service(tmp_path, start_timeout_seconds=60)
     started = asyncio.create_task(service.start())
-    while len(processes.children) < 2:
-        await asyncio.sleep(0.01)
+    await _until(lambda: len(processes.children) >= 2)
 
     started.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -171,3 +183,31 @@ async def test_unexpected_exit_is_observable_and_not_a_requested_stop(processes,
 
     await service.stop()
     assert service.stopping is True
+
+
+async def test_daemon_that_ignores_sigterm_is_killed_and_never_a_prepared_build(
+    processes, tmp_path
+):
+    processes.ignore_sigterm = True
+    service = _service(tmp_path, stop_timeout_seconds=0.3)
+    await service.start()
+    daemon = processes.children[0]
+
+    with pytest.raises(RuntimeError, match="clean shutdown deadline"):
+        await service.prepare_for_snapshot()
+
+    assert daemon.returncode is not None
+    assert _group_gone(daemon)
+
+
+async def test_preparation_requires_a_running_daemon(processes, tmp_path):
+    service = _service(tmp_path)
+    with pytest.raises(RuntimeError, match="exited before build preparation"):
+        await service.prepare_for_snapshot()
+
+    await service.start()
+    processes.children[0].kill()
+    await service.wait()
+    with pytest.raises(RuntimeError, match="exited before build preparation"):
+        await service.prepare_for_snapshot()
+    await service.stop()

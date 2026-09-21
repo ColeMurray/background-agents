@@ -382,11 +382,9 @@ class SandboxSupervisor:
             self.shutdown_event.set()
 
     async def _start_docker(self) -> None:
-        """Start the owned daemon when the launch requires Docker, and never otherwise."""
+        """Start the owned daemon; only called when the trusted launch config requires Docker."""
         if self.docker_service is None:
-            if self.config.docker_enabled:
-                raise RuntimeError("Required Docker service is not configured")
-            return
+            raise RuntimeError("Required Docker service is not configured")
         await self.docker_service.start()
         self._docker_watch_task = asyncio.create_task(self._watch_docker())
 
@@ -522,9 +520,12 @@ class SandboxSupervisor:
         self, expected_tunnel_ports: list[int]
     ) -> RepositoryBootResult:
         timeout_seconds = self._image_build_execution_timeout_seconds()
-        deadline = asyncio.timeout(timeout_seconds)
         try:
-            async with deadline:
+            async with asyncio.timeout(timeout_seconds):
+                if not self.config.docker_enabled:
+                    return await self._run_until_shutdown(
+                        lambda: self.repository_boot.boot(BootMode.BUILD, expected_tunnel_ports)
+                    )
                 # Docker starts before setup hooks, and is stopped cleanly
                 # before success is reported: the snapshot must hold a
                 # quiesced data root, never a daemon mid-write.
@@ -532,16 +533,13 @@ class SandboxSupervisor:
                 result = await self._run_until_shutdown(
                     lambda: self.repository_boot.boot(BootMode.BUILD, expected_tunnel_ports)
                 )
-                if self.docker_service is not None:
-                    await self._run_until_shutdown(self.docker_service.prepare_for_snapshot)
-                    await self._stop_docker_watch()
-                    if self._docker_watch_failure is not None:
-                        raise self._docker_watch_failure
+                assert self.docker_service is not None
+                await self._run_until_shutdown(self.docker_service.prepare_for_snapshot)
+                await self._stop_docker_watch()
+                if self._docker_watch_failure is not None:
+                    raise self._docker_watch_failure
                 return result
         except TimeoutError as error:
-            if not deadline.expired():
-                # The daemon's own startup or shutdown deadline, not the build budget.
-                raise
             raise RuntimeError(
                 f"image build exceeded its {timeout_seconds}-second execution timeout"
             ) from error
@@ -642,9 +640,10 @@ class SandboxSupervisor:
                 await self.agent_bridge.start(early_connect=True)
                 self._bridge_watch_task = asyncio.create_task(self._watch_bridge_during_boot())
 
-            # Docker before the desktop and the repository boot: setup and
-            # start hooks may run containers.
-            await self._run_until_shutdown(self._start_docker)
+            if self.config.docker_enabled:
+                # Docker before the desktop and the repository boot: setup and
+                # start hooks may run containers.
+                await self._run_until_shutdown(self._start_docker)
 
             try:
                 await self.browser_desktop.start()

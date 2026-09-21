@@ -149,6 +149,13 @@ export const BOOT_MODE_ENV_KEYS = [
 ] as const;
 
 /**
+ * The runtime's trusted Docker signal. Only Modal ever sets it, after this
+ * scrub; on every other provider a repo secret of this name would make the
+ * runtime try to own a daemon the image does not have.
+ */
+export const DOCKER_ENABLED_ENV_KEY = "OPENINSPECT_DOCKER_ENABLED";
+
+/**
  * Env vars of the image-build callback contract, keyed by semantic name and
  * mirrored from the runtime constants in
  * `sandbox_runtime/repo_image_callback.py`. Both language sides are pinned by
@@ -320,6 +327,7 @@ export function buildSandboxEnvVars(
   // would otherwise survive into BootMode.from_env — letting a session claim it
   // booted from a repo image, a snapshot, or an image build when it did not.
   for (const marker of BOOT_MODE_ENV_KEYS) delete envVars[marker];
+  delete envVars[DOCKER_ENABLED_ENV_KEY];
 
   const sessionConfig = buildSessionConfig(config);
 
@@ -439,6 +447,7 @@ export function buildImageBuildEnvVars(options: ImageBuildEnvVarsOptions): Recor
   for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
     delete envVars[key];
   }
+  delete envVars[DOCKER_ENABLED_ENV_KEY];
 
   Object.assign(envVars, {
     PYTHONUNBUFFERED: "1",

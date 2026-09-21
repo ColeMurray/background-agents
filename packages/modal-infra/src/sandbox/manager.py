@@ -81,6 +81,23 @@ def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
     return has_owner
 
 
+async def _create_sandbox(
+    create_kwargs: dict[str, Any], *, repository_image: bool
+) -> modal.Sandbox:
+    """The one `Sandbox.create` call; only its own NotFound means the image is gone."""
+    try:
+        return await modal.Sandbox.create.aio(
+            "python",
+            "-m",
+            "sandbox_runtime.entrypoint",
+            **create_kwargs,
+        )
+    except modal.exception.NotFoundError as e:
+        if repository_image:
+            raise RepositoryImageUnavailableError("repository image is unavailable") from e
+        raise
+
+
 def _session_identity(session_config: SessionConfig | dict[str, Any] | None) -> str:
     """The control-plane session id carried in the launch's session config."""
     if isinstance(session_config, dict):
@@ -495,25 +512,17 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
-        try:
-            if docker.enabled:
-                sandbox = await self._launch_docker_sandbox(
-                    session_id=_session_identity(config.session_config),
-                    sandbox_id=sandbox_id,
-                    retire_sandbox_id=config.retire_sandbox_id,
-                    create_kwargs=create_kwargs,
-                )
-            else:
-                sandbox = await modal.Sandbox.create.aio(
-                    "python",
-                    "-m",
-                    "sandbox_runtime.entrypoint",
-                    **create_kwargs,
-                )
-        except modal.exception.NotFoundError as e:
-            if isinstance(spec.source, _RepositoryImageSource):
-                raise RepositoryImageUnavailableError("repository image is unavailable") from e
-            raise
+        repository_image = isinstance(spec.source, _RepositoryImageSource)
+        if docker.enabled:
+            sandbox = await self._launch_docker_sandbox(
+                session_id=_session_identity(config.session_config),
+                sandbox_id=sandbox_id,
+                retire_sandbox_id=config.retire_sandbox_id,
+                create_kwargs=create_kwargs,
+                repository_image=repository_image,
+            )
+        else:
+            sandbox = await _create_sandbox(create_kwargs, repository_image=repository_image)
         modal_object_id = sandbox.object_id
         (
             code_server_url,
@@ -555,6 +564,7 @@ class SandboxManager:
         sandbox_id: str,
         retire_sandbox_id: str | None,
         create_kwargs: dict[str, Any],
+        repository_image: bool,
     ) -> modal.Sandbox:
         """Create a Docker VM under a deterministic name, adopting an existing one.
 
@@ -570,13 +580,9 @@ class SandboxManager:
         existing = await self._find_owned_docker_allocation(name, tags)
         if existing is None:
             try:
-                return await modal.Sandbox.create.aio(
-                    "python",
-                    "-m",
-                    "sandbox_runtime.entrypoint",
-                    name=name,
-                    tags=tags,
-                    **create_kwargs,
+                return await _create_sandbox(
+                    {**create_kwargs, "name": name, "tags": tags},
+                    repository_image=repository_image,
                 )
             except modal.exception.AlreadyExistsError:
                 existing = await self._find_owned_docker_allocation(name, tags)

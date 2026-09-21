@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -356,3 +357,15 @@ def test_local_docker_image_is_the_default_image_plus_the_docker_phase(monkeypat
     image.run_commands.assert_called_once_with(
         "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh docker"
     )
+
+
+def test_docker_verification_resources_match_the_control_plane_defaults() -> None:
+    """The image is verified with the resources a Docker session gets when none are configured."""
+    source = (
+        Path(deploy.__file__).parents[1] / "control-plane" / "src" / "sandbox" / "modal-docker.ts"
+    ).read_text()
+    cpu = re.search(r"DOCKER_SANDBOX_DEFAULT_CPU_CORES = (\d+);", source)
+    memory = re.search(r"DOCKER_SANDBOX_DEFAULT_MEMORY_MIB = (\d+);", source)
+    assert cpu and memory
+    assert int(cpu.group(1)) == deploy.DOCKER_VERIFICATION_CPU_CORES
+    assert int(memory.group(1)) == deploy.DOCKER_VERIFICATION_MEMORY_MIB

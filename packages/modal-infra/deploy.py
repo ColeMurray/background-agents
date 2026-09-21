@@ -130,12 +130,10 @@ def build_sandbox_image(*, with_docker: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-sandbox-image", action="store_true")
-    parser.add_argument("--with-docker", action="store_true")
     args = parser.parse_args()
     if args.build_sandbox_image:
-        build_sandbox_image(
-            with_docker=args.with_docker or os.environ.get("BUILD_MODAL_VM_IMAGE") == "true"
-        )
+        # BUILD_MODAL_VM_IMAGE is the same switch Terraform and images/base.py read.
+        build_sandbox_image(with_docker=os.environ.get("BUILD_MODAL_VM_IMAGE") == "true")
 
 
 if __name__ == "__main__":

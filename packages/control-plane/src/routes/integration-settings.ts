@@ -3,6 +3,10 @@
  */
 
 import {
+  assertDockerSettingsWriteAdmitted,
+  DockerSandboxAdmissionError,
+} from "../sandbox/modal-docker";
+import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   type CodeServerSettings,
@@ -101,6 +105,18 @@ async function handleGetIntegrationSettings(
   return json({ integrationId: id, settings });
 }
 
+/** Sandbox settings may only enable Docker where Docker sessions are admitted. */
+function refuseUnadmittedDockerSetting(env: Env, id: string, settings: unknown): Response | null {
+  if (id !== "sandbox") return null;
+  try {
+    assertDockerSettingsWriteAdmitted(env, settings);
+    return null;
+  } catch (e) {
+    if (e instanceof DockerSandboxAdmissionError) return error(e.message, 400, e.reason);
+    throw e;
+  }
+}
+
 async function handleSetIntegrationSettings(
   request: Request,
   env: Env,
@@ -116,6 +132,8 @@ async function handleSetIntegrationSettings(
   if (settings instanceof Response) return settings;
 
   const store = new IntegrationSettingsStore(ctx.db);
+  const refused = refuseUnadmittedDockerSetting(env, id, settings);
+  if (refused) return refused;
 
   try {
     await store.setGlobal(id, settings);
@@ -227,6 +245,8 @@ async function handleSetRepoSettings(
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
+  const refused = refuseUnadmittedDockerSetting(env, id, settings);
+  if (refused) return refused;
 
   try {
     await store.setRepoSettings(id, repo, settings);
@@ -319,6 +339,8 @@ async function handleSetEnvironmentSettings(
   if (body instanceof Response) return body;
   const settings = extractSettings(body);
   if (settings instanceof Response) return settings;
+  const refused = refuseUnadmittedDockerSetting(env, integrationId, settings);
+  if (refused) return refused;
 
   try {
     await store.setEnvironmentSettings(integrationId, environmentId, settings);

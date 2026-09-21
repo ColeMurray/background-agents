@@ -261,7 +261,7 @@ describe("sessions API route (POST)", () => {
     });
   });
 
-  it("forwards a boolean Docker choice and drops anything else", async () => {
+  it("forwards the Docker choice verbatim so the control plane can refuse a malformed one", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
@@ -277,7 +277,11 @@ describe("sessions API route (POST)", () => {
     });
 
     await POST(postRequest({ repoOwner: "acme", repoName: "web", dockerEnabled: "true" }));
-    expect(controlPlaneBody(1)).toEqual({ repoOwner: "acme", repoName: "web" });
+    expect(controlPlaneBody(1)).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      dockerEnabled: "true",
+    });
   });
 
   it("still strips fields outside the allowlist", async () => {

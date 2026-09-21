@@ -96,6 +96,21 @@ export function assertDockerSandboxAdmitted(
 }
 
 /**
+ * Refuse to store `dockerEnabled: true` while Docker sessions are not admitted.
+ * A stored default would otherwise make every session in that scope fail
+ * admission, not just the ones that wanted Docker.
+ */
+export function assertDockerSettingsWriteAdmitted(
+  env: Pick<EnvConfig, "SANDBOX_PROVIDER" | "ENABLE_MODAL_VM_SANDBOXES">,
+  settings: unknown
+): void {
+  if (!settings || typeof settings !== "object") return;
+  const record = settings as { defaults?: unknown; dockerEnabled?: unknown };
+  const layer = record.defaults && typeof record.defaults === "object" ? record.defaults : record;
+  assertDockerSandboxAdmitted(env, layer as Pick<SandboxSettings, "dockerEnabled">);
+}
+
+/**
  * Resolve the effective Docker choice once and freeze it into the settings a
  * session is created with.
  *

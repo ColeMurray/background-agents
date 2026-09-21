@@ -36,7 +36,7 @@ export function DockerModeSelect({
       <SelectContent>
         <SelectItem value="default">Configured sandbox</SelectItem>
         <SelectItem value="standard">Standard sandbox</SelectItem>
-        <SelectItem value="docker">Docker (Modal VM)</SelectItem>
+        <SelectItem value="docker">Docker sandbox</SelectItem>
       </SelectContent>
     </Select>
   );

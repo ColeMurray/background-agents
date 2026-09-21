@@ -105,6 +105,28 @@ describe("Integration settings API", () => {
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
 
+    it("refuses to store a Docker default while Docker sessions are not admitted", async () => {
+      const endpoint = "https://test.local/integration-settings/sandbox";
+      const refused = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: { defaults: { dockerEnabled: true } } }),
+      });
+      expect(refused.status).toBe(400);
+      await expect(refused.json()).resolves.toMatchObject({ code: "docker_not_available" });
+      const persisted = await env.DB.prepare(
+        "SELECT settings FROM integration_settings WHERE integration_id = ?"
+      )
+        .bind("sandbox")
+        .first<{ settings: string }>();
+      expect(persisted).toBeNull();
+
+      const explicitOff = await serviceFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ settings: { defaults: { dockerEnabled: false } } }),
+      });
+      expect(explicitOff.status).toBe(200);
+    });
+
     it("does not grandfather invalid sandbox timing across real D1 API round-trips", async () => {
       const endpoint = "https://test.local/integration-settings/sandbox";
       await env.DB.prepare(

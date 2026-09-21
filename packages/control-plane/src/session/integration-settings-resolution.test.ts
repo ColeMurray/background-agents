@@ -16,7 +16,7 @@ const { MockIntegrationSettingsValidationError } = vi.hoisted(() => ({
   MockIntegrationSettingsValidationError: class extends Error {
     constructor(
       message: string,
-      readonly fieldPath?: string
+      readonly fieldPaths: readonly string[] = []
     ) {
       super(message);
     }
@@ -171,7 +171,7 @@ describe("resolveSessionScopedSettings", () => {
   it("fails closed instead of defaulting when the resolved dockerEnabled is malformed", async () => {
     mockState.resolved["sandbox"] = {
       enabledRepos: null,
-      settings: { dockerEnabled: "true", tunnelPorts: [3000] },
+      settings: { tunnelPorts: "not-an-array", dockerEnabled: "true" },
     };
 
     await expect(
@@ -181,8 +181,8 @@ describe("resolveSessionScopedSettings", () => {
 
   it("fails closed when a stored layer rejects dockerEnabled at read time", async () => {
     mockState.resolved["sandbox"] = new MockIntegrationSettingsValidationError(
-      "Repo settings are invalid: dockerEnabled must be a boolean",
-      "dockerEnabled"
+      "Repo settings are invalid: tunnelPorts must be an array",
+      ["tunnelPorts", "dockerEnabled"]
     );
     await expect(
       resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }])
@@ -190,7 +190,7 @@ describe("resolveSessionScopedSettings", () => {
 
     mockState.global["sandbox"] = new MockIntegrationSettingsValidationError(
       "Global settings are invalid: defaults.dockerEnabled must be a boolean",
-      "defaults.dockerEnabled"
+      ["defaults.dockerEnabled"]
     );
     await expect(resolveSessionScopedSettings(DB, [])).rejects.toThrow(
       SandboxDockerSettingValidationError
@@ -200,7 +200,7 @@ describe("resolveSessionScopedSettings", () => {
   it("still defaults when an unrelated stored layer is unreadable", async () => {
     mockState.resolved["sandbox"] = new MockIntegrationSettingsValidationError(
       "Repo settings are invalid: tunnelPorts must be an array",
-      "tunnelPorts"
+      ["tunnelPorts"]
     );
     await expect(
       resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }])

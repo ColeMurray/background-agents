@@ -68,7 +68,6 @@ export interface EnabledScopeUnit {
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
   repositoriesFingerprint: string;
-  artifactVariant: SandboxArtifactVariant;
 }
 
 /** The scope's buildable repository set, in position order ([0] = primary). */
@@ -221,14 +220,10 @@ export async function listEnabledScopeUnits(
         repoName: repo.repo_name,
         baseBranch: repo.base_branch,
       }));
-      const scope = { kind: "environment" as const, id: row.id };
       return {
-        scope,
+        scope: { kind: "environment" as const, id: row.id },
         repositories,
         repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
-        artifactVariant: repositories[0]
-          ? await resolveScopeArtifactVariant(db, scope, repositories[0])
-          : ("default" as const),
       };
     })
   );
@@ -243,7 +238,6 @@ export async function listEnabledScopeUnits(
           scope,
           repositories: target.repositories,
           repositoriesFingerprint: target.repositoriesFingerprint,
-          artifactVariant: target.artifactVariant,
         };
       } catch (e) {
         logger.warn("image_build.enabled_unit_skipped", {
@@ -259,13 +253,8 @@ export async function listEnabledScopeUnits(
   return [...environmentUnits, ...repoUnits.filter((unit) => unit !== null)];
 }
 
-/**
- * Sandbox settings governing the build (timeout): the primary repository's
- * settings, with the environment's own overrides layered on top for
- * environment scopes (a repo scope has no environment layer by definition).
- */
 /** The runtime variant the scope's sessions launch on: a Docker scope prepares Docker images. */
-export async function resolveScopeArtifactVariant(
+async function resolveScopeArtifactVariant(
   db: SqlDatabase,
   scope: ImageBuildScope,
   primary: ImageBuildRepository
@@ -273,6 +262,11 @@ export async function resolveScopeArtifactVariant(
   return sandboxArtifactVariantFor(await resolveScopeSandboxSettings(db, scope, primary));
 }
 
+/**
+ * Sandbox settings governing the build (timeout): the primary repository's
+ * settings, with the environment's own overrides layered on top for
+ * environment scopes (a repo scope has no environment layer by definition).
+ */
 export async function resolveScopeSandboxSettings(
   db: SqlDatabase,
   scope: ImageBuildScope,

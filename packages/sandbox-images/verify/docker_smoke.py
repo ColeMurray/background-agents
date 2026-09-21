@@ -48,8 +48,7 @@ async def run_command(*command: str, expect: bytes | None = None) -> bytes:
     return stdout
 
 
-async def verify_workloads(workdir: Path) -> None:
-    await run_command("docker", "info", "--format", "{{.Driver}}", expect=b"overlay2")
+def write_fixtures(workdir: Path) -> None:
     (workdir / "Dockerfile").write_text(
         f"FROM {ROOTFS_IMAGE}\nRUN mkdir -p /www && printf {MARKER} > /www/marker\n"
     )
@@ -66,6 +65,10 @@ async def verify_workloads(workdir: Path) -> None:
         '    command: ["sh", "-c", "for i in 1 2 3 4 5 6 7 8 9 10; do '
         f'wget -qO- http://server:8080/marker | grep -qx {MARKER} && exit 0; sleep 1; done; exit 1"]\n'
     )
+
+
+async def verify_workloads(workdir: Path) -> None:
+    await run_command("docker", "info", "--format", "{{.Driver}}", expect=b"overlay2")
     await run_command("docker", "import", ROOTFS_TAR, ROOTFS_IMAGE)
     await run_command(
         "docker", "buildx", "build", "--pull=false", "--load", "--tag", BUILT_IMAGE, str(workdir)
@@ -96,19 +99,28 @@ async def verify_workloads(workdir: Path) -> None:
     )
 
 
-async def cleanup(workdir: Path) -> None:
-    await run_command(
-        "docker",
-        "compose",
-        "--project-name",
-        COMPOSE_PROJECT,
-        "-f",
-        str(workdir / "compose.yaml"),
-        "down",
-        "--volumes",
-        "--remove-orphans",
-    )
-    await run_command("docker", "image", "rm", "--force", BUILT_IMAGE, ROOTFS_IMAGE)
+async def cleanup(workdir: Path) -> list[Exception]:
+    """Best-effort removal of everything the checks created; failures are returned, not raised."""
+    failures: list[Exception] = []
+    for command in (
+        (
+            "docker",
+            "compose",
+            "--project-name",
+            COMPOSE_PROJECT,
+            "-f",
+            str(workdir / "compose.yaml"),
+            "down",
+            "--volumes",
+            "--remove-orphans",
+        ),
+        ("docker", "image", "rm", "--force", BUILT_IMAGE, ROOTFS_IMAGE),
+    ):
+        try:
+            await run_command(*command)
+        except Exception as error:
+            failures.append(error)
+    return failures
 
 
 async def main() -> int:
@@ -117,10 +129,16 @@ async def main() -> int:
     try:
         with tempfile.TemporaryDirectory() as directory:
             workdir = Path(directory)
+            write_fixtures(workdir)
             try:
                 await verify_workloads(workdir)
-            finally:
+            except BaseException:
+                # The verification failure is the diagnosis; cleanup errors are secondary.
                 await cleanup(workdir)
+                raise
+            failures = await cleanup(workdir)
+            if failures:
+                raise RuntimeError("Docker verification cleanup failed") from failures[0]
         # The build path stops the daemon the same way before a snapshot.
         await service.prepare_for_snapshot()
     finally:

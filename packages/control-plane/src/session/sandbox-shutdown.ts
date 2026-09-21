@@ -55,6 +55,19 @@ interface ShutdownDependencies {
 }
 
 /** One durable owner of planned stopping. Provider side effects never imply a saved receipt. */
+/**
+ * The runtime variant a session's snapshots are taken on, from its frozen
+ * settings. A blob that cannot be read labels the artifact default: a Docker
+ * session then refuses to restore it, which is the fail-closed outcome.
+ */
+function sessionArtifactVariant(sandboxSettings: string | null): SandboxArtifactVariant {
+  try {
+    return sandboxArtifactVariantFor(parsePersistedSandboxSettings(sandboxSettings));
+  } catch {
+    return "default";
+  }
+}
+
 export class SandboxShutdownCoordinator {
   private activeOperation: string | null = null;
   private checkpointOperationId: string | null = null;
@@ -505,6 +518,7 @@ export class SandboxShutdownCoordinator {
       this.endCheckpoint(id, false);
       return { outcome: "held" };
     }
+    const artifactVariant = sessionArtifactVariant(session.sandbox_settings);
     const previousStatus = row.status;
     const statusChanged =
       !isDeadSandboxStatus(previousStatus) &&
@@ -531,7 +545,7 @@ export class SandboxShutdownCoordinator {
           checkpointGeneration.sandboxId,
           result.imageId,
           row.runtime_version,
-          this.sessionArtifactVariant()
+          artifactVariant
         )
       ) {
         this.endCheckpoint(id, true);
@@ -803,7 +817,7 @@ export class SandboxShutdownCoordinator {
           state.generation.sandboxId,
           artifactId,
           receipt.runtimeVersion,
-          this.sessionArtifactVariant()
+          sessionArtifactVariant(this.deps.session.getSession()?.sandbox_settings ?? null)
         );
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
@@ -945,13 +959,6 @@ export class SandboxShutdownCoordinator {
   }
 
   /** Shared snapshot invocation and conservative classification for checkpoint and shutdown. */
-  /** The runtime variant this session's sandboxes are launched on, from its frozen settings. */
-  private sessionArtifactVariant(): SandboxArtifactVariant {
-    return sandboxArtifactVariantFor(
-      parsePersistedSandboxSettings(this.deps.session.getSession()?.sandbox_settings ?? null)
-    );
-  }
-
   private async captureSnapshot(
     providerObjectId: string,
     sessionId: string,

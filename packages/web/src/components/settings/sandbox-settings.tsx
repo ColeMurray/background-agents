@@ -30,11 +30,7 @@ import {
   MIN_FINAL_SNAPSHOT_BUFFER_MINUTES,
   MIN_SANDBOX_TIMEOUT_MINUTES,
 } from "./sandbox-timeout";
-import {
-  resolveSandboxSettingsDraft,
-  type SandboxSettingsDraft,
-  type DockerDraftChoice,
-} from "./sandbox-settings-draft";
+import { resolveSandboxSettingsDraft, type SandboxSettingsDraft } from "./sandbox-settings-draft";
 import { SessionCostSettingsFields } from "./session-cost-settings-fields";
 import {
   parseSandboxEnvironmentSettingsResponse,
@@ -46,6 +42,7 @@ import {
   getPublicSandboxProvider,
   supportsConfigurableSandboxResources,
   supportsConfigurableSandboxTimeout,
+  supportsDockerSandboxes,
 } from "@/lib/sandbox-provider";
 
 const GLOBAL_SCOPE = "__global__";
@@ -128,6 +125,14 @@ function useSandboxSettingsScope(
   };
 }
 
+// Radix Select treats "" as "no selection", so the inherit choice needs its own item value.
+const DOCKER_INHERIT_CHOICE = "inherit";
+
+function dockerSelectValue(draftValue: string, isGlobal: boolean): string {
+  if (draftValue !== "") return draftValue;
+  return isGlobal ? "false" : DOCKER_INHERIT_CHOICE;
+}
+
 /**
  * Edits inherited sandbox settings for one scope, becoming read-only without that scope's management permission.
  */
@@ -157,7 +162,7 @@ export function SandboxSettingsEditor({
     hiddenFields.add("memoryMib");
   }
   if (!configurableTimeout) hiddenFields.add("sandboxTimeoutMs");
-  const dockerAvailable = sandboxProvider === "modal";
+  const dockerAvailable = supportsDockerSandboxes();
   if (!dockerAvailable) hiddenFields.add("dockerEnabled");
   const isGlobal = scope === "global";
   const canManage = hasPermission(
@@ -294,15 +299,17 @@ export function SandboxSettingsEditor({
             run containers such as PostgreSQL. Uses more resources than the standard sandbox.
           </p>
           <Select
-            value={isGlobal && values.dockerEnabled === "" ? "false" : values.dockerEnabled}
-            onValueChange={(value) => updateField("dockerEnabled", value as DockerDraftChoice)}
+            value={dockerSelectValue(values.dockerEnabled, isGlobal)}
+            onValueChange={(value) =>
+              updateField("dockerEnabled", value === DOCKER_INHERIT_CHOICE ? "" : value)
+            }
           >
             <SelectTrigger id="docker-enabled" className="w-56" aria-label="Docker">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {!isGlobal && (
-                <SelectItem value="">
+                <SelectItem value={DOCKER_INHERIT_CHOICE}>
                   Inherit ({baseDefaults?.dockerEnabled ? "enabled" : "disabled"})
                 </SelectItem>
               )}

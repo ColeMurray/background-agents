@@ -8,7 +8,6 @@ const unit = {
   scope: { kind: "repo" as const, id: "acme/web" },
   repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
   repositoriesFingerprint: "fp-current",
-  artifactVariant: "default" as const,
 };
 
 function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordView {

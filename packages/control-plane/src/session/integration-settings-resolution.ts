@@ -128,13 +128,13 @@ export async function resolveSandboxSettings(
  */
 function rethrowDockerSettingError(error: unknown): void {
   if (error instanceof SandboxDockerSettingValidationError) throw error;
-  const fieldPath =
+  const fieldPaths =
     error instanceof IntegrationSettingsValidationError
-      ? error.fieldPath
+      ? error.fieldPaths
       : error instanceof z.ZodError
-        ? error.issues[0]?.path.join(".")
-        : undefined;
-  if (fieldPath?.split(".").at(-1) === "dockerEnabled") {
+        ? error.issues.map((issue) => issue.path.join("."))
+        : [];
+  if (fieldPaths.some((path) => path.split(".").at(-1) === "dockerEnabled")) {
     throw new SandboxDockerSettingValidationError("dockerEnabled must be a boolean");
   }
 }

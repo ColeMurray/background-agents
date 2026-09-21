@@ -303,6 +303,24 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.LEGITIMATE_SECRET).toBe("keep-me");
   });
 
+  it("never lets a repo secret carry the trusted Docker signal to a non-Modal runtime", () => {
+    const sessionEnv = buildSandboxEnvVars(
+      { ...baseConfig, userEnvVars: { OPENINSPECT_DOCKER_ENABLED: "true", KEEP: "1" } },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+    expect(sessionEnv).not.toHaveProperty("OPENINSPECT_DOCKER_ENABLED");
+    expect(sessionEnv.KEEP).toBe("1");
+
+    const buildEnv = buildImageBuildEnvVars({
+      sandboxId: "build-1",
+      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
+      baseEnvVars: { OPENINSPECT_DOCKER_ENABLED: "true" },
+      buildExecutionTimeoutSeconds: 60,
+      scmIdentity: scmCloneIdentity("github"),
+    } as never);
+    expect(buildEnv).not.toHaveProperty("OPENINSPECT_DOCKER_ENABLED");
+  });
+
   it("sets the slack-notify flag only when enabled", () => {
     expect(
       buildSandboxEnvVars(baseConfig, { scmIdentity: scmCloneIdentity("github") })

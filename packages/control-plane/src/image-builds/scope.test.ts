@@ -314,7 +314,6 @@ describe("listEnabledScopeUnits", () => {
       repositoriesFingerprint: await computeRepositoriesFingerprint([
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
       ]),
-      artifactVariant: "default",
     });
   });
 

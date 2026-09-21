@@ -14,6 +14,8 @@ test("Modal Docker provisioning and admission flags reach Terraform plan and app
   ];
   const planStart = workflow.indexOf("\n  plan:\n");
   const applyStart = workflow.indexOf("\n  apply:\n");
+  assert.notEqual(planStart, -1, "expected the Terraform plan job");
+  assert.notEqual(applyStart, -1, "expected the Terraform apply job");
   const jobs = { plan: workflow.slice(planStart, applyStart), apply: workflow.slice(applyStart) };
 
   for (const [name, job] of Object.entries(jobs)) {

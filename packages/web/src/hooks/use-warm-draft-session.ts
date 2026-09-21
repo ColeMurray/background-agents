@@ -20,6 +20,12 @@ export type WarmDraftSessionRequest = SessionTargetRequestFields & {
   dockerEnabled?: boolean;
 };
 
+const DOCKER_REFUSAL_CODES: ReadonlySet<unknown> = new Set([
+  "docker_not_available",
+  "docker_not_allowed",
+  "invalid_sandbox_settings",
+]);
+
 export function warmDraftSessionIdentity(
   request: WarmDraftSessionRequest | null,
   routingIdentity?: InteractiveProviderRoutingIdentity
@@ -92,6 +98,7 @@ export function useWarmDraftSession(
     abortControllerRef.current = abortController;
     setIsWarming(true);
 
+    lastErrorRef.current = null;
     const creation = (async () => {
       try {
         const response = await browserApiFetch("/api/sessions", {
@@ -101,15 +108,19 @@ export function useWarmDraftSession(
           signal: abortController.signal,
         });
         if (!response.ok) {
-          // Keep the control plane's reason (a closed Docker gate, for
-          // instance) so the composer can show it instead of a generic failure.
+          // Keep the control plane's Docker refusal so the composer can show
+          // it; every other failure keeps its generic message.
           const body = await response.json().catch(() => null);
-          const message =
-            body && typeof body === "object" && typeof body.error === "string" ? body.error : null;
-          lastErrorRef.current = message;
+          const refusal =
+            body &&
+            typeof body === "object" &&
+            typeof body.error === "string" &&
+            DOCKER_REFUSAL_CODES.has(body.code)
+              ? body.error
+              : null;
+          lastErrorRef.current = refusal;
           return null;
         }
-        lastErrorRef.current = null;
 
         const parsed = createSessionResponseSchema.safeParse(
           await response.json().catch(() => null)

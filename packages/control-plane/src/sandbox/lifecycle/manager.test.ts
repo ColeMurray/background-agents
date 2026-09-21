@@ -4048,11 +4048,33 @@ describe("SandboxLifecycleManager", () => {
 
         expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
         expect(provider.createSandbox).not.toHaveBeenCalled();
+        // The attempt fails visibly, and the snapshot reference survives it.
         expect(storage.calls).toContain("transitionSandboxStatus:spawning->failed");
         expect(storage.getSandbox()?.snapshot_image_id).toBe("img-saved");
         expect(storage.getSandbox()?.last_spawn_error).toContain("runtime");
       }
     );
+
+    it("retires the prior generation on a Docker restore, not the one being reserved", async () => {
+      const { manager, provider } = createSettingsManager(
+        DOCKER_SETTINGS,
+        createMockSandbox({
+          status: "stopped",
+          modal_sandbox_id: "sandbox-prior-generation",
+          snapshot_image_id: "img-saved",
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+          snapshot_artifact_variant: "modal-docker-v1",
+        })
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ retireSandboxId: "sandbox-prior-generation" })
+      );
+      const restoreConfig = vi.mocked(provider.restoreFromSnapshot!).mock.calls[0][0];
+      expect(restoreConfig.sandboxId).not.toBe("sandbox-prior-generation");
+    });
 
     it.each([
       ["a Docker session", DOCKER_SETTINGS, "modal-docker-v1"],

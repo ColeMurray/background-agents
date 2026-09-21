@@ -1166,7 +1166,13 @@ export class SandboxLifecycleManager
 
       this.storage.setLastSpawnError(null, null);
 
+      // The saved row is read before reservation rewrites it; the variant
+      // check runs right after reservation so a mismatch fails this attempt
+      // visibly, before the prior sandbox is stopped or the runtime version
+      // is rewritten, and keeps the snapshot reference.
       const priorRow = this.storage.getSandbox();
+      const priorSandboxId = priorRow?.modal_sandbox_id ?? null;
+
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
@@ -1175,6 +1181,8 @@ export class SandboxLifecycleManager
         preserveProviderObjectId: true,
         shutdownPolicy,
       });
+      const sandboxSettings = this.parseSandboxSettings(session);
+      assertSnapshotVariantMatches(priorRow, snapshotImageId, sandboxSettings);
 
       // A restored sandbox runs the snapshot's binaries whatever the provider
       // exports at launch, so the snapshot's version is the authoritative one.
@@ -1184,11 +1192,7 @@ export class SandboxLifecycleManager
 
       await this.stopPriorProviderSandbox();
 
-      const sandboxSettings = this.parseSandboxSettings(session);
-      assertSnapshotVariantMatches(priorRow, snapshotImageId, sandboxSettings);
-      const retireSandboxId = isDockerSandbox(sandboxSettings)
-        ? (priorRow?.modal_sandbox_id ?? null)
-        : null;
+      const retireSandboxId = isDockerSandbox(sandboxSettings) ? priorSandboxId : null;
       const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 

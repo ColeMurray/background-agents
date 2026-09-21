@@ -153,7 +153,7 @@ def test_reserved_user_env_scrub_matches_manifest():
     python_reserved = set(RESERVED_USER_ENV_KEYS)
 
     assert python_reserved == callback_env_values | set(manifest["reserved_only_modal"])
-    assert set(manifest["reserved_only_modal"]) == {MODAL_SANDBOX_ID_ENV, DOCKER_ENABLED_ENV_VAR}
+    assert set(manifest["reserved_only_modal"]) == {MODAL_SANDBOX_ID_ENV}
     # The TS-only extras never enter the Python scrub set.
     assert set(manifest["reserved_only_control_plane"]) & python_reserved == set()
     assert IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR in manifest["reserved_only_control_plane"]
