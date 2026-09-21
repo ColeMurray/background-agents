@@ -45,7 +45,7 @@ const OPENAI_MODELS = [
   "openai/gpt-5.3-codex-spark",
 ] as const;
 
-const XAI_MODELS = ["xai/grok-4.5", "xai/grok-4.6", "xai/grok-build-0.1"] as const;
+const XAI_MODELS = ["xai/grok-4.5", "xai/grok-4.6", "xai/grok-4.7", "xai/grok-build-0.1"] as const;
 
 const ZEN_MODELS = [
   "opencode/kimi-k2.5",
@@ -398,6 +398,10 @@ describe("model utilities", () => {
       default: "high",
     });
     expect(getReasoningConfig("xai/grok-4.6")).toEqual({
+      efforts: ["low", "medium", "high"],
+      default: "high",
+    });
+    expect(getReasoningConfig("xai/grok-4.7")).toEqual({
       efforts: ["low", "medium", "high"],
       default: "high",
     });

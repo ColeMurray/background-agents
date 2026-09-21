@@ -69,7 +69,8 @@ instructions.
 | Model ID             | Display name   | Description                                     | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------------------------------------- | ----------------- | -------------- |
 | `xai/grok-4.5`       | Grok 4.5       | Grok for chat, coding, and agentic tools        | low, medium, high | high           |
-| `xai/grok-4.6`       | Grok 4.6       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
+| `xai/grok-4.6`       | Grok 4.6       | Grok for chat, coding, and agentic tools        | low, medium, high | high           |
+| `xai/grok-4.7`       | Grok 4.7       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
 | `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | Not configurable  | N/A            |
 
 ## OpenCode Zen

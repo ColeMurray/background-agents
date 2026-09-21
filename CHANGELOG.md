@@ -2,6 +2,12 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 21, 2026
+
+**Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from
+low through high. The **xAI / SuperGrok** group stays opt-in — enable the model under **Settings >
+Models**. See [Available models](docs/AVAILABLE_MODELS.md#xai--supergrok).
+
 ## September 17, 2026
 
 **Repository-less Slack sessions.** The Slack target classifier can start suitable work in an empty
