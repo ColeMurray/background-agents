@@ -15,6 +15,7 @@ from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
+from .docker_service import DockerService
 from .harness.base import HarnessId, HarnessProcessOwner
 from .image_build_context_start import (
     IMAGE_BUILD_CONTEXT_START_ARGUMENT,
@@ -146,6 +147,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         shutdown_event,
         log,
         boot_events=warnings,
+        docker_service=DockerService(log) if config.docker_enabled else None,
     )
 
 

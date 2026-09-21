@@ -78,3 +78,15 @@ def test_session_config_is_recursively_immutable():
     assert isinstance(repositories[0], MappingProxyType)
     with pytest.raises(TypeError):
         repositories[0]["repo_name"] = "changed"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, False), ("", False), ("false", False), ("1", False), ("TRUE", False), ("true", True)],
+)
+def test_docker_enabled_is_only_the_exact_trusted_value(value, expected):
+    environment = {"SANDBOX_ID": "sandbox-1"}
+    if value is not None:
+        environment["OPENINSPECT_DOCKER_ENABLED"] = value
+
+    assert RuntimeConfig.from_env(environment).docker_enabled is expected

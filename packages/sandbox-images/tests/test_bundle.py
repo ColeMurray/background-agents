@@ -146,3 +146,50 @@ def test_symlinks_and_executable_modes(checkout, tmp_path):
     (directory / "escape.sh").symlink_to(tmp_path / "outside")
     with pytest.raises(ValueError, match="symlink"):
         plan_image(checkout, "e2b")
+
+
+def test_docker_variant_pins_debian_packages_by_checksum():
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    assert set(tools["docker"]) == {"engine", "cli", "containerd", "buildx", "compose"}
+    tools["docker"]["engine"]["file"] = "docker-ce_latest.tgz"
+    with pytest.raises(ValueError, match="Debian amd64"):
+        validate_toolchain(tools)
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    tools["docker"]["compose"]["sha256"] = "deadbeef"
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_toolchain(tools)
+    del tools["docker"]["buildx"]
+    with pytest.raises(ValueError, match="exactly"):
+        validate_toolchain(tools)
+
+
+def test_docker_variant_installs_only_checked_packages_and_never_runs_at_boot():
+    script = (REPO_ROOT / "packages/sandbox-images/install/docker.sh").read_text()
+    assert "download_checked" in script
+    assert "get.docker.com" not in script
+    assert "docker pull" not in script
+    install_commands = [line for line in script.splitlines() if "apt-get install" in line]
+    assert install_commands
+    assert all("--no-install-recommends" in command for command in install_commands)
+    assert "/etc/docker/daemon.json" in script
+    # The default image's installer never includes the Docker phase.
+    install = (REPO_ROOT / "packages/sandbox-images/install/install.sh").read_text()
+    assert "docker" not in install
+
+
+def test_docker_daemon_config_uses_overlay2_and_avoids_modal_networks():
+    config = json.loads(
+        (REPO_ROOT / "packages/sandbox-images/install/docker-daemon.json").read_text()
+    )
+    assert config["storage-driver"] == "overlay2"
+    assert config["features"]["containerd-snapshotter"] is False
+    assert config["bip"].startswith("10.")
+    assert all(pool["base"].startswith("10.") for pool in config["default-address-pools"])
+
+
+def test_docker_pins_reach_the_installer_as_shell_variables(checkout, tmp_path):
+    bundle = pack_bundle(checkout, "modal", tmp_path / "out")
+    config = (bundle.directory / "image-config.sh").read_text()
+    for package in ("ENGINE", "CLI", "CONTAINERD", "BUILDX", "COMPOSE"):
+        assert f"export DOCKER_{package}_FILE=" in config
+        assert f"export DOCKER_{package}_SHA256=" in config

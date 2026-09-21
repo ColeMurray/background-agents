@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
@@ -207,3 +209,199 @@ async def test_code_server_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch)
     await SandboxSupervisor.monitor_processes(supervisor)
 
     supervisor._report_fatal_error.assert_not_awaited()
+
+
+def _docker_service(events, *, prepare_error=None):
+    service = MagicMock()
+    service.stopping = False
+    exited = asyncio.Event()
+
+    async def start():
+        events.append("docker:start")
+
+    async def wait():
+        await exited.wait()
+        return 137
+
+    async def prepare_for_snapshot():
+        events.append("docker:prepare")
+        if prepare_error is not None:
+            raise prepare_error
+        service.stopping = True
+
+    async def stop():
+        events.append("docker:stop")
+        service.stopping = True
+        exited.set()
+
+    service.start = AsyncMock(side_effect=start)
+    service.wait = AsyncMock(side_effect=wait)
+    service.prepare_for_snapshot = AsyncMock(side_effect=prepare_for_snapshot)
+    service.stop = AsyncMock(side_effect=stop)
+    service.exited = exited
+    return service
+
+
+def _docker_supervisor(tmp_path, events, monkeypatch, **service_kwargs):
+    supervisor, repository, *rest = _supervisor(tmp_path, events)
+    monkeypatch.setenv("OPENINSPECT_DOCKER_ENABLED", "true")
+    supervisor.config = RuntimeConfig.from_env(
+        {
+            "SANDBOX_ID": "sandbox-1",
+            "REPO_OWNER": "acme",
+            "REPO_NAME": "repo",
+            "OPENINSPECT_DOCKER_ENABLED": "true",
+        },
+        workspace_path=tmp_path,
+    )
+    supervisor.docker_service = _docker_service(events, **service_kwargs)
+    return supervisor, repository, *rest
+
+
+async def test_docker_starts_before_repository_boot_and_stops_last(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+    assert await supervisor.run() is True
+
+    assert events[:3] == ["docker:start", "desktop", "repository:fresh"]
+    assert events[-1] == "docker:stop"
+
+
+async def test_standard_boot_never_touches_docker(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _supervisor(tmp_path, events)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+    assert await supervisor.run() is True
+
+    assert supervisor.docker_service is None
+    assert not any(event.startswith("docker:") for event in events)
+
+
+async def test_docker_required_but_unconfigured_is_fatal(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
+    supervisor.docker_service = None
+    supervisor._report_fatal_error = AsyncMock()
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+
+    assert await supervisor.run() is False
+
+    supervisor._report_fatal_error.assert_awaited_once()
+    assert "Docker service is not configured" in supervisor._report_fatal_error.await_args.args[0]
+    assert "repository:fresh" not in events
+
+
+async def test_build_starts_docker_before_hooks_and_prepares_it_before_success(
+    tmp_path, monkeypatch
+):
+    events = []
+    supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock()
+
+    async def report_success(**_kwargs):
+        events.append("success")
+        assert supervisor._docker_watch_task is None
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=report_success)
+    callback.report_failure = AsyncMock()
+
+    assert await supervisor.run(callback) is True
+
+    assert events == [
+        "docker:start",
+        "repository:build",
+        "docker:prepare",
+        "success",
+        "docker:stop",
+    ]
+
+
+@pytest.mark.parametrize("error", [RuntimeError("did not stop cleanly"), TimeoutError()])
+async def test_build_preparation_failure_is_reported_as_a_failed_build(
+    tmp_path, monkeypatch, error
+):
+    events = []
+    supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch, prepare_error=error)
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    supervisor._report_fatal_error = AsyncMock()
+    callback = MagicMock()
+    callback.report_success = AsyncMock()
+    callback.report_failure = AsyncMock()
+
+    assert await supervisor.run(callback) is False
+
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_awaited_once()
+    assert supervisor.docker_service.stop.await_count == 1
+
+
+async def test_daemon_exit_during_build_hooks_fails_the_build(tmp_path, monkeypatch):
+    events = []
+    supervisor, repository, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    supervisor._report_fatal_error = AsyncMock()
+    callback = MagicMock()
+    callback.report_success = AsyncMock()
+    callback.report_failure = AsyncMock()
+
+    async def boot(_mode, _ports):
+        events.append("repository:build")
+        supervisor.docker_service.exited.set()
+        await asyncio.sleep(300)
+
+    repository.boot = AsyncMock(side_effect=boot)
+
+    assert await supervisor.run(callback) is False
+
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_awaited_once()
+    assert "exited unexpectedly" in callback.report_failure.await_args.args[0]
+    supervisor._report_fatal_error.assert_awaited_once()
+
+
+async def test_daemon_exit_during_session_is_fatal(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    supervisor._report_fatal_error = AsyncMock()
+
+    async def monitor():
+        supervisor.docker_service.exited.set()
+        await supervisor.shutdown_event.wait()
+
+    supervisor.monitor_processes = AsyncMock(side_effect=monitor)
+
+    assert await supervisor.run() is False
+
+    supervisor._report_fatal_error.assert_awaited_once()
+    assert "exited unexpectedly" in supervisor._report_fatal_error.await_args.args[0]
+
+
+async def test_requested_shutdown_during_docker_start_is_not_a_failure(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock()
+    callback.report_success = AsyncMock()
+    callback.report_failure = AsyncMock()
+
+    async def start():
+        supervisor.shutdown_event.set()
+        await asyncio.sleep(300)
+
+    supervisor.docker_service.start = AsyncMock(side_effect=start)
+
+    assert await supervisor.run(callback) is True
+
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_not_awaited()
