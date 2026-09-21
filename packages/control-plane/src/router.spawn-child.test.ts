@@ -45,6 +45,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     harness: HarnessId;
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
+    dockerEnabled?: boolean;
+    cpuCores?: number | null;
+    memoryMib?: number | null;
     promptAuthor: {
       userId: string;
       canonicalUserId?: string | null;
@@ -522,6 +525,76 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     })?.[0] as Request;
     const initBody = await initRequest.json<{ sandboxSettings: Record<string, unknown> }>();
     expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [3000] });
+  });
+
+  describe("Docker inheritance", () => {
+    const dockerParent: TestSpawnContext = {
+      ...spawnContext,
+      dockerEnabled: true,
+      cpuCores: 4,
+      memoryMib: 8192,
+    };
+
+    async function spawnInitBody(
+      context: TestSpawnContext,
+      envOverrides: Record<string, unknown>
+    ): Promise<{ response: Response; initBody: Record<string, unknown> | null }> {
+      const store = makeStore("canonical-user-123");
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return store as never;
+      });
+      const { env, childStub } = makeSuccessfulEnv(context);
+      const response = await makeRequest({ ...env, ...envOverrides });
+      const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
+        const request = call[0] as Request;
+        return new URL(request.url).pathname === SessionInternalPaths.init;
+      })?.[0] as Request | undefined;
+      const initBody = initRequest
+        ? await initRequest.json<{ sandboxSettings: Record<string, unknown> }>()
+        : null;
+      return { response, initBody };
+    }
+
+    it("inherits the parent's frozen Docker mode and resources over live settings", async () => {
+      integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
+        dockerEnabled: false,
+        cpuCores: 1,
+        memoryMib: 1024,
+        tunnelPorts: [3000],
+      });
+
+      const { response, initBody } = await spawnInitBody(dockerParent, {
+        ENABLE_MODAL_VM_SANDBOXES: "true",
+      });
+
+      expect(response.status).toBe(201);
+      expect(initBody?.sandboxSettings).toEqual({
+        dockerEnabled: true,
+        cpuCores: 4,
+        memoryMib: 8192,
+        tunnelPorts: [3000],
+        sandboxTimeoutMs: 14_400_000,
+      });
+    });
+
+    it("refuses a Docker child while admission is closed instead of downgrading it", async () => {
+      const { response, initBody } = await spawnInitBody(dockerParent, {});
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "docker_not_available" });
+      expect(initBody).toBeNull();
+    });
+
+    it("keeps a standard parent's child standard even when live settings now enable Docker", async () => {
+      integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({ dockerEnabled: true });
+
+      const { response, initBody } = await spawnInitBody(spawnContext, {
+        ENABLE_MODAL_VM_SANDBOXES: "true",
+      });
+
+      expect(response.status).toBe(201);
+      expect(initBody?.sandboxSettings).toEqual({ sandboxTimeoutMs: 14_400_000 });
+    });
   });
 
   it("creates repo-less children for repo-less parents", async () => {

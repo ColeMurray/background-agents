@@ -4,8 +4,13 @@ import {
   vncSettingsSchema,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
-import { IntegrationSettingsStore } from "../db/integration-settings";
+import {
+  IntegrationSettingsStore,
+  IntegrationSettingsValidationError,
+} from "../db/integration-settings";
+import { z } from "zod";
 import { createLogger } from "../logger";
+import { SandboxDockerSettingValidationError } from "../sandbox/settings";
 import type { RepoIdentity } from "./repository-target";
 import type { SqlDatabase } from "../db/sql-database";
 
@@ -89,6 +94,7 @@ export async function resolveSandboxSettings(
       const globalSettings = await store.getGlobal("sandbox");
       return globalSettings?.defaults ?? {};
     } catch (e) {
+      rethrowDockerSettingError(e);
       logger.warn("Failed to resolve global sandbox settings, using defaults", {
         error: e instanceof Error ? e.message : String(e),
       });
@@ -107,10 +113,29 @@ export async function resolveSandboxSettings(
     if (enabledRepos !== null && !enabledRepos.includes(repo.toLowerCase())) return {};
     return sandboxSettingsSchema.parse(settings);
   } catch (e) {
+    rethrowDockerSettingError(e);
     logger.warn("Failed to resolve sandbox settings, using defaults", {
       error: e instanceof Error ? e.message : String(e),
     });
     return {};
+  }
+}
+
+/**
+ * Every other unreadable sandbox setting degrades to the defaults, but a
+ * malformed stored `dockerEnabled` must not: defaulting it would silently
+ * launch a session on a different runtime than the one that was configured.
+ */
+function rethrowDockerSettingError(error: unknown): void {
+  if (error instanceof SandboxDockerSettingValidationError) throw error;
+  const fieldPath =
+    error instanceof IntegrationSettingsValidationError
+      ? error.fieldPath
+      : error instanceof z.ZodError
+        ? error.issues[0]?.path.join(".")
+        : undefined;
+  if (fieldPath?.split(".").at(-1) === "dockerEnabled") {
+    throw new SandboxDockerSettingValidationError("dockerEnabled must be a boolean");
   }
 }
 

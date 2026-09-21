@@ -117,6 +117,29 @@ describe("initializeSession", () => {
     });
   });
 
+  it("refuses to persist a Docker requirement for a provider that cannot honor it", async () => {
+    await expect(
+      initializeSession(
+        createEnv("e2b"),
+        { ...baseInput, sandboxSettings: { dockerEnabled: true, cpuCores: 2, memoryMib: 4096 } },
+        ctx as never
+      )
+    ).rejects.toThrow("Docker sessions require the Modal sandbox provider");
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("persists a frozen Docker choice for Modal", async () => {
+    await initializeSession(
+      createEnv("modal"),
+      { ...baseInput, sandboxSettings: { dockerEnabled: true, cpuCores: 2, memoryMib: 4096 } },
+      ctx as never
+    );
+
+    const request = stubFetchMock.mock.calls[0][0];
+    const body = await request.json<{ sandboxSettings: Record<string, unknown> }>();
+    expect(body.sandboxSettings).toEqual({ dockerEnabled: true, cpuCores: 2, memoryMib: 4096 });
+  });
+
   it("requires exactly one resolved or inherited managed skills manifest", async () => {
     await expect(
       initializeSession(

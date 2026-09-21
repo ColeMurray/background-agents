@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
@@ -23,6 +24,12 @@ import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import {
+  assertDockerSandboxAdmitted,
+  DockerSandboxAdmissionError,
+  freezeDockerSandboxSettings,
+} from "../sandbox/modal-docker";
+import { SandboxDockerSettingValidationError } from "../sandbox/settings";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
@@ -203,11 +210,24 @@ export async function handleCreateSession(
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
-  const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
-    ctx.db,
-    scopeMembers,
-    environmentId
-  );
+  let codeServerEnabled: boolean;
+  let vncEnabled: boolean;
+  let sandboxSettings: SandboxSettings;
+  try {
+    const resolved = await resolveSessionScopedSettings(ctx.db, scopeMembers, environmentId);
+    codeServerEnabled = resolved.codeServerEnabled;
+    vncEnabled = resolved.vncEnabled;
+    // The Docker choice is resolved once here and frozen for the session's
+    // lifetime; a later settings change never moves an existing session.
+    sandboxSettings = freezeDockerSandboxSettings(resolved.sandboxSettings, body.dockerEnabled);
+    assertDockerSandboxAdmitted(env, sandboxSettings);
+  } catch (e) {
+    if (e instanceof SandboxDockerSettingValidationError) {
+      return error(e.message, 400, "invalid_sandbox_settings");
+    }
+    if (e instanceof DockerSandboxAdmissionError) return error(e.message, 403, e.reason);
+    throw e;
+  }
 
   const sessionId = generateId();
   let providerAuth;

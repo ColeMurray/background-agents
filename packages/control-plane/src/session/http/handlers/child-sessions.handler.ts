@@ -3,7 +3,11 @@ import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/ses
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
 import { z } from "zod";
 import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
-import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
+import {
+  parsePersistedSandboxSettings,
+  SandboxDockerSettingValidationError,
+} from "../../../sandbox/settings";
+import { isDockerSandbox } from "../../../sandbox/modal-docker";
 import type { SessionMessenger } from "../../messenger";
 import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
 import type { MessageRepository } from "../../message-repository";
@@ -80,11 +84,24 @@ export class ChildSessionsHandler {
     if (promptAuthor instanceof Response) return promptAuthor;
     let sandboxTimeoutMs: number | undefined;
     let finalSnapshotBufferMs: number | undefined;
+    let dockerSettings: Pick<SpawnContext, "dockerEnabled" | "cpuCores" | "memoryMib"> = {};
     try {
       const sandboxSettings = parsePersistedSandboxSettings(session.sandbox_settings);
       sandboxTimeoutMs = sandboxSettings.sandboxTimeoutMs;
       finalSnapshotBufferMs = sandboxSettings.finalSnapshotBufferMs;
-    } catch {
+      if (isDockerSandbox(sandboxSettings)) {
+        dockerSettings = {
+          dockerEnabled: true,
+          cpuCores: sandboxSettings.cpuCores,
+          memoryMib: sandboxSettings.memoryMib,
+        };
+      }
+    } catch (e) {
+      // A parent whose Docker choice cannot be read must not spawn a child on
+      // a guessed runtime.
+      if (e instanceof SandboxDockerSettingValidationError) {
+        return Response.json({ error: "Parent sandbox settings are invalid" }, { status: 500 });
+      }
       sandboxTimeoutMs = undefined;
     }
     const context: SpawnContext = {
@@ -97,6 +114,7 @@ export class ChildSessionsHandler {
       baseBranch: session.base_branch,
       sandboxTimeoutMs,
       finalSnapshotBufferMs,
+      ...dockerSettings,
       promptAuthor: {
         userId: promptAuthor.user_id,
         ...(promptAuthor.canonical_user_id

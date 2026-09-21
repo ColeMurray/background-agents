@@ -460,6 +460,72 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).not.toHaveBeenCalled();
   });
 
+  describe("Docker sessions", () => {
+    async function initBodyFor(
+      envOverrides: Record<string, unknown>,
+      body: Record<string, unknown>
+    ): Promise<{ response: Response; initBody: Record<string, unknown> | null; create: unknown }> {
+      const create = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return { create } as never;
+      });
+      let initBody: Record<string, unknown> | null = null;
+      const initFetch = vi.fn(async (request: Request) => {
+        initBody = (await request.json()) as Record<string, unknown>;
+        return Response.json({ status: "created" });
+      });
+      const response = await createSessionRequestWithBody(
+        { ...createEnv(initFetch), ...envOverrides },
+        { title: "Docker", model: "anthropic/claude-haiku-4-5", ...body }
+      );
+      return { response, initBody, create };
+    }
+
+    it("rejects a Docker request while admission is closed, before any session exists", async () => {
+      const { response, initBody, create } = await initBodyFor({}, { dockerEnabled: true });
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: expect.stringContaining("not enabled"),
+        code: "docker_not_available",
+      });
+      expect(create).not.toHaveBeenCalled();
+      expect(initBody).toBeNull();
+    });
+
+    it("rejects a Docker request on a non-Modal provider even with the gate open", async () => {
+      const { response, create } = await initBodyFor(
+        { SANDBOX_PROVIDER: "e2b", ENABLE_MODAL_VM_SANDBOXES: "true" },
+        { dockerEnabled: true }
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "docker_not_allowed" });
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it("freezes an admitted Docker request with its launch resources", async () => {
+      const { response, initBody } = await initBodyFor(
+        { ENABLE_MODAL_VM_SANDBOXES: "true" },
+        { dockerEnabled: true }
+      );
+
+      expect(response.status).toBe(201);
+      expect(initBody?.sandboxSettings).toEqual({
+        dockerEnabled: true,
+        cpuCores: 2,
+        memoryMib: 4096,
+      });
+    });
+
+    it("keeps the standard session's persisted settings shape when Docker is off", async () => {
+      const { response, initBody } = await initBodyFor({}, { dockerEnabled: false });
+
+      expect(response.status).toBe(201);
+      expect(initBody?.sandboxSettings).toEqual({});
+    });
+  });
+
   it("creates the D1 session index before initializing the SessionDO", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {

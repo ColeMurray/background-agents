@@ -1,25 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionScopedSettings } from "./integration-settings-resolution";
+import { SandboxDockerSettingValidationError } from "../sandbox/settings";
 
 const mockState = vi.hoisted(() => ({
   resolvedCalls: [] as Array<{ id: string; repo: string; environmentId: string | null }>,
   globalCalls: [] as string[],
   resolved: {} as Record<
     string,
-    { enabledRepos: string[] | null; settings: Record<string, unknown> }
+    { enabledRepos: string[] | null; settings: Record<string, unknown> } | Error
   >,
-  global: {} as Record<string, { defaults: Record<string, unknown> }>,
+  global: {} as Record<string, { defaults: Record<string, unknown> } | Error>,
+}));
+
+const { MockIntegrationSettingsValidationError } = vi.hoisted(() => ({
+  MockIntegrationSettingsValidationError: class extends Error {
+    constructor(
+      message: string,
+      readonly fieldPath?: string
+    ) {
+      super(message);
+    }
+  },
 }));
 
 vi.mock("../db/integration-settings", () => ({
+  IntegrationSettingsValidationError: MockIntegrationSettingsValidationError,
   IntegrationSettingsStore: class {
     async getResolvedConfig(id: string, repo: string, environmentId?: string | null) {
       mockState.resolvedCalls.push({ id, repo, environmentId: environmentId ?? null });
-      return mockState.resolved[id] ?? { enabledRepos: null, settings: {} };
+      const resolved = mockState.resolved[id];
+      if (resolved instanceof Error) throw resolved;
+      return resolved ?? { enabledRepos: null, settings: {} };
     }
     async getGlobal(id: string) {
       mockState.globalCalls.push(id);
-      return mockState.global[id] ?? null;
+      const global = mockState.global[id];
+      if (global instanceof Error) throw global;
+      return global ?? null;
     }
   },
 }));
@@ -149,6 +166,45 @@ describe("resolveSessionScopedSettings", () => {
       vncEnabled: true,
       sandboxSettings: { buildTimeoutSeconds: 1200 },
     });
+  });
+
+  it("fails closed instead of defaulting when the resolved dockerEnabled is malformed", async () => {
+    mockState.resolved["sandbox"] = {
+      enabledRepos: null,
+      settings: { dockerEnabled: "true", tunnelPorts: [3000] },
+    };
+
+    await expect(
+      resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }])
+    ).rejects.toThrow(SandboxDockerSettingValidationError);
+  });
+
+  it("fails closed when a stored layer rejects dockerEnabled at read time", async () => {
+    mockState.resolved["sandbox"] = new MockIntegrationSettingsValidationError(
+      "Repo settings are invalid: dockerEnabled must be a boolean",
+      "dockerEnabled"
+    );
+    await expect(
+      resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }])
+    ).rejects.toThrow(SandboxDockerSettingValidationError);
+
+    mockState.global["sandbox"] = new MockIntegrationSettingsValidationError(
+      "Global settings are invalid: defaults.dockerEnabled must be a boolean",
+      "defaults.dockerEnabled"
+    );
+    await expect(resolveSessionScopedSettings(DB, [])).rejects.toThrow(
+      SandboxDockerSettingValidationError
+    );
+  });
+
+  it("still defaults when an unrelated stored layer is unreadable", async () => {
+    mockState.resolved["sandbox"] = new MockIntegrationSettingsValidationError(
+      "Repo settings are invalid: tunnelPorts must be an array",
+      "tunnelPorts"
+    );
+    await expect(
+      resolveSessionScopedSettings(DB, [{ repoOwner: "acme", repoName: "web" }])
+    ).resolves.toMatchObject({ sandboxSettings: {} });
   });
 
   it("rejects malformed persisted settings and falls back to disabled/defaults", async () => {

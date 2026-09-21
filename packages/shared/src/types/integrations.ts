@@ -275,6 +275,13 @@ export const sandboxSettingsSchema = z.strictObject({
   buildTimeoutSeconds: z.number().optional(),
   /** Maximum OpenCode-reported session cost in USD. */
   maxSessionCostUsd: z.number().finite().positive().optional(),
+  /**
+   * Launch the sandbox with a usable Docker daemon for user workloads
+   * (Modal only: the provider boots a Docker-capable VM instead of the default
+   * gVisor sandbox). Omitted inherits; `false` selects the standard sandbox;
+   * `true` requires the Docker-capable launch and never falls back.
+   */
+  dockerEnabled: z.boolean().optional(),
 });
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;

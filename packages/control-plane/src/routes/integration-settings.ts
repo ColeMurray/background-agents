@@ -483,6 +483,7 @@ async function handleGetResolvedConfig(
         memoryMib: sandboxSettings.memoryMib ?? null,
         sandboxTimeoutMs: sandboxSettings.sandboxTimeoutMs ?? null,
         finalSnapshotBufferMs: sandboxSettings.finalSnapshotBufferMs ?? null,
+        dockerEnabled: sandboxSettings.dockerEnabled ?? false,
         enabledRepos,
       },
     });

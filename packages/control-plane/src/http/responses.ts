@@ -6,9 +6,12 @@ export function json(data: unknown, status = 200): Response {
   });
 }
 
-/** Create the control plane's standard JSON error envelope. */
-export function error(message: string, status = 400): Response {
-  return json({ error: message }, status);
+/**
+ * Create the control plane's standard JSON error envelope. `code` is a stable
+ * machine-readable reason for clients that branch on it.
+ */
+export function error(message: string, status = 400, code?: string): Response {
+  return json(code === undefined ? { error: message } : { error: message, code }, status);
 }
 
 /**

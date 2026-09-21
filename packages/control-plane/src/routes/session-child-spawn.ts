@@ -30,6 +30,12 @@ import {
   resolveSandboxSettings,
   resolveVncEnabled,
 } from "../session/integration-settings-resolution";
+import {
+  assertDockerSandboxAdmitted,
+  DockerSandboxAdmissionError,
+  freezeDockerSandboxSettings,
+} from "../sandbox/modal-docker";
+import { SandboxDockerSettingValidationError } from "../sandbox/settings";
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import {
@@ -75,14 +81,22 @@ export async function handleSpawnChild(
   const parentEnvironmentId = parentSession?.environmentId ?? null;
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
-  const resolvedChildSandboxSettings = parentSession
-    ? await resolveSandboxSettings(
-        ctx.db,
-        parentSession.repoOwner,
-        parentSession.repoName,
-        parentEnvironmentId
-      )
-    : {};
+  let resolvedChildSandboxSettings: SandboxSettings;
+  try {
+    resolvedChildSandboxSettings = parentSession
+      ? await resolveSandboxSettings(
+          ctx.db,
+          parentSession.repoOwner,
+          parentSession.repoName,
+          parentEnvironmentId
+        )
+      : {};
+  } catch (e) {
+    if (e instanceof SandboxDockerSettingValidationError) {
+      return error(e.message, 400, "invalid_sandbox_settings");
+    }
+    throw e;
+  }
   const maxConcurrentChildren =
     resolvedChildSandboxSettings.maxConcurrentChildSessions ??
     DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
@@ -125,14 +139,35 @@ export async function handleSpawnChild(
   const {
     sandboxTimeoutMs: _currentTimeoutMs,
     finalSnapshotBufferMs: _currentBufferMs,
-    ...resolvedChildSettingsWithoutTimeout
+    dockerEnabled: _currentDockerEnabled,
+    ...resolvedChildSettingsWithoutFrozen
   } = resolvedChildSandboxSettings;
-  const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
+  const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutFrozen;
   if (spawnContext.sandboxTimeoutMs !== undefined) {
     childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
   }
   if (spawnContext.finalSnapshotBufferMs !== undefined) {
     childSandboxSettings.finalSnapshotBufferMs = spawnContext.finalSnapshotBufferMs;
+  }
+  // The Docker choice and, for Docker parents, the launch resources come from
+  // the parent's frozen settings, never from live configuration. New Docker
+  // children still need current admission.
+  const parentDockerEnabled = spawnContext.dockerEnabled === true;
+  if (parentDockerEnabled) {
+    if (spawnContext.cpuCores !== undefined) childSandboxSettings.cpuCores = spawnContext.cpuCores;
+    if (spawnContext.memoryMib !== undefined) {
+      childSandboxSettings.memoryMib = spawnContext.memoryMib;
+    }
+  }
+  const frozenChildSandboxSettings = freezeDockerSandboxSettings(
+    childSandboxSettings,
+    parentDockerEnabled
+  );
+  try {
+    assertDockerSandboxAdmitted(env, frozenChildSandboxSettings);
+  } catch (e) {
+    if (e instanceof DockerSandboxAdmissionError) return error(e.message, 403, e.reason);
+    throw e;
   }
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
@@ -271,7 +306,7 @@ export async function handleSpawnChild(
     scmUserId: spawnContext.promptAuthor.scmUserId,
     codeServerEnabled: childCodeServerEnabled,
     vncEnabled: childVncEnabled,
-    sandboxSettings: childSandboxSettings,
+    sandboxSettings: frozenChildSandboxSettings,
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,

@@ -9,6 +9,7 @@ import {
 import {
   normalizeSandboxSettings,
   parsePersistedSandboxSettings,
+  SandboxDockerSettingValidationError,
   SandboxSettingsValidationError,
 } from "./settings";
 
@@ -307,5 +308,43 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({
       tunnelPorts: [3000],
     });
+  });
+});
+
+describe("dockerEnabled", () => {
+  it("preserves an explicit boolean in either mode", () => {
+    expect(normalizeSandboxSettings({ dockerEnabled: true })).toEqual({ dockerEnabled: true });
+    expect(normalizeSandboxSettings({ dockerEnabled: false }, { invalid: "omit" })).toEqual({
+      dockerEnabled: false,
+    });
+    expect(parsePersistedSandboxSettings('{"dockerEnabled":true,"cpuCores":2}')).toEqual({
+      dockerEnabled: true,
+      cpuCores: 2,
+    });
+  });
+
+  it("leaves an absent value absent", () => {
+    expect(normalizeSandboxSettings({ terminalEnabled: true })).not.toHaveProperty("dockerEnabled");
+  });
+
+  it.each([null, "true", 1, {}])(
+    "never omits a malformed present value %j, even where other fields are omitted",
+    (dockerEnabled) => {
+      expect(() =>
+        normalizeSandboxSettings({ dockerEnabled, tunnelPorts: ["bad"] }, { invalid: "omit" })
+      ).toThrow(SandboxDockerSettingValidationError);
+      expect(() => parsePersistedSandboxSettings(JSON.stringify({ dockerEnabled }))).toThrow(
+        SandboxDockerSettingValidationError
+      );
+    }
+  );
+
+  it("reports a malformed value through the caller's error type on writes", () => {
+    expect(() =>
+      normalizeSandboxSettings(
+        { dockerEnabled: "yes" },
+        { createError: (message) => new CustomSettingsValidationError(message) }
+      )
+    ).toThrow(CustomSettingsValidationError);
   });
 });

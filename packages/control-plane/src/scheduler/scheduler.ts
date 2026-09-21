@@ -76,6 +76,7 @@ import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import { assertDockerSandboxAdmitted, freezeDockerSandboxSettings } from "../sandbox/modal-docker";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
 import { resolveManagedSkills } from "../session/skill-resolution";
@@ -1572,11 +1573,15 @@ export class Scheduler {
       (target.repoOwner && target.repoName
         ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
         : []);
-    const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
-      this.db,
-      scopeMembers,
-      target.environmentId
-    );
+    const {
+      codeServerEnabled,
+      vncEnabled,
+      sandboxSettings: resolvedSandboxSettings,
+    } = await resolveSessionScopedSettings(this.db, scopeMembers, target.environmentId);
+    // Same frozen Docker choice and admission as handleCreateSession; a
+    // closed gate throws into the run's failure path before any session exists.
+    const sandboxSettings = freezeDockerSandboxSettings(resolvedSandboxSettings);
+    assertDockerSandboxAdmitted(this.env, sandboxSettings);
     // The session below is about to start spending this budget, so the sweep
     // must not come for the run until it is spent.
     await store.setRunExecutionDeadline(

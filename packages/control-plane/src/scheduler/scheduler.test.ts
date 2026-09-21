@@ -1147,6 +1147,50 @@ describe("Scheduler", () => {
       expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [5173], terminalEnabled: true });
     });
 
+    it("freezes an admitted Docker default into the automation session", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: "main" })]);
+      const stub = createMockSessionStub();
+      const env = createEnv(
+        {
+          DB: createIntegrationSettingsDbMock(undefined, false, { dockerEnabled: true }),
+          ENABLE_MODAL_VM_SANDBOXES: "true",
+        },
+        stub
+      );
+
+      await createScheduler(env).tick();
+
+      const initBody = await getInitBody(vi.mocked(stub.fetch));
+      expect(initBody.sandboxSettings).toEqual({
+        dockerEnabled: true,
+        cpuCores: 2,
+        memoryMib: 4096,
+        tunnelPorts: [5173],
+      });
+    });
+
+    it("fails the run without a session when Docker admission is closed", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: "main" })]);
+      const stub = createMockSessionStub();
+      const env = createEnv(
+        { DB: createIntegrationSettingsDbMock(undefined, false, { dockerEnabled: true }) },
+        stub
+      );
+
+      await createScheduler(env).tick();
+
+      expect(vi.mocked(stub.fetch)).not.toHaveBeenCalled();
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          status: "failed",
+          failure_reason: expect.stringContaining("not enabled"),
+        })
+      );
+    });
+
     it("moves the run's deadline out to the sandbox timeout its session is launched with", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1", { base_branch: "main" })]);

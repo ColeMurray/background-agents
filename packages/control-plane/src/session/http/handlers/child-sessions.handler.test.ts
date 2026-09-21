@@ -308,6 +308,42 @@ describe("ChildSessionsHandler", () => {
     expect(body.promptAuthor).not.toHaveProperty("scmAccessTokenEncrypted");
   });
 
+  it("carries a Docker parent's frozen mode and resources in the spawn context", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(
+      createSession({
+        sandbox_settings: JSON.stringify({ dockerEnabled: true, cpuCores: 4, memoryMib: 8192 }),
+      })
+    );
+    repository.listParticipants.mockReturnValue([createParticipant()]);
+    repository.getProcessingMessageAuthor.mockReturnValue({ author_id: "participant-1" });
+    repository.getParticipantById.mockReturnValue(createParticipant());
+
+    const response = handler.getSpawnContext();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      dockerEnabled: true,
+      cpuCores: 4,
+      memoryMib: 8192,
+    });
+  });
+
+  it("omits Docker fields for a standard parent and fails when the choice is unreadable", async () => {
+    const { handler, getSession, repository } = createHandler();
+    repository.listParticipants.mockReturnValue([createParticipant()]);
+    repository.getProcessingMessageAuthor.mockReturnValue({ author_id: "participant-1" });
+    repository.getParticipantById.mockReturnValue(createParticipant());
+
+    getSession.mockReturnValue(createSession({ sandbox_settings: '{"cpuCores":4}' }));
+    const standard = await handler.getSpawnContext().json<Record<string, unknown>>();
+    expect(standard).not.toHaveProperty("dockerEnabled");
+    expect(standard).not.toHaveProperty("cpuCores");
+
+    getSession.mockReturnValue(createSession({ sandbox_settings: '{"dockerEnabled":"true"}' }));
+    expect(handler.getSpawnContext().status).toBe(500);
+  });
+
   it("returns a narrow active prompt author without encrypted credentials", async () => {
     const { handler, getSession, repository } = createHandler();
     getSession.mockReturnValue(createSession());

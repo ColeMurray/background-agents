@@ -39,7 +39,11 @@ type IntegrationSettingsAtLevel<
 const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
 
 export class IntegrationSettingsValidationError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Dotted path of the offending field when a single field failed shape validation. */
+    readonly fieldPath?: string
+  ) {
     super(message);
     this.name = "IntegrationSettingsValidationError";
   }
@@ -65,7 +69,10 @@ function parseSettings<TSchema extends z.ZodType<object>>(
       issue?.code === "invalid_type" && issue.path.length > 0
         ? `${issue.path.join(".")} must be ${issue.expected === "array" ? "an" : "a"} ${issue.expected}`
         : (issue?.message ?? "invalid shape");
-    throw new IntegrationSettingsValidationError(`${description} are invalid: ${detail}`);
+    throw new IntegrationSettingsValidationError(
+      `${description} are invalid: ${detail}`,
+      issue && issue.path.length > 0 ? issue.path.join(".") : undefined
+    );
   }
   return result.data;
 }

@@ -41,6 +41,14 @@ export const spawnContextSchema = z.object({
   baseBranch: z.string().nullable(),
   sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
   finalSnapshotBufferMs: finalSnapshotBufferMsSchema.optional(),
+  /**
+   * The parent's frozen Docker choice. Children inherit it exactly, together
+   * with the CPU and memory a Docker parent launched with, so lineage never
+   * silently changes runtime.
+   */
+  dockerEnabled: z.boolean().optional(),
+  cpuCores: z.number().positive().nullable().optional(),
+  memoryMib: z.number().int().positive().nullable().optional(),
   promptAuthor: promptAuthorSchema,
 });
 

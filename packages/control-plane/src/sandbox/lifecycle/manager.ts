@@ -63,7 +63,8 @@ import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
-import { parsePersistedSandboxSettings } from "../settings";
+import { parsePersistedSandboxSettings, SandboxDockerSettingValidationError } from "../settings";
+import { isDockerSandbox } from "../modal-docker";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import {
   evaluateImageBuildForSpawn,
@@ -2096,8 +2097,20 @@ export class SandboxLifecycleManager
           settings: unsupported,
         });
       }
+      if (isDockerSandbox(settings) && this.provider.name !== "modal") {
+        throw new SandboxProviderError(
+          `Docker sessions require the Modal sandbox provider (got ${this.provider.name})`,
+          "permanent"
+        );
+      }
       return omitUnsupportedSandboxSettings(settings, this.provider.name);
-    } catch {
+    } catch (e) {
+      // Any other unreadable setting defaults; the Docker choice never does,
+      // because defaulting it would launch on the wrong runtime.
+      if (e instanceof SandboxProviderError) throw e;
+      if (e instanceof SandboxDockerSettingValidationError) {
+        throw new SandboxProviderError(e.message, "permanent", e);
+      }
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
     }

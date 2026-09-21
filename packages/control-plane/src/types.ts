@@ -70,6 +70,9 @@ export interface EnvConfig {
   // `*.modal.run` hosts. Unset in every cloud deployment; a proxy or a
   // stand-in server sets it, as the other providers' `*_API_URL` settings do.
   MODAL_API_URL?: string;
+  // Admits new Docker-enabled (Modal VM) sessions, children and image builds.
+  // Off by default; closing it never affects sessions already admitted.
+  ENABLE_MODAL_VM_SANDBOXES?: string;
   DAYTONA_API_URL?: string; // Daytona REST API base URL
   DAYTONA_BASE_SNAPSHOT?: string; // Named Daytona snapshot used for fresh sandbox creation
   DAYTONA_AUTO_STOP_INTERVAL_MINUTES?: string; // Daytona idle stop interval in minutes

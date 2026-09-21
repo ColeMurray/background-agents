@@ -25,6 +25,18 @@ export class SandboxSettingsValidationError extends Error {
   }
 }
 
+/**
+ * A present `dockerEnabled` that is not a boolean. Unlike other malformed
+ * fields this is never omitted: dropping it would silently change which
+ * sandbox runtime a session launches on, so every reader fails closed.
+ */
+export class SandboxDockerSettingValidationError extends SandboxSettingsValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxDockerSettingValidationError";
+  }
+}
+
 /** Decode and normalize a session's persisted sandbox settings snapshot. */
 export function parsePersistedSandboxSettings(settingsJson: string | null): SandboxSettings {
   if (settingsJson === null) return {};
@@ -67,6 +79,15 @@ export function normalizeSandboxSettings(
     } else {
       result.terminalEnabled = settings.terminalEnabled;
     }
+  }
+
+  if (settings.dockerEnabled !== undefined) {
+    if (typeof settings.dockerEnabled !== "boolean") {
+      const message = "dockerEnabled must be a boolean";
+      if (invalidBehavior === "throw") throw createError(message);
+      throw new SandboxDockerSettingValidationError(message);
+    }
+    result.dockerEnabled = settings.dockerEnabled;
   }
 
   if (settings.tunnelPorts !== undefined) {

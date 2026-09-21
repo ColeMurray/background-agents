@@ -251,6 +251,11 @@ const createSessionRequestBaseSchema = z.object({
   skillSelection: sessionSkillSelectionSchema.optional(),
   /** Explicit account/API-key choices. Omission resolves provider policy. */
   providerSelections: modelProviderSelectionsSchema.optional(),
+  /**
+   * One-off Docker choice for this session, taking precedence over the
+   * resolved sandbox settings. Omitted uses the configured default.
+   */
+  dockerEnabled: z.boolean().optional(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema

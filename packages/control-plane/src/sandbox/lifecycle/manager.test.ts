@@ -3895,6 +3895,36 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("sandbox settings", () => {
+    it.each([
+      ["a non-Modal provider", '{"dockerEnabled":true,"cpuCores":2,"memoryMib":4096}'],
+      ["a malformed Docker choice", '{"dockerEnabled":"true"}'],
+    ])(
+      "fails a Docker session permanently on %s instead of launching standard",
+      async (_, blob) => {
+        const session = createMockSession({ sandbox_settings: blob });
+        const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+        const provider = createMockProvider();
+        const mockStorage = createMockStorage(session, sandbox);
+        const manager = new SandboxLifecycleManager(
+          provider,
+          mockStorage,
+          mockStorage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createUnmanagedShutdown(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+        expect(mockStorage.calls).toContain("incrementCircuitBreakerFailure");
+        expect(mockStorage.calls).toContain("transitionSandboxStatus:spawning->failed");
+      }
+    );
+
     it("uses the configured sandbox timeout for fresh spawns", async () => {
       const session = createMockSession({
         sandbox_settings: '{"sandboxTimeoutMs":14400000}',

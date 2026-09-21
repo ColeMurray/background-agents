@@ -16,6 +16,7 @@ import type { SessionSkillManifestInput } from "./skill-resolution";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
+import { isDockerSandbox } from "../sandbox/modal-docker";
 
 const logger = createLogger("session-init");
 
@@ -152,6 +153,12 @@ export async function initializeSession(
   const sandboxSettings = input.sandboxSettings
     ? omitUnsupportedSandboxSettings(input.sandboxSettings, sandboxProvider)
     : undefined;
+  // Callers admit Docker sessions before reaching here; this is the last
+  // point at which a Docker requirement could otherwise be persisted for a
+  // provider that cannot honor it.
+  if (isDockerSandbox(sandboxSettings) && sandboxProvider !== "modal") {
+    throw new Error(`Docker sessions require the Modal sandbox provider (got ${sandboxProvider})`);
+  }
   if (unsupportedSettings.length > 0) {
     logger.warn("Ignoring sandbox settings unsupported by the configured provider", {
       event: "sandbox.settings_unsupported",
