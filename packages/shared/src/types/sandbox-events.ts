@@ -96,11 +96,10 @@ export const sandboxGenerationSchema = z.object({
 export const sandboxEventSchema = z.discriminatedUnion("type", [
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
-    status: z.string(),
   }),
   sandboxEventBaseSchema.extend({
-    // Emitted on every sandbox bridge connect (bridge readiness, not vendor
-    // readiness). Present in essentially every session's replay history.
+    // Emitted after the runtime attaches its harness. This is the readiness
+    // signal that moves the sandbox row to `ready`.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */

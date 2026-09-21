@@ -43,6 +43,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -426,6 +427,7 @@ export class SessionMessageQueue {
         message_id: message.id,
         outcome: "deferred",
         reason: "sandbox_booting",
+        ...sandboxBootPhaseLogFields(target.phase),
       });
       return;
     }

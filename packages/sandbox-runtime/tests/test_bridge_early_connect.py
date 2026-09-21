@@ -445,7 +445,7 @@ class TestConnectSnapshot:
         assert bridge.event_forwarder._event_buffer == []
         assert [line["seq"] for line in bridge.boot_attach._held_boot_lines] == [2]
 
-    async def test_heartbeat_reports_booting_until_attached(self, tmp_path, monkeypatch):
+    async def test_heartbeat_status_is_retained_for_compatibility(self, tmp_path, monkeypatch):
         harness = OpeningHarness([])
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         bridge._send_event = AsyncMock()

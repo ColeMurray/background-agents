@@ -685,20 +685,34 @@ describe("SessionMessageQueue", () => {
   it("defers, without spawning, while the bridge is attached but the sandbox is still booting", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-boot" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
-    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting" });
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({
+      kind: "booting",
+      phase: {
+        phase: "setup",
+        status: "started",
+        bootSeq: 3,
+        repoOwner: "acme",
+        repoName: "repo",
+        detail: "not logged",
+      },
+    });
 
     await h.queue.processMessageQueue();
     await h.backgroundTasks.settle();
 
-    expect(h.log.info).toHaveBeenCalledWith(
-      "prompt.dispatch",
-      expect.objectContaining({
-        message_id: "msg-boot",
-        outcome: "deferred",
-        reason: "sandbox_booting",
-      })
-    );
+    expect(h.log.info).toHaveBeenCalledWith("prompt.dispatch", {
+      event: "prompt.dispatch",
+      message_id: "msg-boot",
+      outcome: "deferred",
+      reason: "sandbox_booting",
+      boot_seq: 3,
+      phase: "setup",
+      phase_status: "started",
+      repo_owner: "acme",
+      repo_name: "repo",
+      elapsed_ms: null,
+      warning: false,
+    });
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();

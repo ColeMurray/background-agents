@@ -236,7 +236,6 @@ describe("SessionSandboxEventProcessor", () => {
     const event: SandboxEvent = {
       type: "heartbeat",
       sandboxId: "sb-1",
-      status: "ready",
       timestamp: 1000,
     };
 
@@ -784,7 +783,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -798,7 +796,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -812,7 +809,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -825,7 +821,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 

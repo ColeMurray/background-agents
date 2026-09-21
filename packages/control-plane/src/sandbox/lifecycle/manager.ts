@@ -64,6 +64,7 @@ import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import { parsePersistedSandboxSettings } from "../settings";
+import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import {
   evaluateImageBuildForSpawn,
   type ImageBuildLookup,
@@ -1748,15 +1749,16 @@ export class SandboxLifecycleManager
    * same words.
    */
   private async failBootBudget(elapsedMs: number, ctx: AlarmContext): Promise<SandboxAlarmResult> {
+    const bootPhase = parseStoredSandboxBootPhase(ctx.sandbox.boot_phase);
     const reason = formatBootBudgetFailure(
       ctx.sandbox.boot_phase,
       this.config.bootBudget.timeoutMs
     );
     this.log.warn("Boot budget exceeded", {
       event: "sandbox.boot_budget",
+      ...sandboxBootPhaseLogFields(bootPhase),
       elapsed_ms: elapsedMs,
       timeout_ms: this.config.bootBudget.timeoutMs,
-      boot_phase: ctx.sandbox.boot_phase,
     });
     this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.fenceSandboxGeneration();

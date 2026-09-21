@@ -552,6 +552,8 @@ class AgentBridge:
             raise
 
     def _heartbeat_event(self) -> dict[str, Any]:
+        # `ready` is the readiness signal. Older control planes still require
+        # this ignored status field before they will record heartbeat liveness.
         return {
             "type": "heartbeat",
             "sandboxId": self.sandbox_id,

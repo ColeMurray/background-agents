@@ -1,7 +1,4 @@
-import {
-  sandboxBootPhaseSchema,
-  type SandboxBootPhase,
-} from "@open-inspect/shared/types/sandbox-events";
+import { parseStoredSandboxBootPhase } from "../boot-phase";
 
 /**
  * The operator-facing explanation for a boot that outlived its budget.
@@ -27,15 +24,7 @@ export function formatBootBudgetFailure(bootPhaseJson: string | null, timeoutMs:
  * failure path.
  */
 function describeBootPhase(bootPhaseJson: string | null): string {
-  let phase: SandboxBootPhase | null = null;
-  if (bootPhaseJson) {
-    try {
-      const parsed = sandboxBootPhaseSchema.safeParse(JSON.parse(bootPhaseJson));
-      phase = parsed.success ? parsed.data : null;
-    } catch {
-      phase = null;
-    }
-  }
+  const phase = parseStoredSandboxBootPhase(bootPhaseJson);
   if (!phase) return "booting";
   const repo = phase.repoOwner && phase.repoName ? ` for ${phase.repoOwner}/${phase.repoName}` : "";
   switch (phase.phase) {

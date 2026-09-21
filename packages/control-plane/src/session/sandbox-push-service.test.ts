@@ -126,7 +126,7 @@ describe("SandboxPushService", () => {
     // manual-push assumption would let a PR be opened on a branch that was
     // never pushed; the caller must retry once the sandbox is ready.
     const h = createService();
-    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting" });
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting", phase: null });
 
     const result = await h.service.pushBranchToRemote(createPushSpec("acme", "web", "feature/x"));
 

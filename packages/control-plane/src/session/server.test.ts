@@ -485,7 +485,6 @@ describe("SessionServer", () => {
         type: "heartbeat",
         sandboxId: "sandbox-1",
         timestamp: 1000,
-        status: "ready",
       })
     );
 
@@ -493,7 +492,6 @@ describe("SessionServer", () => {
       type: "heartbeat",
       sandboxId: "sandbox-1",
       timestamp: 1000,
-      status: "ready",
     });
   });
 
@@ -508,7 +506,6 @@ describe("SessionServer", () => {
         type: "heartbeat",
         sandboxId: "sandbox-1",
         timestamp: 1000,
-        status: "ready",
       })
     );
 

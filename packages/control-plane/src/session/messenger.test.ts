@@ -80,7 +80,7 @@ describe("SessionMessengerImpl", () => {
     // The registry withholds a booting sandbox's socket from operational
     // commands; refresh_diff and stop take their unavailable branches.
     const { messenger, wsManager } = harness({ sandboxSocket: null });
-    wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting" });
+    wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting", phase: null });
 
     await expect(messenger.sendToSandbox({ type: "refresh_diff" })).rejects.toBeInstanceOf(
       SandboxDeliveryUnavailableError
