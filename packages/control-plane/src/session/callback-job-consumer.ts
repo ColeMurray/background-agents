@@ -5,8 +5,8 @@ import type { JobDelivery, JobDeps, JobOutcome } from "../jobs";
 import { Scheduler } from "../scheduler/scheduler";
 import { sessionMessagePageSchema, SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
+import { CALLBACK_ATTEMPT_TIMEOUT_MS } from "./callback-delivery";
 
-const CALLBACK_ATTEMPT_TIMEOUT_MS = 10_000;
 const ACTIVITY_MAX_AGE_MS = 60_000;
 
 /** One bounded delivery; the host owns retry scheduling. */

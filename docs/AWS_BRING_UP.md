@@ -1,8 +1,9 @@
 # Bringing Up the Control Plane on AWS
 
 This stands the Open-Inspect control plane up on AWS, from an empty account to `/healthz` answering
-over HTTPS at a hostname you choose. **No Cloudflare account is involved at any point.** TLS is a
-Let's Encrypt certificate that Caddy obtains on the instance; DNS is whatever you already run.
+over HTTPS at a hostname you choose. **The core stack needs no Cloudflare account; optional bot
+integrations still use Cloudflare Workers.** TLS is a Let's Encrypt certificate that Caddy obtains
+on the instance; DNS is whatever you already run.
 
 What you get is one EC2 instance running the same `docker compose` stack CI boots on every pull
 request, with a persistent EBS volume under it, S3 for media and backups, and its logs in
@@ -138,9 +139,12 @@ openssl rand -base64 32 | put IMAGE_CALLBACK_TOKEN_PEPPER
 # others stay unset, which is a refusal rather than a weak key. The web app's
 # own SERVICE_AUTH_SECRET must equal SERVICE_AUTH_SECRET_WEB.
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_WEB
-openssl rand -base64 32 | put SERVICE_AUTH_SECRET_SLACK_BOT
+# Slack and Linear: supply the exact values already configured on the target
+# bot workers. Do not generate independent values; callbacks would fail HMAC verification.
+# For example, pipe a trusted local copy through the existing put helper:
+# put SERVICE_AUTH_SECRET_SLACK_BOT < /secure/path/slack-bot-service-auth-secret
+# put SERVICE_AUTH_SECRET_LINEAR_BOT < /secure/path/linear-bot-service-auth-secret
 openssl rand -base64 32 | put SERVICE_AUTH_SECRET_GITHUB_BOT
-openssl rand -base64 32 | put SERVICE_AUTH_SECRET_LINEAR_BOT
 
 # The sandbox provider. Both environments select Modal, and this is the shared
 # HMAC secret between the control plane and the Modal deployment; without it the
@@ -181,9 +185,25 @@ Non-secret values — access-control lists, `WEB_APP_URL`, the sandbox provider'
 — go in the `config` map in `terraform.tfvars`, not here. **Anything in that map lands in the state
 file**, so nothing secret belongs in it.
 
+For outbound Slack/Linear callbacks, add the deployed bot HTTPS origins to that map as
+`SLACK_BOT_URL` and `LINEAR_BOT_URL` (omit bots you do not use). The existing
+config-to-SSM-to-`.env` path passes these through; no additional Terraform variable is needed. Put
+the matching `SERVICE_AUTH_SECRET_SLACK_BOT` and `SERVICE_AUTH_SECRET_LINEAR_BOT` values in their
+secret parameters, never the config map. Confirm these names remain in `secret_names` if you
+override that inventory. Restart the service after applying configuration. See
+[Connecting bot workers](./CONTROL_PLANE_CONTAINER.md#connecting-bot-workers) for URL constraints,
+timeout behavior and the separate reverse-transport requirement.
+
 Adding a key the module does not know about — another provider's token — means adding it to the
 `secret_names` variable, which replaces the inventory rather than extending it. Removing a name from
 that set deletes the parameter, and the operator's value with it.
+
+The operator is responsible for obtaining those existing values from their local secret material or
+the initialized Cloudflare Terraform state and supplying them directly through `put`. No extra
+Terraform output or repository-specific copy tool is required. Avoid printing the values or placing
+them in command arguments, and verify the selected bot deployment and AWS environment before writing
+either parameter. Restart the Node service to reload changed values. This configures outbound
+callbacks only, not reverse bot-to-Node routing (COL-107).
 
 ## 5. Push an image
 
@@ -473,6 +493,6 @@ variation rather than a requirement.
 - **Alarms beyond the instance's status checks.** Disk and memory need the CloudWatch agent, and the
   alarms that describe the control plane itself need metrics the host does not publish yet; both are
   H-8.
-- **The bots.** The Slack, GitHub and Linear bots remain Cloudflare Workers. A deployment with no
-  Cloudflare account runs the control plane and the web app, and does without them, until that
-  transport lands.
+- **The bots.** The Slack, GitHub and Linear bots remain Cloudflare Workers. Node can send to
+  Slack/Linear over their configured HTTPS origins; bot-to-Node routing remains separate work
+  (COL-107). This is not a Cloudflare-free bot deployment.

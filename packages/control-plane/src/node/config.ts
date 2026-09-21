@@ -165,10 +165,15 @@ export const NODE_HOST_VARIABLE_NAMES = [
   "DATA_DIR",
   "MIGRATIONS_DIR",
   "SHUTDOWN_TIMEOUT_MS",
+  "SLACK_BOT_URL",
+  "LINEAR_BOT_URL",
 ] as const;
 
 /** What the process itself needs: where to listen and where its files live. */
 export interface NodeHostSettings {
+  /** Node-only outbound bot origins; only constructed clients enter the application environment. */
+  slackBotUrl?: string;
+  linearBotUrl?: string;
   /** Interface to listen on; `HOST`, else DEFAULT_HOST. */
   host: string;
   /** `PORT`, else DEFAULT_PORT, the port the Worker's local dev server uses. */
@@ -203,6 +208,8 @@ export function readNodeHostSettings(source: ConfigSource): NodeHostSettings {
     throw new Error("DATA_DIR is required: the directory that holds the host's databases");
   }
   return {
+    slackBotUrl: present(variables.SLACK_BOT_URL),
+    linearBotUrl: present(variables.LINEAR_BOT_URL),
     host: present(variables.HOST) ?? DEFAULT_HOST,
     port: integer("PORT", variables.PORT, DEFAULT_PORT),
     dataDir: resolve(dataDir),

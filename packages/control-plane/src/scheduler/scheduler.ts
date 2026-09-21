@@ -87,7 +87,7 @@ import {
   isPrincipalAuthorized,
 } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
-import { deliverWithRetry } from "../session/callback-delivery";
+import { CALLBACK_ATTEMPT_TIMEOUT_MS, deliverWithRetry } from "../session/callback-delivery";
 import type { GitHubEnrichment } from "../session/identity";
 
 /** Max automations to process per tick (backpressure). */
@@ -165,7 +165,7 @@ const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * launches with no thread history, which is the same fallback as any other
  * failure.
  */
-const SLACK_THREAD_CONTEXT_TIMEOUT_MS = 10_000;
+const SLACK_THREAD_CONTEXT_TIMEOUT_MS = CALLBACK_ATTEMPT_TIMEOUT_MS;
 
 /**
  * Repository label for user-facing surfaces (Slack), read from the run's
@@ -1459,6 +1459,7 @@ export class Scheduler {
         signal: AbortSignal.timeout(SLACK_THREAD_CONTEXT_TIMEOUT_MS),
       });
       if (!response.ok) {
+        await response.body?.cancel();
         this.log.warn("Slack thread context request failed", {
           event: "scheduler.slack_thread_context_failed",
           channel: event.channelId,
@@ -1512,7 +1513,9 @@ export class Scheduler {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...body, signature }),
+        signal: AbortSignal.timeout(CALLBACK_ATTEMPT_TIMEOUT_MS),
       });
+      await response.body?.cancel();
       if (!response.ok) {
         this.log.warn("Slack skip callback failed", {
           event: "scheduler.slack_skip_failed",

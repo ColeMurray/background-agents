@@ -17,6 +17,8 @@ describe("readEnvConfig", () => {
       SANDBOX_PROVIDER: "e2b",
       PATH: "/usr/bin",
       DATA_DIR: "/var/lib/oi",
+      SLACK_BOT_URL: "https://slack.example",
+      LINEAR_BOT_URL: "https://linear.example",
     });
     expect(config).toEqual({ ...REQUIRED, LOG_LEVEL: "debug", SANDBOX_PROVIDER: "e2b" });
   });
@@ -34,6 +36,21 @@ describe("readEnvConfig", () => {
 });
 
 describe("readNodeHostSettings", () => {
+  it("reads bot origins only into Node settings and treats empty URLs as unset", () => {
+    expect(
+      readNodeHostSettings({
+        DATA_DIR: "data",
+        SLACK_BOT_URL: "https://slack.example",
+        LINEAR_BOT_URL: "https://linear.example",
+      })
+    ).toMatchObject({
+      slackBotUrl: "https://slack.example",
+      linearBotUrl: "https://linear.example",
+    });
+    expect(
+      readNodeHostSettings({ DATA_DIR: "data", SLACK_BOT_URL: "", LINEAR_BOT_URL: "" })
+    ).toMatchObject({ slackBotUrl: undefined, linearBotUrl: undefined });
+  });
   it("requires DATA_DIR and defaults the rest", () => {
     expect(() => readNodeHostSettings({})).toThrow("DATA_DIR is required");
     const settings = readNodeHostSettings({ DATA_DIR: "/var/lib/oi" });

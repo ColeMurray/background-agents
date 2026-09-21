@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket } from "ws";
 import { NO_AUTHORIZATION } from "../routes/shared";
 import { admit } from "../routing/admit";
@@ -92,13 +92,17 @@ describe("startNodeHost", () => {
     ...overrides,
   });
 
-  const start = (overrides: Partial<NodeHostOptions> = {}): Promise<NodeHost> => {
+  const start = (
+    overrides: Omit<Partial<NodeHostOptions>, "settings"> & {
+      settings?: Partial<NodeHostSettings>;
+    } = {}
+  ): Promise<NodeHost> => {
     dataDir ??= mkdtempSync(join(tmpdir(), "node-host-"));
     return startNodeHost({
       config: CONFIG,
-      settings: settings(),
       objectStorage: OBJECT_STORAGE,
       ...overrides,
+      settings: settings(overrides.settings),
     });
   };
 
@@ -109,10 +113,83 @@ describe("startNodeHost", () => {
     };
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await host?.shutdown();
     host = null;
     rmSync(dataDir, { recursive: true, force: true });
     dataDir = undefined as unknown as string;
+  });
+
+  it.each([false, true])("wires optional bot clients when configured: %s", async (configured) => {
+    const routes = new Hono<ControlPlaneHonoEnv>();
+    routes.get(
+      "/bots",
+      admit({
+        authentication: { kind: "public" },
+        supportedScmProviders: "all",
+        authorization: NO_AUTHORIZATION,
+      }),
+      async (c) => {
+        expect(c.env).not.toHaveProperty("SLACK_BOT_URL");
+        expect(c.env).not.toHaveProperty("LINEAR_BOT_URL");
+        if (c.env.SLACK_BOT)
+          await c.env.SLACK_BOT.fetch("https://internal/callbacks/complete", {
+            method: "POST",
+            body: "slack",
+          });
+        if (c.env.LINEAR_BOT)
+          await c.env.LINEAR_BOT.fetch("https://internal/callbacks/start", {
+            method: "POST",
+            body: "linear",
+          });
+        return Response.json({ slack: !!c.env.SLACK_BOT, linear: !!c.env.LINEAR_BOT });
+      }
+    );
+    const nativeFetch = globalThis.fetch;
+    const outbound = vi.fn(async () => new Response("ok"));
+    vi.stubGlobal("fetch", outbound);
+    host = await start({
+      routes: [routes],
+      settings: configured
+        ? { slackBotUrl: "https://slack.example", linearBotUrl: "https://linear.example" }
+        : {},
+      config: {
+        ...CONFIG,
+        ...(configured
+          ? {
+              SERVICE_AUTH_SECRET_SLACK_BOT: "slack-key",
+              SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-key",
+            }
+          : {}),
+      },
+    });
+    const response = await nativeFetch(`http://127.0.0.1:${host.address.port}/bots`);
+    expect(await response.json()).toEqual({ slack: configured, linear: configured });
+    expect(outbound).toHaveBeenCalledTimes(configured ? 2 : 0);
+    if (configured) {
+      const requests = (outbound.mock.calls as unknown as [Request][]).map(([request]) => request);
+      expect(requests.map((request) => request.url)).toEqual([
+        "https://slack.example/callbacks/complete",
+        "https://linear.example/callbacks/start",
+      ]);
+      expect(await Promise.all(requests.map((request) => request.text()))).toEqual([
+        "slack",
+        "linear",
+      ]);
+    }
+  });
+
+  it.each([
+    { settings: { slackBotUrl: "https://slack.example" }, config: CONFIG },
+    { settings: { linearBotUrl: "https://linear.example" }, config: CONFIG },
+    {
+      settings: { slackBotUrl: "http://remote.example" },
+      config: { ...CONFIG, SERVICE_AUTH_SECRET_SLACK_BOT: "key" },
+    },
+  ])("rejects invalid or unsigned bot configuration before opening stores: %j", async (options) => {
+    await expect(start(options)).rejects.toThrow(/BOT_URL/);
+    expect(existsSync(join(dataDir, GLOBAL_STORE_FILE))).toBe(false);
+    expect(existsSync(join(dataDir, JOB_STORE_FILE))).toBe(false);
   });
 
   it("boots over the migrated global store and answers the health check and the route table", async () => {
