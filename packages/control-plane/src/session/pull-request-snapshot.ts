@@ -46,6 +46,8 @@ export const pullRequestSnapshotSchema = z
 
 export type PullRequestSnapshotInput = z.infer<typeof pullRequestSnapshotSchema>;
 
+const artifactMetadataSchema = z.record(z.string(), z.unknown());
+
 /**
  * Map a snapshot into the D1 authority record for an artifact — the
  * single snapshot→record field mapping shared by every record writer.
@@ -82,10 +84,8 @@ export function snapshotToRecord(
 export function parsePullRequestArtifactMetadata(raw: string | null): Record<string, unknown> {
   if (!raw) return {};
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    const parsed = artifactMetadataSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : {};
   } catch {
     return {};
   }
