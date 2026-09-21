@@ -13,7 +13,7 @@ import {
 } from "../branch-preferences";
 import { filterReposByQuery, getAvailableRepos } from "../classifier/repos";
 import { createLogger } from "../logger";
-import type { Env, SlackInteractionPayload } from "../types";
+import type { BackgroundTaskScheduler, Env, SlackInteractionPayload } from "../types";
 import {
   CLEAR_BRANCH_PREFERENCE_ACTION_ID,
   MAX_REPO_SUGGESTION_OPTIONS,
@@ -27,7 +27,6 @@ import { publishAppHome } from "./publisher";
 import type {
   AppHomeInteractionLogContext,
   AppHomeInteractionResponseBody,
-  BackgroundTaskScheduler,
   SlackBlockAction,
 } from "./slack-types";
 import type { SlackSelectOption } from "../slack-blocks";

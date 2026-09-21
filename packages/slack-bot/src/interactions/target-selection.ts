@@ -13,7 +13,6 @@ import {
   buildWorkingMessage,
   formatSessionDefaultsNotice,
   scheduleStartingStatus,
-  type BackgroundTaskScheduler,
 } from "../messages/blocks";
 import { formatAttributedRequest } from "../messages/context";
 import {
@@ -29,7 +28,7 @@ import {
 } from "../sessions/session-launcher";
 import { resolveTargetValue, targetSelectedText } from "../target-clarification";
 import { targetId, type SlackSessionTarget } from "../targets";
-import type { Env } from "../types";
+import type { BackgroundTaskScheduler, Env } from "../types";
 import { resolveSlackActorIdentity } from "../user-identity";
 import { hasInlinePromptOptions, resolveInlinePromptOptions } from "../inline-flags";
 
