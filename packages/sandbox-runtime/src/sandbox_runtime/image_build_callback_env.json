@@ -15,5 +15,5 @@
     "OI_REPO_IMAGE_CALLBACK_SECRET",
     "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"
   ],
-  "reserved_only_modal": ["MODAL_SANDBOX_ID"]
+  "reserved_only_modal": ["MODAL_SANDBOX_ID", "OPENINSPECT_DOCKER_ENABLED"]
 }

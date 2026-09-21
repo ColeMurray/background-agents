@@ -119,6 +119,7 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
         user_env_vars={"FOO": "bar"},
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds=2400,
+        sandbox_settings=None,
     )
 
 

@@ -6,7 +6,10 @@ from typing import cast
 
 import modal
 
-from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from sandbox_runtime.constants import (
+    DOCKER_ENABLED_ENV_VAR,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+)
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.modal_image_build_start import (
     MODAL_IMAGE_BUILD_START_ARGUMENT,
@@ -23,6 +26,12 @@ from sandbox_runtime.repo_image_callback import (
 
 from ..app import app
 from ..images.base import base_image
+from .docker_launch import (
+    docker_base_image,
+    docker_launch_kwargs,
+    docker_runtime_env,
+    parse_docker_launch,
+)
 from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from .vcs_env import inject_vcs_env_vars
 
@@ -45,6 +54,7 @@ RESERVED_USER_ENV_KEYS = (
     CALLBACK_TOKEN_ENV,
     PROVIDER_SESSION_ID_ENV,
     MODAL_SANDBOX_ID_ENV,
+    DOCKER_ENABLED_ENV_VAR,
 )
 
 
@@ -70,8 +80,10 @@ class ModalBuildSessionService:
         user_env_vars: dict[str, str] | None = None,
         build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
+        sandbox_settings: dict | None = None,
     ) -> str:
         start_time = time.time()
+        docker = parse_docker_launch(sandbox_settings)
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
         for name in RESERVED_USER_ENV_KEYS:
@@ -93,6 +105,7 @@ class ModalBuildSessionService:
                 BUILD_ID_ENV: build_id,
                 CALLBACK_URL_ENV: callback_url,
                 FAILURE_CALLBACK_URL_ENV: failure_callback_url,
+                **docker_runtime_env(docker),
             }
         )
         inject_vcs_env_vars(
@@ -113,13 +126,14 @@ class ModalBuildSessionService:
 
         sandbox = await modal.Sandbox.create.aio(
             *command,
-            image=base_image,
+            image=docker_base_image() if docker.enabled else base_image,
             app=app,
             secrets=[],
             timeout=timeout_seconds,
             workdir="/workspace",
             env=cast("dict[str, str | None]", env_vars),
             tags=tags,
+            **docker_launch_kwargs(docker),
         )
         log.info(
             "sandbox.create_build",

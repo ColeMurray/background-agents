@@ -8,12 +8,19 @@ import pytest
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT_ENV_VAR,
+    DOCKER_ENABLED_ENV_VAR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
     TTYD_PROXY_PORT_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
 )
 from sandbox_runtime.types import SessionConfig
+from src.sandbox.docker_launch import (
+    DockerImageUnavailableError,
+    InvalidDockerSettingsError,
+    docker_allocation_name,
+    docker_allocation_tags,
+)
 from src.sandbox.manager import (
     RepositoryImageUnavailableError,
     SandboxConfig,
@@ -136,6 +143,11 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert kwargs["cpu"] == 1.5
     assert kwargs["memory"] == 3072
     assert kwargs["encrypted_ports"] == [9000, 9001, 9002, 3000]
+    # The default launch never touches the VM runtime or named allocations.
+    assert "experimental_options" not in kwargs
+    assert "name" not in kwargs
+    assert "tags" not in kwargs
+    assert env[DOCKER_ENABLED_ENV_VAR] == "false"
 
     assert env["CONTROL_PLANE_URL"] == "https://control.example"
     assert env["CUSTOM_ENV"] == "preserved"
@@ -218,3 +230,181 @@ async def test_repository_image_not_found_is_reported_explicitly(monkeypatch):
                 repo_image_id="repo-image-missing",
             )
         )
+
+
+DOCKER_SETTINGS = {"dockerEnabled": True, "cpuCores": 2, "memoryMib": 4096}
+
+
+def _docker_manager(monkeypatch) -> tuple[SandboxManager, dict, object]:
+    captured: dict = {}
+    docker_image = object()
+    monkeypatch.setattr("src.sandbox.manager.base_image", object())
+    monkeypatch.setattr("src.sandbox.docker_launch.docker_image", docker_image)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+    monkeypatch.setattr(
+        SandboxManager,
+        "_resolve_and_setup_tunnels",
+        AsyncMock(return_value=(None, None, None, {})),
+    )
+    return SandboxManager(), captured, docker_image
+
+
+def _docker_config(**overrides) -> SandboxConfig:
+    fields = {
+        "repo_owner": "acme",
+        "repo_name": "repo",
+        "sandbox_id": "sandbox-acme-repo-1700000000000",
+        "session_config": SessionConfig(
+            session_id="session-1", repo_owner="acme", repo_name="repo"
+        ),
+        "control_plane_url": "https://control.example",
+        "sandbox_auth_token": "token",
+        "user_env_vars": {DOCKER_ENABLED_ENV_VAR: "false", "CUSTOM_ENV": "preserved"},
+        "settings": dict(DOCKER_SETTINGS),
+    }
+    return SandboxConfig(**{**fields, **overrides})
+
+
+def _not_found(*_args, **_kwargs):
+    from modal.exception import NotFoundError
+
+    raise NotFoundError("no sandbox")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
+async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch, image_source):
+    manager, captured, docker_image = _docker_manager(monkeypatch)
+    artifact = object()
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: artifact)
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
+    )
+
+    if image_source == "snapshot":
+        handle = await manager.restore_from_snapshot(
+            snapshot_image_id="snapshot-1",
+            session_config={"session_id": "session-1", "repo_owner": "acme", "repo_name": "repo"},
+            sandbox_id="sandbox-acme-repo-1700000000000",
+            control_plane_url="https://control.example",
+            sandbox_auth_token="token",
+            user_env_vars={DOCKER_ENABLED_ENV_VAR: "false"},
+            settings=dict(DOCKER_SETTINGS),
+        )
+    else:
+        handle = await manager.create_sandbox(
+            _docker_config(repo_image_id="repo-image-1" if image_source == "repository" else None)
+        )
+
+    kwargs = captured["kwargs"]
+    assert kwargs["image"] is (docker_image if image_source == "base" else artifact)
+    assert kwargs["experimental_options"] == {"vm_runtime": True}
+    assert kwargs["cpu"] == 2.0
+    assert kwargs["memory"] == 4096
+    assert kwargs["name"] == docker_allocation_name("session-1", "sandbox-acme-repo-1700000000000")
+    assert kwargs["tags"] == docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")
+    # The trusted signal wins over any user-supplied value.
+    assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == "true"
+    assert handle.docker_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_docker_launch_without_a_provisioned_image_never_uses_the_default(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    monkeypatch.setattr("src.sandbox.docker_launch.docker_image", None)
+
+    with pytest.raises(DockerImageUnavailableError):
+        await manager.create_sandbox(_docker_config())
+
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
+async def test_malformed_docker_setting_fails_before_any_launch(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+
+    with pytest.raises(InvalidDockerSettingsError):
+        await manager.create_sandbox(_docker_config(settings={"dockerEnabled": "true"}))
+
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
+async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    tags = docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")
+    existing = SimpleNamespace(object_id="modal-existing", get_tags=AsyncMock(return_value=tags))
+    existing.get_tags.aio = existing.get_tags
+    from_name = AsyncMock(return_value=existing)
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
+    )
+
+    handle = await manager.create_sandbox(_docker_config())
+
+    assert "kwargs" not in captured
+    assert handle.modal_object_id == "modal-existing"
+    from_name.assert_awaited_once_with(
+        "open-inspect", docker_allocation_name("session-1", "sandbox-acme-repo-1700000000000")
+    )
+
+
+@pytest.mark.asyncio
+async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    foreign = SimpleNamespace(
+        object_id="modal-foreign",
+        get_tags=AsyncMock(return_value={"openinspect_kind": "session"}),
+    )
+    foreign.get_tags.aio = foreign.get_tags
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=foreign)),
+    )
+
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await manager.create_sandbox(_docker_config())
+
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
+async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    prior_tags = docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999")
+    prior = SimpleNamespace(
+        object_id="modal-prior",
+        get_tags=AsyncMock(return_value=prior_tags),
+        terminate=AsyncMock(),
+    )
+    prior.get_tags.aio = prior.get_tags
+    prior.terminate.aio = prior.terminate
+    prior_name = docker_allocation_name("session-1", "sandbox-acme-repo-1699999999999")
+
+    async def from_name(_app, name):
+        if name == prior_name:
+            return prior
+        _not_found()
+
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
+    )
+
+    await manager.create_sandbox(
+        _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
+    )
+
+    prior.terminate.assert_awaited_once()
+    assert captured["kwargs"]["name"] == docker_allocation_name(
+        "session-1", "sandbox-acme-repo-1700000000000"
+    )
+
+    # A prior allocation with foreign tags is left alone.
+    prior.terminate.reset_mock()
+    prior.get_tags = AsyncMock(return_value={"openinspect_kind": "other"})
+    prior.get_tags.aio = prior.get_tags
+    await manager.create_sandbox(
+        _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
+    )
+    prior.terminate.assert_not_awaited()

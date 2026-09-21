@@ -32,7 +32,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from .constants import DOCKER_ENABLED_ENV_VAR, IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
 from .log_config import StructuredLogger, get_logger
 from .repo_image_callback import (
     BUILD_ID_ENV,
@@ -101,6 +101,8 @@ RESERVED_CONTEXT_ENV_KEYS: frozenset[str] = frozenset(
         "VCS_HOST",
         "VCS_CLONE_USERNAME",
         VCS_CLONE_TOKEN_ENV,
+        # Trusted runtime signal (provider-owned).
+        DOCKER_ENABLED_ENV_VAR,
     }
 )
 

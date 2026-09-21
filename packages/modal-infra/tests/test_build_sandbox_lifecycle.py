@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from sandbox_runtime.constants import (
+    DOCKER_ENABLED_ENV_VAR,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+)
 from sandbox_runtime.modal_image_build_start import MODAL_SANDBOX_ID_ENV
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
@@ -150,7 +153,7 @@ def test_reserved_user_env_scrub_matches_manifest():
     python_reserved = set(RESERVED_USER_ENV_KEYS)
 
     assert python_reserved == callback_env_values | set(manifest["reserved_only_modal"])
-    assert set(manifest["reserved_only_modal"]) == {MODAL_SANDBOX_ID_ENV}
+    assert set(manifest["reserved_only_modal"]) == {MODAL_SANDBOX_ID_ENV, DOCKER_ENABLED_ENV_VAR}
     # The TS-only extras never enter the Python scrub set.
     assert set(manifest["reserved_only_control_plane"]) & python_reserved == set()
     assert IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR in manifest["reserved_only_control_plane"]
@@ -370,3 +373,40 @@ async def test_terminate_build_sandbox_treats_provider_not_found_as_success(monk
     )
 
     sandbox.terminate.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("docker_enabled", [False, True])
+async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
+    monkeypatch, docker_enabled
+):
+    sandbox = SimpleNamespace(object_id="modal-session-1")
+    create = _async_method(sandbox)
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+    default_image = object()
+    docker_image = object()
+    monkeypatch.setattr("src.sandbox.build_session.base_image", default_image)
+    monkeypatch.setattr("src.sandbox.docker_launch.docker_image", docker_image)
+
+    await ModalBuildSessionService().create(
+        build_id="build-1",
+        scope_kind="repo",
+        scope_id="acme/repo",
+        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        callback_url="https://cp.test/image-builds/build-complete",
+        failure_callback_url="https://cp.test/image-builds/build-failed",
+        user_env_vars={DOCKER_ENABLED_ENV_VAR: "true"},
+        sandbox_settings=(
+            {"dockerEnabled": True, "cpuCores": 2, "memoryMib": 4096} if docker_enabled else None
+        ),
+    )
+
+    kwargs = create.aio.await_args.kwargs
+    assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == ("true" if docker_enabled else "false")
+    if docker_enabled:
+        assert kwargs["image"] is docker_image
+        assert kwargs["experimental_options"] == {"vm_runtime": True}
+        assert (kwargs["cpu"], kwargs["memory"]) == (2.0, 4096)
+    else:
+        assert kwargs["image"] is default_image
+        assert "experimental_options" not in kwargs

@@ -36,6 +36,7 @@ from .app import (
 )
 from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
+from .sandbox.docker_launch import DockerImageUnavailableError, InvalidDockerSettingsError
 
 configure_logging()
 log = get_logger("web_api")
@@ -76,6 +77,7 @@ class CreateBuildSandboxRequest(_ModalRequestModel):
     user_env_vars: dict[str, str] | None = None
     build_execution_timeout_seconds: int | None = None
     provider_session_timeout_seconds: int | None = None
+    sandbox_settings: dict[str, Any] | None = None
 
 
 class StartBuildSandboxRequest(_ModalRequestModel):
@@ -136,6 +138,7 @@ class CreateSandboxRequest(_RepositoryContextModel):
     vnc_enabled: bool | None = None
     agent_slack_notify_enabled: bool = False
     sandbox_settings: dict[str, Any] | None = None
+    retire_sandbox_id: str | None = None
 
 
 class RestoreSessionConfigRequest(_RepositoryContextModel):
@@ -168,6 +171,7 @@ class RestoreSandboxRequest(_ModalRequestModel):
     vnc_enabled: bool | None = None
     agent_slack_notify_enabled: bool = False
     sandbox_settings: dict[str, Any] | None = None
+    retire_sandbox_id: str | None = None
 
 
 @dataclass
@@ -208,6 +212,16 @@ async def _execute_endpoint(
         execution.http_status = e.status_code
         execution.outcome = "error"
         raise
+    except InvalidDockerSettingsError as e:
+        execution.http_status = 400
+        execution.outcome = "error"
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except DockerImageUnavailableError as e:
+        # Not provisioned on this deployment: a permanent, actionable failure
+        # for the request, never a reason to launch the default sandbox.
+        execution.http_status = 501
+        execution.outcome = "error"
+        raise HTTPException(status_code=501, detail="docker_not_available") from e
     except Exception as e:
         execution.http_status = 500
         execution.outcome = "error"
@@ -434,6 +448,7 @@ async def api_create_sandbox(
                 if parsed_request.timeout_seconds is not None
                 else DEFAULT_SANDBOX_TIMEOUT_SECONDS
             ),
+            retire_sandbox_id=parsed_request.retire_sandbox_id or None,
         )
 
         try:
@@ -454,6 +469,7 @@ async def api_create_sandbox(
                 "vnc_password": handle.vnc_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
+                "docker_enabled": handle.docker_enabled,
             },
         }
 
@@ -702,6 +718,7 @@ async def api_restore_sandbox(
             ),
             agent_slack_notify_enabled=parsed_request.agent_slack_notify_enabled,
             settings=parsed_request.sandbox_settings or None,
+            retire_sandbox_id=parsed_request.retire_sandbox_id or None,
         )
 
         return {
@@ -716,6 +733,7 @@ async def api_restore_sandbox(
                 "vnc_password": handle.vnc_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
+                "docker_enabled": handle.docker_enabled,
             },
         }
 
@@ -790,6 +808,7 @@ async def api_create_build_sandbox(
             user_env_vars=parsed_request.user_env_vars or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,
+            sandbox_settings=parsed_request.sandbox_settings or None,
         )
         execution.log_fields["sandbox_id"] = provider_session_id
         return {

@@ -21,6 +21,7 @@ from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    DOCKER_ENABLED_ENV_VAR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     NOVNC_PORT,
     NOVNC_PORT_ENV_VAR,
@@ -37,7 +38,16 @@ from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
 from ..app import app, llm_secrets
+from ..app_config import APP_NAME
 from ..images.base import base_image
+from .docker_launch import (
+    docker_allocation_name,
+    docker_allocation_tags,
+    docker_base_image,
+    docker_launch_kwargs,
+    docker_runtime_env,
+    parse_docker_launch,
+)
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
@@ -55,6 +65,7 @@ _RESERVED_LAUNCH_ENV_VARS = {
     "SESSION_CONFIG",
     VNC_PASSWORD_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
+    DOCKER_ENABLED_ENV_VAR,
 }
 
 
@@ -68,6 +79,17 @@ def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
     if has_owner != has_name:
         raise ValueError("repo_owner and repo_name must be provided together")
     return has_owner
+
+
+def _session_identity(session_config: SessionConfig | dict[str, Any] | None) -> str:
+    """The control-plane session id carried in the launch's session config."""
+    if isinstance(session_config, dict):
+        session_id = session_config.get("session_id")
+    elif session_config is not None:
+        session_id = session_config.session_id
+    else:
+        session_id = None
+    return session_id if isinstance(session_id, str) else ""
 
 
 def _resource_kwargs(settings: dict[str, Any] | None) -> dict:
@@ -115,6 +137,10 @@ class SandboxConfig:
     settings: dict[str, Any] | None = (
         None  # Sandbox settings (tunnelPorts, etc.) from control plane
     )
+    # A previous generation's sandbox id whose Docker VM may still be running
+    # after an ambiguous create (the control plane lost the response). Only
+    # Docker launches act on it; the named allocation is retired if owned.
+    retire_sandbox_id: str | None = None
 
 
 @dataclass
@@ -133,6 +159,7 @@ class SandboxHandle:
     vnc_password: str | None = None
     ttyd_url: str | None = None  # proxy tunnel URL (not ttyd directly)
     tunnel_urls: dict[int, str] | None = None  # port -> tunnel URL mapping for extra ports
+    docker_enabled: bool = False  # Launched on the Docker-capable VM runtime
 
 
 @dataclass(frozen=True)
@@ -368,6 +395,7 @@ class SandboxManager:
             )
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
+        docker = parse_docker_launch(config.settings)
         env_vars = {
             key: value
             for key, value in (config.user_env_vars or {}).items()
@@ -382,6 +410,7 @@ class SandboxManager:
                 SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
                 "REPO_OWNER": config.repo_owner or "",
                 "REPO_NAME": config.repo_name or "",
+                **docker_runtime_env(docker),
             }
         )
 
@@ -389,7 +418,7 @@ class SandboxManager:
         include_github_cli_aliases = False
         snapshot_id: str | None = None
         if isinstance(spec.source, _BaseImageSource):
-            image = base_image
+            image = docker_base_image() if docker.enabled else base_image
         elif isinstance(spec.source, _RepositoryImageSource):
             try:
                 image = modal.Image.from_id(spec.source.image_id)
@@ -461,17 +490,26 @@ class SandboxManager:
             "workdir": "/workspace",
             "env": env_vars,
             **_resource_kwargs(config.settings),
+            **docker_launch_kwargs(docker),
         }
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
         try:
-            sandbox = await modal.Sandbox.create.aio(
-                "python",
-                "-m",
-                "sandbox_runtime.entrypoint",
-                **create_kwargs,
-            )
+            if docker.enabled:
+                sandbox = await self._launch_docker_sandbox(
+                    session_id=_session_identity(config.session_config),
+                    sandbox_id=sandbox_id,
+                    retire_sandbox_id=config.retire_sandbox_id,
+                    create_kwargs=create_kwargs,
+                )
+            else:
+                sandbox = await modal.Sandbox.create.aio(
+                    "python",
+                    "-m",
+                    "sandbox_runtime.entrypoint",
+                    **create_kwargs,
+                )
         except modal.exception.NotFoundError as e:
             if isinstance(spec.source, _RepositoryImageSource):
                 raise RepositoryImageUnavailableError("repository image is unavailable") from e
@@ -507,6 +545,77 @@ class SandboxManager:
             vnc_password=vnc_password,
             ttyd_url=ttyd_url,
             tunnel_urls=extra_tunnel_urls,
+            docker_enabled=docker.enabled,
+        )
+
+    async def _launch_docker_sandbox(
+        self,
+        *,
+        session_id: str,
+        sandbox_id: str,
+        retire_sandbox_id: str | None,
+        create_kwargs: dict[str, Any],
+    ) -> modal.Sandbox:
+        """Create a Docker VM under a deterministic name, adopting an existing one.
+
+        VM creation can outlive the control plane's HTTP request. Naming each
+        generation's allocation lets a retried create adopt the sandbox Modal
+        already made instead of starting a second VM, and lets the next
+        generation retire a predecessor whose object id was never learned.
+        """
+        if retire_sandbox_id:
+            await self._retire_docker_allocation(session_id, retire_sandbox_id)
+        name = docker_allocation_name(session_id, sandbox_id)
+        tags = docker_allocation_tags(session_id, sandbox_id)
+        existing = await self._find_owned_docker_allocation(name, tags)
+        if existing is None:
+            try:
+                return await modal.Sandbox.create.aio(
+                    "python",
+                    "-m",
+                    "sandbox_runtime.entrypoint",
+                    name=name,
+                    tags=tags,
+                    **create_kwargs,
+                )
+            except modal.exception.AlreadyExistsError:
+                existing = await self._find_owned_docker_allocation(name, tags)
+                if existing is None:
+                    raise
+        log.info(
+            "sandbox.docker_allocation_adopted",
+            sandbox_id=sandbox_id,
+            modal_object_id=existing.object_id,
+        )
+        return existing
+
+    @staticmethod
+    async def _find_owned_docker_allocation(
+        name: str, tags: dict[str, str]
+    ) -> modal.Sandbox | None:
+        try:
+            sandbox = await modal.Sandbox.from_name.aio(APP_NAME, name)
+        except modal.exception.NotFoundError:
+            return None
+        if await sandbox.get_tags.aio() != tags:
+            raise RuntimeError("Docker sandbox allocation ownership mismatch")
+        return sandbox
+
+    async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:
+        """Terminate a prior generation's named VM, only when its ownership tags match."""
+        name = docker_allocation_name(session_id, sandbox_id)
+        try:
+            sandbox = await modal.Sandbox.from_name.aio(APP_NAME, name)
+        except modal.exception.NotFoundError:
+            return
+        if await sandbox.get_tags.aio() != docker_allocation_tags(session_id, sandbox_id):
+            log.warn("sandbox.docker_allocation_retire_mismatch", sandbox_id=sandbox_id)
+            return
+        await sandbox.terminate.aio()
+        log.info(
+            "sandbox.docker_allocation_retired",
+            sandbox_id=sandbox_id,
+            modal_object_id=sandbox.object_id,
         )
 
     async def create_sandbox(
@@ -648,6 +757,7 @@ class SandboxManager:
         vnc_enabled: bool = DEFAULT_VNC_ENABLED,
         agent_slack_notify_enabled: bool = False,
         settings: dict[str, Any] | None = None,
+        retire_sandbox_id: str | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -698,6 +808,7 @@ class SandboxManager:
                     code_server_enabled=code_server_enabled,
                     vnc_enabled=vnc_enabled,
                     agent_slack_notify_enabled=agent_slack_notify_enabled,
+                    retire_sandbox_id=retire_sandbox_id,
                     settings=settings,
                 ),
                 source=_SnapshotImageSource(
