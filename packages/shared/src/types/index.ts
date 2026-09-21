@@ -136,6 +136,9 @@ export {
   sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
 } from "./server-messages";
+
+export { sandboxShutdownSchema } from "./sandbox-shutdown";
+export type { SandboxShutdownState } from "./sandbox-shutdown";
 export type {
   ParticipantPresence,
   PromptQueueItem,

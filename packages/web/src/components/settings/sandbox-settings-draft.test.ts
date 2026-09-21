@@ -19,7 +19,7 @@ const baseDefaults: SandboxSettings = {
   vncPort: 6081,
   terminalPort: 7682,
   buildTimeoutSeconds: 1200,
-  sandboxTimeoutMs: 123_000,
+  sandboxTimeoutMs: 1_203_000,
   maxConcurrentChildSessions: 3,
   maxTotalChildSessions: 12,
   cpuCores: 0.5,
@@ -41,7 +41,8 @@ describe("resolveSandboxSettingsDraft", () => {
         vncPort: "6081",
         terminalPort: "7682",
         buildTimeoutSeconds: "1200",
-        sandboxTimeoutMinutes: "2.05",
+        sandboxTimeoutMinutes: "20.05",
+        finalSnapshotBufferMinutes: "",
         maxConcurrentChildSessions: "3",
         maxTotalChildSessions: "12",
         cpuCores: "0.5",
@@ -53,6 +54,112 @@ describe("resolveSandboxSettingsDraft", () => {
     expect(resolve({ terminalEnabled: false }).result).toEqual({
       settings: { terminalEnabled: false },
     });
+  });
+
+  it("validates the final snapshot buffer against its minimum and session timeout", () => {
+    expect(resolve({ finalSnapshotBufferMinutes: "4" }).result).toEqual({
+      error: "Final snapshot buffer must be at least 5 minutes, in one-second increments.",
+    });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "20", finalSnapshotBufferMinutes: "5" },
+      }).result
+    ).toMatchObject({
+      settings: { sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 300_000 },
+    });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "20", finalSnapshotBufferMinutes: "10" },
+      }).result
+    ).toMatchObject({
+      settings: { sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 },
+    });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "10", finalSnapshotBufferMinutes: "10" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "5", finalSnapshotBufferMinutes: "" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        draft: { sandboxTimeoutMinutes: "10", finalSnapshotBufferMinutes: "" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        ownSettings: { sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 300_000 },
+        draft: { finalSnapshotBufferMinutes: "" },
+      }).result
+    ).toMatchObject({ settings: { sandboxTimeoutMs: 1_200_000 } });
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: true,
+        ownSettings: { sandboxTimeoutMs: 360_000, finalSnapshotBufferMs: 300_000 },
+        draft: { finalSnapshotBufferMinutes: "" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+  });
+
+  it("rejects unrelated saves when configured timing is invalid against the default buffer", () => {
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: false,
+        ownSettings: { sandboxTimeoutMs: 300_000 },
+        baseDefaults: { terminalEnabled: true },
+        draft: { terminalEnabled: false },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+  });
+
+  it("rejects an edited timeout against the default final snapshot buffer", () => {
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: false,
+        ownSettings: { sandboxTimeoutMs: 300_000 },
+        draft: { sandboxTimeoutMinutes: "6" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+  });
+
+  it("validates an edited timeout against an inherited explicit buffer", () => {
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: false,
+        baseDefaults: { sandboxTimeoutMs: 1_200_000, finalSnapshotBufferMs: 600_000 },
+        draft: { sandboxTimeoutMinutes: "10" },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+  });
+
+  it("continues to reject untouched explicit invalid timing pairs", () => {
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: false,
+        ownSettings: { sandboxTimeoutMs: 600_000, finalSnapshotBufferMs: 600_000 },
+        draft: { terminalEnabled: true },
+      }).result
+    ).toEqual({ error: "Final snapshot buffer must be shorter than the session timeout." });
+  });
+
+  it("ignores timing edits hidden by provider policy", () => {
+    expect(
+      resolveSandboxSettingsDraft({
+        isGlobal: false,
+        ownSettings: { sandboxTimeoutMs: 300_000 },
+        draft: { sandboxTimeoutMinutes: "6", terminalEnabled: true },
+        hiddenFields: new Set(["sandboxTimeoutMs"]),
+      }).result
+    ).toEqual({ settings: { sandboxTimeoutMs: 300_000, terminalEnabled: true } });
   });
 
   it("preserves existing overrides, including false, empty arrays and resource nulls", () => {
@@ -139,7 +246,7 @@ describe("resolveSandboxSettingsDraft", () => {
         vncPort: "9001",
         terminalPort: "9002",
         buildTimeoutSeconds: " 60 ",
-        sandboxTimeoutMinutes: " 2.05 ",
+        sandboxTimeoutMinutes: " 20.05 ",
         maxConcurrentChildSessions: "02",
         maxTotalChildSessions: "10",
         maxSessionCostUsd: " 2.50 ",
@@ -153,7 +260,7 @@ describe("resolveSandboxSettingsDraft", () => {
         vncPort: 9001,
         terminalPort: 9002,
         buildTimeoutSeconds: 60,
-        sandboxTimeoutMs: 123_000,
+        sandboxTimeoutMs: 1_203_000,
         maxConcurrentChildSessions: 2,
         maxTotalChildSessions: 10,
         maxSessionCostUsd: 2.5,
@@ -224,7 +331,7 @@ describe("resolveSandboxSettingsDraft", () => {
         vncPort: "6081 ",
         terminalPort: "7682 ",
         buildTimeoutSeconds: "1200 ",
-        sandboxTimeoutMinutes: "2.05 ",
+        sandboxTimeoutMinutes: "20.05 ",
         tunnelPorts: ["03000", " 5173 ", "3000", ""],
       }).hasChanges
     ).toBe(false);
@@ -312,7 +419,7 @@ describe("resolveSandboxSettingsDraft", () => {
     }
   );
 
-  it.each([1000, 31_000, 123_000, 246_000])(
+  it.each([1_201_000, 1_231_000, 1_323_000, 1_446_000])(
     "round-trips a %i ms timeout through the existing helper",
     (sandboxTimeoutMs) => {
       const ownSettings = { sandboxTimeoutMs };

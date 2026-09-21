@@ -2,7 +2,12 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
 import type { SnapshotResult } from "../provider";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
-import { createAlarmFixture, createMockSandbox, createMockProvider } from "./test-helpers";
+import {
+  createAlarmFixture,
+  createMockSandbox,
+  createMockProvider,
+  noLifetime,
+} from "./test-helpers";
 
 describe("heartbeat alarm effects", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -37,6 +42,7 @@ describe("heartbeat alarm effects", () => {
           providerObjectId: sandbox.modal_object_id,
           sessionId: "test-session",
           reason: "heartbeat_timeout",
+          intent: resumable ? "preserve" : "destroy",
           signal: undefined,
         });
       } else {
@@ -129,6 +135,12 @@ describe("heartbeat alarm effects", () => {
       await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
 
       expect(stopSandbox).toHaveBeenCalledOnce();
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "heartbeat_timeout",
+          intent: resumable ? "preserve" : "destroy",
+        })
+      );
       expect(stopLog).toHaveBeenCalledWith(
         expect.stringContaining('"error":"provider stop unavailable"')
       );
@@ -168,11 +180,16 @@ describe("heartbeat alarm effects", () => {
       };
       vi.spyOn(h.provider, "createSandbox").mockImplementation(async (config) => {
         await checkStartup();
-        return { sandboxId: config.sandboxId, status: "connecting", createdAt: Date.now() };
+        return {
+          sandboxId: config.sandboxId,
+          status: "connecting",
+          createdAt: Date.now(),
+          lifetime: noLifetime(),
+        };
       });
       vi.spyOn(h.provider, "restoreFromSnapshot").mockImplementation(async (config) => {
         await checkStartup();
-        return { success: true, sandboxId: config.sandboxId };
+        return { success: true, sandboxId: config.sandboxId, lifetime: noLifetime() };
       });
 
       await h.manager.spawnSandbox();

@@ -107,6 +107,7 @@ describe("boot budget alarm effects", () => {
         providerObjectId: sandbox.modal_object_id,
         sessionId: "test-session",
         reason: "boot_budget_exceeded",
+        intent: "destroy",
         signal: undefined,
       });
       expect(h.wsManager.sendToSandbox).toHaveBeenCalledExactlyOnceWith({ type: "shutdown" });

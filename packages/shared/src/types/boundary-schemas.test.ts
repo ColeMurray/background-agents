@@ -860,6 +860,33 @@ describe("boundary schemas", () => {
   });
 
   describe("clientMessageSchema", () => {
+    it("accepts only supported shutdown recovery actions", () => {
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "retry" }).success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "restore_saved" })
+          .success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({ type: "recover_preservation", action: "resume" }).success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "recover_preservation",
+          action: "retry",
+          clientRequestId: "recovery-1",
+        }).success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "recover_preservation",
+          action: "retry",
+          clientRequestId: "",
+        }).success
+      ).toBe(false);
+    });
+
     it("parses a valid prompt with attachments and request correlation", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",

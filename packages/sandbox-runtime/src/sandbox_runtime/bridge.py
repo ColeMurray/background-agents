@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -37,6 +38,7 @@ import websockets
 from websockets import ClientConnection, State
 from websockets.exceptions import InvalidStatus
 
+from .activity_supervisor import ActivitySupervisor
 from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
@@ -63,8 +65,9 @@ from .harness import (
 )
 from .log_config import configure_logging, get_logger
 from .prompt_budgets import resolve_prompt_limits
-from .push_operation import PushOperation
+from .push_operation import PushOperation, PushRejected, PushRequest
 from .repo_config import load_repo_manifest
+from .shutdown_preparation import ShutdownPreparationCoordinator
 from .types import GitUser
 
 if TYPE_CHECKING:
@@ -73,6 +76,8 @@ if TYPE_CHECKING:
     from .attachment_processor import HydratedSessionAttachment
 
 configure_logging()
+
+MAX_SAFE_GENERATION_CREATED_AT = 9_007_199_254_740_991
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
@@ -205,8 +210,7 @@ class AgentBridge:
                 opencode_port=opencode_port,
             )
         )
-        # Track the current prompt task so _handle_stop can cancel it
-        self._current_prompt_task: asyncio.Task[None] | None = None
+        self.shutdown_preparation = ShutdownPreparationCoordinator()
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -233,6 +237,12 @@ class AgentBridge:
             send_event=lambda event: self._send_event(event),
             end_run=self._end_run,
             record_fatal_error=self._record_fatal_error,
+        )
+        self.activity = ActivitySupervisor(
+            send_event=lambda event: self._send_event(event),
+            prompt_finished=lambda: self.diff_refresh.prompt_finished(),
+            refresh_diff=lambda message_id: self.diff_refresh.request(message_id),
+            log=self.log,
         )
 
         self._connected_at_monotonic: float | None = None
@@ -272,6 +282,7 @@ class AgentBridge:
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": harness.session_id,
             "harness": harness.id.value,
+            "preservationProtocolVersion": 1,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -363,11 +374,7 @@ class AgentBridge:
 
         finally:
             await self.boot_attach.stop()
-            # Cancel any in-flight prompt task before closing resources
-            if self._current_prompt_task and not self._current_prompt_task.done():
-                self._current_prompt_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await self._current_prompt_task
+            await self.activity.shutdown()
             # Cleanup failures are logged, never raised: an exception here
             # would replace the one that ended the run, and a deterministic
             # startup failure has to reach main() so the supervisor sees its
@@ -600,42 +607,18 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
+            if self.shutdown_preparation.fenced:
+                await self._send_event(
+                    {
+                        "type": "execution_complete",
+                        "messageId": message_id,
+                        "success": False,
+                        "error": "sandbox_lifetime_expiring",
+                    }
+                )
+                return None
             self.diff_refresh.prompt_started()
-            task = asyncio.create_task(self._handle_prompt(cmd))
-            self._current_prompt_task = task
-
-            def handle_task_exception(t: asyncio.Task[None], mid: str = message_id) -> None:
-                # Release the diff worker's idle gate before any refresh request
-                # below so the refresh can start immediately.
-                self.diff_refresh.prompt_finished()
-                if self._current_prompt_task is t:
-                    self._current_prompt_task = None
-                if t.cancelled():
-                    asyncio.create_task(
-                        self._send_terminal_event_and_refresh(
-                            {
-                                "type": "execution_complete",
-                                "messageId": mid,
-                                "success": False,
-                                "error": "Task was cancelled",
-                            }
-                        )
-                    )
-                elif exc := t.exception():
-                    asyncio.create_task(
-                        self._send_terminal_event_and_refresh(
-                            {
-                                "type": "execution_complete",
-                                "messageId": mid,
-                                "success": False,
-                                "error": str(exc),
-                            }
-                        )
-                    )
-                else:
-                    self.diff_refresh.request(mid)
-
-            task.add_done_callback(handle_task_exception)
+            self.activity.start_prompt(message_id, lambda: self._handle_prompt(cmd))
             # Don't return the task — prompt tasks must survive WS disconnects.
             # Returning it would add it to background_tasks, which gets cancelled
             # in the _connect_and_run finally block on WS close.
@@ -644,14 +627,24 @@ class AgentBridge:
             await self._handle_stop()
         elif cmd_type == "snapshot":
             await self._handle_snapshot()
+        elif cmd_type == "sandbox_generation":
+            await self._handle_sandbox_generation(cmd)
+        elif cmd_type == "prepare_preservation":
+            await self._handle_prepare_shutdown(cmd)
         elif cmd_type == "shutdown":
             await self._handle_shutdown()
         elif cmd_type == "git_sync_complete":
             self.git_sync_complete.set()
         elif cmd_type == "push":
-            await self._handle_push(cmd)
+            if self.shutdown_preparation.fenced:
+                await self._refuse_push_for_shutdown(cmd)
+            else:
+                self._start_push(cmd)
         elif cmd_type == "refresh_diff":
-            self.diff_refresh.request(None)
+            if self.shutdown_preparation.fenced:
+                self.log.warn("bridge.command_refused_for_preservation", cmd_type=cmd_type)
+            else:
+                self.diff_refresh.request(None)
         elif cmd_type == "ack":
             ack_id = cmd.get("ackId")
             if ack_id and self.event_forwarder.acknowledge(ack_id):
@@ -660,12 +653,8 @@ class AgentBridge:
             self.log.debug("bridge.unknown_command", cmd_type=cmd_type)
         return None
 
-    async def _send_terminal_event_and_refresh(self, event: dict[str, Any]) -> None:
-        await self._send_event(event)
-        self.diff_refresh.request(str(event.get("messageId") or "") or None)
-
-    async def _handle_prompt(self, cmd: dict[str, Any]) -> None:
-        """Handle prompt command - run the turn through the harness and terminalise it."""
+    async def _handle_prompt(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Run a harness turn and return its terminal-event candidate."""
         message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
         content = cmd.get("content", "")
         model = cmd.get("model")
@@ -774,15 +763,13 @@ class AgentBridge:
                 duration_ms=duration_ms,
             )
 
-        await self._send_event(
-            {
-                "type": "execution_complete",
-                "messageId": message_id,
-                "success": not had_error,
-                **({"error": error_message} if error_message else {}),
-                **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
-            }
-        )
+        return {
+            "type": "execution_complete",
+            "messageId": message_id,
+            "success": not had_error,
+            **({"error": error_message} if error_message else {}),
+            **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
+        }
 
     async def _prepare_turn(
         self,
@@ -800,6 +787,8 @@ class AgentBridge:
         running turn.
         """
         try:
+            if self.shutdown_preparation.fenced:
+                raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 await self.boot_attach.wait_until_ready(message_id, deadline)
                 harness = self._require_harness()
@@ -823,6 +812,8 @@ class AgentBridge:
             if self.boot_attach.booting:
                 raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
             raise RuntimeError(f"prompt could not start within {budget} s") from None
+        if self.shutdown_preparation.fenced:
+            raise RuntimeError("sandbox_lifetime_expiring")
         return harness, attachments
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
@@ -836,12 +827,69 @@ class AgentBridge:
     async def _handle_stop(self) -> None:
         """Handle stop command - cancel prompt task and ask the harness to abort."""
         self.log.info("bridge.stop")
-        task = self._current_prompt_task
-        if task and not task.done():
-            task.cancel()
+        self.activity.interrupt_prompt("Task was cancelled")
         # Best-effort: also tell the agent to stop (saves LLM compute cost)
         if self.harness is not None:
             await self.harness.abort()
+
+    @staticmethod
+    def _parse_generation(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        sandbox_id = value.get("sandboxId")
+        created_at = value.get("createdAt")
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            return None
+        if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
+            return None
+        if isinstance(created_at, int):
+            valid_created_at = 0 < created_at <= MAX_SAFE_GENERATION_CREATED_AT
+        else:
+            valid_created_at = (
+                math.isfinite(created_at)
+                and created_at.is_integer()
+                and 0 < created_at <= MAX_SAFE_GENERATION_CREATED_AT
+            )
+        if not valid_created_at:
+            return None
+        return {"sandboxId": sandbox_id, "createdAt": int(created_at)}
+
+    async def _handle_sandbox_generation(self, cmd: dict[str, Any]) -> None:
+        """Establish or advance the authenticated retained-runtime generation."""
+        generation = self._parse_generation(cmd.get("generation"))
+        if generation is None or generation["sandboxId"] != self.sandbox_id:
+            self.log.warn("bridge.sandbox_generation_invalid")
+            return
+        await self._send_event(self.shutdown_preparation.establish_generation(generation))
+
+    async def _handle_prepare_shutdown(self, cmd: dict[str, Any]) -> None:
+        """Fence admission and confirm the active harness execution stopped."""
+        generation = self._parse_generation(cmd.get("generation"))
+        if generation is None:
+            self.log.warn("bridge.preservation_generation_invalid")
+            return
+
+        async def contain_activity(deadline: float) -> bool:
+            harness = self._require_harness()
+            return await self.activity.drain_for_shutdown(
+                deadline=deadline,
+                prompt_error="sandbox_lifetime_expiring",
+                push_cancellation_event=self._shutdown_push_error_event,
+                stop_execution=harness.stop_execution,
+            )
+
+        async def persist_session() -> None:
+            await self._persist_rotated_session_id(self._require_harness(), strict=True)
+
+        result = await self.shutdown_preparation.prepare(
+            cmd,
+            parsed_generation=generation,
+            contain_activity=contain_activity,
+            persist_session=persist_session,
+            log=self.log,
+        )
+        if result is not None:
+            await self._send_event(result)
 
     async def _handle_snapshot(self) -> None:
         """Handle snapshot command - prepare for snapshot."""
@@ -856,27 +904,49 @@ class AgentBridge:
     async def _handle_shutdown(self) -> None:
         """Handle shutdown command - graceful shutdown."""
         self.log.info("bridge.shutdown_requested")
-        if self._current_prompt_task and not self._current_prompt_task.done():
-            self._current_prompt_task.cancel()
+        await self.boot_attach.stop()
+        await self.activity.shutdown()
         await self.boot_attach.end_run("shutdown")
 
-    async def _handle_push(self, cmd: dict[str, Any]) -> None:
-        """Execute locally, then emit exactly one timestamped result event."""
+    async def _refuse_push_for_shutdown(self, cmd: dict[str, Any]) -> None:
+        await self._send_event(self._shutdown_push_error_event(cmd))
+
+    def _shutdown_push_error_event(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request: PushRequest | None = PushRequest.from_push_spec(cmd.get("pushSpec"))
+        except PushRejected as rejected:
+            request = rejected.request
+        return {
+            "type": "push_error",
+            "error": "Push failed — the sandbox is shutting down.",
+            "branchName": request.branch_name if request is not None else "",
+            **(request.repo_fields() if request is not None else {}),
+            "timestamp": time.time(),
+        }
+
+    def _start_push(self, cmd: dict[str, Any]) -> None:
+        async def execute() -> dict[str, Any]:
+            if self.shutdown_preparation.fenced:
+                return self._shutdown_push_error_event(cmd)
+            return await self._handle_push(cmd)
+
+        self.activity.start_push(cmd, execute)
+
+    async def _handle_push(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        """Execute a local push and return its timestamped result candidate."""
         result = await PushOperation(
             repo_path=self.repo_path,
             manifest_path=self.repo_manifest_path,
             logger=self.log,
         ).execute(cmd.get("pushSpec"))
-        await self._send_event(
-            {
-                "type": "push_error" if result.error is not None else "push_complete",
-                **({"error": result.error} if result.error is not None else {}),
-                # Even an empty branch resolves the control plane's pending push.
-                "branchName": result.request.branch_name,
-                **result.request.repo_fields(),
-                "timestamp": time.time(),
-            }
-        )
+        return {
+            "type": "push_error" if result.error is not None else "push_complete",
+            **({"error": result.error} if result.error is not None else {}),
+            # Even an empty branch resolves the control plane's pending push.
+            "branchName": result.request.branch_name,
+            **result.request.repo_fields(),
+            "timestamp": time.time(),
+        }
 
     async def _configure_git_identity(self, user: GitUser | None) -> None:
         """Refresh signing state and configure prompt-scoped author identity."""
@@ -914,17 +984,23 @@ class AgentBridge:
         if resumed:
             await self._save_session_id(harness)
 
-    async def _persist_rotated_session_id(self, harness: AgentHarness) -> None:
+    async def _persist_rotated_session_id(
+        self, harness: AgentHarness, *, strict: bool = False
+    ) -> None:
         """A conversation reset rotates the vendor id mid-connection; keep the file current."""
         try:
             persisted = self._read_persisted_session_id()
         except Exception as e:
             self.log.error("agent.session.load_error", exc=e)
+            if strict:
+                raise
             return
         if harness.session_id and harness.session_id != persisted:
-            await self._save_session_id(harness)
+            await self._save_session_id(harness, strict=strict)
 
-    async def _save_session_id(self, harness: AgentHarness | None = None) -> None:
+    async def _save_session_id(
+        self, harness: AgentHarness | None = None, *, strict: bool = False
+    ) -> None:
         """Persist the vendor session id so a snapshot restore can resume it."""
         harness = harness if harness is not None else self._require_harness()
         session_id = harness.session_id
@@ -933,6 +1009,8 @@ class AgentBridge:
                 self.session_id_file.write_text(session_id)
             except Exception as e:
                 self.log.error("agent.session.save_error", exc=e)
+                if strict:
+                    raise
 
     @staticmethod
     def _record_fatal_error(message: str) -> None:

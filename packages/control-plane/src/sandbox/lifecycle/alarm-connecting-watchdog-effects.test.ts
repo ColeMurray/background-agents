@@ -31,6 +31,7 @@ describe("connecting watchdog effects", () => {
         providerObjectId: sandbox.modal_object_id,
         sessionId: "test-session",
         reason: "connecting_timeout",
+        intent: "destroy",
         signal: undefined,
       });
       expect(vi.mocked(h.storage.updateSandboxStatus).mock.invocationCallOrder[0]).toBeLessThan(

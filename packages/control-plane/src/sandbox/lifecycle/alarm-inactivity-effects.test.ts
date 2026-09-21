@@ -76,6 +76,12 @@ describe("inactivity alarm effects", () => {
       await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
 
       expect(stopSandbox).toHaveBeenCalledOnce();
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "inactivity_timeout",
+          intent: resumable ? "preserve" : "destroy",
+        })
+      );
       expect(stopLog).toHaveBeenCalledWith(
         expect.stringContaining('"error":"provider stop unavailable"')
       );
@@ -125,6 +131,36 @@ describe("inactivity alarm effects", () => {
     expect(h.wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
   });
 
+  it("preserves a destructive-snapshot sandbox before inactivity destroys it", async () => {
+    const sandbox = createMockSandbox({
+      last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
+    });
+    const order: string[] = [];
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: {
+          snapshotStopsSandbox: true,
+          supportsExplicitStop: true,
+          supportsPersistentResume: false,
+        },
+        takeSnapshot: vi.fn(async () => {
+          order.push("snapshot");
+          return { success: true, imageId: "legacy-vercel-snapshot" };
+        }),
+        stopSandbox: vi.fn(async () => {
+          order.push("stop");
+          return { success: true };
+        }),
+      })
+    );
+
+    await h.manager.handleAlarm();
+
+    expect(order).toEqual(["snapshot", "stop"]);
+    expect(sandbox.snapshot_image_id).toBe("legacy-vercel-snapshot");
+  });
+
   it("stops resumable sandboxes without snapshotting, preserving code-server and VNC secrets", async () => {
     const sandbox = createMockSandbox({
       last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
@@ -153,6 +189,7 @@ describe("inactivity alarm effects", () => {
       expect.objectContaining({
         providerObjectId: sandbox.modal_object_id,
         reason: "inactivity_timeout",
+        intent: "preserve",
       })
     );
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("codeServer");

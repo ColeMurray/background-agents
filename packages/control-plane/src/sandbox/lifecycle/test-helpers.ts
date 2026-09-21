@@ -10,10 +10,14 @@ import {
   type AlarmScheduler,
   type IdGenerator,
   type SandboxLifecycleConfig,
+  type SandboxShutdownLifecycle,
 } from "./manager";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
+import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 import type {
   SandboxProvider,
+  SandboxLifetime,
   CreateSandboxConfig,
   CreateSandboxResult,
   RestoreConfig,
@@ -158,6 +162,24 @@ export function createMockStorage(
         return true;
       }
     ),
+    commitProviderStartup: vi.fn((generation, providerObjectId, allowFailedSelfHeal) => {
+      calls.push("commitProviderStartup");
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt ||
+        sandbox.fenced !== 0 ||
+        !(
+          ["spawning", "connecting", "ready"].includes(sandbox.status) ||
+          (allowFailedSelfHeal && sandbox.status === "failed")
+        )
+      ) {
+        return null;
+      }
+      if (providerObjectId !== null) sandbox.modal_object_id = providerObjectId;
+      if (sandbox.status === "spawning") sandbox.status = "connecting";
+      return sandbox.status;
+    }),
     updateSandboxForSpawn: vi.fn((data) => {
       calls.push("updateSandboxForSpawn");
       if (sandbox) {
@@ -320,6 +342,10 @@ export function createMockIdGenerator(): IdGenerator {
   };
 }
 
+export function noLifetime(): SandboxLifetime {
+  return { kind: "none", observedAtMs: Date.now() };
+}
+
 export function createMockProvider(
   overrides: Partial<{
     createSandbox: (config: CreateSandboxConfig) => Promise<CreateSandboxResult>;
@@ -345,12 +371,14 @@ export function createMockProvider(
         providerObjectId: "provider-obj-123",
         status: "connecting",
         createdAt: Date.now(),
+        lifetime: noLifetime(),
       })),
     restoreFromSnapshot:
       overrides.restoreFromSnapshot ||
       vi.fn(async (config: RestoreConfig) => ({
-        success: true,
+        success: true as const,
         sandboxId: config.sandboxId,
+        lifetime: noLifetime(),
       })),
     takeSnapshot:
       overrides.takeSnapshot ||
@@ -376,15 +404,77 @@ export function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+export function createUnmanagedShutdown() {
+  return {
+    reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
+    markRecoveryInvoked: vi.fn(),
+    recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
+    isHolding: vi.fn(() => false),
+    requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
+    captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
+      outcome: "saved",
+      imageId: "snapshot-img-123",
+      sourceStopped: false,
+    })),
+    startupDecision: vi.fn<SandboxShutdownLifecycle["startupDecision"]>(() => ({
+      kind: "normal",
+    })),
+    holdFailedRecovery: vi.fn(),
+    runtimeReady: vi.fn(),
+    generationReady: vi.fn(),
+    prepared: vi.fn(),
+    admissionDecision: vi.fn(() => "unmanaged" as const),
+    handleAlarm: vi.fn(async () => "continue" as const),
+    recover: vi.fn(async () => undefined),
+    snapshot: vi.fn(() => null),
+  } satisfies SandboxShutdownLifecycle;
+}
+
+export function createCheckpointShutdown(
+  provider: SandboxProvider,
+  storage: SandboxStorage & SessionContextReader,
+  messenger: SandboxBroadcaster,
+  onLifecycleChange: () => Promise<void> = async () => {}
+): SandboxShutdownLifecycle {
+  let state: ShutdownRecord | null = null;
+  const coordinator = new SandboxShutdownCoordinator({
+    store: {
+      read: () => (state ? structuredClone(state) : null),
+      write: (next: ShutdownRecord) => {
+        state = structuredClone(next);
+      },
+    },
+    provider,
+    sandbox: storage,
+    session: {
+      getSession: () => storage.getSession(),
+      transaction: <T>(operation: () => T): T => operation(),
+    },
+    messenger,
+    sockets: { getSandboxSocket: () => null },
+    alarm: createMockAlarmScheduler(),
+    background: { submit: vi.fn((task: () => Promise<void>) => void task()) },
+    onLifecycleChange: vi.fn(onLifecycleChange),
+    reconcileStatus: vi.fn(async () => {}),
+    retireAccess: vi.fn(),
+  } as never);
+  return {
+    ...createUnmanagedShutdown(),
+    captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+  };
+}
+
 export function createAlarmFixture(
   sandbox: ReturnType<typeof createMockSandbox> | null,
   provider = createMockProvider(),
-  clientCount = 0
+  clientCount = 0,
+  onLifecycleChange: () => Promise<void> = async () => {}
 ) {
   const storage = createMockStorage(createMockSession(), sandbox);
   const broadcaster = createMockBroadcaster();
   const wsManager = createMockWebSocketManager(false, clientCount);
   const alarmScheduler = createMockAlarmScheduler();
+  const shutdown = createCheckpointShutdown(provider, storage, broadcaster, onLifecycleChange);
   const manager = new SandboxLifecycleManager(
     provider,
     storage,
@@ -393,7 +483,8 @@ export function createAlarmFixture(
     wsManager,
     alarmScheduler,
     createMockIdGenerator(),
+    shutdown,
     createTestConfig()
   );
-  return { manager, storage, broadcaster, wsManager, alarmScheduler, provider };
+  return { manager, storage, broadcaster, wsManager, alarmScheduler, provider, shutdown };
 }

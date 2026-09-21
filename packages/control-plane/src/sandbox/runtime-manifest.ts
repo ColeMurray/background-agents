@@ -8,6 +8,8 @@ if (Number(parsedGeneration) !== runtimeManifest.generation) {
 export const SANDBOX_RUNTIME_VERSION = runtimeManifest.runtimeVersion;
 export const SANDBOX_RUNTIME_GENERATION = runtimeManifest.generation;
 export const MIN_COMPATIBLE_RUNTIME_GENERATION = runtimeManifest.minimumCompatibleGeneration;
+export const MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION =
+  runtimeManifest.minimumPreservationGeneration;
 export const MIN_REBUILD_RUNTIME_GENERATION = runtimeManifest.minimumRebuildGeneration;
 /** Per-harness image floors; see minCompatibleRuntimeVersionFor in image-builds/model.ts. */
 export const HARNESS_MIN_RUNTIME_GENERATION: Readonly<Partial<Record<string, number>>> =

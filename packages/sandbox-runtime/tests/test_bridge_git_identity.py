@@ -95,17 +95,15 @@ class TestGitIdentityConfiguration:
             },
         }
 
-        await bridge._handle_prompt(cmd)
+        terminal = await bridge._handle_prompt(cmd)
 
         bridge._configure_git_identity.assert_not_awaited()
-        bridge._send_event.assert_awaited_once_with(
-            {
-                "type": "execution_complete",
-                "messageId": "msg-1",
-                "success": False,
-                "error": "Invalid prompt Git identity",
-            }
-        )
+        assert terminal == {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "error": "Invalid prompt Git identity",
+        }
 
     @pytest.mark.asyncio
     async def test_rejects_an_unknown_identity_mode(self, bridge: AgentBridge):
@@ -123,17 +121,15 @@ class TestGitIdentityConfiguration:
             },
         }
 
-        await bridge._handle_prompt(cmd)
+        terminal = await bridge._handle_prompt(cmd)
 
         bridge._configure_git_identity.assert_not_awaited()
-        bridge._send_event.assert_awaited_once_with(
-            {
-                "type": "execution_complete",
-                "messageId": "msg-1",
-                "success": False,
-                "error": "Invalid prompt Git identity",
-            }
-        )
+        assert terminal == {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "error": "Invalid prompt Git identity",
+        }
 
     @pytest.mark.asyncio
     async def test_rejects_a_missing_git_identity_mode(self, bridge: AgentBridge):
@@ -148,17 +144,15 @@ class TestGitIdentityConfiguration:
             "author": {"userId": "user-1"},
         }
 
-        await bridge._handle_prompt(cmd)
+        terminal = await bridge._handle_prompt(cmd)
 
         bridge._configure_git_identity.assert_not_awaited()
-        bridge._send_event.assert_awaited_once_with(
-            {
-                "type": "execution_complete",
-                "messageId": "msg-1",
-                "success": False,
-                "error": "Invalid prompt Git identity",
-            }
-        )
+        assert terminal == {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "error": "Invalid prompt Git identity",
+        }
 
 
 class TestConfigureGitIdentity:
@@ -191,7 +185,7 @@ class TestConfigureGitIdentity:
         bridge.boot_attach.harness = ScriptedHarness(stream)
         bridge._send_event = AsyncMock()
 
-        await bridge._handle_prompt(
+        terminal = await bridge._handle_prompt(
             {
                 "messageId": "msg-1",
                 "content": "fix the bug",
@@ -206,11 +200,9 @@ class TestConfigureGitIdentity:
         )
 
         stream.assert_not_called()
-        bridge._send_event.assert_awaited_once_with(
-            {
-                "type": "execution_complete",
-                "messageId": "msg-1",
-                "success": False,
-                "error": "Commit signing configuration unavailable",
-            }
-        )
+        assert terminal == {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "error": "Commit signing configuration unavailable",
+        }

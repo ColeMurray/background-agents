@@ -116,6 +116,7 @@ describe("cross-path alarm effects", () => {
         expect.objectContaining({
           providerObjectId: sandbox.modal_object_id,
           reason: `${trigger}_timeout`,
+          intent: "destroy",
         })
       );
       expect(order).toEqual([
@@ -127,6 +128,44 @@ describe("cross-path alarm effects", () => {
       expect(sandbox.snapshot_image_id).toBe("snapshot-complete");
       expect(sandbox.status).toBe(trigger === "heartbeat" ? "stale" : "stopped");
       expect(sandbox.spawn_failure_count).toBe(0);
+    }
+  );
+
+  it.each(["heartbeat", "inactivity"] as const)(
+    "does not stop or detach a replacement admitted after %s checkpoint completion",
+    async (trigger) => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now - 10_000,
+        last_activity:
+          trigger === "inactivity" ? now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1 : now,
+      });
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const h = createAlarmFixture(
+        sandbox,
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true, supportsPersistentResume: false },
+          stopSandbox,
+        }),
+        0,
+        async () => {
+          sandbox.modal_sandbox_id = "replacement-sandbox";
+          sandbox.modal_object_id = "replacement-provider-object";
+          sandbox.created_at += 1;
+          sandbox.status = "connecting";
+        }
+      );
+
+      await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalledWith({ type: "shutdown" });
+      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(sandbox).toMatchObject({
+        modal_sandbox_id: "replacement-sandbox",
+        modal_object_id: "replacement-provider-object",
+        status: "connecting",
+      });
     }
   );
 

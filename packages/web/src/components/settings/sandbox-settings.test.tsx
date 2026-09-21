@@ -184,6 +184,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
                   cpuCores: 2,
                   memoryMib: 4096,
                   sandboxTimeoutMs: 7_200_000,
+                  finalSnapshotBufferMs: 900_000,
                   buildTimeoutSeconds: 2400,
                 },
               },
@@ -202,11 +203,15 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.queryByLabelText("CPU cores")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Memory (MiB)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Session Timeout (minutes)")).not.toBeInTheDocument();
+    const finalSnapshotBuffer = screen.getByLabelText("Final snapshot buffer (minutes)");
+    expect(finalSnapshotBuffer).toHaveValue(15);
     expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(2400);
     expect(
       screen.getByText(/Per-session CPU and memory overrides are unavailable for daytona/)
     ).toBeInTheDocument();
 
+    await user.clear(finalSnapshotBuffer);
+    await user.type(finalSnapshotBuffer, "20");
     await user.click(screen.getByLabelText("Web Terminal"));
     await user.click(screen.getByText("Save Settings"));
 
@@ -219,6 +224,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         cpuCores: 2,
         memoryMib: 4096,
         sandboxTimeoutMs: 7_200_000,
+        finalSnapshotBufferMs: 1_200_000,
       });
     });
   });
