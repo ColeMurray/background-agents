@@ -463,8 +463,8 @@ export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
  * Possible inactivity actions.
  */
 export type InactivityAction =
-  | { action: "timeout"; shouldSnapshot: boolean }
-  | { action: "extend"; extensionMs: number; shouldWarn: boolean }
+  | { action: "timeout" }
+  | { action: "extend"; extensionMs: number }
   | { action: "schedule"; nextCheckMs: number };
 
 /**
@@ -523,12 +523,11 @@ export function evaluateInactivityTimeout(
       return {
         action: "extend",
         extensionMs: config.extensionMs,
-        shouldWarn: true,
       };
     }
 
-    // No clients connected - timeout and snapshot
-    return { action: "timeout", shouldSnapshot: true };
+    // No clients connected - end the idle sandbox.
+    return { action: "timeout" };
   }
 
   // Not yet timed out - schedule next check at remaining time (minimum interval)
@@ -556,12 +555,7 @@ export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
 /**
  * Heartbeat health result.
  */
-export interface HeartbeatHealth {
-  /** Whether the sandbox is considered stale (missed heartbeats) */
-  isStale: boolean;
-  /** Time since last heartbeat in ms (only set if stale) */
-  ageMs?: number;
-}
+export type HeartbeatHealth = { isStale: false } | { isStale: true; ageMs: number };
 
 /**
  * Evaluate heartbeat health.
