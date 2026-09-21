@@ -93,6 +93,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
+    snapshotStopsSandbox: false,
     supportsRestore: true,
     supportsPersistentResume: false,
     supportsExplicitStop: true,

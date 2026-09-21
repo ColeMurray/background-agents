@@ -449,6 +449,9 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxId: SANDBOX_ID,
       status: "connecting",
     });
+    // Exercise the legacy row-readiness contract independently of the failed
+    // test launch's unacknowledged shutdown generation.
+    await queryDO(stub, "DELETE FROM sandbox_preservation");
 
     const { ws } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
@@ -476,6 +479,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxId: SANDBOX_ID,
       status: "connecting",
     });
+    await queryDO(stub, "DELETE FROM sandbox_preservation");
     const [codePassword, vncPassword, terminalToken] = await Promise.all([
       encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
       encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),

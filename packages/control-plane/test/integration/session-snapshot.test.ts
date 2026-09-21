@@ -18,6 +18,9 @@ describe("session snapshot synchronization", () => {
     const name = `snapshot-${Date.now()}`;
     const { stub } = await initNamedSession(name, { title: "Snapshot session" });
     await waitForSandboxStatus(stub, "failed");
+    // This fixture directly installs a legacy ready row rather than
+    // acknowledging the failed preservation-aware generation.
+    await queryDO(stub, "DELETE FROM sandbox_preservation");
     const createdAt = Date.now();
     await seedEvents(stub, [
       {

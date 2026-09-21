@@ -1830,6 +1830,7 @@ describe("SandboxLifecycleManager", () => {
       expect(sandbox.runtime_version).toBe(COMPATIBLE_RUNTIME_VERSION);
 
       await manager.spawnSandbox();
+      sandbox.status = "ready";
       await manager.triggerSnapshot("execution_complete");
 
       expect(sandbox.runtime_version).toBeNull();
@@ -2477,10 +2478,10 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
       ).toBe(true);
-      expect(broadcaster.messages.slice(-2)).toEqual([
-        { type: "sandbox_status", status: "ready" },
-        { type: "sandbox_access_changed" },
-      ]);
+      expect(broadcaster.messages).not.toContainEqual({
+        type: "sandbox_status",
+        status: "snapshotting",
+      });
     });
 
     it("skips when provider does not support snapshots", async () => {
@@ -2574,7 +2575,7 @@ describe("SandboxLifecycleManager", () => {
       await manager.triggerSnapshot("execution_complete");
 
       expect(sandbox.status).toBe("stale");
-      expect(storage.calls).toContain("transitionSandboxStatus:snapshotting->ready");
+      expect(storage.calls.some((call) => call.includes("snapshotting"))).toBe(false);
       expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_status", status: "ready" });
       expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
       // The image itself is still recorded: it describes the filesystem, not the row.
@@ -2644,7 +2645,7 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).not.toContain("recordSandboxSnapshot");
     });
 
-    it("does not claim a failed unmanaged destructive snapshot", async () => {
+    it("routes a destructive snapshot through graceful shutdown without invoking capture", async () => {
       const sandbox = createMockSandbox({ status: "ready" });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -2667,7 +2668,7 @@ describe("SandboxLifecycleManager", () => {
 
       await manager.triggerSnapshot("test");
 
-      expect(provider.takeSnapshot).toHaveBeenCalledOnce();
+      expect(provider.takeSnapshot).not.toHaveBeenCalled();
       expect(storage.calls).not.toContain("recordSandboxSnapshot");
       expect(broadcaster.messages).not.toContainEqual(
         expect.objectContaining({ type: "snapshot_saved" })
@@ -2687,8 +2688,8 @@ describe("SandboxLifecycleManager", () => {
         ...createUnmanagedShutdown(),
         captureCheckpoint: vi.fn(async () => ({
           outcome: "saved" as const,
+          operationId: "checkpoint-operation",
           imageId: "snapshot",
-          sourceStopped: false,
         })),
       } satisfies SandboxShutdownLifecycle;
       const manager = new SandboxLifecycleManager(

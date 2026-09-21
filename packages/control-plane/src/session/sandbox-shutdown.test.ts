@@ -22,6 +22,7 @@ function provider(overrides: Partial<SandboxProvider> = {}): SandboxProvider {
     capabilities: {
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
+      snapshotStopsSandbox: false,
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
@@ -167,6 +168,21 @@ describe("SandboxShutdownCoordinator", () => {
     f.sandboxRow.modal_sandbox_id = "replacement-sandbox";
     await expect(f.shutdown.requestShutdown("checkpoint")).resolves.toBe("held");
     expect(f.store.value).toMatchObject({ phase: "running", generation: GENERATION });
+  });
+
+  it("holds and journals a legacy snapshotting row with no operation record", async () => {
+    const f = fixture();
+    f.sandboxRow.status = "snapshotting";
+
+    expect(f.shutdown.admissionDecision()).toBe("held");
+    expect(f.shutdown.isHolding()).toBe(true);
+    expect(f.shutdown.startupDecision()).toMatchObject({ kind: "hold" });
+    await expect(f.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      reason: "legacy_checkpoint",
+      lifecyclePolicy: "legacy",
+    });
   });
 
   it("keeps a reconstructed legacy generation usable but checkpoint-gated", async () => {
@@ -366,12 +382,148 @@ describe("SandboxShutdownCoordinator", () => {
     );
   });
 
+  it("claims heartbeat checkpoint retirement before yielding to final shutdown", async () => {
+    let stopped!: (result: { success: boolean }) => void;
+    const stopSandbox = vi.fn(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          stopped = resolve;
+        })
+    );
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({ success: true, imageId: "heartbeat-image" })),
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    f.sandboxRow.status = "stale";
+    const checkpoint = await f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout");
+    expect(checkpoint.outcome).toBe("saved");
+    if (checkpoint.outcome !== "saved") throw new Error("Expected saved checkpoint");
+
+    const retiring = f.shutdown.retireHeartbeatCheckpoint(checkpoint.operationId);
+    await vi.waitFor(() => expect(stopSandbox).toHaveBeenCalledOnce());
+    expect(f.store.value).toMatchObject({
+      phase: "retiring",
+      operationId: checkpoint.operationId,
+    });
+    await expect(f.shutdown.requestShutdown("inactivity_timeout")).resolves.toBe("held");
+    stopped({ success: true });
+    await expect(retiring).resolves.toBe(true);
+    expect(f.store.value).toMatchObject({ phase: "saved", sourceRetired: true });
+    expect(f.calls).toContain("access-retired");
+  });
+
+  it("starts the final stop budget after a checkpoint outlives the original stop window", async () => {
+    let complete!: (result: { success: boolean; imageId: string }) => void;
+    const takeSnapshot = vi.fn(
+      () =>
+        new Promise<{ success: boolean; imageId: string }>((resolve) => {
+          complete = resolve;
+        })
+    );
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "execution_complete");
+    await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
+    await f.shutdown.requestShutdown("final");
+    expect(f.store.value).toMatchObject({
+      phase: "waiting_for_checkpoint",
+      waitByMs: 400_000,
+    });
+    expect(f.store.value?.stopByMs).toBeUndefined();
+
+    f.setNow(161_000);
+    await f.shutdown.handleAlarm();
+    expect(f.store.value?.phase).toBe("waiting_for_checkpoint");
+    complete({ success: true, imageId: "ordinary" });
+    await checkpoint;
+    await f.backgroundTasks.at(-1)!();
+    expect(f.store.value).toMatchObject({
+      phase: "draining",
+      stopByMs: 221_000,
+      captureByMs: 521_000,
+    });
+    expect(f.deps.sockets.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prepare_preservation", stopByMs: 221_000 })
+    );
+  });
+
+  it.each(["restart", "deadline"] as const)(
+    "holds an unresolved checkpoint on final wait %s",
+    async (mode) => {
+      let complete!: (result: { success: boolean; imageId: string }) => void;
+      const takeSnapshot = vi.fn(
+        () =>
+          new Promise<{ success: boolean; imageId: string }>((resolve) => {
+            complete = resolve;
+          })
+      );
+      const f = fixture(provider({ takeSnapshot }));
+      await readyFinite(f);
+      const checkpoint = f.shutdown.captureCheckpoint(GENERATION, "execution_complete");
+      await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
+      f.store.write({ ...f.store.value!, expiresAtMs: 230_000, drainAtMs: 200_000 });
+      await f.shutdown.requestShutdown("final");
+      expect(f.store.value?.waitByMs).toBe(110_000);
+      const owner =
+        mode === "restart"
+          ? new SandboxShutdownCoordinator({ ...f.deps, store: f.store } as never)
+          : f.shutdown;
+      if (mode === "deadline") f.setNow(110_000);
+      await owner.handleAlarm();
+      expect(f.store.value?.phase).toBe("unknown");
+      expect(owner.admissionDecision()).toBe("held");
+      complete({ success: true, imageId: "ordinary" });
+      await checkpoint;
+      expect(f.store.value?.phase).toBe("unknown");
+      expect(takeSnapshot).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("re-reads checkpoint completion after final alarm scheduling", async () => {
+    let complete!: (result: { success: boolean; imageId: string }) => void;
+    const takeSnapshot = vi.fn(
+      () =>
+        new Promise<{ success: boolean; imageId: string }>((resolve) => {
+          complete = resolve;
+        })
+    );
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    const capture = f.shutdown.captureCheckpoint(GENERATION, "execution_complete");
+    await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
+    let arm!: () => void;
+    f.deps.alarm.schedule.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          arm = () => resolve(undefined);
+        })
+    );
+    const final = f.shutdown.requestShutdown("final");
+    complete({ success: true, imageId: "checkpoint" });
+    await capture;
+    arm();
+    await final;
+    expect(f.store.value).toMatchObject({
+      phase: "draining",
+      checkpoint: { phase: "completed" },
+    });
+    expect(f.deps.sockets.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prepare_preservation" })
+    );
+  });
+
   it("rejects a checkpoint without capture headroom so final graceful shutdown can start", async () => {
-    const f = fixture();
+    const f = fixture(provider({ takeSnapshot: vi.fn() }));
     await readyFinite(f, 1_000_000);
 
     await expect(f.shutdown.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
       outcome: "held",
+      reason: "insufficient_capture_headroom",
     });
     await expect(f.shutdown.requestShutdown("sandbox_lifetime_expiring")).resolves.toBe("owned");
     expect(f.deps.sockets.send).toHaveBeenCalledWith(
@@ -381,11 +533,12 @@ describe("SandboxShutdownCoordinator", () => {
   });
 
   it("rejects checkpoints until a confirmed generation is ready", async () => {
-    const f = fixture();
+    const f = fixture(provider({ takeSnapshot: vi.fn() }));
     reserveGeneration(f, GENERATION, "confirmed");
 
     await expect(f.shutdown.captureCheckpoint(GENERATION, "checkpoint")).resolves.toEqual({
       outcome: "held",
+      reason: "shutdown_held",
     });
   });
 
@@ -405,9 +558,12 @@ describe("SandboxShutdownCoordinator", () => {
       const run = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
 
       await vi.advanceTimersByTimeAsync(300_000);
-      await expect(run).resolves.toEqual({ outcome: "unknown" });
+      await expect(run).resolves.toMatchObject({ outcome: "unknown" });
       expect(signal?.aborted).toBe(true);
-      expect(f.store.value).toMatchObject({ phase: "unknown", checkpointInFlight: false });
+      expect(f.store.value).toMatchObject({
+        phase: "running",
+        checkpoint: { phase: "unknown" },
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -424,12 +580,13 @@ describe("SandboxShutdownCoordinator", () => {
     );
     await readyWithoutDeadline(f);
     const oldCapture = f.shutdown.captureCheckpoint(GENERATION, "checkpoint");
+    await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
     const replacement = { sandboxId: "sandbox-2", createdAt: 2_000 };
     f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
     f.sandboxRow.created_at = replacement.createdAt;
     reserveGeneration(f, replacement, "legacy");
     resolve({ success: true, imageId: "late-image" });
-    await expect(oldCapture).resolves.toEqual({ outcome: "unknown" });
+    await expect(oldCapture).resolves.toEqual({ outcome: "held", reason: "superseded" });
     expect(f.store.value).toMatchObject({ generation: replacement });
   });
 
@@ -517,6 +674,61 @@ describe("SandboxShutdownCoordinator", () => {
       error: expect.stringContaining("provider result is unknown"),
     });
     expect(f.deps.provider.takeSnapshot).toBeUndefined();
+  });
+
+  it("keeps final alarm scheduling failures retryable before provider invocation", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true,
+      imageId: "image-1",
+      sourceStopped: true,
+    }));
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    f.deps.alarm.schedule.mockRejectedValueOnce(new Error("Temporary alarm failure"));
+
+    await f.shutdown.handleAlarm();
+
+    expect(f.store.value?.phase).toBe("failed");
+    expect(takeSnapshot).not.toHaveBeenCalled();
+    await f.shutdown.recover("retry");
+    expect(f.store.value?.phase).toBe("draining");
+  });
+
+  it("keeps deadline exhaustion retryable when alarm scheduling consumes the capture budget", async () => {
+    const takeSnapshot = vi.fn();
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    f.deps.alarm.schedule.mockImplementationOnce(async () => {
+      f.setNow(f.store.value!.captureByMs!);
+    });
+
+    await f.shutdown.handleAlarm();
+
+    expect(takeSnapshot).not.toHaveBeenCalled();
+    expect(f.store.value?.phase).toBe("failed");
+    await f.shutdown.recover("retry");
+    expect(f.store.value?.phase).toBe("draining");
+  });
+
+  it("holds final shutdown unknown after provider invocation throws", async () => {
+    const takeSnapshot = vi.fn(async () => {
+      throw new Error("Connection lost after request");
+    });
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+
+    await f.shutdown.handleAlarm();
+
+    expect(takeSnapshot).toHaveBeenCalledOnce();
+    expect(f.store.value?.phase).toBe("unknown");
+    await expect(f.shutdown.recover("retry")).rejects.toThrow("cannot be retried safely");
+    expect(takeSnapshot).toHaveBeenCalledOnce();
   });
 
   it("commits a snapshot receipt before retiring an independently captured source", async () => {

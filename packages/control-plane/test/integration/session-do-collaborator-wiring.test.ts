@@ -134,7 +134,7 @@ describe("SessionDO collaborator wiring", () => {
 
     await runInSessionDO(stub, (instance: SessionDO) => {
       collaboratorsOf(instance).lifecycleManager.triggerSnapshot = vi.fn(
-        async (_reason: string) => {}
+        async (_reason: string) => ({ outcome: "held" as const, reason: "test" })
       );
     });
 

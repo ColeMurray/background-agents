@@ -161,6 +161,26 @@ function realLifecycleHarness(
 }
 
 describe("sandbox graceful shutdown wiring", () => {
+  it("holds a persisted legacy snapshotting row instead of inferring readiness", async () => {
+    const name = `shutdown-legacy-checkpoint-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "snapshotting",
+    });
+    await queryDO(stub, "DELETE FROM sandbox_preservation");
+
+    await runInSessionDO(stub, (instance) => instance.alarm());
+
+    expect(await readShutdown(stub)).toMatchObject({
+      phase: "unknown",
+      reason: "legacy_checkpoint",
+    });
+    expect((await stub.fetch("http://internal/internal/sandbox-access")).status).toBe(409);
+    expect(await queryDO(stub, "SELECT status FROM sandbox")).toEqual([{ status: "snapshotting" }]);
+  });
+
   it("preserves a completed session status when shutdown begins between prompts", async () => {
     const name = `shutdown-completed-status-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -535,7 +555,7 @@ describe("sandbox graceful shutdown wiring", () => {
     });
   });
 
-  it("snapshots an unmanaged destructive provider before inactivity destroys it", async () => {
+  it("holds a destructive provider when prior shutdown ownership is unresolved", async () => {
     const { stub } = await initNamedSession(`shutdown-unmanaged-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
     const now = Date.now();
@@ -626,13 +646,13 @@ describe("sandbox graceful shutdown wiring", () => {
       return calls;
     });
 
-    expect(calls).toEqual(["snapshot", "stop"]);
+    expect(calls).toEqual([]);
     expect(
       await queryDO<{ snapshot_image_id: string | null }>(
         stub,
         "SELECT snapshot_image_id FROM sandbox"
       )
-    ).toEqual([{ snapshot_image_id: "legacy-vercel-snapshot" }]);
+    ).toEqual([{ snapshot_image_id: null }]);
   });
 
   it("holds queued work until a versioned runtime acknowledges its sandbox generation", async () => {

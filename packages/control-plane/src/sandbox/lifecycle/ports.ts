@@ -6,9 +6,10 @@ export interface SandboxGeneration {
 
 /** Coordinator-owned checkpoint result; unknown never authorizes a destructive retry. */
 export type SandboxCheckpointOutcome =
-  | { outcome: "saved"; imageId: string; sourceStopped: boolean }
-  | { outcome: "held" }
-  | { outcome: "unknown" };
+  | { outcome: "saved"; operationId: string; imageId: string }
+  | { outcome: "held"; reason: string }
+  | { outcome: "failed"; reason: string }
+  | { outcome: "unknown"; operationId: string; reason: string };
 
 /**
  * Startup policy hides persisted receipt representation from lifecycle consumers.

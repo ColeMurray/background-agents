@@ -12,6 +12,7 @@ export interface SessionAccessReaderDeps {
   repoSecretsEncryptionKey: string;
   sandboxDashboardSettings: SandboxDashboardSettings;
   log: Logger;
+  mayAccess?: () => boolean;
 }
 
 /**
@@ -28,7 +29,11 @@ export class SessionAccessReader {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
     const sandbox = this.deps.sandboxRepository.getSandbox();
-    if (!sandbox || !isSandboxAccessAvailable(sandbox.status)) {
+    if (
+      !sandbox ||
+      !isSandboxAccessAvailable(sandbox.status) ||
+      this.deps.mayAccess?.() === false
+    ) {
       return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
 
@@ -41,6 +46,7 @@ export class SessionAccessReader {
     const current = this.deps.sandboxRepository.getSandbox();
     if (
       !current ||
+      this.deps.mayAccess?.() === false ||
       current.id !== sandbox.id ||
       !isSandboxAccessAvailable(current.status) ||
       current.code_server_url !== sandbox.code_server_url ||

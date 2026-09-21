@@ -83,6 +83,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   readonly capabilities: SandboxProviderCapabilities = {
     supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
+    snapshotStopsSandbox: false,
     supportsRestore: true,
     supportsPersistentResume: true,
     supportsExplicitStop: true,

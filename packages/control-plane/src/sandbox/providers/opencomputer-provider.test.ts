@@ -99,6 +99,7 @@ describe("OpenComputerSandboxProvider", () => {
 
     expect(provider.name).toBe("opencomputer");
     expect(provider.capabilities).toEqual({
+      snapshotStopsSandbox: false,
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
       supportsRestore: true,

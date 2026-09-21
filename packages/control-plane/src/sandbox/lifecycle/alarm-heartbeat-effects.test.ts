@@ -35,7 +35,26 @@ describe("heartbeat alarm effects", () => {
         })
       );
 
-      await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+      const checkpointOwned = status === "ready" && !resumable;
+      await expect(h.manager.handleAlarm()).resolves.toBe(
+        checkpointOwned ? "no_action" : "sandbox_terminated"
+      );
+
+      if (checkpointOwned) {
+        expect(stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerObjectId: sandbox.modal_object_id,
+            reason: "heartbeat_timeout",
+            intent: "destroy",
+          })
+        );
+        expect(h.provider.takeSnapshot).toHaveBeenCalledOnce();
+        expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+        expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+        expect(sandbox.status).toBe("stopped");
+        expect(sandbox.spawn_failure_count).toBe(0);
+        return;
+      }
 
       if (explicitStop) {
         expect(stopSandbox).toHaveBeenCalledExactlyOnceWith({
@@ -132,7 +151,10 @@ describe("heartbeat alarm effects", () => {
         })
       );
 
-      await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+      const checkpointOwned = status === "ready" && !resumable;
+      await expect(h.manager.handleAlarm()).resolves.toBe(
+        checkpointOwned ? "no_action" : "sandbox_terminated"
+      );
 
       expect(stopSandbox).toHaveBeenCalledOnce();
       expect(stopSandbox).toHaveBeenCalledWith(
@@ -141,24 +163,30 @@ describe("heartbeat alarm effects", () => {
           intent: resumable ? "preserve" : "destroy",
         })
       );
-      expect(stopLog).toHaveBeenCalledWith(
-        expect.stringContaining('"error":"provider stop unavailable"')
-      );
+      if (checkpointOwned)
+        expect(stopLog).toHaveBeenCalledWith(expect.stringContaining('"msg":"Heartbeat stale"'));
+      else
+        expect(stopLog).toHaveBeenCalledWith(
+          expect.stringContaining('"error":"provider stop unavailable"')
+        );
       expect(sandbox.code_server_url).toBeNull();
       expect(sandbox.status).toBe("stale");
       expect(h.manager.isSpawning()).toBe(false);
       expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stale" });
-      expect(h.alarmScheduler.schedule).not.toHaveBeenCalled();
-      expect(h.wsManager.detachSandboxWebSocket).toHaveBeenCalledExactlyOnceWith(
-        1000,
-        "Heartbeat stale"
-      );
+      if (checkpointOwned) {
+        expect(h.shutdown.snapshot()).toMatchObject({ phase: "unknown" });
+        expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      } else {
+        expect(h.alarmScheduler.schedule).not.toHaveBeenCalled();
+        expect(h.wsManager.detachSandboxWebSocket).toHaveBeenCalledExactlyOnceWith(
+          1000,
+          "Heartbeat stale"
+        );
+      }
       expect(h.provider.takeSnapshot).toHaveBeenCalledTimes(
         status === "ready" && !resumable ? 1 : 0
       );
-      expect(h.wsManager.sendToSandbox).toHaveBeenCalledTimes(
-        status === "ready" && !resumable ? 1 : 0
-      );
+      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
     });
   });
 
