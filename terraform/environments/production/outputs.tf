@@ -24,18 +24,6 @@ output "d1_database_name" {
 }
 
 # Cloudflare Workers
-output "service_auth_secret_slack_bot" {
-  description = "Existing Slack bot signing key for an operator-controlled Node/AWS handoff; never log raw outputs"
-  value       = var.enable_slack_bot ? random_password.service_auth_secret_slack_bot.result : null
-  sensitive   = true
-}
-
-output "service_auth_secret_linear_bot" {
-  description = "Existing Linear bot signing key for an operator-controlled Node/AWS handoff; never log raw outputs"
-  value       = var.enable_linear_bot ? random_password.service_auth_secret_linear_bot.result : null
-  sensitive   = true
-}
-
 output "control_plane_url" {
   description = "Control plane worker URL"
   value       = module.control_plane_worker.worker_url

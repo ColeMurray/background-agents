@@ -84,30 +84,25 @@ Then `npm run dev -w @open-inspect/web`. The container's `WEB_APP_URL` must be t
 
 ## Connecting bot workers
 
-The bots still run on Cloudflare. To send callbacks and scheduler requests from
-the Node control plane, set `SLACK_BOT_URL` and/or `LINEAR_BOT_URL` to the corresponding
-worker's HTTPS origin in `.env`, and supply its matching
-`SERVICE_AUTH_SECRET_SLACK_BOT` / `SERVICE_AUTH_SECRET_LINEAR_BOT`. Each secret must
-match the receiver's configuration. Omit a URL when that bot is not deployed.
-Configured URLs without their secrets fail boot before data files are opened.
-For AWS, use the [existing-key handoff](./AWS_BRING_UP.md#copy-existing-cloudflare-bot-keys-to-aws)
-rather than generating a different secret. For local Compose, retrieve the same
-sensitive output through your approved secret manager into the gitignored `.env`;
-do not print or paste the key into logs or shell history.
+The bots still run on Cloudflare. To send callbacks and scheduler requests from the Node control
+plane, set `SLACK_BOT_URL` and/or `LINEAR_BOT_URL` to the corresponding worker's HTTPS origin in
+`.env`, and supply its matching `SERVICE_AUTH_SECRET_SLACK_BOT` / `SERVICE_AUTH_SECRET_LINEAR_BOT`.
+Each secret must match the receiver's configuration. Omit a URL when that bot is not deployed.
+Configured URLs without their secrets fail boot before data files are opened. For AWS, supply the
+exact existing bot keys through the runbook's `put` helper rather than generating different secrets.
+For local Compose, place those same operator-held values in the gitignored `.env`; do not put them
+in logs or shell history.
 
-Origins cannot contain credentials, a path prefix, query or fragment. Plain HTTP
-is allowed only for exact loopback hosts in local development; loopback inside
-Compose means the app container itself, not your laptop. Delivery callers own the
-ten-second attempt deadline on both hosts, including response-body handling.
-The adapter preserves caller cancellation and rejects redirects. It changes only
-the origin; callback body HMACs and
-the existing jobs/scheduler retry policies are unchanged. Cloudflare deployments
-continue using service bindings and ignore these URL settings.
+Origins cannot contain credentials, a path prefix, query or fragment. Plain HTTP is allowed only for
+exact loopback hosts in local development; loopback inside Compose means the app container itself,
+not your laptop. Delivery callers own the ten-second attempt deadline on both hosts, including
+response-body handling. The adapter preserves caller cancellation and rejects redirects. It changes
+only the origin; callback body HMACs and the existing jobs/scheduler retry policies are unchanged.
+Cloudflare deployments continue using service bindings and ignore these URL settings.
 
-This enables **control-plane-to-bot** traffic only. Configuring the reverse
-bot-to-Node route is separate work (COL-107). Validate with isolated staging bot
-identities before enabling production notifications; local tests do not prove
-Cloudflare ingress or end-to-end bot routing.
+This enables **control-plane-to-bot** traffic only. Configuring the reverse bot-to-Node route is
+separate work (COL-107). Validate with isolated staging bot identities before enabling production
+notifications; local tests do not prove Cloudflare ingress or end-to-end bot routing.
 
 ## Reaching the container from a sandbox
 
@@ -146,12 +141,11 @@ lists sessions whose files are gone, and the host opens each of those as an empt
 next touched, with no pending deadlines. The entrypoint logs a warning to that effect after every
 restore. Treat the replica as protection for the global store, not as recovery of a deployment.
 
-`jobs.db` is not included in the continuous replica. Image-build finalizations can
-be republished from `global.db`, but session callback jobs cannot. A restart on the
-same volume preserves accepted callbacks; a global-store-only restore does not.
-Use a stopped whole-volume snapshot when pending callback recovery is required.
-See [session callback durability](./SESSION_CALLBACK_JOBS.md) for the acceptance
-boundary and recovery limitations.
+`jobs.db` is not included in the continuous replica. Image-build finalizations can be republished
+from `global.db`, but session callback jobs cannot. A restart on the same volume preserves accepted
+callbacks; a global-store-only restore does not. Use a stopped whole-volume snapshot when pending
+callback recovery is required. See [session callback durability](./SESSION_CALLBACK_JOBS.md) for the
+acceptance boundary and recovery limitations.
 
 `cache.db` is deliberately excluded from that replication: it holds the repositories listing and a
 live GitHub installation token, neither of which belongs in a backup bucket, and a cache refills by
