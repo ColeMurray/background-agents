@@ -198,6 +198,23 @@ describe("SessionServer", () => {
     });
   });
 
+  it("preserves request correlation when a cancel prompt payload fails validation", async () => {
+    const { server, sockets, clientCommands } = createHarness();
+
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "cancel_prompt", messageId: "", clientRequestId: "cancel-1" })
+    );
+
+    expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "INVALID_MESSAGE",
+      message: "Failed to process message",
+      clientRequestId: "cancel-1",
+    });
+  });
+
   it("routes ping without requiring an authenticated client", async () => {
     const { server, sockets, setClient } = createHarness();
     setClient(null);
@@ -472,6 +489,28 @@ describe("SessionServer", () => {
       type: "error",
       code: "RATE_LIMITED",
       message: "Too many requests",
+    });
+  });
+
+  it("rejects fetch_history without a cursor without consuming the throttle window", async () => {
+    const { server, sockets, clientCommands, setNow } = createHarness();
+    const cursor = { timestamp: 10, id: "event-1", sequence: 2 };
+
+    setNow(2000);
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history" }));
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
+
+    expect(clientCommands.getHistoryPage).toHaveBeenCalledExactlyOnceWith({ cursor });
+    expect(sockets.send).toHaveBeenNthCalledWith(1, "client", {
+      type: "error",
+      code: "INVALID_CURSOR",
+      message: "Invalid cursor",
+    });
+    expect(sockets.send).toHaveBeenNthCalledWith(2, "client", {
+      type: "history_page",
+      items: [],
+      hasMore: false,
+      cursor: null,
     });
   });
 
