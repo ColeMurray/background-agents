@@ -17,9 +17,8 @@ import {
   sandboxEnvironmentSettingsResponseSchema,
   sandboxGlobalSettingsResponseSchema,
   sandboxRepoSettingsResponseSchema,
-  SandboxSettingsEditor,
-  SandboxSettingsPage,
-} from "./sandbox-settings";
+} from "./sandbox-settings-schema";
+import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
