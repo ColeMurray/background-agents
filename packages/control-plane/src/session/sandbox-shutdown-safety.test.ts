@@ -119,7 +119,7 @@ function fixture(
     alarm: { schedule: vi.fn(async () => undefined) },
     background: { submit: vi.fn() },
     onLifecycleChange: vi.fn(async () => undefined),
-    reconcileStatus: vi.fn(async () => undefined),
+    reconcileStatusFromMessages: vi.fn(async () => undefined),
     retireAccess: vi.fn(),
     now: () => options.now ?? 100_000,
   } as never);

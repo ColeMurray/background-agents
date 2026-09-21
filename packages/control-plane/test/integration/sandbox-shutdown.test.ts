@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import {
   DEFAULT_LIFECYCLE_CONFIG,
@@ -120,7 +121,7 @@ function realLifecycleHarness(
       },
     },
     onLifecycleChange: processQueue,
-    reconcileStatus: async () => undefined,
+    reconcileStatusFromMessages: async () => undefined,
     retireAccess: () => undefined,
   } as never);
   const manager = new SandboxLifecycleManager(
@@ -160,6 +161,84 @@ function realLifecycleHarness(
 }
 
 describe("sandbox graceful shutdown wiring", () => {
+  it("preserves a completed session status when shutdown begins between prompts", async () => {
+    const name = `shutdown-completed-status-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    await seedShutdown(stub, { drainAtMs: Date.now() - 1 });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "completed-before-shutdown",
+      authorId,
+      content: "Completed before inactivity shutdown",
+      source: "web",
+      status: "completed",
+      createdAt: Date.now(),
+    });
+    await queryDO(stub, "UPDATE session SET status = 'completed'");
+
+    await runInSessionDO(stub, async (instance) => {
+      await expect(componentsOf(instance).lifecycleManager.handleShutdownAlarm()).resolves.toBe(
+        "hold_watchdogs"
+      );
+    });
+
+    await vi.waitFor(async () => {
+      expect(await queryDO<{ status: string }>(stub, "SELECT status FROM session")).toEqual([
+        { status: "completed" },
+      ]);
+      await expect(
+        env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(name).first()
+      ).resolves.toEqual({ status: "completed" });
+    });
+  });
+
+  it("fails an interrupted prompt before reconciling shutdown status", async () => {
+    const name = `shutdown-interrupted-status-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    await seedShutdown(stub, { drainAtMs: Date.now() - 1 });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    const now = Date.now();
+    await seedMessage(stub, {
+      id: "processing-at-shutdown",
+      authorId,
+      content: "Interrupted by inactivity shutdown",
+      source: "web",
+      status: "processing",
+      createdAt: now - 1_000,
+      startedAt: now,
+    });
+    await queryDO(stub, "UPDATE session SET status = 'active'");
+
+    await runInSessionDO(stub, async (instance) => {
+      await expect(componentsOf(instance).lifecycleManager.handleShutdownAlarm()).resolves.toBe(
+        "hold_watchdogs"
+      );
+    });
+
+    await vi.waitFor(async () => {
+      expect(
+        await queryDO<{ status: string }>(
+          stub,
+          "SELECT status FROM messages WHERE id = 'processing-at-shutdown'"
+        )
+      ).toEqual([{ status: "failed" }]);
+      expect(await queryDO<{ status: string }>(stub, "SELECT status FROM session")).toEqual([
+        { status: "failed" },
+      ]);
+      await expect(
+        env.DB.prepare("SELECT status FROM sessions WHERE id = ?").bind(name).first()
+      ).resolves.toEqual({ status: "failed" });
+    });
+  });
+
   it("rolls back the sandbox reservation when the matching shutdown write fails", async () => {
     const { stub } = await initNamedSession(`shutdown-reservation-rollback-${Date.now()}`);
     await seedSandboxAuth(stub, {
@@ -790,7 +869,7 @@ describe("sandbox graceful shutdown wiring", () => {
         alarm: { schedule: async () => undefined },
         background,
         onLifecycleChange: async () => undefined,
-        reconcileStatus: async () => undefined,
+        reconcileStatusFromMessages: async () => undefined,
         retireAccess: () => undefined,
       } as never);
 

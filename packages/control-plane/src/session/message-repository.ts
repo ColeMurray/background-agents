@@ -9,7 +9,7 @@ import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
-import type { MessageRow } from "./types";
+import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
 import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -93,10 +93,6 @@ export class MessageRepository {
     private readonly attachments: SessionAttachmentRepository,
     private readonly eventRepository: EventRepository
   ) {}
-
-  private rows<T>(result: SqlResult): T[] {
-    return result.toArray() as T[];
-  }
 
   getActiveDurationMs(): number {
     const result = this.sql.exec(
@@ -189,13 +185,13 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
-    const rows = this.rows<MessageRow>(result);
+    const rows = parseMessageRows(result.toArray());
     return rows[0] ?? null;
   }
 
   getMessageById(messageId: string): MessageRow | null {
     const result = this.sql.exec(`SELECT * FROM messages WHERE id = ? LIMIT 1`, messageId);
-    return this.rows<MessageRow>(result)[0] ?? null;
+    return parseMessageRows(result.toArray())[0] ?? null;
   }
 
   getMessageByClientRequestId(clientRequestId: string): MessageRow | null {
@@ -203,7 +199,7 @@ export class MessageRepository {
       `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`,
       clientRequestId
     );
-    return this.rows<MessageRow>(result)[0] ?? null;
+    return parseMessageRows(result.toArray())[0] ?? null;
   }
 
   getAutofixMessageId(feedbackKey: string): string | null {
@@ -287,7 +283,7 @@ export class MessageRepository {
       `SELECT * FROM messages WHERE status IN ('pending', 'processing')
        ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`
     );
-    return this.rows<MessageRow>(result);
+    return parseMessageRows(result.toArray());
   }
 
   listPromptQueue(): PromptQueueItem[] {
@@ -495,7 +491,7 @@ export class MessageRepository {
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);
-    return this.rows<MessageRow>(result);
+    return parseMessageRows(result.toArray());
   }
 
   getLatestTerminalMessage(): MessageRow | null {
@@ -505,7 +501,7 @@ export class MessageRepository {
        ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
        LIMIT 1`
     );
-    const rows = this.rows<MessageRow>(result);
+    const rows = parseMessageRows(result.toArray());
     return rows[0] ?? null;
   }
 
@@ -516,4 +512,12 @@ export class MessageRepository {
     const rows = result.toArray() as Array<{ author_id: string }>;
     return rows[0] ?? null;
   }
+}
+
+function parseMessageRows(rows: unknown[]): MessageRow[] {
+  return rows.map((row) => {
+    const parsed = messageRowSchema.safeParse(row);
+    if (parsed.success) return parsed.data;
+    throw new SessionStorageIntegrityError("Malformed persisted message row");
+  });
 }

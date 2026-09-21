@@ -36,7 +36,7 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
   const canRetry = recoveryActions.includes("retry");
   const canRestoreSaved = recoveryActions.includes("restore_saved");
   const canResumeQueuedWork = isContinuationPaused && canRestoreSaved;
-  const detail = shutdown.error ?? shutdown.reason;
+  const detail = isError ? (shutdown.error ?? shutdown.reason) : undefined;
 
   const recover = async (action: ShutdownRecoveryAction) => {
     if (!onRecover || pendingAction) return;
