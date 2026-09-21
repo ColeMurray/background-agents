@@ -7,23 +7,27 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 **Graceful sandbox shutdown and recovery.** Sandboxes approaching their provider lifetime now stop
 admitting new work, preserve the filesystem, and confirm retirement before expiry, reserving a
 configurable **Final snapshot buffer** set globally or per repository and environment. Sessions show
-shutdown and recovery progress: work queued at a clean prompt boundary continues automatically in a
-new sandbox, while an interrupted prompt fails once and stays paused until you choose **Resume
-queued work** — it is never replayed automatically. Recovery failures stay held rather than falling
-back to a fresh checkout.
+shutdown and recovery progress: work queued at a clean prompt boundary restores automatically into a
+new generation, while an interrupted prompt fails once and, after state is saved, queued work waits
+for **Resume queued work** — the interrupted prompt is never replayed automatically. A failed or
+uncertain shutdown stays held rather than falling back to a fresh checkout, offering retry or
+restore only when the server authorizes it.
 
-**Provider-aware sandbox settings.** Sandbox settings now show only the controls the configured
-provider can honor. Daytona sandboxes inherit CPU and memory from their snapshot, so those controls
-and the per-session timeout are hidden with an explanation, and stored values a provider cannot
-apply are stripped before a session starts instead of blocking the spawn.
+**Provider-aware sandbox settings.** The per-session CPU, memory, and session-timeout controls are
+now hidden when the configured provider cannot honor them. Daytona sandboxes inherit CPU and memory
+from their snapshot and take no per-session lifetime, so all three are hidden with an explanation
+while its image build timeout stays configurable, and stored values a provider cannot apply are
+stripped before a session starts instead of blocking the spawn.
 
 ## September 19, 2026
 
-**Prebuilt images for Daytona.** Daytona can now build, reuse, and clean up repository and
-environment images at parity with Modal, E2B, Vercel, and OpenComputer, so sessions start from a
-prebuilt snapshot. The feature is opt-in behind `DAYTONA_PREBUILDS_ENABLED` and off by default;
-while it is closed, manual triggers, save hooks, and the rebuild cron skip Daytona scopes and
-session spawns never select a prebuilt image. Remaining live verification gates are listed in
+**Prebuilt images for Daytona.** Daytona joins the image-prebuild subsystem: it can build repository
+and environment snapshots, start sessions from them, and reclaim sources and snapshots afterwards.
+The feature is opt-in behind `DAYTONA_PREBUILDS_ENABLED` and off by default. Admission gates exactly
+two things — starting a build and selecting a prebuilt image for a fresh session — so while it is
+closed a manual rebuild returns 503, save hooks do nothing, and the cron skips new builds while
+finalization, status, and cleanup keep running. None of this has been exercised against a live
+Daytona deployment; the gates an operator should pass before opening admission are listed in
 [Image prebuilds](docs/IMAGE_PREBUILD.md#verification-gates).
 
 **Slack model flags set session defaults.** A `!model` or `!reasoning` flag on the message that
