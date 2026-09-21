@@ -1,11 +1,9 @@
 import { getModelDisplayName } from "@open-inspect/shared/models";
 import { setAssistantThreadStatusBestEffort } from "../activity-status";
 import type { ModelSelection } from "../inline-flags";
-import type { Env } from "../types";
+import type { BackgroundTaskScheduler, Env } from "../types";
 
 const WORKING_MESSAGE_TEXT = "Starting work...";
-
-export type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
 export function scheduleStartingStatus(
   scheduleBackground: BackgroundTaskScheduler,

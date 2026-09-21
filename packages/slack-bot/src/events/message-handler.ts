@@ -27,7 +27,6 @@ import {
   buildWorkingMessage,
   formatSessionDefaultsNotice,
   scheduleStartingStatus,
-  type BackgroundTaskScheduler,
 } from "../messages/blocks";
 import {
   formatAttributedRequest,
@@ -49,7 +48,7 @@ import {
 } from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
 import { targetId } from "../targets";
-import type { Env } from "../types";
+import type { BackgroundTaskScheduler, Env } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,

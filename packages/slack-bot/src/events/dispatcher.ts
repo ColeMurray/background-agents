@@ -1,8 +1,7 @@
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
-import type { BackgroundTaskScheduler } from "../messages/blocks";
-import type { Env } from "../types";
+import type { BackgroundTaskScheduler, Env } from "../types";
 import { handleAppMention, handleDirectMessage } from "./message-handler";
 import type { SlackEventPayload } from "./payload";
 
