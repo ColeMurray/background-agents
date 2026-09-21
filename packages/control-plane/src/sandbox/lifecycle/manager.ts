@@ -62,7 +62,15 @@ import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
-import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
+import {
+  minCompatibleRuntimeVersionFor,
+  repoImageBuildScope,
+  type ImageBuildScope,
+} from "../../image-builds/model";
+import {
+  MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION,
+  SANDBOX_RUNTIME_VERSION,
+} from "../runtime-manifest";
 import { parsePersistedSandboxSettings } from "../settings";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import {
@@ -619,16 +627,39 @@ export class SandboxLifecycleManager
         );
         return;
 
-      case "spawn":
+      case "spawn": {
+        // Replacing a generation whose bridge actually connected throws away
+        // that sandbox's filesystem: uncommitted work, and the vendor session
+        // id that lives in it, so the replacement answers with no conversation
+        // history. It is the most expensive thing this lifecycle does, and it
+        // was previously only an info line — from the client the agent just
+        // continued with amnesia over a clean checkout. A generation that never
+        // connected had nothing to lose and stays quiet.
+        const discardingState = sandboxState !== null && spawnState.hasConnected === true;
         if (spawnDecision.reason) {
-          this.log.info("Spawn decision: spawn", {
+          this.log[discardingState ? "warn" : "info"]("Spawn decision: spawn", {
             event: "sandbox.snapshot_rejected",
             reason: spawnDecision.reason,
             snapshot_image_id: spawnState.snapshotImageId,
           });
         }
+        if (discardingState) {
+          this.log.warn("Replacing a sandbox generation without restoring its state", {
+            event: "sandbox.state_discarded",
+            reason: spawnDecision.reason ?? "no restorable snapshot",
+            sandbox_status: spawnState.status,
+            snapshot_image_id: spawnState.snapshotImageId,
+            snapshot_runtime_version: spawnState.snapshotRuntimeVersion,
+          });
+          this.broadcaster.broadcast({
+            type: "sandbox_warning",
+            message:
+              "Started a fresh sandbox: the previous sandbox's state could not be restored, so uncommitted changes and earlier conversation context are not carried over.",
+          });
+        }
         await this.doSpawn();
         return;
+      }
     }
   }
 
@@ -707,7 +738,7 @@ export class SandboxLifecycleManager
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
-        shutdownPolicy: shutdownPolicyForLaunch("new", null),
+        shutdownPolicy: shutdownPolicyForLaunch(SANDBOX_RUNTIME_VERSION),
       });
 
       await this.stopPriorProviderSandbox();
@@ -809,7 +840,7 @@ export class SandboxLifecycleManager
         generation = retry;
         ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
           preserveProviderObjectId: false,
-          shutdownPolicy: shutdownPolicyForLaunch("new", null),
+          shutdownPolicy: shutdownPolicyForLaunch(SANDBOX_RUNTIME_VERSION),
         }));
         result = await this.provider.createSandbox({
           ...createConfig,
@@ -918,12 +949,24 @@ export class SandboxLifecycleManager
         });
         return result.image;
       }
-      this.log.info("Prebuilt image miss, using base image", {
+      // A below-floor latest-ready image means the floor moved past every
+      // cached image, not that this one session drifted: until a compliant
+      // image is built, *all* spawns clone from the base image. That is a
+      // deploy-wide condition worth a warn, not an ordinary miss.
+      const level = result.reason === "runtime_below_floor" ? "warn" : "info";
+      this.log[level]("Prebuilt image miss, using base image", {
         event: "image_build.spawn_miss",
         scope_kind: scope.kind,
         scope_id: scope.id,
         reason: result.reason,
         image_build_id: result.imageBuildId,
+        ...(result.reason === "runtime_below_floor"
+          ? {
+              image_runtime_version: image?.runtime_version ?? null,
+              harness_floor: minCompatibleRuntimeVersionFor(harness),
+              preservation_floor: MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION,
+            }
+          : {}),
       });
       return null;
     } catch (e) {
@@ -1131,7 +1174,7 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
-      const shutdownPolicy = shutdownPolicyForLaunch("existing", snapshotRuntimeVersion);
+      const shutdownPolicy = shutdownPolicyForLaunch(snapshotRuntimeVersion);
       const { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
         preserveProviderObjectId: true,
         shutdownPolicy,
@@ -1290,7 +1333,7 @@ export class SandboxLifecycleManager
 
       const now = Date.now();
       generation = { sandboxId: sandbox.modal_sandbox_id, createdAt: now };
-      const shutdownPolicy = shutdownPolicyForLaunch("existing", sourceRuntimeVersion);
+      const shutdownPolicy = shutdownPolicyForLaunch(sourceRuntimeVersion);
       this.storage.setLastSpawnError(null, null);
       await this.enterProviderStartup("connecting", now, shutdownPolicy, () => {
         this.storage.updateSandboxForResume({

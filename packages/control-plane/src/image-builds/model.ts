@@ -97,11 +97,15 @@ export interface ImageBuildCallbackBuild {
 }
 
 /**
- * Compatibility floor for prebuilt-image runtimes.
+ * Compatibility floor for prebuilt-image runtimes, and the floor that retires
+ * stored snapshots (see `isSnapshotRuntimeCompatible`).
  *
  * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
- * bumps. v60 is the first runtime whose managed-provider plugins use the
- * generic token broker, so no image baked by an earlier runtime may be selected.
+ * bumps: raising it discards the filesystem of every live session below it.
+ * See the floor reference on `runtime-manifest.ts` for how this interacts with
+ * the preservation and rebuild floors, and record what breaking change each
+ * bump encodes in that bump's own commit rather than here — a value restated
+ * in prose drifts from the manifest, which is the single source of truth.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
 

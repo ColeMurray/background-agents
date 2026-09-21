@@ -84,6 +84,15 @@ export type ImageBuildSelectionResult =
  * Evaluate the latest ready image (or its absence) against the session's own
  * repository snapshot. Checks run cheapest-first; the floor is the session
  * harness's and fails closed on an unparseable runtime version.
+ *
+ * `runtime_below_floor` combines two independent floors, either of which is
+ * sufficient to reject: the harness image floor
+ * (`minCompatibleRuntimeVersionFor`) and the confirmed-shutdown protocol floor
+ * (`supportsConfirmedShutdown`). The second is easy to miss — raising
+ * `minimumPreservationGeneration` invalidates every cached image below it, so a
+ * bump made without a matching rebuild sends every spawn to the base image
+ * until a compliant image is ready. Callers should surface that case rather
+ * than treating it as an ordinary miss.
  */
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
