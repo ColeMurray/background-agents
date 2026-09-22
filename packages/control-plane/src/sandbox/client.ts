@@ -74,6 +74,7 @@ const createImageBuildSandboxModalResponseSchema = z.object({
   data: z.object({
     // Non-empty: the previous hand-rolled check rejected a blank id.
     provider_session_id: z.string().min(1),
+    docker_enabled: z.boolean().optional(),
   }),
 });
 
@@ -264,6 +265,8 @@ export interface CreateImageBuildSandboxRequest {
 
 export interface CreateImageBuildSandboxResponse {
   providerSessionId: string;
+  /** Absent from pre-feature Modal deployments. */
+  dockerEnabled?: boolean;
 }
 
 export interface StartImageBuildSandboxRequest {
@@ -660,6 +663,7 @@ export class ModalClient {
       outcome = "success";
       return {
         providerSessionId: result.data.provider_session_id,
+        dockerEnabled: result.data.docker_enabled,
       };
     } finally {
       log.info("modal.request", {

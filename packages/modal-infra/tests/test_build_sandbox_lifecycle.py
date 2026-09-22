@@ -165,7 +165,7 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
     create = _async_method(sandbox)
     monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
 
-    provider_session_id = await ModalBuildSessionService().create(
+    launch = await ModalBuildSessionService().create(
         build_id="build-1",
         scope_kind="repo",
         scope_id="acme/repo",
@@ -188,7 +188,8 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         timeout_seconds=1800,
     )
 
-    assert provider_session_id == "modal-session-1"
+    assert launch.provider_session_id == "modal-session-1"
+    assert launch.docker_enabled is False
     args = create.aio.await_args.args
     kwargs = create.aio.await_args.kwargs
     assert args == (
@@ -388,7 +389,7 @@ async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
     monkeypatch.setattr("src.sandbox.build_session.base_image", default_image)
     monkeypatch.setattr("src.sandbox.docker_launch.docker_image", docker_image)
 
-    await ModalBuildSessionService().create(
+    launch = await ModalBuildSessionService().create(
         build_id="build-1",
         scope_kind="repo",
         scope_id="acme/repo",
@@ -401,6 +402,8 @@ async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
         ),
     )
 
+    assert launch.provider_session_id == "modal-session-1"
+    assert launch.docker_enabled is docker_enabled
     kwargs = create.aio.await_args.kwargs
     assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == ("true" if docker_enabled else "false")
     if docker_enabled:

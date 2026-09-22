@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import dataclass
 from typing import cast
 
 import modal
@@ -58,6 +59,12 @@ class BuildSessionNotFoundError(LookupError):
     """The requested provider session is absent or bound to another build."""
 
 
+@dataclass(frozen=True)
+class BuildSessionLaunch:
+    provider_session_id: str
+    docker_enabled: bool
+
+
 class ModalBuildSessionService:
     """Own the identity-bound lifecycle of one Modal image-build sandbox."""
 
@@ -77,7 +84,7 @@ class ModalBuildSessionService:
         build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         sandbox_settings: dict | None = None,
-    ) -> str:
+    ) -> BuildSessionLaunch:
         start_time = time.time()
         docker = parse_docker_launch(sandbox_settings)
         primary = repositories[0]
@@ -140,7 +147,9 @@ class ModalBuildSessionService:
             duration_ms=int((time.time() - start_time) * 1000),
             outcome="success",
         )
-        return sandbox.object_id
+        return BuildSessionLaunch(
+            provider_session_id=sandbox.object_id, docker_enabled=docker.enabled
+        )
 
     async def start(
         self,

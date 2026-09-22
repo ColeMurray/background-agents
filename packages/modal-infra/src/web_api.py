@@ -795,7 +795,7 @@ async def api_create_build_sandbox(
                 status_code=400, detail="callback URLs must target the control plane"
             )
 
-        provider_session_id = await ModalBuildSessionService().create(
+        launch = await ModalBuildSessionService().create(
             build_id=build_id,
             scope_kind=scope_kind,
             scope_id=scope_id,
@@ -810,10 +810,13 @@ async def api_create_build_sandbox(
             timeout_seconds=provider_session_timeout_seconds,
             sandbox_settings=parsed_request.sandbox_settings or None,
         )
-        execution.log_fields["sandbox_id"] = provider_session_id
+        execution.log_fields["sandbox_id"] = launch.provider_session_id
         return {
             "success": True,
-            "data": {"provider_session_id": provider_session_id},
+            "data": {
+                "provider_session_id": launch.provider_session_id,
+                "docker_enabled": launch.docker_enabled,
+            },
         }
 
 

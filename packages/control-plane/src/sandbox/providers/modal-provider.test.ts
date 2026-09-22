@@ -641,6 +641,74 @@ describe("ModalSandboxProvider", () => {
   });
 
   describe("image builds", () => {
+    it.each([
+      { requested: true, confirmed: undefined, accepted: false, cleanupFails: false },
+      { requested: true, confirmed: false, accepted: false, cleanupFails: false },
+      { requested: true, confirmed: true, accepted: true, cleanupFails: false },
+      { requested: false, confirmed: undefined, accepted: true, cleanupFails: false },
+      { requested: false, confirmed: false, accepted: true, cleanupFails: false },
+      { requested: true, confirmed: false, accepted: false, cleanupFails: true },
+    ])(
+      "requires Docker confirmation before binding or starting: %j",
+      async ({ requested, confirmed, accepted, cleanupFails }) => {
+        const client = createMockModalClient({
+          createImageBuildSandbox: vi.fn(async () => ({
+            providerSessionId: "modal-session-123",
+            dockerEnabled: confirmed,
+          })),
+          terminateImageBuildSandbox: vi.fn(async () => {
+            if (cleanupFails) throw new ModalApiError("cleanup unavailable", 503);
+          }),
+        });
+        const onProviderSessionCreated = vi.fn(async () => undefined);
+        const correlation = { request_id: "request-1", trace_id: "trace-1" };
+        const sandboxSettings = { dockerEnabled: requested, cpuCores: 2, memoryMib: 4096 };
+        const launch = new ModalSandboxProvider(client).triggerImageBuild({
+          buildId: "build-123",
+          scopeKind: "repo",
+          scopeId: "acme/repo",
+          repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
+          sandboxSettings,
+          callbackUrl: "https://worker.test/image-builds/build-complete",
+          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+          callbackToken: "callback-token",
+          buildExecutionTimeoutSeconds: 1800,
+          providerSessionTimeoutSeconds: 2400,
+          onProviderSessionCreated,
+          correlation,
+        });
+
+        if (accepted) {
+          await launch;
+          expect(onProviderSessionCreated).toHaveBeenCalledWith("modal-session-123");
+          expect(client.startImageBuildSandbox).toHaveBeenCalledOnce();
+          expect(client.terminateImageBuildSandbox).not.toHaveBeenCalled();
+        } else {
+          await expect(launch).rejects.toMatchObject({
+            errorType: cleanupFails ? "transient" : "permanent",
+            message: expect.stringContaining(
+              cleanupFails ? "cleanup unavailable" : "did not launch the Docker runtime"
+            ),
+          });
+          expect(client.terminateImageBuildSandbox).toHaveBeenCalledWith(
+            {
+              buildId: "build-123",
+              providerSessionId: "modal-session-123",
+              reason: "docker_runtime_not_honored",
+              correlation,
+            },
+            correlation
+          );
+          expect(onProviderSessionCreated).not.toHaveBeenCalled();
+          expect(client.startImageBuildSandbox).not.toHaveBeenCalled();
+        }
+        expect(client.createImageBuildSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ sandboxSettings }),
+          correlation
+        );
+      }
+    );
+
     it("binds a created image-build sandbox before starting it", async () => {
       const client = createMockModalClient();
       const provider = new ModalSandboxProvider(client);

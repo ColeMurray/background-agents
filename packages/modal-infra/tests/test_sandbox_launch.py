@@ -1,5 +1,6 @@
 """Behavior matrix for shared fresh, repository-image, and snapshot launches."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -351,6 +352,100 @@ async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("create_race", [False, True])
+@pytest.mark.parametrize("image_source", ["base", "snapshot"])
+async def test_docker_retry_returns_the_original_access_credentials(
+    monkeypatch, create_race, image_source
+):
+    from modal.exception import AlreadyExistsError, NotFoundError
+
+    manager, captured, _ = _docker_manager(monkeypatch)
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: object())
+    monkeypatch.setattr(
+        SandboxManager, "_generate_code_server_password", Mock(side_effect=["original", "new"])
+    )
+    monkeypatch.setattr(
+        SandboxManager, "_generate_vnc_password", Mock(side_effect=["old-vnc", "new-vnc"])
+    )
+    from_name = AsyncMock(side_effect=NotFoundError("not created"))
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
+    )
+
+    async def launch():
+        config = _docker_config(code_server_enabled=True, vnc_enabled=True)
+        if image_source == "base":
+            return await manager.create_sandbox(config)
+        return await manager.restore_from_snapshot(
+            snapshot_image_id="snapshot-1",
+            session_config=config.session_config,
+            sandbox_id=config.sandbox_id,
+            code_server_enabled=True,
+            vnc_enabled=True,
+            settings=config.settings,
+        )
+
+    original = await launch()
+    original_env = captured["kwargs"]["env"]
+    credential_output = json.dumps(
+        {key: original_env[key] for key in ("CODE_SERVER_PASSWORD", VNC_PASSWORD_ENV_VAR)}
+    )
+    process = SimpleNamespace(
+        stdout=SimpleNamespace(read=SimpleNamespace(aio=AsyncMock(return_value=credential_output))),
+        wait=SimpleNamespace(aio=AsyncMock(return_value=0)),
+    )
+    existing = SimpleNamespace(
+        object_id=original.modal_object_id,
+        get_tags=SimpleNamespace(aio=AsyncMock(return_value=captured["kwargs"]["tags"])),
+        exec=SimpleNamespace(aio=AsyncMock(return_value=process)),
+    )
+    from_name.side_effect = [NotFoundError("racing"), existing] if create_race else [existing]
+    create = AsyncMock(side_effect=AlreadyExistsError("already created"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", SimpleNamespace(aio=create))
+
+    adopted = await launch()
+
+    assert adopted.modal_object_id == original.modal_object_id
+    assert adopted.code_server_password == original.code_server_password == "original"
+    assert adopted.vnc_password == original.vnc_password == "old-vnc"
+    assert create.await_count == int(create_race)
+    assert existing.exec.aio.call_args.args[-2:] == ("CODE_SERVER_PASSWORD", VNC_PASSWORD_ENV_VAR)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output,exit_code", [("{}", 0), ('{"CODE_SERVER_PASSWORD": ""}', 0), ("invalid", 0), ("", 1)]
+)
+async def test_docker_adoption_fails_if_original_credentials_cannot_be_recovered(
+    monkeypatch, output, exit_code
+):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    process = SimpleNamespace(
+        stdout=SimpleNamespace(read=SimpleNamespace(aio=AsyncMock(return_value=output))),
+        wait=SimpleNamespace(aio=AsyncMock(return_value=exit_code)),
+    )
+    existing = SimpleNamespace(
+        object_id="modal-existing",
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(
+                return_value=docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")
+            )
+        ),
+        exec=SimpleNamespace(aio=AsyncMock(return_value=process)),
+    )
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=existing)),
+    )
+
+    with pytest.raises(RuntimeError, match="Could not recover adopted sandbox access credentials"):
+        await manager.create_sandbox(_docker_config(code_server_enabled=True))
+
+    assert "kwargs" not in captured
+    manager._resolve_and_setup_tunnels.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(monkeypatch):
     manager, captured, _ = _docker_manager(monkeypatch)
     foreign = SimpleNamespace(
@@ -395,7 +490,7 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
         _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
     )
 
-    prior.terminate.assert_awaited_once()
+    prior.terminate.assert_awaited_once_with(wait=True)
     assert captured["kwargs"]["name"] == docker_allocation_name(
         "session-1", "sandbox-acme-repo-1700000000000"
     )
@@ -408,3 +503,53 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
         _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
     )
     prior.terminate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination_fails", [False, True])
+async def test_docker_successor_waits_for_confirmed_predecessor_retirement(
+    monkeypatch, termination_fails
+):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    termination_requested = asyncio.Event()
+    termination_finished = asyncio.Event()
+
+    async def terminate(*, wait=False):
+        termination_requested.set()
+        if wait:
+            await termination_finished.wait()
+        if termination_fails:
+            raise RuntimeError("termination unconfirmed")
+
+    prior = SimpleNamespace(
+        object_id="modal-prior",
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "sandbox-prior"))
+        ),
+        terminate=SimpleNamespace(aio=terminate),
+    )
+    from modal.exception import NotFoundError
+
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(side_effect=[prior, NotFoundError("no successor")])),
+    )
+    launch = asyncio.create_task(
+        manager.create_sandbox(_docker_config(retire_sandbox_id="sandbox-prior"))
+    )
+    try:
+        await asyncio.wait_for(termination_requested.wait(), timeout=1)
+        assert not launch.done()
+        assert "kwargs" not in captured
+
+        termination_finished.set()
+        if termination_fails:
+            with pytest.raises(RuntimeError, match="termination unconfirmed"):
+                await launch
+            assert "kwargs" not in captured
+        else:
+            await launch
+            assert "kwargs" in captured
+    finally:
+        launch.cancel()
+        await asyncio.gather(launch, return_exceptions=True)

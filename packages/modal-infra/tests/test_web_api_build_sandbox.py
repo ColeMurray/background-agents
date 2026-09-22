@@ -9,7 +9,11 @@ from modal.exception import TimeoutError as ModalTimeoutError
 
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
-from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS, MAX_BUILD_TIMEOUT_SECONDS
+from src.sandbox.build_session import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    MAX_BUILD_TIMEOUT_SECONDS,
+    BuildSessionLaunch,
+)
 from src.sandbox.manager import SandboxHandle, SandboxManager
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
@@ -23,7 +27,7 @@ def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
     monkeypatch.setattr(web_api, "validate_control_plane_url", lambda _url: True)
     service = SimpleNamespace(
-        create=AsyncMock(return_value="modal-session-1"),
+        create=AsyncMock(return_value=BuildSessionLaunch("modal-session-1", False)),
         start=AsyncMock(),
         terminate=AsyncMock(),
         snapshot=AsyncMock(return_value="modal-image-1"),
@@ -104,7 +108,7 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
 
     assert result == {
         "success": True,
-        "data": {"provider_session_id": "modal-session-1"},
+        "data": {"provider_session_id": "modal-session-1", "docker_enabled": False},
     }
     service.create.assert_awaited_once_with(
         build_id="imgb-1",
@@ -144,6 +148,34 @@ async def test_create_build_sandbox_adds_finalization_grace_to_default_timeout(m
     assert service.create.await_args.kwargs["timeout_seconds"] == (
         DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("docker_enabled", [False, True])
+async def test_create_build_sandbox_returns_the_provider_confirmed_variant(
+    monkeypatch, docker_enabled
+):
+    service = _patch_dependencies(monkeypatch)
+    service.create.return_value = BuildSessionLaunch("modal-session-1", docker_enabled)
+    settings = {"dockerEnabled": True, "cpuCores": 2, "memoryMib": 4096}
+
+    result = await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            "sandbox_settings": settings,
+            **CALLBACK_CONTEXT,
+        },
+    )
+
+    assert result["data"] == {
+        "provider_session_id": "modal-session-1",
+        "docker_enabled": docker_enabled,
+    }
+    assert service.create.await_args.kwargs["sandbox_settings"] == settings
 
 
 @pytest.mark.asyncio

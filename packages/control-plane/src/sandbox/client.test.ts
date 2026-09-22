@@ -766,60 +766,64 @@ describe("ModalClient", () => {
     ).rejects.toThrow("Modal API error: Invalid response");
   });
 
-  it("creates a dormant image-build sandbox before callback credentials are available", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
+  it.each([undefined, false, true])(
+    "creates a dormant image-build sandbox with Docker confirmation %s",
+    async (dockerEnabled) => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
         new Response(
-          JSON.stringify({ success: true, data: { provider_session_id: "modal-session-1" } }),
+          JSON.stringify({
+            success: true,
+            data: { provider_session_id: "modal-session-1", docker_enabled: dockerEnabled },
+          }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
       );
 
-    const client = createModalClient("secret", "acme", "prod-web");
-    const result = await client.createImageBuildSandbox({
-      scopeKind: "repo",
-      scopeId: "acme/repo",
-      buildId: "imgb-1",
-      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
-      cloneToken: "clone-token",
-      cloneHost: "gitlab.com",
-      cloneUsername: "oauth2",
-      callbackUrl: "https://worker.test/image-builds/build-complete",
-      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
-      buildExecutionTimeoutSeconds: 1800,
-      providerSessionTimeoutSeconds: 2400,
-    });
+      const client = createModalClient("secret", "acme", "prod-web");
+      const result = await client.createImageBuildSandbox({
+        scopeKind: "repo",
+        scopeId: "acme/repo",
+        buildId: "imgb-1",
+        repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+        cloneToken: "clone-token",
+        cloneHost: "gitlab.com",
+        cloneUsername: "oauth2",
+        callbackUrl: "https://worker.test/image-builds/build-complete",
+        failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+        buildExecutionTimeoutSeconds: 1800,
+        providerSessionTimeoutSeconds: 2400,
+      });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://acme-prod-web--open-inspect-api-create-build-sandbox.modal.run",
-      expect.any(Object)
-    );
-    const request = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(JSON.parse(String(request.body))).toMatchObject({
-      clone_token: "clone-token",
-      clone_host: "gitlab.com",
-      clone_username: "oauth2",
-      callback_url: "https://worker.test/image-builds/build-complete",
-      failure_callback_url: "https://worker.test/image-builds/build-failed",
-    });
-    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
-    expect(body).toEqual({
-      scope_kind: "repo",
-      scope_id: "acme/repo",
-      build_id: "imgb-1",
-      repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "develop" }],
-      clone_token: "clone-token",
-      clone_host: "gitlab.com",
-      clone_username: "oauth2",
-      callback_url: "https://worker.test/image-builds/build-complete",
-      failure_callback_url: "https://worker.test/image-builds/build-failed",
-      build_execution_timeout_seconds: 1800,
-      provider_session_timeout_seconds: 2400,
-      sandbox_settings: null,
-    });
-    expect(result).toEqual({ providerSessionId: "modal-session-1" });
-  });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://acme-prod-web--open-inspect-api-create-build-sandbox.modal.run",
+        expect.any(Object)
+      );
+      const request = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(JSON.parse(String(request.body))).toMatchObject({
+        clone_token: "clone-token",
+        clone_host: "gitlab.com",
+        clone_username: "oauth2",
+        callback_url: "https://worker.test/image-builds/build-complete",
+        failure_callback_url: "https://worker.test/image-builds/build-failed",
+      });
+      const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+      expect(body).toEqual({
+        scope_kind: "repo",
+        scope_id: "acme/repo",
+        build_id: "imgb-1",
+        repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "develop" }],
+        clone_token: "clone-token",
+        clone_host: "gitlab.com",
+        clone_username: "oauth2",
+        callback_url: "https://worker.test/image-builds/build-complete",
+        failure_callback_url: "https://worker.test/image-builds/build-failed",
+        build_execution_timeout_seconds: 1800,
+        provider_session_timeout_seconds: 2400,
+        sandbox_settings: null,
+      });
+      expect(result).toEqual({ providerSessionId: "modal-session-1", dockerEnabled });
+    }
+  );
 
   it("starts the exact bound image-build sandbox with callback credentials", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(

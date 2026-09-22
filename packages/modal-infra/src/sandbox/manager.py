@@ -53,6 +53,7 @@ from .vcs_env import inject_vcs_env_vars
 log = get_logger("manager")
 
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
+ACCESS_PASSWORD_READ_TIMEOUT_SECONDS = 30
 MAX_TUNNEL_PORTS = 10
 DEFAULT_VNC_ENABLED = False
 _RESERVED_LAUNCH_ENV_VARS = {
@@ -514,13 +515,21 @@ class SandboxManager:
 
         repository_image = isinstance(spec.source, _RepositoryImageSource)
         if docker.enabled:
-            sandbox = await self._launch_docker_sandbox(
+            sandbox, adopted = await self._launch_docker_sandbox(
                 session_id=_session_identity(config.session_config),
                 sandbox_id=sandbox_id,
                 retire_sandbox_id=config.retire_sandbox_id,
                 create_kwargs=create_kwargs,
                 repository_image=repository_image,
             )
+            if adopted:
+                passwords = await self._read_access_passwords(
+                    sandbox,
+                    code_server_enabled=config.code_server_enabled,
+                    vnc_enabled=config.vnc_enabled,
+                )
+                code_server_password = passwords.get("CODE_SERVER_PASSWORD")
+                vnc_password = passwords.get(VNC_PASSWORD_ENV_VAR)
         else:
             sandbox = await _create_sandbox(create_kwargs, repository_image=repository_image)
         modal_object_id = sandbox.object_id
@@ -565,7 +574,7 @@ class SandboxManager:
         retire_sandbox_id: str | None,
         create_kwargs: dict[str, Any],
         repository_image: bool,
-    ) -> modal.Sandbox:
+    ) -> tuple[modal.Sandbox, bool]:
         """Create a Docker VM under a deterministic name, adopting an existing one.
 
         VM creation can outlive the control plane's HTTP request. Naming each
@@ -580,10 +589,11 @@ class SandboxManager:
         existing = await self._find_owned_docker_allocation(name, tags)
         if existing is None:
             try:
-                return await _create_sandbox(
+                sandbox = await _create_sandbox(
                     {**create_kwargs, "name": name, "tags": tags},
                     repository_image=repository_image,
                 )
+                return sandbox, False
             except modal.exception.AlreadyExistsError:
                 existing = await self._find_owned_docker_allocation(name, tags)
                 if existing is None:
@@ -593,7 +603,40 @@ class SandboxManager:
             sandbox_id=sandbox_id,
             modal_object_id=existing.object_id,
         )
-        return existing
+        return existing, True
+
+    @staticmethod
+    async def _read_access_passwords(
+        sandbox: modal.Sandbox, *, code_server_enabled: bool, vnc_enabled: bool
+    ) -> dict[str, str]:
+        """Recover only enabled service credentials from the owned VM's launch environment."""
+        keys = []
+        if code_server_enabled:
+            keys.append("CODE_SERVER_PASSWORD")
+        if vnc_enabled:
+            keys.append(VNC_PASSWORD_ENV_VAR)
+        if not keys:
+            return {}
+        process = await sandbox.exec.aio(
+            "python",
+            "-I",
+            "-c",
+            "import json, os, sys; print(json.dumps({k: os.environ.get(k) for k in sys.argv[1:]}))",
+            *keys,
+            timeout=ACCESS_PASSWORD_READ_TIMEOUT_SECONDS,
+        )
+        output = await process.stdout.read.aio()
+        if await process.wait.aio() != 0:
+            raise RuntimeError("Could not recover adopted sandbox access credentials")
+        try:
+            passwords = json.loads(output)
+        except ValueError:
+            raise RuntimeError("Could not recover adopted sandbox access credentials") from None
+        if not isinstance(passwords, dict) or any(
+            not isinstance(passwords.get(key), str) or not passwords[key] for key in keys
+        ):
+            raise RuntimeError("Could not recover adopted sandbox access credentials")
+        return {key: passwords[key] for key in keys}
 
     @staticmethod
     async def _find_owned_docker_allocation(
@@ -617,7 +660,7 @@ class SandboxManager:
         if await sandbox.get_tags.aio() != docker_allocation_tags(session_id, sandbox_id):
             log.warn("sandbox.docker_allocation_retire_mismatch", sandbox_id=sandbox_id)
             return
-        await sandbox.terminate.aio()
+        await sandbox.terminate.aio(wait=True)
         log.info(
             "sandbox.docker_allocation_retired",
             sandbox_id=sandbox_id,

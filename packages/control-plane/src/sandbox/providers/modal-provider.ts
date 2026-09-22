@@ -336,7 +336,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     config: ModalImageBuildTriggerConfig
   ): Promise<{ providerSessionId: string }> {
     try {
-      return await this.client.createImageBuildSandbox(
+      const created = await this.client.createImageBuildSandbox(
         {
           scopeKind: config.scopeKind,
           scopeId: config.scopeId,
@@ -354,6 +354,19 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         },
         config.correlation
       );
+      if (isDockerSandbox(config.sandboxSettings) && created.dockerEnabled !== true) {
+        await this.terminateImageBuildSandbox({
+          buildId: config.buildId,
+          providerSessionId: created.providerSessionId,
+          reason: "docker_runtime_not_honored",
+          correlation: config.correlation,
+        });
+        throw new SandboxProviderError(
+          "Modal deployment did not launch the Docker runtime for the image build; deploy Docker-aware Modal endpoints",
+          "permanent"
+        );
+      }
+      return created;
     } catch (error) {
       throw this.classifyImageBuildError("Failed to create Modal image build sandbox", error);
     }
