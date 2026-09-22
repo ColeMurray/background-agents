@@ -7,6 +7,7 @@ v1 validation below; only producer cases require the runner's temporary artifact
 import copy
 import json
 import os
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -20,6 +21,7 @@ from sandbox_runtime.repo_config import parse_repositories
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.web_terminal import WebTerminal
 from src import launch_contract, web_api
+from src.receiver_dependencies import RECEIVER_VALIDATOR_REQUIREMENTS
 from src.sandbox.manager import SandboxManager
 
 from .test_web_api_create_sandbox import _call_create_sandbox, _call_restore_sandbox, _patch_auth
@@ -32,6 +34,25 @@ def test_published_schema_matches_receiver():
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     published = Path(__file__).parents[1] / "contracts" / "launch-v1.schema.json"
     assert json.loads(published.read_text()) == schema
+
+
+def test_function_image_validator_pins_match_the_contract_lock():
+    lock = tomllib.loads((Path(__file__).parents[1] / "uv.lock").read_text())
+    packages = {package["name"]: package for package in lock["package"]}
+    names = set()
+
+    def visit(name):
+        if name in names:
+            return
+        names.add(name)
+        for dependency in packages[name].get("dependencies", []):
+            visit(dependency["name"])
+
+    visit("fastapi")
+    visit("pydantic")
+    assert set(RECEIVER_VALIDATOR_REQUIREMENTS) == {
+        f"{name}=={packages[name]['version']}" for name in names
+    }
 
 
 def test_health_advertises_contract_support_without_provider_work(native_calls):

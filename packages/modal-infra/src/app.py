@@ -16,6 +16,7 @@ import sandbox_runtime
 from .app_config import APP_NAME
 from .images.base import deployed_image_environment
 from .log_config import get_logger
+from .receiver_dependencies import RECEIVER_VALIDATOR_REQUIREMENTS
 
 # Path to sandbox_runtime source — bundled into function_image so shims can resolve
 _SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
@@ -30,9 +31,8 @@ app = modal.App(APP_NAME)
 function_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
-        "pydantic>=2.0",
+        *RECEIVER_VALIDATOR_REQUIREMENTS,
         "httpx",
-        "fastapi",
         "modal",  # Required for sandbox.manager imports
         "PyJWT[crypto]",  # For GitHub App token generation
     )

@@ -44,8 +44,9 @@ context used by the tests. Do not update it merely to suppress a compatibility f
 ## Preparation evidence to refresh before activation
 
 1. Record exact sender and receiver SHAs/build identities, endpoints, deployment modes and actual
-   receiver Python/Pydantic/FastAPI versions. The receiver image installs dependencies separately
-   from the local frozen uv environment.
+   receiver Python/Pydantic/FastAPI versions. The function image pins the validator dependency tree
+   to the frozen contract lock; CI checks parity. Record deployed identity to confirm that the
+   intended artifact actually reached the receiver.
 2. Identify bundled receiver runtime and base/prepared/retained-snapshot runtime versions
    separately. Missing metadata is not evidence of current compatibility.
 3. Inventory external/self-hosted callers and review overlap with PR #1809, preservation work and
