@@ -10,6 +10,7 @@ import type { SandboxRuntimeFacts } from "../sandbox-ports";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
+import { sandboxBootPhaseLogFields } from "../../sandbox/boot-phase";
 
 /**
  * Sandbox-runtime family: events about the sandbox itself rather than the
@@ -85,7 +86,11 @@ export class SandboxRuntimeEventHandler {
 
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (!this.lifecycle.onRuntimeReady(context.now, event.harness)) return;
+    if (
+      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
+    ) {
+      return;
+    }
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });
@@ -113,13 +118,7 @@ export class SandboxRuntimeEventHandler {
     }
     this.log.info("sandbox.boot_progress", {
       event: "sandbox.boot_progress",
-      boot_seq: event.bootSeq,
-      phase: event.phase,
-      phase_status: event.status,
-      repo_owner: event.repoOwner ?? null,
-      repo_name: event.repoName ?? null,
-      elapsed_ms: event.elapsedMs ?? null,
-      warning: event.warning ?? false,
+      ...sandboxBootPhaseLogFields(toSandboxBootPhase(event)),
     });
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });

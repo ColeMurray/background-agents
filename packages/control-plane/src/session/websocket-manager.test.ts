@@ -106,9 +106,10 @@ function createMockRepository() {
     createdAt: number;
     authorizationExpiresAt: number;
   }> = [];
+  const getSandbox = vi.fn(() => sandboxRow);
 
   const repo = {
-    getSandbox: () => sandboxRow,
+    getSandbox,
     setActiveSocketId: (socketId: string) => {
       // Like the UPDATE it stands in for: nothing to write without a row.
       if (sandboxRow) sandboxRow.active_socket_id = socketId;
@@ -152,6 +153,7 @@ function createMockRepository() {
 
   return {
     repo,
+    getSandbox,
     mappings,
     upsertCalls,
     setSandbox: (row: SandboxRow | null) => {
@@ -721,12 +723,30 @@ describe("SessionWebSocketManagerImpl", () => {
         const { manager, mockRepo } = createManager();
         const row = createSandboxRow("sb-1");
         row.status = status;
+        row.boot_phase = JSON.stringify({
+          phase: "setup",
+          status: "started",
+          bootSeq: 3,
+          repoOwner: "acme",
+          repoName: "api",
+        });
         mockRepo.setSandbox(row);
         const ws = createFakeWebSocket();
         manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
         expect(manager.getSandboxSocket()).toBe(ws);
-        expect(manager.getSandboxCommandTarget()).toEqual({ kind: "booting" });
+        mockRepo.getSandbox.mockClear();
+        expect(manager.getSandboxCommandTarget()).toEqual({
+          kind: "booting",
+          phase: {
+            phase: "setup",
+            status: "started",
+            bootSeq: 3,
+            repoOwner: "acme",
+            repoName: "api",
+          },
+        });
+        expect(mockRepo.getSandbox).toHaveBeenCalledOnce();
         // Withholding is not closing: the bridge stays attached for lifecycle use.
         expect(ws.close).not.toHaveBeenCalled();
       }

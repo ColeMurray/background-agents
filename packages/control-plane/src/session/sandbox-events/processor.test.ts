@@ -32,7 +32,10 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
   };
 }
 
-function createProcessor() {
+function createProcessor(shutdown?: {
+  generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
+  prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+}) {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
@@ -163,7 +166,8 @@ function createProcessor() {
       log,
       { onRuntimeReady: vi.fn(() => false) }
     ),
-    pushService
+    pushService,
+    shutdown
   );
 
   return {
@@ -232,7 +236,6 @@ describe("SessionSandboxEventProcessor", () => {
     const event: SandboxEvent = {
       type: "heartbeat",
       sandboxId: "sb-1",
-      status: "ready",
       timestamp: 1000,
     };
 
@@ -780,7 +783,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -794,7 +796,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -808,7 +809,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -821,7 +821,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -843,6 +842,87 @@ describe("SessionSandboxEventProcessor", () => {
   });
 
   describe("ACK mechanism", () => {
+    it.each([
+      {
+        event: {
+          type: "sandbox_generation_ready",
+          sandboxId: "sb-1",
+          generation: { sandboxId: "sb-1", createdAt: 4000 },
+          timestamp: 1000,
+          ackId: "sandbox_generation_ready:2",
+        } satisfies SandboxEvent,
+      },
+      {
+        event: {
+          type: "preservation_prepared",
+          sandboxId: "sb-1",
+          operationId: "operation-1",
+          generation: { sandboxId: "sb-1", createdAt: 4000 },
+          executionStopped: true,
+          timestamp: 1000,
+          ackId: "preservation_prepared:2",
+        } satisfies SandboxEvent,
+      },
+    ])("rejects $event.type without shutdown handlers and does not ACK", async ({ event }) => {
+      const h = createProcessor();
+      const sandboxWs = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toThrow(
+        "Sandbox graceful shutdown event handlers are not configured"
+      );
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    });
+
+    it("ACKs a shutdown event only after its configured handler succeeds", async () => {
+      const prepared = vi.fn();
+      const h = createProcessor({ generationReady: vi.fn(), prepared });
+      const sandboxWs = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      const event = {
+        type: "preservation_prepared",
+        sandboxId: "sb-1",
+        operationId: "operation-1",
+        generation: { sandboxId: "sb-1", createdAt: 4000 },
+        executionStopped: true,
+        timestamp: 1000,
+        ackId: "preservation_prepared:2",
+      } satisfies SandboxEvent;
+
+      await h.processor.processSandboxEvent(event);
+
+      expect(prepared).toHaveBeenCalledWith(event);
+      expect(prepared.mock.invocationCallOrder[0]).toBeLessThan(
+        h.wsManager.send.mock.invocationCallOrder[0]
+      );
+      expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+        type: "ack",
+        ackId: "preservation_prepared:2",
+      });
+    });
+
+    it("does not ACK when a configured shutdown handler throws", async () => {
+      const h = createProcessor({
+        generationReady: vi.fn(() => {
+          throw new Error("generation rejected");
+        }),
+        prepared: vi.fn(),
+      });
+      const sandboxWs = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+      const event = {
+        type: "sandbox_generation_ready",
+        sandboxId: "sb-1",
+        generation: { sandboxId: "sb-1", createdAt: 4000 },
+        timestamp: 1000,
+        ackId: "sandbox_generation_ready:2",
+      } satisfies SandboxEvent;
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toThrow("generation rejected");
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    });
+
     it("sends ACK after execution_complete when ackId is present", async () => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;

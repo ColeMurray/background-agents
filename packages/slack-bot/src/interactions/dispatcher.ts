@@ -4,8 +4,7 @@ import {
   baseActionId,
   parseTargetInteractionRequestId,
 } from "../target-clarification";
-import type { SlackInteractionPayload, Env } from "../types";
-import type { BackgroundTaskScheduler } from "../messages/blocks";
+import type { BackgroundTaskScheduler, SlackInteractionPayload, Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 
 export async function handleSlackInteraction(

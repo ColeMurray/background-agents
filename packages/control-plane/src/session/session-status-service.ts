@@ -216,6 +216,15 @@ export class SessionStatusService {
   }
 
   /**
+   * Re-derive status from persisted messages after an external lifecycle
+   * boundary, without overriding a user-selected terminal status.
+   */
+  async reconcileFromMessageState(): Promise<void> {
+    if (this.isSessionClosed()) return;
+    await this.settleFromMessageState();
+  }
+
+  /**
    * Whether the session has been cancelled or archived. A reconcile derives
    * the next status from message state, and message state says nothing about
    * a status the user chose; a reconcile that runs after an await (the

@@ -87,15 +87,19 @@ const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
   messageId: z.string(),
 });
 
+export const sandboxGenerationSchema = z.object({
+  sandboxId: z.string().min(1),
+  createdAt: z.number().int().positive(),
+});
+
 // Sandbox events from Modal or synthesized by the control plane.
 export const sandboxEventSchema = z.discriminatedUnion("type", [
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
-    status: z.string(),
   }),
   sandboxEventBaseSchema.extend({
-    // Emitted on every sandbox bridge connect (bridge readiness, not vendor
-    // readiness). Present in essentially every session's replay history.
+    // Emitted after the runtime attaches its harness. This is the readiness
+    // signal that moves the sandbox row to `ready`.
     type: z.literal("ready"),
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
@@ -103,7 +107,19 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
+    preservationProtocolVersion: z.literal(1).optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("sandbox_generation_ready"),
+    generation: sandboxGenerationSchema,
+  }),
+  sandboxEventBaseSchema.extend({
+    type: z.literal("preservation_prepared"),
+    operationId: z.string().min(1),
+    generation: sandboxGenerationSchema,
+    executionStopped: z.boolean(),
+    error: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),

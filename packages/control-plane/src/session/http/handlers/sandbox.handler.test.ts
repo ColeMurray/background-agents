@@ -97,7 +97,6 @@ describe("SandboxHandler", () => {
     const event = {
       type: "heartbeat",
       sandboxId: "sandbox-1",
-      status: "running",
       timestamp: 123,
     };
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { sandboxBootPhaseSchema, sandboxEventSchema, toSandboxBootPhase } from "./sandbox-events";
+import {
+  sandboxBootPhaseSchema,
+  sandboxEventSchema,
+  sandboxGenerationSchema,
+  toSandboxBootPhase,
+} from "./sandbox-events";
 
 describe("boot_progress sandbox event", () => {
   it("parses a phase report with its repository and sequence", () => {
@@ -100,5 +105,27 @@ describe("toSandboxBootPhase", () => {
     });
     // What the control plane stores is what the snapshot schema accepts.
     expect(sandboxBootPhaseSchema.parse(phase)).toEqual(phase);
+  });
+});
+
+describe("sandboxGenerationSchema", () => {
+  it.each([
+    [1, true],
+    [1.0, true],
+    [Number.MAX_SAFE_INTEGER, true],
+    [0, false],
+    [-1, false],
+    [0.5, false],
+    [Number.NaN, false],
+    [Number.POSITIVE_INFINITY, false],
+    [Number.MAX_SAFE_INTEGER + 1, false],
+  ])("validates createdAt=%s at the safe positive integer boundary", (createdAt, valid) => {
+    expect(sandboxGenerationSchema.safeParse({ sandboxId: "sandbox-1", createdAt }).success).toBe(
+      valid
+    );
+  });
+
+  it("rejects an empty sandbox id", () => {
+    expect(sandboxGenerationSchema.safeParse({ sandboxId: "", createdAt: 1 }).success).toBe(false);
   });
 });

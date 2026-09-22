@@ -445,7 +445,7 @@ class TestConnectSnapshot:
         assert bridge.event_forwarder._event_buffer == []
         assert [line["seq"] for line in bridge.boot_attach._held_boot_lines] == [2]
 
-    async def test_heartbeat_reports_booting_until_attached(self, tmp_path, monkeypatch):
+    async def test_heartbeat_status_is_retained_for_compatibility(self, tmp_path, monkeypatch):
         harness = OpeningHarness([])
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         bridge._send_event = AsyncMock()
@@ -479,10 +479,9 @@ class TestCommandsWhileBooting:
 
         _write_lines(HARNESS_COMPLETED)
         await bridge.boot_attach._relay_boot_events()
-        await asyncio.wait_for(prompt, timeout=1)
+        terminal = await asyncio.wait_for(prompt, timeout=1)
 
         assert [p.message_id for p in harness.prompts] == ["msg-1"]
-        terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["messageId"] == "msg-1"
 
@@ -542,12 +541,11 @@ class TestCommandsWhileBooting:
         bridge._send_event = AsyncMock()
         bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.01)
 
-        await asyncio.wait_for(
+        terminal = await asyncio.wait_for(
             bridge._handle_prompt({"type": "prompt", "messageId": "msg-1", "content": "hi"}),
             timeout=1,
         )
 
-        terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["success"] is False
         assert "did not become ready" in terminal["error"]
@@ -569,11 +567,10 @@ class TestCommandsWhileBooting:
         bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.05)
 
         started_at = time.monotonic()
-        await bridge._handle_prompt(_agent_prompt("msg-1"))
+        terminal = await bridge._handle_prompt(_agent_prompt("msg-1"))
 
         assert time.monotonic() - started_at < 0.4
         assert harness.prompts == []
-        terminal = bridge._send_event.await_args.args[0]
         assert terminal["type"] == "execution_complete"
         assert terminal["success"] is False
         assert "could not start within" in terminal["error"]
@@ -583,10 +580,19 @@ class TestCommandsWhileBooting:
         bridge._send_event = AsyncMock()
 
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "hi"})
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         await asyncio.sleep(0)
         await bridge._handle_command({"type": "stop"})
         await asyncio.wait_for(task, timeout=1)
+
+        async def wait_for_terminal() -> None:
+            while not any(
+                call.args[0]["type"] == "execution_complete"
+                for call in bridge._send_event.await_args_list
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_terminal(), timeout=1)
 
         terminals = [
             call.args[0]

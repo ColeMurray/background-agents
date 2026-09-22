@@ -66,11 +66,12 @@ Grok models support connected SuperGrok provider accounts or `XAI_API_KEY` mode 
 default. See [Using Grok with a SuperGrok Subscription](GROK_MODELS.md) for setup and rollout
 instructions.
 
-| Model ID             | Display name   | Description                                     | Reasoning efforts | Default effort |
-| -------------------- | -------------- | ----------------------------------------------- | ----------------- | -------------- |
-| `xai/grok-4.5`       | Grok 4.5       | Grok for chat, coding, and agentic tools        | low, medium, high | high           |
-| `xai/grok-4.6`       | Grok 4.6       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
-| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | Not configurable  | N/A            |
+| Model ID             | Display name   | Description                                     | Reasoning efforts        | Default effort |
+| -------------------- | -------------- | ----------------------------------------------- | ------------------------ | -------------- |
+| `xai/grok-4.5`       | Grok 4.5       | Grok for chat, coding, and agentic tools        | low, medium, high        | high           |
+| `xai/grok-4.6`       | Grok 4.6       | Grok for chat, coding, and agentic tools        | low, medium, high, xhigh | high           |
+| `xai/grok-4.7`       | Grok 4.7       | Latest Grok for chat, coding, and agentic tools | low, medium, high, xhigh | high           |
+| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | Not configurable         | N/A            |
 
 ## OpenCode Zen
 

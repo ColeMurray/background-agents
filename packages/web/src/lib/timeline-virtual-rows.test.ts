@@ -20,7 +20,7 @@ describe("buildTimelineVirtualRows", () => {
     const rows = buildTimelineVirtualRows({
       items: buildSessionTimelineItems(
         [
-          { type: "heartbeat", sandboxId: "sandbox", timestamp: 1, status: "ready" },
+          { type: "heartbeat", sandboxId: "sandbox", timestamp: 1 },
           {
             type: "tool_result",
             sandboxId: "sandbox",

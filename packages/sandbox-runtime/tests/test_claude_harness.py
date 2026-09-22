@@ -101,6 +101,8 @@ class FakeSdkClient:
     hang: bool = False
     hang_connect: bool = False
     hang_interrupt: bool = False
+    hang_disconnect: bool = False
+    fail_disconnect: bool = False
     fail_connect: bool = False
 
     async def connect(self) -> None:
@@ -111,6 +113,10 @@ class FakeSdkClient:
         self.connected = True
 
     async def disconnect(self) -> None:
+        if self.fail_disconnect:
+            raise RuntimeError("disconnect failed")
+        if self.hang_disconnect:
+            await asyncio.Event().wait()
         self.disconnected = True
 
     async def query(self, prompt: Any, session_id: str = "default") -> None:

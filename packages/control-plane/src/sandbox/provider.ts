@@ -62,7 +62,19 @@ export interface SandboxProviderCapabilities {
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */
   supportsExplicitStop?: boolean;
+  /** Whether taking a snapshot also stops the source sandbox. */
+  snapshotStopsSandbox?: boolean;
 }
+
+export type SandboxLifetime =
+  | {
+      kind: "finite";
+      expiresAtMs: number;
+      observedAtMs: number;
+      source: "provider" | "conservative_start_bound";
+    }
+  | { kind: "none"; observedAtMs: number }
+  | { kind: "unknown"; observedAtMs: number; reason: string };
 
 /**
  * One member repository of a session, in position order (first = primary).
@@ -168,6 +180,7 @@ export interface CreateSandboxResult {
   providerObjectId?: string;
   /** Creation timestamp */
   createdAt: number;
+  lifetime: SandboxLifetime;
   /** Code-server tunnel URL (if available) */
   codeServerUrl?: string;
   /** Code-server password (if available) */
@@ -229,9 +242,7 @@ export interface RestoreConfig {
 /**
  * Result of restoring a sandbox from a snapshot.
  */
-export interface RestoreResult {
-  /** Whether the restore succeeded */
-  success: boolean;
+interface RestoreResultFields {
   /** Sandbox ID if successful */
   sandboxId?: string;
   /** Provider's internal object ID (e.g., Modal's object ID for snapshot API) */
@@ -250,6 +261,18 @@ export interface RestoreResult {
   tunnelUrls?: Record<string, string>;
 }
 
+export type RestoreResult =
+  | (RestoreResultFields & {
+      /** Whether the restore succeeded */
+      success: true;
+      lifetime: SandboxLifetime;
+    })
+  | (RestoreResultFields & {
+      /** Whether the restore succeeded */
+      success: false;
+      lifetime?: never;
+    });
+
 /**
  * Configuration for taking a sandbox snapshot.
  */
@@ -264,6 +287,8 @@ export interface SnapshotConfig {
   correlation?: CorrelationContext;
   /** Optional caller deadline for long-running provider artifact creation. */
   signal?: AbortSignal;
+  /** Absolute caller deadline shared by every nested provider operation. */
+  deadlineAtMs?: number;
 }
 
 /**
@@ -276,6 +301,8 @@ export interface SnapshotResult {
   imageId?: string;
   /** Error message if failed */
   error?: string;
+  /** True when snapshot creation itself stopped the source sandbox. */
+  sourceStopped?: boolean;
 }
 
 /**
@@ -303,9 +330,7 @@ export interface ResumeConfig {
 /**
  * Result of resuming a previously stopped sandbox.
  */
-export interface ResumeResult {
-  /** Whether the resume succeeded */
-  success: boolean;
+interface ResumeResultFields {
   /** Provider's internal object ID, if it changed during recovery */
   providerObjectId?: string;
   /** Error message if resume failed */
@@ -324,6 +349,18 @@ export interface ResumeResult {
   tunnelUrls?: Record<string, string>;
 }
 
+export type ResumeResult =
+  | (ResumeResultFields & {
+      /** Whether the resume succeeded */
+      success: true;
+      lifetime: SandboxLifetime;
+    })
+  | (ResumeResultFields & {
+      /** Whether the resume succeeded */
+      success: false;
+      lifetime?: never;
+    });
+
 /**
  * Configuration for explicitly stopping a sandbox.
  */
@@ -334,10 +371,14 @@ export interface StopConfig {
   sessionId: string;
   /** Reason for the stop operation */
   reason: string;
+  /** Whether the provider-owned state must remain resumable or be destroyed. */
+  intent: "preserve" | "destroy";
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /** Optional caller deadline for provider cleanup. */
   signal?: AbortSignal;
+  /** Absolute caller deadline shared by every nested provider operation. */
+  deadlineAtMs?: number;
 }
 
 /**
@@ -348,6 +389,20 @@ export interface StopResult {
   success: boolean;
   /** Error message if stop failed */
   error?: string;
+}
+
+/** Combine caller cancellation with an absolute provider-operation deadline. */
+export function signalUntilDeadline(
+  deadlineAtMs: number | undefined,
+  signal?: AbortSignal
+): AbortSignal | undefined {
+  if (deadlineAtMs === undefined) return signal;
+  const remainingMs = deadlineAtMs - Date.now();
+  const deadlineSignal =
+    remainingMs <= 0
+      ? AbortSignal.abort(new DOMException("Provider operation deadline exceeded", "TimeoutError"))
+      : AbortSignal.timeout(remainingMs);
+  return signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
 }
 
 /**

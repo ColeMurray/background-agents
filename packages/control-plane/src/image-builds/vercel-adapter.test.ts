@@ -128,11 +128,13 @@ describe("VercelImageBuildAdapter", () => {
       providerObjectId: "vercel-session-1",
       sessionId: "build-1",
       reason: "environment_image_build_complete",
+      intent: "destroy",
       correlation: {
         request_id: "request-1",
         trace_id: "trace-1",
         sandbox_id: "vercel-session-1",
       },
+      signal: undefined,
     });
   });
 

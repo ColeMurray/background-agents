@@ -112,6 +112,7 @@ const baseStopConfig: StopConfig = {
   providerObjectId: "daytona-sandbox-id",
   sessionId: "session-123",
   reason: "inactivity_timeout",
+  intent: "preserve",
 };
 
 // ==================== Tests ====================
@@ -145,6 +146,7 @@ describe("DaytonaSandboxProvider", () => {
       expect(result.sandboxId).toBe("sandbox-456");
       expect(result.providerObjectId).toBe("daytona-sandbox-id");
       expect(result.createdAt).toBeGreaterThan(0);
+      expect(result.lifetime).toMatchObject({ kind: "none" });
 
       // Verify create was called with correct params
       const createCall = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -567,10 +569,11 @@ describe("DaytonaSandboxProvider", () => {
       expect(result.codeServerUrl).toBeUndefined();
     });
   });
-
   describe("stopSandbox", () => {
     it("happy path: stops sandbox", async () => {
-      const client = createMockClient();
+      const client = createMockClient({
+        getSandbox: async () => ({ id: "daytona-sandbox-id", state: "stopped" }),
+      });
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
       const result = await provider.stopSandbox(baseStopConfig);
@@ -584,7 +587,12 @@ describe("DaytonaSandboxProvider", () => {
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
       const signal = AbortSignal.timeout(1_000);
 
-      const result = await provider.stopSandbox({ ...baseStopConfig, reason: "respawn", signal });
+      const result = await provider.stopSandbox({
+        ...baseStopConfig,
+        reason: "respawn",
+        intent: "destroy",
+        signal,
+      });
 
       expect(result.success).toBe(true);
       expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-sandbox-id", signal);
@@ -593,13 +601,13 @@ describe("DaytonaSandboxProvider", () => {
 
     it("returns success when sandbox not found (already gone)", async () => {
       const client = createMockClient({
-        stopSandbox: async () => {
+        deleteSandbox: async () => {
           throw new DaytonaNotFoundError("not found");
         },
       });
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
 
-      const result = await provider.stopSandbox(baseStopConfig);
+      const result = await provider.stopSandbox({ ...baseStopConfig, intent: "destroy" });
 
       expect(result.success).toBe(true);
     });

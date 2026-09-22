@@ -42,6 +42,7 @@ import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  signalUntilDeadline,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ResumeConfig,
@@ -149,6 +150,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId: sandbox.id,
         createdAt: Date.now(),
+        lifetime: { kind: "none", observedAtMs: Date.now() },
         ...access,
       };
     } catch (error) {
@@ -204,6 +206,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.id,
+        lifetime: { kind: "none", observedAtMs: Date.now() },
         ...access,
       };
     } catch (error) {
@@ -213,18 +216,29 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
     try {
       try {
-        if (config.reason === "respawn") {
-          await this.client.deleteSandbox(
-            config.providerObjectId,
-            ...(config.signal ? [config.signal] : [])
-          );
+        const destroy = config.intent === "destroy";
+        if (destroy) {
+          await this.client.deleteSandbox(config.providerObjectId, ...(signal ? [signal] : []));
         } else {
-          await this.client.stopSandbox(config.providerObjectId);
+          await this.client.stopSandbox(config.providerObjectId, ...(signal ? [signal] : []));
+          if (config.intent === "preserve") {
+            const stopped = await this.client.getSandbox(config.providerObjectId, signal);
+            if (stopped.state !== "stopped" && stopped.state !== "archived") {
+              return { success: false, error: `Sandbox state was ${stopped.state} after stop` };
+            }
+          }
         }
       } catch (error) {
         if (error instanceof DaytonaNotFoundError) {
+          if (config.intent === "preserve") {
+            return {
+              success: false,
+              error: "Sandbox disappeared before graceful shutdown was verified",
+            };
+          }
           return { success: true };
         }
         throw error;
@@ -233,7 +247,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw classifyDaytonaError(
-        `Failed to ${config.reason === "respawn" ? "delete" : "stop"} Daytona sandbox`,
+        `Failed to ${config.intent === "destroy" ? "delete" : "stop"} Daytona sandbox`,
         error
       );
     }

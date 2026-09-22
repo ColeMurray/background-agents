@@ -12,6 +12,12 @@ import {
   DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
+import {
+  parseSandboxGlobalSettingsResponse,
+  sandboxEnvironmentSettingsResponseSchema,
+  sandboxGlobalSettingsResponseSchema,
+  sandboxRepoSettingsResponseSchema,
+} from "./sandbox-settings-schema";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -85,6 +91,57 @@ afterEach(() => {
   reposMock.loading = false;
 });
 
+describe("sandbox settings response schemas", () => {
+  it("parses valid global responses including nullable fields", () => {
+    const parsed = sandboxGlobalSettingsResponseSchema.safeParse({
+      integrationId: "sandbox",
+      settings: { defaults: { tunnelPorts: [3000] }, enabledRepos: null },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success ? parsed.data.settings?.enabledRepos : undefined).toBeNull();
+    expect(
+      parseSandboxGlobalSettingsResponse({ integrationId: "sandbox", settings: null })
+    ).toEqual({
+      integrationId: "sandbox",
+      settings: null,
+    });
+  });
+
+  it("rejects malformed global responses", () => {
+    expect(
+      sandboxGlobalSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: ["3000"] } },
+      }).success
+    ).toBe(false);
+    expect(parseSandboxGlobalSettingsResponse({ integrationId: "github", settings: null })).toBe(
+      undefined
+    );
+  });
+
+  it("parses valid scoped responses and rejects partial scoped responses", () => {
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: null,
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxEnvironmentSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        environmentId: "env_123",
+        settings: { sandboxTimeoutMs: 7_200_000 },
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({ integrationId: "sandbox", settings: null })
+        .success
+    ).toBe(false);
+  });
+});
+
 describe("SandboxSettingsPage — tunnel ports editor", () => {
   const user = userEvent.setup();
 
@@ -126,6 +183,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
                   cpuCores: 2,
                   memoryMib: 4096,
                   sandboxTimeoutMs: 7_200_000,
+                  finalSnapshotBufferMs: 900_000,
                   buildTimeoutSeconds: 2400,
                 },
               },
@@ -144,11 +202,15 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.queryByLabelText("CPU cores")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Memory (MiB)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Session Timeout (minutes)")).not.toBeInTheDocument();
+    const finalSnapshotBuffer = screen.getByLabelText("Final snapshot buffer (minutes)");
+    expect(finalSnapshotBuffer).toHaveValue(15);
     expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(2400);
     expect(
       screen.getByText(/Per-session CPU and memory overrides are unavailable for daytona/)
     ).toBeInTheDocument();
 
+    await user.clear(finalSnapshotBuffer);
+    await user.type(finalSnapshotBuffer, "20");
     await user.click(screen.getByLabelText("Web Terminal"));
     await user.click(screen.getByText("Save Settings"));
 
@@ -161,6 +223,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         cpuCores: 2,
         memoryMib: 4096,
         sandboxTimeoutMs: 7_200_000,
+        finalSnapshotBufferMs: 1_200_000,
       });
     });
   });
