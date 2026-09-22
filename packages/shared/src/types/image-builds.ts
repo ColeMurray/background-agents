@@ -8,6 +8,19 @@
  */
 
 import { z } from "zod";
+import type { SandboxProviderName } from "./integrations";
+
+/** Backends that can build and boot prebuilt images.
+ * Deployment admission (such as Daytona opt-in) is a separate policy.
+ */
+export const IMAGE_BUILD_PROVIDER_IDS = [
+  "modal",
+  "modal-vm",
+  "vercel",
+  "opencomputer",
+  "e2b",
+  "daytona",
+] as const satisfies readonly SandboxProviderName[];
 
 /** Mirrors the `image_builds.status` column. */
 export const imageBuildStatusSchema = z.enum(["building", "ready", "failed", "superseded"]);

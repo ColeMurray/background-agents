@@ -120,6 +120,13 @@ jobs:
         run: terraform test
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Modal module contract tests
+        id: modal_test
+        run: |
+          terraform init -backend=false
+          terraform test
+        working-directory: terraform/modules/modal-app
+
       - name: Post Validation Results
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v8
@@ -138,6 +145,7 @@ jobs:
             | Init | ${{ steps.init.outcome == 'success' && '✅' || '❌' }} |
             | Validate | ${{ steps.validate.outcome == 'success' && '✅' || '❌' }} |
             | Tests | ${{ steps.test.outcome == 'success' && '✅' || '❌' }} |
+            | Modal module tests | ${{ steps.modal_test.outcome == 'success' && '✅' || '❌' }} |
             ${planNote}
 
             *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;

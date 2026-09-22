@@ -100,6 +100,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
 
   readonly capabilities: SandboxProviderCapabilities;
 
+  pendingSandboxReference(sessionId: string, sandboxId: string): string | undefined {
+    return this.name === "modal-vm"
+      ? `modal-vm-session:${JSON.stringify([sessionId, sandboxId])}`
+      : undefined;
+  }
+
   constructor(
     private readonly client: ModalClient,
     backend: ModalBackend
@@ -151,7 +157,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         config.correlation
       );
 
-      await this.confirmSessionLaunch(config, result);
+      this.confirmSessionLaunch(result);
       return {
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
@@ -210,7 +216,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         config.correlation
       );
 
-      await this.confirmSessionLaunch(config, result);
+      this.confirmSessionLaunch(result);
       return {
         success: true,
         sandboxId: result.sandboxId,
@@ -246,15 +252,27 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
-      const result = await this.client.snapshotSandbox(
-        {
-          providerObjectId: config.providerObjectId,
-          sessionId: config.sessionId,
-          signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
-          deadlineAtMs: config.deadlineAtMs,
-        },
-        config.correlation
-      );
+      const request = {
+        providerObjectId: config.providerObjectId,
+        sessionId: config.sessionId,
+        sandboxBackend: this.name,
+        signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
+        deadlineAtMs: config.deadlineAtMs,
+      };
+      let result;
+      try {
+        result = await this.client.snapshotSandbox(request, config.correlation);
+      } catch (error) {
+        // A VM's terminal capture is keyed by this stable source reference.
+        // One retry can recover the durable receipt after a lost response.
+        if (
+          this.name !== "modal-vm" ||
+          request.signal?.aborted ||
+          (error instanceof ModalApiError && error.status < 500)
+        )
+          throw error;
+        result = await this.client.snapshotSandbox(request, config.correlation);
+      }
 
       if (this.name === "modal-vm" && result.sourceStopped !== true) {
         throw new SandboxProviderError(
@@ -280,6 +298,16 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       }
       throw this.classifyError("Failed to take snapshot", error);
     }
+  }
+
+  recoverSnapshotReceipt(
+    config: Pick<SnapshotConfig, "providerObjectId" | "sessionId" | "signal" | "deadlineAtMs">
+  ): Promise<{ imageId: string } | null> {
+    if (this.name !== "modal-vm") return Promise.resolve(null);
+    return this.client.recoverSandboxSnapshot({
+      ...config,
+      signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
+    });
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
@@ -372,30 +400,18 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     );
   }
 
-  private async confirmSessionLaunch(
-    config: CreateSandboxConfig | RestoreConfig,
-    result: { modalObjectId?: string; sandboxBackend?: unknown; legacyDockerEnabled?: unknown }
-  ): Promise<void> {
+  private confirmSessionLaunch(result: {
+    modalObjectId?: string;
+    sandboxBackend?: unknown;
+    legacyDockerEnabled?: unknown;
+  }): void {
     try {
       this.assertBackend(result);
     } catch (error) {
-      if (result.modalObjectId) {
-        try {
-          await this.client.stopSandbox(
-            { providerObjectId: result.modalObjectId, sessionId: config.sessionId },
-            config.correlation
-          );
-        } catch (cleanupError) {
-          throw new SandboxLaunchRejectedError(
-            "Incompatible Modal allocation could not be retired",
-            result.modalObjectId,
-            cleanupError instanceof Error ? cleanupError : undefined
-          );
-        }
-      }
+      // The lifecycle must persist and fence this generation before any cleanup await.
       throw new SandboxLaunchRejectedError(
         error instanceof Error ? error.message : "Incompatible Modal allocation",
-        null,
+        result.modalObjectId ?? null,
         error instanceof Error ? error : undefined
       );
     }

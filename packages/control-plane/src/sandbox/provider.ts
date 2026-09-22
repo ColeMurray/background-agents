@@ -564,6 +564,11 @@ export interface SandboxProvider {
   /** Provider capabilities */
   readonly capabilities: SandboxProviderCapabilities;
 
+  /** Optional opaque reference usable for snapshot/stop even if the launch response is lost.
+   * Persisted before launch; this is not evidence that startup succeeded.
+   */
+  pendingSandboxReference?(sessionId: string, sandboxId: string): string | undefined;
+
   /**
    * Create a new sandbox.
    *
@@ -601,6 +606,11 @@ export interface SandboxProvider {
    * @throws SandboxProviderError with errorType for error handling
    */
   takeSnapshot?(config: SnapshotConfig): Promise<SnapshotResult>;
+
+  /** Recover only an existing terminal capture receipt. Must never initiate a snapshot or stop. */
+  recoverSnapshotReceipt?(
+    config: Pick<SnapshotConfig, "providerObjectId" | "sessionId" | "signal" | "deadlineAtMs">
+  ): Promise<{ imageId: string } | null>;
 
   /**
    * Stop a sandbox explicitly via the provider API.

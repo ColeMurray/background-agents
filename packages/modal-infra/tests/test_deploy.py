@@ -8,7 +8,16 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import deploy
+import modal
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def deployed_vm_reference(monkeypatch):
+    function = Mock()
+    function.remote.return_value = None
+    monkeypatch.setattr(deploy.modal.Function, "from_name", Mock(return_value=function))
+    return function
 
 
 def test_deployment_rejects_missing_image_without_opt_in(monkeypatch, tmp_path) -> None:
@@ -108,7 +117,11 @@ assert 'src.app' not in sys.modules
     assert result.returncode == 0, result.stderr
 
 
-def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("prior_vm_image", [None, "im-existing-vm"])
+def test_build_sandbox_image_eagerly_builds_against_deployed_app(
+    monkeypatch, tmp_path, deployed_vm_reference, prior_vm_image
+) -> None:
+    deployed_vm_reference.remote.return_value = prior_vm_image
     deployed_app = object()
     lookup = Mock(return_value=deployed_app)
     build = Mock()
@@ -135,10 +148,25 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
     build.assert_called_once_with(deployed_app)
     assert create.call_args.kwargs["env"] is plan["runtimeEnv"]
     sandbox.terminate.assert_called_once()
-    assert json.loads((tmp_path / "selected.json").read_text()) == {
+    expected = {
         "imageId": "im-verified",
         "buildHash": "packed-recipe",
     }
+    if prior_vm_image:
+        expected["dockerImageId"] = prior_vm_image
+    assert json.loads((tmp_path / "selected.json").read_text()) == expected
+    assert create.call_count == 1  # Reverse cutover retains capability without another VM build.
+
+
+def test_reverse_cutover_fails_closed_if_existing_capability_cannot_be_read(deployed_vm_reference):
+    deployed_vm_reference.remote.side_effect = RuntimeError("lookup unavailable")
+    with pytest.raises(RuntimeError, match="lookup unavailable"):
+        deploy._deployed_vm_image()
+
+
+def test_first_deployment_has_no_vm_capability(deployed_vm_reference):
+    deployed_vm_reference.remote.side_effect = modal.exception.NotFoundError("not deployed")
+    assert deploy._deployed_vm_image() is None
 
 
 def test_local_base_image_retains_its_packed_plan(monkeypatch, tmp_path) -> None:

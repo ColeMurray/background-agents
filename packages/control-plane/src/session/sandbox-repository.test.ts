@@ -36,6 +36,7 @@ function sandboxRow(overrides: Partial<SandboxRow> = {}): SandboxRow {
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: 1000,
     ...overrides,
   };
@@ -465,7 +466,7 @@ describe("SandboxRepository boot state (SQLite)", () => {
   describe("rejectProviderStartup", () => {
     const generation = { sandboxId: "sb-1", createdAt: 1000 };
 
-    it.each(["spawning", "connecting", "ready", "failed"])(
+    it.each(["spawning", "connecting", "ready", "failed", "stopped", "stale"])(
       "fences %s and persists cleanup responsibility",
       (status) => {
         const { repository, set } = createSqliteRepository();
@@ -474,9 +475,12 @@ describe("SandboxRepository boot state (SQLite)", () => {
           status,
           status === "failed" ? 1 : 0
         );
-        expect(repository.rejectProviderStartup(generation, "sb-rejected")).toBe(true);
+        expect(repository.rejectProviderStartup(generation, "sb-rejected")).toBe(
+          ["spawning", "connecting", "ready"].includes(status) ? "failed" : "retained"
+        );
         expect(repository.getSandbox()).toMatchObject({
-          status: "failed",
+          status: ["stopped", "stale"].includes(status) ? status : "failed",
+          startup_rejected: 1,
           fenced: 1,
           modal_object_id: "sb-rejected",
           auth_token_hash: "",
@@ -490,10 +494,10 @@ describe("SandboxRepository boot state (SQLite)", () => {
     it("records confirmed cleanup without retaining an obligation and rejects superseded writes", () => {
       const { repository, set } = createSqliteRepository();
       set("status = 'connecting', modal_sandbox_id = 'sb-1', modal_object_id = 'old'");
-      expect(repository.rejectProviderStartup(generation, null)).toBe(true);
+      expect(repository.rejectProviderStartup(generation, null)).toBe("failed");
       expect(repository.getSandbox()?.modal_object_id).toBeNull();
       expect(repository.rejectProviderStartup({ ...generation, createdAt: 999 }, "late")).toBe(
-        false
+        "superseded"
       );
       expect(repository.getSandbox()?.modal_object_id).toBeNull();
     });

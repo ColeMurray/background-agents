@@ -489,6 +489,16 @@ async def api_create_sandbox(
 
 
 @app.function(image=function_image)
+def deployment_vm_image() -> str | None:
+    """Private SDK-only deployment handshake; preserve capability across selector cutover."""
+    import os
+
+    from .images.base import DOCKER_IMAGE_ID_ENV
+
+    return os.environ.get(DOCKER_IMAGE_ID_ENV)
+
+
+@app.function(image=function_image)
 @fastapi_endpoint(method="GET")
 def api_health() -> dict:
     """Health check endpoint. Does not require authentication."""
@@ -545,10 +555,6 @@ async def api_snapshot_sandbox(
 
         manager = SandboxManager()
 
-        handle = await manager.get_sandbox_by_id(sandbox_id)
-        if not handle:
-            raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
-
         deadline_at_ms = request.get("deadline_at_ms")
         timeout_seconds = SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
         if deadline_at_ms is not None:
@@ -561,17 +567,29 @@ async def api_snapshot_sandbox(
             timeout_seconds = (deadline_at_ms / 1000) - time.time()
             if timeout_seconds <= 0:
                 raise HTTPException(status_code=408, detail="snapshot deadline expired")
-        source_stopped = handle.sandbox_backend == "modal-vm"
+        source_stopped = request.get("sandbox_backend") == "modal-vm"
         try:
-            # Include Docker preparation, capture and confirmed retirement in one budget.
-            # Timeout is an unknown outcome, never a successful source-stopped receipt.
             async with asyncio.timeout(timeout_seconds):
-                if deadline_at_ms is None:
-                    image_id = await manager.take_snapshot(handle)
-                else:
-                    image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
                 if source_stopped:
-                    await handle.modal_sandbox.terminate.aio(wait=True)
+                    from .sandbox.terminal_snapshot import snapshot_vm
+
+                    image_id = await snapshot_vm(manager, sandbox_id, timeout_seconds)
+                else:
+                    handle = await manager.get_sandbox_by_id(sandbox_id)
+                    if not handle:
+                        raise HTTPException(
+                            status_code=404, detail=f"Sandbox not found: {sandbox_id}"
+                        )
+                    if handle.sandbox_backend == "modal-vm":
+                        raise HTTPException(
+                            status_code=400, detail="VM capture requires sandbox_backend"
+                        )
+                    if deadline_at_ms is None:
+                        image_id = await manager.take_snapshot(handle)
+                    else:
+                        image_id = await manager.take_snapshot(
+                            handle, timeout_seconds=timeout_seconds
+                        )
         except (TimeoutError, ModalTimeoutError) as exc:
             raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
         return {
@@ -582,6 +600,27 @@ async def api_snapshot_sandbox(
                 "sandbox_id": sandbox_id,
             },
         }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_recover_sandbox_snapshot(
+    request: dict[str, Any],
+    authorization: str | None = Header(None),
+) -> dict[str, Any]:
+    """Read a terminal VM capture receipt without repeating any provider side effect."""
+    async with _execute_endpoint(
+        endpoint_name="api_recover_sandbox_snapshot",
+        authorization=authorization,
+        trace_id=None,
+        request_id=None,
+    ):
+        sandbox_id = request.get("sandbox_id")
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
+        from .sandbox.terminal_snapshot import recover_vm_snapshot
+
+        return {"success": True, "data": {"image_id": await recover_vm_snapshot(sandbox_id)}}
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])

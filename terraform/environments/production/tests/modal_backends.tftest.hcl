@@ -50,6 +50,10 @@ run "gvisor_uses_shared_modal_infrastructure" {
     condition     = local.use_modal_backend && length(module.modal_app) == 1 && length(data.external.modal_source_hash) == 1
     error_message = "Standard Modal must provision its shared infrastructure."
   }
+  assert {
+    condition     = !module.modal_app[0].vm_image_build_enabled
+    error_message = "Standard Modal must not request VM image verification."
+  }
 }
 run "vm_uses_shared_modal_infrastructure" {
   command = plan
@@ -57,6 +61,10 @@ run "vm_uses_shared_modal_infrastructure" {
   assert {
     condition     = local.use_modal_backend && length(module.modal_app) == 1 && length(data.external.modal_source_hash) == 1
     error_message = "Modal VM must provision the same Modal module and credentials."
+  }
+  assert {
+    condition     = module.modal_app[0].vm_image_build_enabled
+    error_message = "Modal VM selection must reach the module deployment trigger."
   }
 }
 run "vm_requires_modal_credentials" {

@@ -405,7 +405,7 @@ class SandboxSupervisor:
             self._docker_watch_failure = error
             self.shutdown_event.set()
             return
-        if service.stopping:
+        if service.exit_expected:
             return
         self.log.error("docker.exited_unexpectedly")
         self._docker_watch_failure = RuntimeError("Required Docker daemon exited unexpectedly")
@@ -720,8 +720,10 @@ class SandboxSupervisor:
                     # is not a requested cancellation and the failure must
                     # still reach the control plane.
                     try:
-                        async with asyncio.timeout(FATAL_ERROR_REPORT_TIMEOUT_SECONDS):
-                            await repo_image_callback.report_failure(error_message)
+                        # The callback owns its bounded retries; the daemon failure's
+                        # shutdown signal must not cancel delivery.
+                        if not await repo_image_callback.report_failure(error_message):
+                            self.log.error("image_build.failure_report_failed")
                     except Exception:
                         self.log.error("image_build.failure_report_failed")
                 else:

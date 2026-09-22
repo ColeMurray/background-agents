@@ -55,6 +55,46 @@ function fixture(confirmation: unknown) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("distinct Modal backend identities", () => {
+  it("uses a dedicated read-only receipt endpoint after the original capture deadline", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { image_id: "im-recovered" },
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new ModalSandboxProvider(createModalClient("secret", "acme"), "modal-vm");
+    await expect(
+      provider.recoverSnapshotReceipt({
+        providerObjectId: 'modal-vm-session:["session","generation"]',
+        sessionId: "session",
+        deadlineAtMs: Date.now() + 30_000,
+      })
+    ).resolves.toEqual({ imageId: "im-recovered" });
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain("api-recover-sandbox-snapshot");
+    expect(JSON.parse(options.body)).toEqual({
+      sandbox_id: 'modal-vm-session:["session","generation"]',
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("recovers a lost terminal snapshot response using the same source reference and deadline", async () => {
+    const { client, provider } = fixture("modal-vm");
+    client.snapshotSandbox.mockRejectedValueOnce(new Error("response lost"));
+    await expect(
+      provider.takeSnapshot({
+        providerObjectId: "sb-1",
+        sessionId: "session-1",
+        reason: "shutdown",
+        deadlineAtMs: Date.now() + 60_000,
+      })
+    ).resolves.toMatchObject({ success: true, imageId: "im-1", sourceStopped: true });
+    expect(client.snapshotSandbox).toHaveBeenCalledTimes(2);
+    expect(client.snapshotSandbox.mock.calls[0]).toEqual(client.snapshotSandbox.mock.calls[1]);
+  });
   it("selects the immutable backend on both launch paths without altering generic resources", async () => {
     const { provider, client } = fixture("modal-vm");
     const settings = { cpuCores: 3, memoryMib: null };
@@ -79,18 +119,18 @@ describe("distinct Modal backend identities", () => {
   });
 
   it.each([undefined, null, false, "modal", "future-backend", { unexpected: true }])(
-    "rejects and retires create/restore allocations with confirmation %j",
+    "returns rejected create/restore handles before cleanup with confirmation %j",
     async (value) => {
       const { provider, client } = fixture(value);
       await expect(provider.createSandbox(config)).rejects.toThrow("did not confirm");
       await expect(
         provider.restoreFromSnapshot({ ...config, snapshotImageId: "im-1" })
       ).rejects.toThrow("did not confirm");
-      expect(client.stopSandbox).toHaveBeenCalledTimes(2);
+      expect(client.stopSandbox).not.toHaveBeenCalled();
     }
   );
 
-  it("retains a rejected session allocation ID when retirement fails", async () => {
+  it("carries the rejected session allocation ID for lifecycle-owned cleanup", async () => {
     const { provider, client } = fixture("modal");
     client.stopSandbox.mockRejectedValue(new Error("unreachable"));
     await expect(provider.createSandbox(config)).rejects.toMatchObject({

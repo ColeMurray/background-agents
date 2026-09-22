@@ -214,7 +214,7 @@ async def test_code_server_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch)
 
 def _docker_service(events, *, prepare_error=None):
     service = MagicMock()
-    service.stopping = False
+    service.exit_expected = False
     exited = asyncio.Event()
 
     async def start():
@@ -228,11 +228,11 @@ def _docker_service(events, *, prepare_error=None):
         events.append("docker:prepare")
         if prepare_error is not None:
             raise prepare_error
-        service.stopping = True
+        service.exit_expected = True
 
     async def stop():
         events.append("docker:stop")
-        service.stopping = True
+        service.exit_expected = True
         exited.set()
 
     service.start = AsyncMock(side_effect=start)
@@ -348,7 +348,8 @@ async def test_build_preparation_failure_is_reported_as_a_failed_build(
     assert supervisor.docker_service.stop.await_count == 1
 
 
-async def test_daemon_exit_during_build_hooks_fails_the_build(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reported", [True, False])
+async def test_daemon_exit_during_build_hooks_fails_the_build(tmp_path, monkeypatch, reported):
     events = []
     supervisor, repository, *_ = _docker_supervisor(tmp_path, events, monkeypatch)
     monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
@@ -356,6 +357,15 @@ async def test_daemon_exit_during_build_hooks_fails_the_build(tmp_path, monkeypa
     callback = MagicMock()
     callback.report_success = AsyncMock()
     callback.report_failure = AsyncMock()
+    # A zero fatal-report bound must not cancel the separate build callback policy.
+    monkeypatch.setattr("sandbox_runtime.supervisor.FATAL_ERROR_REPORT_TIMEOUT_SECONDS", 0)
+
+    async def report_failure(_error):
+        await asyncio.sleep(0)
+        events.append("failure:reported")
+        return reported
+
+    callback.report_failure.side_effect = report_failure
 
     async def boot(_mode, _ports):
         events.append("repository:build")
@@ -370,6 +380,9 @@ async def test_daemon_exit_during_build_hooks_fails_the_build(tmp_path, monkeypa
     callback.report_failure.assert_awaited_once()
     assert "exited unexpectedly" in callback.report_failure.await_args.args[0]
     supervisor._report_fatal_error.assert_awaited_once()
+    assert "failure:reported" in events
+    if not reported:
+        supervisor.log.error.assert_any_call("image_build.failure_report_failed")
 
 
 async def test_daemon_exit_during_session_is_fatal(tmp_path, monkeypatch):

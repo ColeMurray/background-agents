@@ -75,6 +75,7 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: 1,
     ...overrides,
   };

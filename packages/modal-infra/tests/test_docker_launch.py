@@ -70,16 +70,10 @@ def test_docker_base_image_requires_provisioning(monkeypatch):
     assert docker_base_image() is sentinel
 
 
-def test_allocation_name_is_deterministic_per_generation_and_modal_safe():
-    name = docker_allocation_name("session/with:odd chars", "sandbox-acme-repo-1700000000000")
-
-    assert name == docker_allocation_name(
-        "session/with:odd chars", "sandbox-acme-repo-1700000000000"
-    )
-    assert name != docker_allocation_name(
-        "session/with:odd chars", "sandbox-acme-repo-1700000000001"
-    )
-    assert name != docker_allocation_name("other-session", "sandbox-acme-repo-1700000000000")
+def test_allocation_name_is_stable_per_session_and_modal_safe():
+    name = docker_allocation_name("session/with:odd chars")
+    assert name == docker_allocation_name("session/with:odd chars")
+    assert name != docker_allocation_name("other-session")
     assert len(name) <= 64
     assert re.fullmatch(r"[a-zA-Z0-9-_.]+", name)
     assert not re.fullmatch(r"ap-[a-zA-Z0-9]{22}", name)

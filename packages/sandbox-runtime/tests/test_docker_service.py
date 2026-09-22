@@ -123,7 +123,7 @@ async def test_ready_then_clean_preparation_leaves_no_owned_process(processes, t
 
     assert daemon.returncode == 0
     assert _group_gone(daemon)
-    assert service.stopping is True
+    assert service.exit_expected is True
     await service.stop()
     assert all(child.returncode is not None for child in processes.children)
 
@@ -168,10 +168,14 @@ async def test_nonzero_daemon_exit_cannot_be_a_prepared_build(processes, tmp_pat
     processes.daemon_exit = 1
     service = _service(tmp_path)
     await service.start()
+    watcher = asyncio.create_task(service.wait())
+    await asyncio.sleep(0)
 
     with pytest.raises(RuntimeError, match="did not stop cleanly"):
         await service.prepare_for_snapshot()
 
+    assert await watcher == 1
+    assert service.exit_expected is False
     await service.stop()
     assert all(child.returncode is not None for child in processes.children)
 
@@ -183,10 +187,10 @@ async def test_unexpected_exit_is_observable_and_not_a_requested_stop(processes,
 
     daemon.kill()
     assert await service.wait() != 0
-    assert service.stopping is False
+    assert service.exit_expected is False
 
     await service.stop()
-    assert service.stopping is True
+    assert service.exit_expected is True
 
 
 async def test_daemon_that_ignores_sigterm_is_killed_and_never_a_prepared_build(
@@ -200,6 +204,7 @@ async def test_daemon_that_ignores_sigterm_is_killed_and_never_a_prepared_build(
     with pytest.raises(RuntimeError, match="clean shutdown deadline"):
         await service.prepare_for_snapshot()
 
+    assert service.exit_expected is False
     assert daemon.returncode is not None
     assert _group_gone(daemon)
 

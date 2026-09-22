@@ -51,18 +51,20 @@ class DockerService:
         self.stop_timeout_seconds = stop_timeout_seconds
         self.log_path = log_path
         self._process: asyncio.subprocess.Process | None = None
-        self._stopping = False
+        self._exit_expected = False
+        self._preparation_finished = asyncio.Event()
+        self._preparation_finished.set()
 
     @property
-    def stopping(self) -> bool:
-        """Whether the last exit was requested, as opposed to an unexpected daemon death."""
-        return self._stopping
+    def exit_expected(self) -> bool:
+        """Whether the exit is confirmed preparation or deliberate supervisor teardown."""
+        return self._exit_expected
 
     async def start(self) -> None:
         """Start the daemon and wait, under a deadline, until ``docker info`` succeeds."""
         if self._process is not None:
             raise RuntimeError("Docker service already started")
-        self._stopping = False
+        self._exit_expected = False
         self._process = await self._spawn_daemon()
         try:
             async with asyncio.timeout(self.start_timeout_seconds):
@@ -138,7 +140,9 @@ class DockerService:
         process = self._process
         if process is None:
             raise RuntimeError("Docker service is not running")
-        return await wait_for_process_exit(process)
+        exit_code = await wait_for_process_exit(process)
+        await self._preparation_finished.wait()
+        return exit_code
 
     async def prepare_for_snapshot(self) -> None:
         """Stop the daemon cleanly so an image build can be snapshotted.
@@ -151,31 +155,38 @@ class DockerService:
         process = self._process
         if process is None or process.returncode is not None:
             raise RuntimeError("Required Docker daemon exited before build preparation")
-        self._stopping = True
-        process.send_signal(signal.SIGTERM)
+        self._preparation_finished.clear()
         try:
-            async with asyncio.timeout(self.stop_timeout_seconds):
-                if await wait_for_process_exit(process) != 0:
-                    raise RuntimeError("Docker build preparation did not stop cleanly")
-        except TimeoutError:
-            await self.stop()
-            raise RuntimeError(
-                "Docker build preparation exceeded its clean shutdown deadline"
-            ) from None
-        # A clean daemon exit means it already stopped containerd and BuildKit;
-        # anything still alive in the group is a straggler, not a dependency.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        self._process = None
-        # A reusable image must never include secret-bearing daemon diagnostics.
-        Path(self.log_path).write_bytes(b"")
-        self.log.info("docker.prepared")
+            process.send_signal(signal.SIGTERM)
+            try:
+                async with asyncio.timeout(self.stop_timeout_seconds):
+                    if await wait_for_process_exit(process) != 0:
+                        raise RuntimeError("Docker build preparation did not stop cleanly")
+            except TimeoutError:
+                await self.stop()
+                raise RuntimeError(
+                    "Docker build preparation exceeded its clean shutdown deadline"
+                ) from None
+            # A clean daemon exit means it already stopped containerd and BuildKit;
+            # anything still alive in the group is a straggler, not a dependency.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            self._process = None
+            # A reusable image must never include secret-bearing daemon diagnostics.
+            Path(self.log_path).write_bytes(b"")
+            self.log.info("docker.prepared")
+            self._exit_expected = True
+        except BaseException:
+            self._exit_expected = False
+            raise
+        finally:
+            self._preparation_finished.set()
 
     async def stop(self) -> None:
         """Bounded graceful termination, then reap every owned process."""
         process = self._process
         self._process = None
-        self._stopping = True
+        self._exit_expected = True
         if process is None:
             return
 

@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
+  startup_rejected INTEGER NOT NULL DEFAULT 0,        -- rejected allocation retains a cleanup obligation
   created_at INTEGER NOT NULL
 );
 
@@ -722,6 +723,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
     )`,
+  },
+  {
+    id: 55,
+    description: "Retain rejected sandbox startup cleanup intent",
+    run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
   },
 ];
 

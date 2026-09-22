@@ -305,7 +305,7 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch
     assert kwargs["experimental_options"] == {"vm_runtime": True}
     assert kwargs["cpu"] == 2.0
     assert kwargs["memory"] == 4096
-    assert kwargs["name"] == docker_allocation_name("session-1", "sandbox-acme-repo-1700000000000")
+    assert kwargs["name"] == docker_allocation_name("session-1")
     assert kwargs["tags"] == docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")
     # The trusted signal wins over any user-supplied value.
     assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == "true"
@@ -348,9 +348,7 @@ async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
 
     assert "kwargs" not in captured
     assert handle.modal_object_id == "modal-existing"
-    from_name.assert_awaited_once_with(
-        "open-inspect", docker_allocation_name("session-1", "sandbox-acme-repo-1700000000000")
-    )
+    from_name.assert_awaited_once_with("open-inspect", docker_allocation_name("session-1"))
 
 
 @pytest.mark.asyncio
@@ -478,10 +476,10 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
     )
     prior.get_tags.aio = prior.get_tags
     prior.terminate.aio = prior.terminate
-    prior_name = docker_allocation_name("session-1", "sandbox-acme-repo-1699999999999")
+    prior_name = docker_allocation_name("session-1")
 
     async def from_name(_app, name):
-        if name == prior_name:
+        if name == prior_name and not prior.terminate.await_count:
             return prior
         _not_found()
 
@@ -494,18 +492,51 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
     )
 
     prior.terminate.assert_awaited_once_with(wait=True)
-    assert captured["kwargs"]["name"] == docker_allocation_name(
-        "session-1", "sandbox-acme-repo-1700000000000"
-    )
+    assert captured["kwargs"]["name"] == docker_allocation_name("session-1")
 
     # A prior allocation with foreign tags is left alone.
     prior.terminate.reset_mock()
     prior.get_tags = AsyncMock(return_value={"openinspect_kind": "other"})
     prior.get_tags.aio = prior.get_tags
-    await manager.create_sandbox(
-        _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
-    )
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await manager.create_sandbox(
+            _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
+        )
     prior.terminate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_late_predecessor_cannot_materialize_beside_successor(monkeypatch):
+    from modal.exception import AlreadyExistsError, NotFoundError
+
+    manager, _, _ = _docker_manager(monkeypatch)
+    predecessor_name = docker_allocation_name("session-1")
+    predecessor = SimpleNamespace(
+        object_id="late-predecessor",
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "prior"))
+        ),
+    )
+    lookup = AsyncMock(
+        side_effect=[NotFoundError("still creating"), NotFoundError("still creating"), predecessor]
+    )
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=lookup))
+
+    async def create(kwargs, *, repository_image):
+        # Provider-side naming wins the race after both client lookups missed it.
+        if kwargs["name"] == predecessor_name:
+            raise AlreadyExistsError("predecessor won the name")
+        return SimpleNamespace(object_id="duplicate-successor")
+
+    monkeypatch.setattr("src.sandbox.manager._create_sandbox", create)
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await manager._launch_docker_sandbox(
+            session_id="session-1",
+            sandbox_id="successor",
+            retire_sandbox_id="prior",
+            create_kwargs={},
+            repository_image=False,
+        )
 
 
 @pytest.mark.asyncio

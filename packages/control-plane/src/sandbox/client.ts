@@ -233,6 +233,7 @@ export interface RestoreSandboxResponse {
 export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
+  sandboxBackend?: ModalBackend;
   signal?: AbortSignal;
   deadlineAtMs?: number;
 }
@@ -319,6 +320,7 @@ export class ModalApiError extends Error {
 export class ModalClient {
   private createSandboxUrl: string;
   private snapshotSandboxUrl: string;
+  private recoverSandboxSnapshotUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
   private stopSandboxUrl: string;
@@ -367,6 +369,7 @@ export class ModalClient {
       modalEndpointUrl(functionName, workspace, environmentWebSuffix, apiUrl);
     this.createSandboxUrl = url("api-create-sandbox");
     this.snapshotSandboxUrl = url("api-snapshot-sandbox");
+    this.recoverSandboxSnapshotUrl = url("api-recover-sandbox-snapshot");
     this.snapshotBuildSandboxUrl = url("api-snapshot-build-sandbox");
     this.restoreSandboxUrl = url("api-restore-sandbox");
     this.stopSandboxUrl = url("api-stop-sandbox");
@@ -542,8 +545,28 @@ export class ModalClient {
   }
 
   /**
-   * Trigger a filesystem snapshot for a sandbox object.
+   * Read a previously recorded terminal snapshot receipt without starting a capture.
    */
+  async recoverSandboxSnapshot(
+    request: SnapshotSandboxRequest
+  ): Promise<{ imageId: string } | null> {
+    const result = await this.postJson(
+      this.recoverSandboxSnapshotUrl,
+      "recoverSandboxSnapshot",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
+      { sandbox_id: request.providerObjectId },
+      z.object({
+        success: z.literal(true),
+        data: z.object({ image_id: z.string().min(1).nullable() }),
+      }),
+      undefined,
+      request.signal,
+      () => {}
+    );
+    return result.data.image_id ? { imageId: result.data.image_id } : null;
+  }
+
+  /** Trigger a filesystem snapshot for a sandbox object. */
   async snapshotSandbox(
     request: SnapshotSandboxRequest,
     correlation?: CorrelationContext
@@ -566,6 +589,7 @@ export class ModalClient {
         {
           sandbox_id: request.providerObjectId,
           deadline_at_ms: request.deadlineAtMs ?? null,
+          ...(request.sandboxBackend ? { sandbox_backend: request.sandboxBackend } : {}),
         },
         snapshotSandboxModalResponseSchema,
         correlation,

@@ -345,6 +345,25 @@ Docker over a local control socket, the provider captures the filesystem, then w
 retirement. Only then does the response confirm `sourceStopped`; subsequent work restores into a new
 generation. Standard Modal snapshots are unchanged. This avoids a new general snapshot protocol.
 
+Review hardening preserves those boundaries:
+
+- VM session generations share a provider-enforced allocation name, with exact generation ownership
+  tags. A pending provider reference is stored before create/restore so snapshot and stop can
+  resolve an allocation whose HTTP response was lost; this reference is not startup confirmation.
+- A terminal VM capture uses that generation's stable source reference as its operation key. Modal
+  stores its image/source receipt before retirement, and a retry can retrieve it without the source
+  still existing. After timeout or restart, the lifecycle uses a dedicated read-only receipt lookup,
+  commits any recovered image, then confirms retirement using the recorded immutable source ID. No
+  unknown capture is reissued. Modal Dict receipts expire after seven days without access. An
+  incomplete capture intent stays unknown; this does not guarantee recovery if the underlying
+  snapshot SDK response is itself lost before the receipt is recorded.
+- Rejected allocations are durably fenced before awaited cleanup. Their explicit cleanup marker
+  rearms retirement retries after restart without changing unrelated snapshot/recovery holds.
+- Switching back to gVisor carries forward the currently deployed verified VM image through a
+  private deployment handshake. It does not build another VM image or strip capability before the
+  worker selector cutover. Removing that retained capability is a separate operator action, not an
+  automatic side effect of switching compute offerings.
+
 Validate these areas:
 
 - **Checkpoint preparation:** current ordinary provider capture calls filesystem snapshot directly.

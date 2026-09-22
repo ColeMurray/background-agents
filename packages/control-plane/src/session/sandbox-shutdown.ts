@@ -32,6 +32,7 @@ const STOP_MS = 60_000;
 const CAPTURE_MS = 300_000;
 const RETIRE_MS = 30_000;
 const MARGIN_MS = 30_000;
+const CAPTURE_RECEIPT_RETRY_MS = 60_000;
 
 class ShutdownDeadlineError extends Error {}
 
@@ -58,6 +59,7 @@ interface ShutdownDependencies {
 /** One durable owner of planned stopping. Provider side effects never imply a saved receipt. */
 export class SandboxShutdownCoordinator {
   private activeOperation: string | null = null;
+  private recoveringReceipt = false;
   private checkpointOperationId: string | null = null;
   private checkpointGeneration: SandboxGeneration | null = null;
   private retiringOperation: string | null = null;
@@ -714,6 +716,10 @@ export class SandboxShutdownCoordinator {
     if (state.phase === "saved")
       return this.continuationPaused(state) ? "hold_watchdogs" : "continue";
     await this.advance();
+    const current = this.deps.store.read();
+    if (current?.phase === "unknown" && current.captureReceiptPending) {
+      await this.recoverCaptureReceipt(current);
+    }
     return "hold_watchdogs";
   }
 
@@ -789,7 +795,12 @@ export class SandboxShutdownCoordinator {
       return;
     }
     this.activeOperation = state.operationId!;
-    const capturing = { ...state, phase: "capturing" as const };
+    const capturing = {
+      ...state,
+      phase: "capturing" as const,
+      captureReceiptPending:
+        !!provider.capabilities.snapshotStopsSandbox && !!provider.recoverSnapshotReceipt,
+    };
     this.publish(capturing);
     await this.deps.alarm.schedule(state.captureByMs!);
     try {
@@ -823,35 +834,11 @@ export class SandboxShutdownCoordinator {
         sourceStopped = result.sourceStopped;
       }
       if (!this.owns(capturing)) return;
-      const receipt = {
-        kind: retained ? ("retained" as const) : ("snapshot" as const),
+      const retiring = this.commitCaptureReceipt(
+        capturing,
         artifactId,
-        provider: provider.name,
-        savedAtMs: this.now(),
-        runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
-      };
-      const retiring: ShutdownRecord = {
-        ...capturing,
-        phase: "retiring",
-        receipt,
-        savedAtMs: receipt.savedAtMs,
-      };
-      // Receipt and legacy projection describe the same capture. Either both
-      // commit for this generation or neither may authorize source retirement.
-      this.deps.session.transaction(() => {
-        if (!this.owns(capturing)) throw new Error("Snapshot generation was superseded");
-        if (
-          !retained &&
-          !this.deps.sandbox.recordSandboxSnapshot(
-            state.generation.sandboxId,
-            artifactId,
-            receipt.runtimeVersion
-          )
-        )
-          throw new Error("Snapshot generation was superseded");
-        this.deps.store.write(retiring);
-      });
-      this.announce(retiring);
+        retained ? "retained" : "snapshot"
+      );
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
     } catch (error) {
@@ -865,6 +852,85 @@ export class SandboxShutdownCoordinator {
         );
     } finally {
       this.activeOperation = null;
+    }
+  }
+
+  private commitCaptureReceipt(
+    state: ShutdownRecord,
+    artifactId: string,
+    kind: "retained" | "snapshot"
+  ): ShutdownRecord {
+    const receipt = {
+      kind,
+      artifactId,
+      provider: this.deps.provider.name,
+      savedAtMs: this.now(),
+      runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
+    };
+    const retiring: ShutdownRecord = {
+      ...state,
+      phase: "retiring",
+      captureReceiptPending: false,
+      error: undefined,
+      receipt,
+      savedAtMs: receipt.savedAtMs,
+    };
+    // Receipt and legacy projection describe the same capture. Either both
+    // commit for this generation or neither may authorize source retirement.
+    this.deps.session.transaction(() => {
+      if (!this.owns(state)) throw new Error("Snapshot generation was superseded");
+      if (
+        kind === "snapshot" &&
+        !this.deps.sandbox.recordSandboxSnapshot(
+          state.generation.sandboxId,
+          artifactId,
+          receipt.runtimeVersion
+        )
+      )
+        throw new Error("Snapshot generation was superseded");
+      this.deps.store.write(retiring);
+    });
+    this.announce(retiring);
+    return retiring;
+  }
+
+  private async recoverCaptureReceipt(state: ShutdownRecord): Promise<void> {
+    const recover = this.deps.provider.recoverSnapshotReceipt;
+    if (
+      this.recoveringReceipt ||
+      !recover ||
+      !state.providerObjectId ||
+      state.restoreInvoked ||
+      !this.current(state) ||
+      !this.providerMatches(state)
+    )
+      return;
+    this.recoveringReceipt = true;
+    try {
+      // A read-only lookup is safe after the capture deadline or eviction. Persist
+      // its next wakeup first; absence is not permission to repeat the capture.
+      await this.deps.alarm.schedule(this.now() + CAPTURE_RECEIPT_RETRY_MS);
+      const deadlineAtMs = this.now() + RETIRE_MS;
+      const session = this.deps.session.getSession()!;
+      const receipt = await this.bounded(deadlineAtMs, (signal) =>
+        recover.call(this.deps.provider, {
+          providerObjectId: state.providerObjectId!,
+          sessionId: session.session_name || session.id,
+          deadlineAtMs,
+          signal,
+        })
+      );
+      if (!receipt || !this.owns(state)) return;
+      const retiring = this.commitCaptureReceipt(
+        { ...state, retireByMs: this.now() + RETIRE_MS },
+        receipt.imageId,
+        "snapshot"
+      );
+      await this.retire(retiring);
+    } catch (error) {
+      this.deps.log?.warn("Snapshot receipt recovery remains unconfirmed", { error });
+    } finally {
+      this.recoveringReceipt = false;
     }
   }
 

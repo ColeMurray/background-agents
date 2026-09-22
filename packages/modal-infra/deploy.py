@@ -65,6 +65,18 @@ def _publish_image_record(record: dict[str, str]) -> None:
     path.write_text(json.dumps(record) + "\n")
 
 
+def _deployed_vm_image() -> str | None:
+    """Retain the existing VM capability until the consumer selector has switched."""
+    try:
+        image_id = modal.Function.from_name(APP_NAME, "deployment_vm_image").remote()
+    except modal.exception.NotFoundError:
+        # First deployment, or a pre-VM app. Other failures must block deployment.
+        return None
+    if image_id is not None and (not isinstance(image_id, str) or not image_id.strip()):
+        raise RuntimeError("Deployed VM image reference is invalid")
+    return image_id
+
+
 def build_sandbox_image(*, with_docker: bool = False) -> None:
     """Build the image used by dynamic sandboxes before requests can create them.
 
@@ -97,6 +109,10 @@ def build_sandbox_image(*, with_docker: bool = False) -> None:
         "imageId": base_image.object_id,
         "buildHash": base_image_plan["buildHash"],
     }
+    if not with_docker:
+        retained_vm_image = _deployed_vm_image()
+        if retained_vm_image:
+            record["dockerImageId"] = retained_vm_image
     _publish_image_record(record)
     if not with_docker:
         return

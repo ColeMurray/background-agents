@@ -96,6 +96,7 @@ const log = createLogger("lifecycle-manager");
 /** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
 const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
+const REJECTED_ALLOCATION_CLEANUP_RETRY_MS = 30_000;
 
 // ==================== Dependency Interfaces ====================
 
@@ -211,11 +212,18 @@ export interface SandboxStorage {
     to: SandboxStatus
   ): boolean;
   /**
+   * Fence a rejected generation and retain its cleanup handle without replacing
+   * a terminal status. Superseded generations cannot modify the current row.
+   */
+  rejectProviderStartup(
+    generation: SandboxGeneration,
+    providerObjectId: string | null
+  ): "failed" | "retained" | "superseded";
+  /**
    * Atomically accept a provider startup result for the named generation,
    * store its handle, and advance a fresh spawn to connecting. Returns the
    * resulting status, or null when another lifecycle event owns the row.
    */
-  rejectProviderStartup(generation: SandboxGeneration, providerObjectId: string | null): boolean;
   commitProviderStartup(
     generation: SandboxGeneration,
     providerObjectId: string | null,
@@ -813,6 +821,7 @@ export class SandboxLifecycleManager
 
       let result: CreateSandboxResult;
       try {
+        this.recordPendingProviderReference(generation, sessionId);
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
@@ -848,6 +857,7 @@ export class SandboxLifecycleManager
           preserveProviderObjectId: false,
           shutdownPolicy: shutdownPolicyForLaunch("new", null),
         }));
+        this.recordPendingProviderReference(generation, sessionId);
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -1196,6 +1206,7 @@ export class SandboxLifecycleManager
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       this.shutdown.markRecoveryInvoked(generation);
+      this.recordPendingProviderReference(generation, session.session_name || session.id);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         retireSandboxId: priorSandboxId,
@@ -2080,7 +2091,15 @@ export class SandboxLifecycleManager
     }
   }
 
-  handleShutdownAlarm(): Promise<"continue" | "hold_watchdogs"> {
+  async handleShutdownAlarm(): Promise<"continue" | "hold_watchdogs"> {
+    const rejected = this.storage.getSandbox();
+    if (rejected?.startup_rejected && rejected.modal_object_id) {
+      await this.cleanupRejectedAllocation(
+        { sandboxId: rejected.modal_sandbox_id, createdAt: rejected.created_at },
+        rejected.modal_object_id
+      );
+      return "hold_watchdogs";
+    }
     return this.shutdown.handleAlarm();
   }
 
@@ -2230,23 +2249,66 @@ export class SandboxLifecycleManager
     await this.storage.updateSandboxAccess("ttyd", url, token);
   }
 
+  private recordPendingProviderReference(generation: SandboxGeneration, sessionId: string): void {
+    if (!generation.sandboxId) throw new SpawnSupersededError();
+    const reference = this.provider.pendingSandboxReference?.(sessionId, generation.sandboxId);
+    if (!reference) return;
+    const row = this.storage.getSandbox();
+    if (
+      row?.modal_sandbox_id !== generation.sandboxId ||
+      row.created_at !== generation.createdAt ||
+      row.fenced
+    ) {
+      throw new SpawnSupersededError();
+    }
+    this.storage.updateSandboxModalObjectId(reference);
+  }
+
   private async retainRejectedAllocation(
     error: unknown,
     generation: SandboxGeneration | null
   ): Promise<void> {
     if (!(error instanceof SandboxLaunchRejectedError) || !generation) return;
-    const alreadyFailed = this.storage.getSandbox()?.status === "failed";
     // Keep the rejected handle on this generation so restart/replacement retries retirement.
     // It is not a successful startup and receives no access credentials or readiness signal.
-    if (!this.storage.rejectProviderStartup(generation, error.providerObjectId)) {
+    const rejection = this.storage.rejectProviderStartup(generation, error.providerObjectId);
+    if (rejection === "superseded") {
       await this.destroyLateProviderResult(error.providerObjectId ?? undefined);
       return;
     }
     this.wsManager.detachSandboxWebSocket(1008, "Provider allocation rejected");
     this.clearSandboxAccessState();
-    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    this.reportSandboxError(error.message);
-    if (!alreadyFailed) this.recordSpawnFailure(Date.now(), generation.createdAt);
+    if (rejection === "failed") {
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.reportSandboxError(error.message);
+      this.recordSpawnFailure(Date.now(), generation.createdAt);
+    }
+    if (error.providerObjectId)
+      await this.cleanupRejectedAllocation(generation, error.providerObjectId);
+  }
+
+  async rearmRejectedAllocationCleanup(): Promise<void> {
+    const row = this.storage.getSandbox();
+    if (row?.startup_rejected && row.modal_object_id) {
+      await this.alarmScheduler.schedule(Date.now() + REJECTED_ALLOCATION_CLEANUP_RETRY_MS);
+    }
+  }
+
+  private async cleanupRejectedAllocation(
+    generation: SandboxGeneration,
+    providerObjectId: string
+  ): Promise<void> {
+    // Persist the next attempt before provider I/O so an eviction cannot lose cleanup.
+    await this.rearmRejectedAllocationCleanup();
+    if (!(await this.destroyLateProviderResult(providerObjectId))) return;
+    const row = this.storage.getSandbox();
+    if (
+      row?.modal_sandbox_id === generation.sandboxId &&
+      row.created_at === generation.createdAt &&
+      row.modal_object_id === providerObjectId
+    ) {
+      this.storage.updateSandboxModalObjectId(null);
+    }
   }
 
   private async claimProviderStartup(
@@ -2293,8 +2355,8 @@ export class SandboxLifecycleManager
     return true;
   }
 
-  private async destroyLateProviderResult(providerObjectId: string | undefined): Promise<void> {
-    if (!providerObjectId || !this.canStopProviderSandbox()) return;
+  private async destroyLateProviderResult(providerObjectId: string | undefined): Promise<boolean> {
+    if (!providerObjectId || !this.canStopProviderSandbox()) return false;
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -2313,11 +2375,13 @@ export class SandboxLifecycleManager
         ),
         timeout,
       ]);
+      return true;
     } catch (error) {
       this.log.warn("Failed to destroy superseded provider sandbox", {
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     }

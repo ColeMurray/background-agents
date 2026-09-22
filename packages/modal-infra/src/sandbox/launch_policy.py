@@ -99,14 +99,14 @@ def _identity_digest(*parts: str) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
-def docker_allocation_name(session_id: str, sandbox_id: str) -> str:
-    """Deterministic, Modal-safe sandbox name for one control-plane generation.
+def docker_allocation_name(session_id: str) -> str:
+    """One provider-enforced running allocation slot per session.
 
-    `sandbox_id` already embeds the generation timestamp, so the pair names
-    exactly one launch attempt. Modal names are limited to 64 chars of
-    `[A-Za-z0-9._-]`, which control-plane identifiers do not satisfy directly.
+    Generations retain distinct ownership tags, not distinct names. A missing
+    lookup cannot authorize overlapping creates: Modal rejects a conflicting
+    name until the previous sandbox has completely stopped.
     """
-    return ALLOCATION_NAME_PREFIX + _identity_digest("modal-vm", session_id, sandbox_id)[:40]
+    return ALLOCATION_NAME_PREFIX + _identity_digest("modal-vm", session_id)[:40]
 
 
 def docker_allocation_tags(session_id: str, sandbox_id: str) -> dict[str, str]:

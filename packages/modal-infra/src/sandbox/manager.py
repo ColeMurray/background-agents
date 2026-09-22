@@ -34,6 +34,7 @@ from sandbox_runtime.constants import (
     VNC_PASSWORD_MAX_BYTES,
     VNC_PORT,
 )
+from sandbox_runtime.docker_control import CONTROL_TIMEOUT_SECONDS
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
@@ -555,14 +556,13 @@ class SandboxManager:
     ) -> tuple[modal.Sandbox, bool]:
         """Create a Docker VM under a deterministic name, adopting an existing one.
 
-        VM creation can outlive the control plane's HTTP request. Naming each
-        generation's allocation lets a retried create adopt the sandbox Modal
-        already made instead of starting a second VM, and lets the next
-        generation retire a predecessor whose object id was never learned.
+        VM creation can outlive the control plane's HTTP request. One name per
+        session serializes generations at Modal even when a predecessor lookup
+        misses an in-flight create. Only matching generation tags permit adoption.
         """
         if retire_sandbox_id:
             await self._retire_docker_allocation(session_id, retire_sandbox_id)
-        name = docker_allocation_name(session_id, sandbox_id)
+        name = docker_allocation_name(session_id)
         tags = docker_allocation_tags(session_id, sandbox_id)
         existing = await self._find_owned_docker_allocation(name, tags)
         if existing is None:
@@ -630,7 +630,7 @@ class SandboxManager:
 
     async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:
         """Terminate a prior generation's named VM, only when its ownership tags match."""
-        name = docker_allocation_name(session_id, sandbox_id)
+        name = docker_allocation_name(session_id)
         try:
             sandbox = await modal.Sandbox.from_name.aio(APP_NAME, name)
         except modal.exception.NotFoundError:
@@ -727,7 +727,7 @@ class SandboxManager:
                 "-m",
                 "sandbox_runtime.docker_control",
                 "prepare",
-                timeout=min(snapshot_timeout_seconds, 45),
+                timeout=min(snapshot_timeout_seconds, CONTROL_TIMEOUT_SECONDS),
             )
             if await probe.wait.aio() != 0:
                 raise RuntimeError("Modal VM Docker shutdown preparation was not confirmed")
@@ -755,7 +755,16 @@ class SandboxManager:
         return image_id
 
     async def stop_sandbox(self, sandbox_id: str) -> None:
-        """Terminate a provider sandbox by its immutable Modal object id."""
+        """Resolve a recovery reference if needed, then confirm immutable-ID retirement."""
+        if sandbox_id.startswith("modal-vm-session:"):
+            from .terminal_snapshot import recorded_vm_source
+
+            source_id = await recorded_vm_source(sandbox_id)
+            if source_id is None:
+                handle = await self.get_sandbox_by_id(sandbox_id)
+                assert handle is not None and handle.modal_object_id is not None
+                source_id = handle.modal_object_id
+            sandbox_id = source_id
         try:
             sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
             await sandbox.terminate.aio(wait=True)
@@ -765,32 +774,49 @@ class SandboxManager:
 
     async def get_sandbox_by_id(self, sandbox_id: str) -> SandboxHandle | None:
         """
-        Get a sandbox handle by its ID.
-
-        Uses Modal's Sandbox.from_id() to retrieve an existing sandbox.
+        Get a sandbox by immutable ID or a generation-checked pending reference.
 
         Args:
-            sandbox_id: The Modal sandbox ID
+            sandbox_id: The Modal sandbox ID or opaque VM session reference
 
         Returns:
-            SandboxHandle if found, None otherwise
+            SandboxHandle if found, None for a confirmed missing immutable ID.
+            Missing pending references remain ambiguous and raise an error.
         """
-        try:
-            modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
-            tags = await modal_sandbox.get_tags.aio()
-            backend = tags.get("openinspect_backend", "modal")
-            if backend not in ("modal", "modal-vm"):
-                raise ValueError("Unknown sandbox backend tag")
-            return SandboxHandle(
-                sandbox_backend="modal-vm" if backend == "modal-vm" else "modal",
-                sandbox_id=sandbox_id,
-                modal_sandbox=modal_sandbox,
-                status=SandboxStatus.READY,  # Assume ready if we can retrieve it
-                created_at=time.time(),
+        if sandbox_id.startswith("modal-vm-session:"):
+            identity = json.loads(sandbox_id.removeprefix("modal-vm-session:"))
+            if (
+                not isinstance(identity, list)
+                or len(identity) != 2
+                or not all(isinstance(part, str) and part for part in identity)
+            ):
+                raise ValueError("Invalid pending VM reference")
+            session_id, generation_id = identity
+            modal_sandbox = await self._find_owned_docker_allocation(
+                docker_allocation_name(session_id),
+                docker_allocation_tags(session_id, generation_id),
             )
-        except Exception as e:
-            log.warn("sandbox.lookup_error", sandbox_id=sandbox_id, exc=e)
-            return None
+            if modal_sandbox is None:
+                # An in-flight create can still materialize. Never report confirmed
+                # absence/retirement for an unresolved launch intent.
+                raise RuntimeError("VM launch identity is not yet visible")
+        else:
+            try:
+                modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+            except modal.exception.NotFoundError:
+                return None
+        tags = await modal_sandbox.get_tags.aio()
+        backend = tags.get("openinspect_backend", "modal")
+        if backend not in ("modal", "modal-vm"):
+            raise ValueError("Unknown sandbox backend tag")
+        return SandboxHandle(
+            sandbox_backend="modal-vm" if backend == "modal-vm" else "modal",
+            sandbox_id=sandbox_id,
+            modal_object_id=modal_sandbox.object_id,
+            modal_sandbox=modal_sandbox,
+            status=SandboxStatus.READY,  # Assume ready if we can retrieve it
+            created_at=time.time(),
+        )
 
     async def restore_from_snapshot(
         self,
