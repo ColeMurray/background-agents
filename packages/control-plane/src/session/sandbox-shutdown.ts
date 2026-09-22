@@ -608,84 +608,44 @@ export class SandboxShutdownCoordinator {
     else this.notifyLifecycleChange();
   }
 
-  /**
-   * Rescue an unreachable serving execution before retiring it. Unlike graceful
-   * shutdown this cannot prove quiescence: the saved filesystem is crash recovery,
-   * never permission to replay interrupted work. No running-generation adoption
-   * is needed; ownership is recorded only when retirement is actually requested.
-   */
-  async preserveBeforeTermination(reason: string): Promise<"owned" | "held" | "unmanaged"> {
+  /** Commit termination ownership before any teardown; emergency capture cannot prove quiescence. */
+  async requestShutdown(
+    reason: string,
+    mode: "graceful" | "emergency" = "graceful"
+  ): Promise<"owned" | "held" | "unmanaged"> {
     const row = this.deps.sandbox.getSandbox();
-    if (!row?.modal_sandbox_id) return "unmanaged";
     const state = this.deps.store.read();
-    if (
-      state &&
-      (!this.current(state) ||
-        !this.providerMatches(state) ||
-        (state.phase !== "running" && state.phase !== "restoring") ||
-        state.checkpointInFlight)
-    )
-      return "held";
+    if (state && (!this.current(state) || !this.providerMatches(state))) return "held";
+    if (!row?.modal_sandbox_id) return state ? "held" : "unmanaged";
+    const emergency = mode === "emergency";
     const recovering = state?.restoreInvoked === true || state?.phase === "restoring";
-    if (!recovering && row.status !== "ready") return "unmanaged";
+    if (state && state.phase !== "running" && !(emergency && recovering)) return "held";
+    if (!emergency && (!state || state.lifecyclePolicy === "legacy"))
+      return state?.checkpointInFlight ? "held" : "unmanaged";
+    if (emergency && state?.checkpointInFlight) return "held";
+    if (emergency && !recovering && row.status !== "ready") return "unmanaged";
+    // A graceful stop reserves the prompt-stop allowance; an emergency cannot
+    // obtain runtime preparation and uses only the bounded capture/retire budget.
     const now = this.now();
-    const end = Math.min(state?.expiresAtMs ?? Infinity, now + CAPTURE_MS + RETIRE_MS + MARGIN_MS);
+    const end = emergency
+      ? Math.min(state?.expiresAtMs ?? Infinity, now + CAPTURE_MS + RETIRE_MS + MARGIN_MS)
+      : (state!.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS);
+    const stopByMs = emergency ? now : Math.min(now + STOP_MS, end - RETIRE_MS - MARGIN_MS);
     const next: ShutdownRecord = {
       ...(state ?? legacyShutdownRecord(row, this.deps.provider.name)),
-      provider: this.deps.provider.name,
-      providerObjectId: row.modal_object_id,
-      sourceRetired: false,
-      phase: recovering ? "unknown" : "capturing",
-      error: recovering
-        ? "The runtime failed during recovery; the provider startup outcome is unknown."
-        : undefined,
-      reason,
-      operationId: crypto.randomUUID(),
-      stopByMs: now,
-      captureByMs: end - RETIRE_MS - MARGIN_MS,
-      retireByMs: end - MARGIN_MS,
-      continuationPaused: true,
-    };
-    const failure = this.deps.session.transaction(() => {
-      const message = this.deps.messages.getProcessingMessage();
-      if (message) next.messageId = message.id;
-      this.deps.store.write(next);
-      this.deps.sandbox.updateSandboxStatus("stale");
-      return message ? this.deps.failures.record(message.id, reason, now, "processing") : null;
-    });
-    this.broadcast({ type: "sandbox_status", status: "stale" });
-    if (recovering) this.announce(next);
-    this.deps.retireAccess();
-    if (failure) this.deps.failures.deliver(failure);
-    this.broadcast({ type: "processing_status", isProcessing: false });
-    if (!recovering) await this.capture(next);
-    this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
-      name: "sandbox.retirement_status",
-    });
-    return recovering ? "held" : "owned";
-  }
-
-  async requestShutdown(reason: string): Promise<"owned" | "unmanaged" | "held"> {
-    const state = this.deps.store.read();
-    if (!state) return "unmanaged";
-    if (!this.current(state) || state.phase !== "running" || !this.providerMatches(state))
-      return "held";
-    if (state.lifecyclePolicy === "legacy") {
-      return state.checkpointInFlight ? "held" : "unmanaged";
-    }
-    const now = this.now();
-    const end = state.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS;
-    // A shorter buffer reduces capture time, not the prompt-stop allowance.
-    // Always leave room for source retirement and the final safety margin.
-    const stopByMs = Math.min(now + STOP_MS, end - RETIRE_MS - MARGIN_MS);
-    const next: ShutdownRecord = {
-      ...state,
-      phase: "draining",
+      providerObjectId: emergency ? row.modal_object_id : state!.providerObjectId,
+      sourceRetired: emergency ? false : state?.sourceRetired,
+      phase: emergency ? (recovering ? "unknown" : "capturing") : "draining",
+      error:
+        emergency && recovering
+          ? "The runtime failed during recovery; the provider startup outcome is unknown."
+          : undefined,
       reason,
       operationId: crypto.randomUUID(),
       stopByMs,
       captureByMs: Math.min(stopByMs + CAPTURE_MS, end - RETIRE_MS - MARGIN_MS),
       retireByMs: end - MARGIN_MS,
+      continuationPaused: emergency || state?.continuationPaused,
     };
     const failure = this.deps.session.transaction(() => {
       const message = this.deps.messages.getProcessingMessage();
@@ -693,15 +653,22 @@ export class SandboxShutdownCoordinator {
         next.messageId = message.id;
         next.continuationPaused = true;
       }
-      this.deps.store.write(next); // Fence before any asynchronous work or terminal publication.
+      this.deps.store.write(next);
+      if (emergency) this.deps.sandbox.updateSandboxStatus("stale");
       return message ? this.deps.failures.record(message.id, reason, now, "processing") : null;
     });
-    this.publish(next);
+    this.announce(next);
     if (failure) this.deps.failures.deliver(failure);
     this.broadcast({ type: "processing_status", isProcessing: false });
     this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
       name: "sandbox.preservation_status",
     });
+    if (emergency) {
+      this.broadcast({ type: "sandbox_status", status: "stale" });
+      this.deps.retireAccess();
+      if (!recovering) await this.capture(next);
+      return recovering ? "held" : "owned";
+    }
     await this.advance();
     return "owned";
   }

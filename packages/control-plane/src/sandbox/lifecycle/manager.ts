@@ -112,10 +112,11 @@ export interface SandboxShutdownLifecycle {
   recordProviderStartup(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
   /** Blocks generic destructive lifecycle work while shutdown or capture ownership is unresolved. */
   isHolding(): boolean;
-  /** Requests terminal graceful shutdown; unmanaged permits the legacy lifecycle fallback. */
-  requestShutdown(reason: string): Promise<"owned" | "unmanaged" | "held">;
-  /** Owns crash-recovery capture and retirement; never silently replaces a serving execution. */
-  preserveBeforeTermination(reason: string): Promise<"owned" | "held" | "unmanaged">;
+  /** Owns termination; only unmanaged permits the legacy lifecycle fallback. */
+  requestShutdown(
+    reason: string,
+    mode?: "graceful" | "emergency"
+  ): Promise<"owned" | "unmanaged" | "held">;
   /** Runs and classifies an ordinary checkpoint without exposing provider ambiguity to callers. */
   captureCheckpoint(
     generation: SandboxGeneration,
@@ -1858,6 +1859,15 @@ export class SandboxLifecycleManager
     return "sandbox_terminated";
   }
 
+  private isCurrentSandboxState(expected: SandboxRow): boolean {
+    const current = this.storage.getSandbox();
+    return (
+      current?.modal_sandbox_id === expected.modal_sandbox_id &&
+      current?.created_at === expected.created_at &&
+      current?.status === expected.status
+    );
+  }
+
   async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
     if (this.shutdown.isHolding()) return;
     const sandbox = this.storage.getSandbox();
@@ -1865,7 +1875,8 @@ export class SandboxLifecycleManager
       return;
     }
 
-    if ((await this.shutdown.preserveBeforeTermination(trigger)) !== "unmanaged") return;
+    if ((await this.shutdown.requestShutdown(trigger, "emergency")) !== "unmanaged") return;
+    if (!this.isCurrentSandboxState(sandbox)) return;
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.updateSandboxStatus("stale");
@@ -1914,12 +1925,13 @@ export class SandboxLifecycleManager
     });
     this.isTerminatingSandbox = true;
     try {
-      const ownership = await this.shutdown.preserveBeforeTermination("fatal_runtime_error");
+      const ownership = await this.shutdown.requestShutdown("fatal_runtime_error", "emergency");
       if (ownership !== "unmanaged") {
         this.recordSpawnFailure(Date.now(), sandbox.created_at);
         this.reportSandboxError(reason);
         return ownership === "owned";
       }
+      if (!this.isCurrentSandboxState(sandbox)) return false;
       this.storage.updateSandboxStatus("failed");
       this.recordSpawnFailure(Date.now(), sandbox.created_at);
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });

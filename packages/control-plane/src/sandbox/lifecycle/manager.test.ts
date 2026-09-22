@@ -2718,6 +2718,41 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("terminateUnresponsiveSandbox", () => {
+    it.each(["fatal", "unresponsive"] as const)(
+      "does not apply %s failed-boot cleanup after the generation changes",
+      async (trigger) => {
+        const sandbox = createMockSandbox({ status: "connecting" });
+        const storage = {
+          ...createMockStorage(createMockSession(), sandbox),
+          getSandbox: () => ({ ...sandbox }),
+        };
+        const shutdown = createUnmanagedShutdown();
+        shutdown.requestShutdown.mockImplementation(async () => {
+          sandbox.status = "ready";
+          return "unmanaged";
+        });
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(true),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          shutdown,
+          createTestConfig()
+        );
+        if (trigger === "fatal") await manager.terminateFailedSandbox("boot failed");
+        else await manager.terminateUnresponsiveSandbox("stop_send_failed");
+        expect(provider.stopSandbox).not.toHaveBeenCalled();
+        expect(sandbox.status).toBe("ready");
+      }
+    );
+
     it.each([
       ["prompt_dispatch_send_failed", "Prompt dispatch send failed"],
       ["stop_send_failed", "Stop command send failed"],
