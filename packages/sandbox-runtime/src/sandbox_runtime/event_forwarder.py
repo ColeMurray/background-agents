@@ -34,8 +34,9 @@ MAX_EVENT_BUFFER_SIZE: Final = 1000
 
 # Bound on a direct send and on each recovery stage. A timed-out direct send
 # spends one retirement grace closing the dead connection, and may spend one
-# further budget acquiring the recovery lock and flushing after a rebind, so
-# send() returns within two budgets plus RETIRE_CLOSE_TIMEOUT_SECONDS.
+# further budget acquiring the recovery lock and flushing after a rebind —
+# plus a second grace if that replacement stalls too. So send() returns
+# within two budgets plus two RETIRE_CLOSE_TIMEOUT_SECONDS.
 SEND_TIMEOUT_SECONDS: Final = 30.0
 
 # Grace for the close that retires a connection whose write timed out —
@@ -102,6 +103,12 @@ class BufferedEventForwarder:
         # excludes them from pending replay; their owning send reconciles the
         # ACK and any failure before deciding whether one buffered copy remains.
         self._in_flight_acks: dict[str, dict[str, Any]] = {}
+
+        # The connection a recovery write was parked on when something
+        # cancelled it. A cancelled write reports nothing about its
+        # connection and cannot retire it, so it leaves the identity here for
+        # whichever recovery stage owns the deadline that cancelled it.
+        self._cancelled_write_ws: ClientConnection | None = None
 
     async def bind(self, ws: ClientConnection) -> None:
         """Attach a live control-plane connection and recover the backlog.
@@ -260,6 +267,7 @@ class BufferedEventForwarder:
         """
         current = self._ws
         if current is not None and current is not failed_ws and current.state == State.OPEN:
+            self._cancelled_write_ws = None
             try:
                 async with asyncio.timeout(self._send_timeout_seconds):
                     async with self._recovery_lock:
@@ -269,6 +277,15 @@ class BufferedEventForwarder:
                 # that single copy for a later bind rather than buffering it
                 # again when lock acquisition or flushing exhausts the stage.
                 self._log.warn("bridge.rebound_recovery_timeout", exc=e)
+                # This deadline is armed before the flush arms its own, so it
+                # is what cancels a stalled flush write — and a cancelled
+                # write cannot retire its connection. Retire it here, but
+                # only when a write was actually cancelled: a stage spent
+                # waiting for the lock proves nothing about the connection.
+                stalled = self._cancelled_write_ws
+                self._cancelled_write_ws = None
+                if stalled is not None:
+                    await self._retire_timed_out_connection(stalled)
 
     async def _flush_buffer(self) -> None:
         """Flush buffered events over the currently bound connection.
@@ -307,6 +324,10 @@ class BufferedEventForwarder:
                     self._pending_acks.pop(ack_id, None)
                 if acknowledged and self._event_buffer and self._event_buffer[0] is event:
                     self._event_buffer.pop(0)
+                # This write never got to time out, so it cannot tell whether
+                # the connection is wedged or retire it. Record it for the
+                # recovery stage whose deadline is the likely canceller.
+                self._cancelled_write_ws = ws
                 raise
             except Exception as e:
                 acknowledged = ack_id is not None and self._pending_acks.get(ack_id) is not event

@@ -716,6 +716,65 @@ class TestTimedOutConnectionRetirement:
         assert forwarder.acknowledge("execution_complete:msg-9") is True
 
     @pytest.mark.asyncio
+    async def test_drain_deadline_retires_the_replacement_it_stalled_on(self):
+        """The drain stage arms its deadline before the flush write arms its
+        own, so the stage is what cancels a stalled replacement write — and a
+        cancelled write cannot retire its own connection. Without this the
+        second wedged connection stays bound and costs another whole send."""
+        forwarder = make_forwarder(send_timeout_seconds=0.05, retire_close_timeout_seconds=0.05)
+        release_failure = asyncio.Event()
+        old = wedged_ws(release_failure)
+        await forwarder.bind(old)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-10"})
+        )
+        await settle()
+
+        forwarder.unbind()
+        replacement = hung_ws()
+        await forwarder.bind(replacement)
+        release_failure.set()
+
+        assert await asyncio.wait_for(send_task, timeout=1) is False
+
+        assert forwarder._ws is None
+        replacement.close.assert_awaited_once()
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-10"]
+
+    @pytest.mark.asyncio
+    async def test_drain_deadline_on_the_lock_keeps_the_replacement_bound(self):
+        """A stage that expired waiting for the lock never wrote anything, so
+        it has no evidence the replacement is wedged — retiring it there
+        would kill a healthy connection."""
+        forwarder = make_forwarder(send_timeout_seconds=0.05)
+        release_failure = asyncio.Event()
+        old = wedged_ws(release_failure)
+        await forwarder.bind(old)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-11"})
+        )
+        await settle()
+
+        await forwarder._recovery_lock.acquire()
+        replacement = open_ws()
+        bind_task = asyncio.create_task(forwarder.bind(replacement))
+        await settle()  # bind publishes the replacement, then waits for the lock
+        release_failure.set()
+
+        try:
+            assert await asyncio.wait_for(send_task, timeout=1) is False
+            assert forwarder._ws is replacement
+            replacement.close.assert_not_awaited()
+            replacement.transport.abort.assert_not_called()
+        finally:
+            forwarder._recovery_lock.release()
+
+        await bind_task
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-11"
+        ]
+
+    @pytest.mark.asyncio
     async def test_cancellation_during_retirement_aborts_and_keeps_the_event(self):
         """Cancellation must not leave the wedged connection bound: the abort
         still ends it, so the reconnect that recovers the buffered event is
