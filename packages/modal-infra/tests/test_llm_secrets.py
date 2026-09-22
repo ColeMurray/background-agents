@@ -27,7 +27,7 @@ def captured_launch(monkeypatch):
         return FakeSandbox()
 
     fake_create_aio.aio = fake_create_aio
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create_aio)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create_aio)
     return captured
 
 
@@ -41,7 +41,7 @@ async def test_restore_attaches_the_deployment_wide_secret(captured_launch, monk
     class FakeImage:
         object_id = "img-llm-secrets"
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **k: FakeImage())
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda *a, **k: FakeImage())
 
     await SandboxManager().restore_from_snapshot(
         snapshot_image_id="img-abc",

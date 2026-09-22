@@ -5,13 +5,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sandbox_runtime.constants import (
+    CODE_SERVER_PORT,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
     NOVNC_PORT,
     NOVNC_PORT_ENV_VAR,
+    TTYD_PROXY_PORT,
     VNC_PASSWORD_ENV_VAR,
     VNC_PASSWORD_MAX_BYTES,
     VNC_PORT,
 )
-from src.sandbox.manager import CODE_SERVER_PORT, TTYD_PROXY_PORT, SandboxConfig, SandboxManager
+from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
 def _patch_sandbox_create(monkeypatch, captured: dict) -> None:
@@ -27,7 +31,7 @@ def _patch_sandbox_create(monkeypatch, captured: dict) -> None:
 
     fake_create = MagicMock()
     fake_create.aio = fake_create_aio
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
 
 
 class TestCreateSandboxVnc:
@@ -36,9 +40,9 @@ class TestCreateSandboxVnc:
         captured = {}
         _patch_sandbox_create(monkeypatch, captured)
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, "https://vnc.example.com", None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls(None, "https://vnc.example.com", None, None)),
         )
 
         handle = await SandboxManager().create_sandbox(
@@ -63,9 +67,9 @@ class TestCreateSandboxVnc:
         captured = {}
         _patch_sandbox_create(monkeypatch, captured)
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls(None, None, None, None)),
         )
 
         handle = await SandboxManager().create_sandbox(
@@ -84,11 +88,13 @@ class TestRestoreSandboxVnc:
     async def test_generates_credentials_and_returns_them_with_url(self, monkeypatch):
         captured = {}
         _patch_sandbox_create(monkeypatch, captured)
-        monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *_args: MagicMock())
+        monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda *_args: MagicMock())
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, "https://restored-vnc.example.com", None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(
+                return_value=TunnelUrls(None, "https://restored-vnc.example.com", None, None)
+            ),
         )
 
         handle = await SandboxManager().restore_from_snapshot(
@@ -108,37 +114,28 @@ class TestRestoreSandboxVnc:
 async def test_resolves_custom_novnc_tunnel():
     sandbox = MagicMock()
     with patch.object(
-        SandboxManager,
+        SandboxTunnels,
         "_resolve_tunnels",
         new_callable=AsyncMock,
         return_value={6081: "https://vnc.example.com"},
     ) as resolve_tunnels:
-        result = await SandboxManager._resolve_and_setup_tunnels(
-            sandbox,
-            "sandbox-vnc",
-            False,
-            True,
-            False,
-            [],
-            code_server_port=CODE_SERVER_PORT,
-            novnc_port=6081,
-            ttyd_proxy_port=TTYD_PROXY_PORT,
-        )
+        result = await SandboxTunnels(
+            code_server_enabled=False,
+            vnc_enabled=True,
+            settings={
+                "terminalEnabled": False,
+                "tunnelPorts": [],
+                "codeServerPort": CODE_SERVER_PORT,
+                "vncPort": 6081,
+                "terminalPort": TTYD_PROXY_PORT,
+            },
+        ).resolve(sandbox, "sandbox-vnc")
 
     resolve_tunnels.assert_awaited_once_with(sandbox, "sandbox-vnc", [6081])
     assert result == (None, "https://vnc.example.com", None, None)
 
 
 def test_raw_vnc_port_is_never_exposed_as_an_extra_tunnel():
-    exposed, extras = SandboxManager._collect_exposed_ports(
-        False,
-        False,
-        False,
-        {"tunnelPorts": [VNC_PORT, 3000]},
-        CODE_SERVER_PORT,
-        NOVNC_PORT,
-        TTYD_PROXY_PORT,
-    )
-
-    assert exposed == [3000]
-    assert extras == [3000]
+    tunnels = SandboxTunnels(settings={"tunnelPorts": [VNC_PORT, 3000]})
+    assert tunnels.exposed_ports == [3000]
+    assert tunnels.environment[EXPECTED_TUNNEL_PORTS_ENV_VAR] == "3000"

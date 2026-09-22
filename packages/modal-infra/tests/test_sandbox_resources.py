@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.sandbox.manager import SandboxConfig, SandboxManager, _resource_kwargs
+from src.sandbox.launch import _resource_kwargs
+from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
 class TestResourceKwargs:
@@ -46,11 +48,11 @@ class TestCreateSandboxResources:
     @pytest.mark.asyncio
     async def test_create_sandbox_passes_cpu_and_memory(self, monkeypatch):
         captured: dict = {}
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls(None, None, None, None)),
         )
 
         manager = SandboxManager()
@@ -73,13 +75,13 @@ class TestCreateSandboxResources:
             object_id = "img-1"
 
         monkeypatch.setattr(
-            "src.sandbox.manager.modal.Image.from_id", lambda *_a, **_kw: FakeImage()
+            "src.sandbox.launch.modal.Image.from_id", lambda *_a, **_kw: FakeImage()
         )
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls(None, None, None, None)),
         )
 
         manager = SandboxManager()

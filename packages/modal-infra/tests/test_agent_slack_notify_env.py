@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
 def _patch_create(monkeypatch, captured: dict) -> None:
@@ -21,11 +22,11 @@ def _patch_create(monkeypatch, captured: dict) -> None:
 
     fake_create = MagicMock()
     fake_create.aio = fake_create_aio
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
     monkeypatch.setattr(
-        SandboxManager,
-        "_resolve_and_setup_tunnels",
-        AsyncMock(return_value=(None, None, None, None)),
+        SandboxTunnels,
+        "resolve",
+        AsyncMock(return_value=TunnelUrls(None, None, None, None)),
     )
 
 
@@ -79,7 +80,7 @@ class TestRestoreFromSnapshotAgentSlackNotify:
         class FakeImage:
             object_id = "img-123"
 
-        monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **k: FakeImage())
+        monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda *a, **k: FakeImage())
         _patch_create(monkeypatch, captured)
 
         manager = SandboxManager()
