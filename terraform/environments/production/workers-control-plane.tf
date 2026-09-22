@@ -110,9 +110,10 @@ module "control_plane_worker" {
       GOOGLE_CLIENT_ID = { value = trimspace(var.google_client_id) }
     } : {},
     trimspace(var.modal_workspace) != "" ? {
-      MODAL_WORKSPACE              = { value = var.modal_workspace }
-      MODAL_ENVIRONMENT            = { value = var.modal_environment }
-      MODAL_ENVIRONMENT_WEB_SUFFIX = { value = var.modal_environment_web_suffix }
+      MODAL_WORKSPACE               = { value = var.modal_workspace }
+      MODAL_LAUNCH_CONTRACT_VERSION = { value = var.modal_launch_contract_v1_enabled ? "1" : "legacy" }
+      MODAL_ENVIRONMENT             = { value = var.modal_environment }
+      MODAL_ENVIRONMENT_WEB_SUFFIX  = { value = var.modal_environment_web_suffix }
     } : {},
     # Bound whenever Daytona credentials exist, not only while it is the
     # active backend: a deployment that has switched providers still has

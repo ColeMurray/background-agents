@@ -10,14 +10,6 @@
  * spawn attempts within the same request.
  */
 
-import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
-import {
-  omitUnsupportedSandboxSettings,
-  unsupportedSandboxSettings,
-  type McpServerConfig,
-  type SandboxSettings,
-} from "@open-inspect/shared/types/integrations";
-import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
@@ -62,14 +54,8 @@ import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
-import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
-import { parsePersistedSandboxSettings } from "../settings";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
-import {
-  evaluateImageBuildForSpawn,
-  type ImageBuildLookup,
-  type SelectedImageBuild,
-} from "./image-selection";
+import { type ImageBuildLookup, type SelectedImageBuild } from "./image-selection";
 import type { AlarmScheduler, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 import type {
@@ -89,6 +75,13 @@ export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { ImageBuildLookup } from "./image-selection";
 export type { AlarmScheduler } from "../../platform-ports";
+
+import {
+  LaunchPolicyResolver,
+  type McpServerLookup,
+  type SlackAgentNotifyLookup,
+} from "./launch-policy";
+export type { McpServerLookup, SlackAgentNotifyLookup } from "./launch-policy";
 
 const log = createLogger("lifecycle-manager");
 
@@ -376,47 +369,6 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
   return `sandbox-${sandboxName}-${now}`;
 }
 
-/**
- * Multi-repo additions to a spawn/restore config. Single-repo sessions keep
- * the scalar wire form untouched (the runtime synthesizes its one-entry
- * list from repo_owner/repo_name/branch), so nothing changes for them.
- * Working-branch names stay lazily derived at PR-creation time
- * (pull-request-service) and reach the sandbox via per-repo push specs,
- * never via spawn config.
- */
-function multiRepoSpawnFields(
-  repositories: SessionRepositoryInfo[]
-): Pick<CreateSandboxConfig, "repositories"> {
-  return repositories.length > 1 || repositories.some((repository) => repository.baseSha)
-    ? { repositories }
-    : {};
-}
-
-// ==================== MCP Server Lookup ====================
-
-/**
- * Lookup interface for MCP servers applicable to a session.
- * Keeps the lifecycle manager free of direct D1Database dependencies.
- * Receives the session's member repositories (empty for repo-less sessions);
- * a scoped server applies when any member matches one of its scopes.
- */
-export interface McpServerLookup {
-  getDecryptedForSession(
-    repositories: Array<{ repoOwner: string; repoName: string }>
-  ): Promise<McpServerConfig[]>;
-}
-
-// ==================== Slack Agent-Notify Lookup ====================
-
-/**
- * Resolves the spawn-time agent-slack-notify gate for a repository or the
- * global no-repository scope.
- * False (or throwing) means do not install the tool in this sandbox.
- */
-export interface SlackAgentNotifyLookup {
-  isEnabledForRepo(repoOwner: string | null, repoName: string | null): Promise<boolean>;
-}
-
 // ==================== Manager ====================
 
 /**
@@ -498,6 +450,16 @@ export class SandboxLifecycleManager
       this.logMemo = memo;
     }
     return memo.logger;
+  }
+
+  private get launchPolicy(): LaunchPolicyResolver {
+    return new LaunchPolicyResolver(
+      this.sessionContext,
+      this.provider,
+      this.config,
+      this.imageBuildLookup,
+      this.log
+    );
   }
 
   constructor(
@@ -733,7 +695,6 @@ export class SandboxLifecycleManager
         }
       }
 
-      const hasRepository = sessionHasRepository(session);
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
@@ -742,66 +703,13 @@ export class SandboxLifecycleManager
       });
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.sessionContext.getUserEnvVars();
-      const { provider, model: modelId } = this.resolveProviderAndModel(session);
-      const repositories = this.sessionContext.getSessionRepositories();
-      const multiRepoFields = multiRepoSpawnFields(repositories);
-
-      // Prebuilt-image selection: an environment session matches its
-      // environment's image against the session's own repository snapshot
-      // (design §7.3); a single-repo ad-hoc session matches its repo scope's
-      // image the same way, where the one-element fingerprint reproduces the
-      // old base_branch filter (non-default-branch sessions miss to base).
-      // Environment sessions never fall back to a repo image — it bakes that
-      // repository's setup and secrets, not the environment's — and
-      // multi-repo ad-hoc sessions never use prebuilt images (a repo image
-      // bakes a single checkout), so both miss straight to the base image.
-      let selectedImage: SelectedImageBuild | null = null;
-      if (session.environment_id) {
-        selectedImage = await this.lookupImageBuildForSpawn(
-          { kind: "environment", id: session.environment_id },
-          repositories,
-          getValidHarnessOrDefault(session.harness)
-        );
-      } else if (hasRepository && repositories.length === 1) {
-        selectedImage = await this.lookupImageBuildForSpawn(
-          repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
-          repositories,
-          getValidHarnessOrDefault(session.harness)
-        );
-      }
-
-      const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
-      const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
-
-      const mcpServers = await this.loadMcpServers(repositories);
-
-      const codeServerEnabled = session.code_server_enabled === 1;
-      const vncEnabled = session.vnc_enabled === 1;
-      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { inputs, selectedImage } = await this.launchPolicy.resolve(session, "fresh");
       const createConfig: CreateSandboxConfig = {
-        sessionId,
+        ...inputs,
         sandboxId: expectedSandboxId,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        controlPlaneUrl: this.config.controlPlaneUrl,
         sandboxAuthToken,
-        harness: getValidHarnessOrDefault(session.harness),
-        provider,
-        model: modelId,
-        userEnvVars,
-        prebuiltImageId,
-        prebuiltImageSha,
-        timeoutSeconds,
-        branch: session.base_branch,
-        codeServerEnabled,
-        vncEnabled,
-        agentSlackNotifyEnabled,
-        mcpServers,
-        sandboxSettings,
-        ...multiRepoFields,
+        prebuiltImageId: selectedImage?.providerImageId ?? null,
+        prebuiltImageSha: selectedImage?.primaryBaseSha ?? null,
       };
 
       let result: CreateSandboxResult;
@@ -929,45 +837,6 @@ export class SandboxLifecycleManager
    * design §7.3) — logging the reason either way; miss-reason counts are the
    * numbers that justify (or kill) the prebuild fast-follows.
    */
-  private async lookupImageBuildForSpawn(
-    scope: ImageBuildScope,
-    repositories: SessionRepositoryInfo[],
-    harness: HarnessId
-  ): Promise<SelectedImageBuild | null> {
-    if (!this.imageBuildLookup || repositories.length === 0) return null;
-    try {
-      const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
-      if (result.outcome === "selected") {
-        this.log.info("Using prebuilt image", {
-          event: "image_build.spawn_selected",
-          scope_kind: scope.kind,
-          scope_id: scope.id,
-          image_build_id: result.image.imageBuildId,
-          runtime_version: result.image.runtimeVersion,
-        });
-        return result.image;
-      }
-      this.log.info("Prebuilt image miss, using base image", {
-        event: "image_build.spawn_miss",
-        scope_kind: scope.kind,
-        scope_id: scope.id,
-        reason: result.reason,
-        image_build_id: result.imageBuildId,
-      });
-      return null;
-    } catch (e) {
-      this.log.warn("Failed to look up prebuilt image, using base image", {
-        event: "image_build.spawn_miss",
-        scope_kind: scope.kind,
-        scope_id: scope.id,
-        reason: "lookup_failed",
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return null;
-    }
-  }
-
   /**
    * Best-effort: the base-image retry must proceed even when D1 is the thing
    * that is down. An unmarked row costs one more failed image boot on the
@@ -988,49 +857,6 @@ export class SandboxLifecycleManager
         image_build_id: image.imageBuildId,
         error: e instanceof Error ? e.message : String(e),
       });
-    }
-  }
-
-  private async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
-    if (!this.config.slackAgentNotifyLookup) return false;
-    try {
-      return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
-        sessionHasRepository(session) ? session.repo_owner : null,
-        sessionHasRepository(session) ? session.repo_name : null
-      );
-    } catch (err) {
-      this.log.warn("Failed to resolve agent slack-notify gate; treating as disabled", {
-        event: "slack_notify.gate_resolve_failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Load MCP servers applicable to the current session's repository.
-   * Returns undefined if none are found or DB is not configured.
-   */
-  private async loadMcpServers(
-    repositories: SessionRepositoryInfo[]
-  ): Promise<McpServerConfig[] | undefined> {
-    try {
-      if (!this.config.mcpServerLookup) return undefined;
-      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
-        repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
-      );
-      this.log.info("MCP servers loaded", {
-        event: "mcp.loaded",
-        count: servers?.length ?? 0,
-        names: servers?.map((s) => s.name) ?? [],
-      });
-      return servers?.length ? servers : undefined;
-    } catch (err) {
-      this.log.warn("Failed to load MCP servers", {
-        event: "mcp.load_failed",
-        error: String(err),
-      });
-      return undefined;
     }
   }
 
@@ -1173,37 +999,13 @@ export class SandboxLifecycleManager
 
       await this.stopPriorProviderSandbox();
 
-      const userEnvVars = await this.sessionContext.getUserEnvVars();
-      const { provider, model: modelId } = this.resolveProviderAndModel(session);
-
-      const repositories = this.sessionContext.getSessionRepositories();
-      const codeServerEnabled = session.code_server_enabled === 1;
-      const vncEnabled = session.vnc_enabled === 1;
-      const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      const mcpServers = await this.loadMcpServers(repositories);
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { inputs } = await this.launchPolicy.resolve(session, "restore");
       this.shutdown.markRecoveryInvoked(generation);
       const result = await this.provider.restoreFromSnapshot({
+        ...inputs,
         snapshotImageId,
-        sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
-        controlPlaneUrl: this.config.controlPlaneUrl,
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-        harness: getValidHarnessOrDefault(session.harness),
-        provider,
-        model: modelId,
-        userEnvVars,
-        timeoutSeconds,
-        branch: session.base_branch,
-        codeServerEnabled,
-        vncEnabled,
-        agentSlackNotifyEnabled,
-        mcpServers,
-        sandboxSettings,
-        ...multiRepoSpawnFields(repositories),
       });
 
       if (result.success) {
@@ -1339,8 +1141,7 @@ export class SandboxLifecycleManager
         this.storage.updateSandboxRuntimeVersion(sourceRuntimeVersion);
       });
 
-      const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { sandboxSettings, timeoutSeconds } = this.launchPolicy.resolveSettings(session);
 
       if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation, providerObjectId);
       const result = await this.provider.resumeSandbox({
@@ -2113,14 +1914,6 @@ export class SandboxLifecycleManager
   }
 
   /**
-   * Resolve the provider and model ID from the session or config default.
-   * e.g., "openai/gpt-5.3-codex" -> { provider: "openai", model: "gpt-5.3-codex" }
-   */
-  private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
-    return extractProviderAndModel(session.model || this.config.model);
-  }
-
-  /**
    * Get the count of connected client WebSockets.
    */
   private getConnectedClientCount(): number {
@@ -2151,38 +1944,6 @@ export class SandboxLifecycleManager
   private async storeVnc(url: string, password: string): Promise<void> {
     this.log.info("Storing VNC info", { url });
     await this.storage.updateSandboxAccess("vnc", url, password);
-  }
-
-  private parseSandboxSettings(session: SessionRow): SandboxSettings {
-    try {
-      const settings = parsePersistedSandboxSettings(session.sandbox_settings);
-      const unsupported = unsupportedSandboxSettings(settings, this.provider.name);
-      if (unsupported.length > 0) {
-        this.log.warn("Ignoring persisted sandbox settings unsupported by the provider", {
-          event: "sandbox.settings_unsupported",
-          provider: this.provider.name,
-          settings: unsupported,
-        });
-      }
-      return omitUnsupportedSandboxSettings(settings, this.provider.name);
-    } catch {
-      this.log.warn("Failed to parse sandbox_settings, using defaults");
-      return {};
-    }
-  }
-
-  private resolveSandboxTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
-    if (!this.provider.capabilities.supportsSandboxTimeout) {
-      if (sandboxSettings.sandboxTimeoutMs !== undefined) {
-        throw new SandboxProviderError(
-          `${this.provider.name} does not support configurable sandbox timeouts`,
-          "permanent"
-        );
-      }
-      return undefined;
-    }
-    const timeoutMs = sandboxSettings.sandboxTimeoutMs;
-    return timeoutMs === undefined ? undefined : timeoutMs / 1000;
   }
 
   private async storeAndBroadcastTunnelUrls(

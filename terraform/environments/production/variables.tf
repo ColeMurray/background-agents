@@ -814,3 +814,8 @@ variable "unsafe_allow_all_users" {
   type        = bool
   default     = false
 }
+variable "modal_launch_contract_v1_enabled" {
+  description = "Enable interactive launch v1 only after verifying the dual-reading Modal receiver and canary. Disable to roll back the sender; keep the receiver deployed."
+  type        = bool
+  default     = false
+}

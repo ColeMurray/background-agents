@@ -12,7 +12,12 @@ import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/type
 import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
-import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
+import {
+  encodeModalCreate,
+  encodeModalRestore,
+  type ModalLaunchContractVersion,
+} from "./modal-launch-contract";
+import { toRepositoryConfigPayload } from "./sandbox-env";
 import type { SessionRepositoryInfo } from "./provider";
 import { withRequestDeadline } from "./request-deadline";
 
@@ -329,7 +334,13 @@ export class ModalClient {
     });
   }
 
-  constructor(secret: string, workspace: string, environmentWebSuffix?: string, apiUrl?: string) {
+  constructor(
+    secret: string,
+    workspace: string,
+    environmentWebSuffix?: string,
+    apiUrl?: string,
+    private readonly launchContractVersion: ModalLaunchContractVersion = "legacy"
+  ) {
     if (!secret) {
       throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
     }
@@ -382,35 +393,7 @@ export class ModalClient {
         this.createSandboxUrl,
         endpoint,
         MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
-        {
-          session_id: request.sessionId,
-          sandbox_id: request.sandboxId || null, // Use control-plane-generated ID
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          control_plane_url: request.controlPlaneUrl,
-          sandbox_auth_token: request.sandboxAuthToken,
-          agent_session_id: request.agentSessionId || null,
-          harness: request.harness,
-          provider: request.provider || "anthropic",
-          model: request.model || "claude-sonnet-4-6",
-          user_env_vars: request.userEnvVars || null,
-          repo_image_id: request.prebuiltImageId || null,
-          repo_image_sha: request.prebuiltImageSha || null,
-          timeout_seconds: request.timeoutSeconds || null,
-          branch: request.branch || null,
-          code_server_enabled: request.codeServerEnabled ?? false,
-          vnc_enabled: request.vncEnabled ?? false,
-          agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
-          mcp_servers: request.mcpServers || null,
-          sandbox_settings: request.sandboxSettings ?? null,
-          // Flat keys matching SessionConfig field names — Modal's create
-          // handler builds its SessionConfig from the request by field name
-          // (unlike restore, which carries a nested session_config).
-          repositories: request.repositories?.length
-            ? request.repositories.map(toRepositoryConfigPayload)
-            : null,
-          bridge_early_connect: true,
-        },
+        encodeModalCreate(request, this.launchContractVersion),
         createSandboxModalResponseSchema,
         correlation,
         request.signal,
@@ -433,6 +416,7 @@ export class ModalClient {
       log.info("modal.request", {
         event: "modal.request",
         endpoint,
+        launch_contract_version: this.launchContractVersion,
         session_id: request.sessionId,
         sandbox_id: request.sandboxId,
         trace_id: correlation?.trace_id,
@@ -461,19 +445,7 @@ export class ModalClient {
         this.restoreSandboxUrl,
         endpoint,
         MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
-        {
-          snapshot_image_id: request.snapshotImageId,
-          session_config: buildSessionConfig(request),
-          sandbox_id: request.sandboxId,
-          control_plane_url: request.controlPlaneUrl,
-          sandbox_auth_token: request.sandboxAuthToken,
-          user_env_vars: request.userEnvVars || null,
-          timeout_seconds: request.timeoutSeconds || null,
-          code_server_enabled: request.codeServerEnabled ?? false,
-          vnc_enabled: request.vncEnabled ?? false,
-          agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
-          sandbox_settings: request.sandboxSettings ?? null,
-        },
+        encodeModalRestore(request, this.launchContractVersion),
         restoreSandboxModalResponseSchema,
         correlation,
         request.signal,
@@ -495,6 +467,7 @@ export class ModalClient {
       log.info("modal.request", {
         event: "modal.request",
         endpoint,
+        launch_contract_version: this.launchContractVersion,
         session_id: request.sessionId,
         sandbox_id: request.sandboxId,
         trace_id: correlation?.trace_id,
@@ -756,7 +729,8 @@ export function createModalClient(
   secret: string,
   workspace: string,
   environmentWebSuffix?: string,
-  apiUrl?: string
+  apiUrl?: string,
+  launchContractVersion: ModalLaunchContractVersion = "legacy"
 ): ModalClient {
   if (!secret) {
     throw new Error("MODAL_API_SECRET is required to create ModalClient");
@@ -764,5 +738,5 @@ export function createModalClient(
   if (!workspace) {
     throw new Error("MODAL_WORKSPACE is required to create ModalClient");
   }
-  return new ModalClient(secret, workspace, environmentWebSuffix, apiUrl);
+  return new ModalClient(secret, workspace, environmentWebSuffix, apiUrl, launchContractVersion);
 }

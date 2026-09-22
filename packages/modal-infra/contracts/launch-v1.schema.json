@@ -1,0 +1,556 @@
+{
+  "$defs": {
+    "CreateSandboxV1Request": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {
+          "const": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "session_config": {
+          "$ref": "#/$defs/LaunchSessionConfigV1"
+        },
+        "sandbox_id": {
+          "minLength": 1,
+          "title": "Sandbox Id",
+          "type": "string"
+        },
+        "control_plane_url": {
+          "minLength": 1,
+          "title": "Control Plane Url",
+          "type": "string"
+        },
+        "sandbox_auth_token": {
+          "minLength": 1,
+          "title": "Sandbox Auth Token",
+          "type": "string"
+        },
+        "user_env_vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "User Env Vars",
+          "type": "object"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "code_server_enabled": {
+          "title": "Code Server Enabled",
+          "type": "boolean"
+        },
+        "vnc_enabled": {
+          "title": "Vnc Enabled",
+          "type": "boolean"
+        },
+        "agent_slack_notify_enabled": {
+          "title": "Agent Slack Notify Enabled",
+          "type": "boolean"
+        },
+        "sandbox_settings": {
+          "$ref": "#/$defs/LaunchSettingsV1"
+        },
+        "repo_image_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repo Image Id"
+        },
+        "repo_image_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repo Image Sha"
+        },
+        "agent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Agent Session Id"
+        }
+      },
+      "required": [
+        "contract_version",
+        "session_config",
+        "sandbox_id",
+        "control_plane_url",
+        "sandbox_auth_token",
+        "user_env_vars",
+        "timeout_seconds",
+        "code_server_enabled",
+        "vnc_enabled",
+        "agent_slack_notify_enabled",
+        "sandbox_settings",
+        "repo_image_id",
+        "repo_image_sha",
+        "agent_session_id"
+      ],
+      "title": "CreateSandboxV1Request",
+      "type": "object"
+    },
+    "LaunchMcpServerV1": {
+      "additionalProperties": true,
+      "description": "Validate known runtime inputs without dropping future MCP extensions.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "local",
+            "remote"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "env": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env"
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        },
+        "repoScopes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reposcopes"
+        },
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enabled"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "LaunchMcpServerV1",
+      "type": "object"
+    },
+    "LaunchSessionConfigV1": {
+      "additionalProperties": true,
+      "description": "Explicit session policy; preserve future runtime fields on both launch paths.",
+      "properties": {
+        "repo_owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repo Owner"
+        },
+        "repo_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repo Name"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "harness": {
+          "enum": [
+            "opencode",
+            "claude"
+          ],
+          "title": "Harness",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Branch"
+        },
+        "mcp_servers": {
+          "items": {
+            "$ref": "#/$defs/LaunchMcpServerV1"
+          },
+          "title": "Mcp Servers",
+          "type": "array"
+        },
+        "repositories": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RestoreRepositoryRequest"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repositories"
+        },
+        "bridge_early_connect": {
+          "title": "Bridge Early Connect",
+          "type": "boolean"
+        },
+        "base_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Sha"
+        },
+        "agent_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Session Id"
+        },
+        "opencode_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Opencode Session Id"
+        },
+        "working_branch_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Branch Name"
+        }
+      },
+      "required": [
+        "repo_owner",
+        "repo_name",
+        "session_id",
+        "harness",
+        "provider",
+        "model",
+        "branch",
+        "mcp_servers",
+        "repositories",
+        "bridge_early_connect"
+      ],
+      "title": "LaunchSessionConfigV1",
+      "type": "object"
+    },
+    "LaunchSettingsV1": {
+      "additionalProperties": true,
+      "description": "Required effective defaults. Other provider settings retain their existing semantics.",
+      "properties": {
+        "codeServerPort": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Codeserverport",
+          "type": "integer"
+        },
+        "vncPort": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Vncport",
+          "type": "integer"
+        },
+        "terminalPort": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Terminalport",
+          "type": "integer"
+        },
+        "terminalEnabled": {
+          "title": "Terminalenabled",
+          "type": "boolean"
+        },
+        "tunnelPorts": {
+          "items": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Tunnelports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "codeServerPort",
+        "vncPort",
+        "terminalPort",
+        "terminalEnabled",
+        "tunnelPorts"
+      ],
+      "title": "LaunchSettingsV1",
+      "type": "object"
+    },
+    "RestoreRepositoryRequest": {
+      "additionalProperties": true,
+      "properties": {
+        "repo_owner": {
+          "minLength": 1,
+          "title": "Repo Owner",
+          "type": "string"
+        },
+        "repo_name": {
+          "minLength": 1,
+          "title": "Repo Name",
+          "type": "string"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "base_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Sha"
+        }
+      },
+      "required": [
+        "repo_owner",
+        "repo_name"
+      ],
+      "title": "RestoreRepositoryRequest",
+      "type": "object"
+    },
+    "RestoreSandboxV1Request": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {
+          "const": 1,
+          "title": "Contract Version",
+          "type": "integer"
+        },
+        "session_config": {
+          "$ref": "#/$defs/LaunchSessionConfigV1"
+        },
+        "sandbox_id": {
+          "minLength": 1,
+          "title": "Sandbox Id",
+          "type": "string"
+        },
+        "control_plane_url": {
+          "minLength": 1,
+          "title": "Control Plane Url",
+          "type": "string"
+        },
+        "sandbox_auth_token": {
+          "minLength": 1,
+          "title": "Sandbox Auth Token",
+          "type": "string"
+        },
+        "user_env_vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "User Env Vars",
+          "type": "object"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "code_server_enabled": {
+          "title": "Code Server Enabled",
+          "type": "boolean"
+        },
+        "vnc_enabled": {
+          "title": "Vnc Enabled",
+          "type": "boolean"
+        },
+        "agent_slack_notify_enabled": {
+          "title": "Agent Slack Notify Enabled",
+          "type": "boolean"
+        },
+        "sandbox_settings": {
+          "$ref": "#/$defs/LaunchSettingsV1"
+        },
+        "snapshot_image_id": {
+          "minLength": 1,
+          "title": "Snapshot Image Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "session_config",
+        "sandbox_id",
+        "control_plane_url",
+        "sandbox_auth_token",
+        "user_env_vars",
+        "timeout_seconds",
+        "code_server_enabled",
+        "vnc_enabled",
+        "agent_slack_notify_enabled",
+        "sandbox_settings",
+        "snapshot_image_id"
+      ],
+      "title": "RestoreSandboxV1Request",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/CreateSandboxV1Request"
+    },
+    {
+      "$ref": "#/$defs/RestoreSandboxV1Request"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

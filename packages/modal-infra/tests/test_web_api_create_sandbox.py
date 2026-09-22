@@ -253,6 +253,7 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
         "api.error",
         exc=ANY,
         endpoint_name=endpoint,
+        launch_contract_version="legacy",
         trace_id="trace-1",
         request_id="request-1",
         session_id="sess-1",
@@ -260,6 +261,7 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
     )
     info.assert_called_once_with(
         "modal.http_request",
+        launch_contract_version="legacy",
         http_method="POST",
         http_path=path,
         http_status=500,

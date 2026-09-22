@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Literal, Self
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
@@ -168,6 +168,89 @@ class RestoreSandboxRequest(_ModalRequestModel):
     vnc_enabled: bool | None = None
     agent_slack_notify_enabled: bool = False
     sandbox_settings: dict[str, Any] | None = None
+
+
+class LaunchMcpServerV1(BaseModel):
+    """Validate known runtime inputs without dropping future MCP extensions."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+    name: NonEmptyString
+    type: Literal["local", "remote"]
+    id: str | None = None
+    command: list[str] | None = None
+    url: str | None = None
+    env: dict[str, str] | None = None
+    headers: dict[str, str] | None = None
+    repoScopes: list[str] | None = None
+    enabled: bool | None = None
+
+
+class LaunchSessionConfigV1(_RepositoryContextModel):
+    """Explicit session policy; preserve future runtime fields on both launch paths."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+    session_id: NonEmptyString
+    repo_owner: str | None
+    repo_name: str | None
+    harness: Literal["opencode", "claude"]
+    provider: NonEmptyString
+    model: NonEmptyString
+    branch: str | None
+    mcp_servers: list[LaunchMcpServerV1]
+    repositories: list[RestoreRepositoryRequest] | None
+    bridge_early_connect: bool
+    base_sha: str | None = None
+    agent_session_id: str | None = None
+    opencode_session_id: str | None = None
+    working_branch_name: str | None = None
+
+
+Port = Annotated[int, Field(ge=1, le=65535)]
+
+
+class LaunchSettingsV1(BaseModel):
+    """Required effective defaults. Other provider settings retain their existing semantics."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+    codeServerPort: Port
+    vncPort: Port
+    terminalPort: Port
+    terminalEnabled: bool
+    tunnelPorts: list[Port]
+
+
+class _LaunchRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    contract_version: Literal[1]
+    session_config: LaunchSessionConfigV1
+    sandbox_id: NonEmptyString
+    control_plane_url: NonEmptyString
+    sandbox_auth_token: NonEmptyString
+    user_env_vars: dict[str, str]
+    timeout_seconds: Annotated[int, Field(gt=0)]
+    code_server_enabled: bool
+    vnc_enabled: bool
+    agent_slack_notify_enabled: bool
+    sandbox_settings: LaunchSettingsV1
+
+
+class CreateSandboxV1Request(_LaunchRequestV1):
+    repo_image_id: str | None
+    repo_image_sha: str | None
+    agent_session_id: str | None
+
+
+class RestoreSandboxV1Request(_LaunchRequestV1):
+    snapshot_image_id: NonEmptyString
+
+
+def _launch_contract_version(request: dict[str, object]) -> int | None:
+    if "contract_version" not in request:
+        return None
+    version = request["contract_version"]
+    if type(version) is not int or version != 1:
+        raise HTTPException(status_code=400, detail="Unsupported launch contract version")
+    return version
 
 
 @dataclass
@@ -392,8 +475,23 @@ async def api_create_sandbox(
         request_id=x_request_id,
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
-    ):
-        parsed_request = _parse_request(CreateSandboxRequest, request)
+    ) as execution:
+        version = _launch_contract_version(request)
+        execution.log_fields["launch_contract_version"] = version or "legacy"
+        v1 = _parse_request(CreateSandboxV1Request, request) if version == 1 else None
+        # Keep the old decoder byte/semantic-compatible. V1 shares validation of
+        # provider fields but never reconstructs its SESSION_CONFIG via SessionConfig.
+        legacy_fields = (
+            request
+            if v1 is None
+            else {
+                **v1.model_dump(exclude={"session_config", "contract_version"}),
+                "session_id": v1.session_config.session_id,
+                "repo_owner": v1.session_config.repo_owner,
+                "repo_name": v1.session_config.repo_name,
+            }
+        )
+        parsed_request = _parse_request(CreateSandboxRequest, legacy_fields)
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -407,9 +505,14 @@ async def api_create_sandbox(
         manager = SandboxManager()
         repo_owner = parsed_request.repo_owner
         repo_name = parsed_request.repo_name
-        session_config = _session_config_from_create_request(
-            request, repo_owner=repo_owner, repo_name=repo_name
-        )
+        if v1 is None:
+            session_config = _session_config_from_create_request(
+                request, repo_owner=repo_owner, repo_name=repo_name
+            )
+        else:
+            session_config = v1.session_config.model_dump(exclude_unset=True)
+            if v1.agent_session_id:
+                session_config["agent_session_id"] = v1.agent_session_id
 
         config = SandboxConfig(
             repo_owner=repo_owner,
@@ -462,7 +565,14 @@ async def api_create_sandbox(
 @fastapi_endpoint(method="GET")
 def api_health() -> dict:
     """Health check endpoint. Does not require authentication."""
-    return {"success": True, "data": {"status": "healthy", "service": "open-inspect-modal"}}
+    return {
+        "success": True,
+        "data": {
+            "status": "healthy",
+            "service": "open-inspect-modal",
+            "launch_contract_versions": ["legacy", 1],
+        },
+    }
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -663,8 +773,16 @@ async def api_restore_sandbox(
         request_id=x_request_id,
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
-    ):
-        parsed_request = _parse_request(RestoreSandboxRequest, request)
+    ) as execution:
+        version = _launch_contract_version(request)
+        execution.log_fields["launch_contract_version"] = version or "legacy"
+        v1 = _parse_request(RestoreSandboxV1Request, request) if version == 1 else None
+        legacy_fields = (
+            request
+            if v1 is None
+            else v1.model_dump(exclude={"contract_version"}, exclude_unset=True)
+        )
+        parsed_request = _parse_request(RestoreSandboxRequest, legacy_fields)
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
