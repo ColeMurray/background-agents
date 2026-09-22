@@ -28,10 +28,11 @@ launch inputs, **not** a durable or globally atomic Launch Plan. The lifecycle m
 identity reservation, prior object retirement, image invalidation/retry, snapshot runtime version,
 recovery holds, generation claims, access publication, and late-result cleanup.
 
-The extraction retains the current sequential reads:
+Hard prerequisites remain ordered; review verified that MCP and Slack have no dependency on one
+another:
 
-- fresh: secrets → repository membership → image eligibility → MCP → Slack;
-- restore: secrets → repository membership → Slack → MCP;
+- fresh: secrets → repository membership → image eligibility → concurrent MCP and Slack;
+- restore: secrets → repository membership → concurrent MCP and Slack;
 - resume: settings only; no new environment/model/MCP resolution.
 
 `UserEnvResolver` still rereads session state and current secrets using persisted auth bindings.

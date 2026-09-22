@@ -2,14 +2,14 @@
 
 ## Delivered versus operationally gated
 
-| Work                                 | Source change                                                                                      | Release gate                                                                 |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Cross-language fixtures and CI       | Real TS sender → Python endpoint → launch environment → runtime/service readers; mutation detector | `npm run test:launch-contract`                                               |
-| Common launch policy                 | Extracted without changing prerequisite ordering or attempt ownership                              | Manager, provider, Node/Workerd tests                                        |
-| Shared encoding/effective defaults   | Canonical session serializer; explicit v1 timeout, flags, ports and tunnel inputs                  | Legacy compatibility suite and v1 suite                                      |
-| Dual-reading receiver / gated sender | Implemented; legacy remains default                                                                | Receiver capability + artifact verification + canary before activation       |
-| Credential ownership                 | Provider-local generation and legacy paths deliberately retained; see ADR 0005                     | Separate scope/expiry/old-image equivalence evidence before any migration    |
-| Legacy retirement                    | Not performed                                                                                      | Caller inventory, rollback window and independent retained-snapshot evidence |
+| Work                                 | Source change                                                                                        | Release gate                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Cross-language fixtures and CI       | Real TS sender → Python endpoint → launch environment → runtime/service readers; mutation detector   | `npm run test:launch-contract`                                               |
+| Common launch policy                 | Ordered hard prerequisites and unchanged attempt ownership; independent MCP/Slack reads run together | Manager, provider, Node/Workerd tests                                        |
+| Shared encoding/effective defaults   | Canonical session serializer; explicit v1 timeout, flags, ports and tunnel inputs                    | Legacy compatibility suite and v1 suite                                      |
+| Dual-reading receiver / gated sender | Implemented; legacy remains default                                                                  | Receiver capability + artifact verification + canary before activation       |
+| Credential ownership                 | Provider-local generation and legacy paths deliberately retained; see ADR 0005                       | Separate scope/expiry/old-image equivalence evidence before any migration    |
+| Legacy retirement                    | Not performed                                                                                        | Caller inventory, rollback window and independent retained-snapshot evidence |
 
 No production or provider-native evidence is implied by local tests. This PR does not deploy, change
 production flags, or declare legacy snapshots unsupported.

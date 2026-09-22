@@ -51,7 +51,7 @@ function fixture(repositories: SessionRepositoryInfo[] = []) {
 
 describe("launch policy ownership", () => {
   it.each(["fresh", "restore"] as const)(
-    "preserves sequential %s preparation and awaits secrets first",
+    "awaits %s secrets before resolving launch prerequisites",
     async (mode) => {
       const f = fixture([{ repoOwner: "group", repoName: "repo", baseBranch: "main" }]);
       let release!: () => void;
@@ -67,16 +67,44 @@ describe("launch policy ownership", () => {
       expect(f.calls).toEqual(["secrets"]);
       release();
       const { inputs } = await prepared;
-      expect(f.calls).toEqual(
-        mode === "fresh"
-          ? ["secrets", "repositories", "image", "mcp", "slack"]
-          : ["secrets", "repositories", "slack", "mcp"]
+      expect(f.calls.slice(0, 2)).toEqual(["secrets", "repositories"]);
+      expect(new Set(f.calls.slice(2))).toEqual(
+        new Set(mode === "fresh" ? ["image", "mcp", "slack"] : ["mcp", "slack"])
       );
       expect(inputs.userEnvVars).toEqual({ SYNTHETIC: "value" });
       expect(inputs.agentSlackNotifyEnabled).toBe(true);
       expect(inputs.repositories).toBeUndefined();
       expect(f.provider.createSandbox).not.toHaveBeenCalled();
       expect(f.images.markRestoreFailed).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["fresh", "restore"] as const)(
+    "resolves independent %s integrations concurrently",
+    async (mode) => {
+      const f = fixture();
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      f.config.mcpServerLookup.getDecryptedForSession.mockImplementation(async () => {
+        await waiting;
+        return [];
+      });
+      f.config.slackAgentNotifyLookup.isEnabledForRepo.mockImplementation(async () => {
+        await waiting;
+        return true;
+      });
+      const pending = f.resolver.resolve(createMockSession(), mode);
+      try {
+        await vi.waitFor(() => {
+          expect(f.config.mcpServerLookup.getDecryptedForSession).toHaveBeenCalledOnce();
+          expect(f.config.slackAgentNotifyLookup.isEnabledForRepo).toHaveBeenCalledOnce();
+        });
+      } finally {
+        release();
+        await pending;
+      }
     }
   );
 
@@ -89,6 +117,7 @@ describe("launch policy ownership", () => {
         "synthetic secret failure"
       );
       expect(f.config.mcpServerLookup.getDecryptedForSession).not.toHaveBeenCalled();
+      expect(f.config.slackAgentNotifyLookup.isEnabledForRepo).not.toHaveBeenCalled();
       expect(f.images.getLatestReady).not.toHaveBeenCalled();
     }
   );

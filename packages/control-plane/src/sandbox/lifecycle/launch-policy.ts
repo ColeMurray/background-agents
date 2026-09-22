@@ -1,7 +1,7 @@
 /**
  * Session launch policy, independent of attempt reservation and provider I/O.
- * Reads remain sequential and retain the legacy create/restore ordering. This
- * is an ephemeral result, not an atomic cross-store snapshot or a secret cache.
+ * Hard prerequisites complete before independent best-effort integrations.
+ * This is an ephemeral result, not an atomic cross-store snapshot or a secret cache.
  */
 import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
@@ -94,17 +94,12 @@ export class LaunchPolicyResolver {
         );
       }
     }
-    // Keep the established lookup order, including the restore-path difference.
-    // Changing it is a separate consistency decision, not part of extraction.
-    let mcpServers: McpServerConfig[] | undefined;
-    let agentSlackNotifyEnabled: boolean;
-    if (mode === "fresh") {
-      mcpServers = await this.loadMcpServers(repositories);
-      agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-    } else {
-      agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
-      mcpServers = await this.loadMcpServers(repositories);
-    }
+    // Neither integration reads or writes the other's state; each owns its
+    // degradation behavior. Keep hard prerequisites outside this concurrency.
+    const [mcpServers, agentSlackNotifyEnabled] = await Promise.all([
+      this.loadMcpServers(repositories),
+      this.resolveAgentSlackNotifyEnabled(session),
+    ]);
     const { sandboxSettings, timeoutSeconds } = this.resolveSettings(session);
     return {
       selectedImage,
