@@ -22,6 +22,8 @@ from sandbox_runtime.log_config import get_logger
 # Preserve the logger name used by existing launch/tunnel dashboards.
 log = get_logger("manager")
 MAX_TUNNEL_PORTS = 10
+DEFAULT_TUNNEL_RESOLUTION_RETRIES = 3
+DEFAULT_TUNNEL_RESOLUTION_BACKOFF_SECONDS = 1.0
 
 
 class TunnelUrls(NamedTuple):
@@ -114,8 +116,8 @@ class SandboxTunnels:
         sandbox: modal.Sandbox,
         sandbox_id: str,
         ports: list[int],
-        retries: int = 3,
-        backoff_seconds: float = 1.0,
+        retries: int = DEFAULT_TUNNEL_RESOLUTION_RETRIES,
+        backoff_seconds: float = DEFAULT_TUNNEL_RESOLUTION_BACKOFF_SECONDS,
     ) -> dict[int, str]:
         """Resolve tunnel URLs for the given ports from Modal, retrying on failure."""
         resolved: dict[int, str] = {}
