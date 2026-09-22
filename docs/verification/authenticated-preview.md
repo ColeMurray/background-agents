@@ -136,12 +136,12 @@ sandbox verification.
 
 ### Implementation verification — 2026-09-22
 
-Verified on branch `authenticated-preview`, based on `fab55fea1`, with the working-tree changes:
+Verified on branch `authenticated-preview`, rebased onto `232bb74c5` before opening the PR:
 
-- Control-plane unit/contracts: **5,084 passed**, including **44** focused preview/auth/Node-host
-  contracts. Web unit tests: **1,805 passed**.
-- Workers integration: **1,320 passed, 1 skipped**. An initial concurrent run had one timeout; the
-  affected file passed separately, then the full suite passed with `--maxWorkers=2`.
+- Control-plane unit/contracts: **5,092 passed**. Focused reruns also passed: **21**
+  preview/auth-helper checks and **10** Node-host checks. Web unit tests: **1,805 passed**.
+- Workers integration: **1,354 passed, 1 skipped**, with `--maxWorkers=2`. An earlier concurrent run
+  on the original base had one timeout; its file and the full suite passed on rerun.
 - Real-stack Playwright: **2 passed**, no retries. Deliberately breaking the BFF service secret
   produced an auth-stage 401 failure; breaking the WebSocket URL failed the connected-state
   assertion. Both faults were reverted and the clean journeys passed again.
@@ -153,13 +153,19 @@ Verified on branch `authenticated-preview`, based on `fab55fea1`, with the worki
   this excludes dependency setup and browser handoff and is not a performance guarantee.
 - Root typecheck, lint, formatting, and Node/Worker/web production builds passed. Node and Worker
   build metadata contained no preview/support/smoke fixture modules.
-- Independent testing/simplicity review led to three focused fixes: pending-versus-verified browser
+- Independent testing/simplicity review led to focused fixes: pending-versus-verified browser
   handoff, bounded exit after cleanup, and surviving sanitized diagnostics. Each has a regression
   test; no additional framework was introduced.
+- A fresh pre-PR review added stop signals and request deadlines during both data seeding and web
+  startup checks. Real stalled HTTP requests verify cleanup of owned servers, child processes,
+  ports, run directories and locks. The GitHub fixture forwards the original request signal to
+  preserve Node 22 timeout behavior. The browser logout check now proves the separate viewer's
+  identity and access remain intact, rather than accepting a 200 response with no session. The
+  reviewer rechecked these fixes and approved.
 
-Docker Compose smoke subsequently **passed** after the local Docker daemon became available: 79
-migrations, authenticated session/WebSocket round-trip, exact prompt delivery, streamed reply and
-completion, scheduler tick, Litestream replication, clean SIGTERM drain, and rejection of a missing
-required key. It used a separate Compose project and ports; its containers, network and volumes were
-removed, the prior local image tag was restored, and the existing development stack remained
-healthy. OAuth and real-provider behavior remain outside this evidence.
+Docker Compose smoke **passed again on the rebased branch**: 79 migrations, authenticated
+session/WebSocket round-trip, exact prompt delivery, streamed reply and completion, scheduler tick,
+Litestream replication, clean SIGTERM drain, and rejection of a missing required key. It used a
+separate Compose project and ports; its containers, network and volumes were removed, the prior
+local image tag was restored, and the existing development stack remained healthy. OAuth and
+real-provider behavior remain outside this evidence.

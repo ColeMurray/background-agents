@@ -1602,24 +1602,24 @@
           </aside>
         </div>
         <div class="counts" aria-label="Passed test counts">
-          <div class="count"><strong>5,084</strong><span>Backend tests passed</span></div>
+          <div class="count"><strong>5,092</strong><span>Backend tests passed</span></div>
           <div class="count"><strong>1,805</strong><span>Web tests passed</span></div>
           <div class="count">
-            <strong>1,320</strong><span>Worker tests passed · 1 skipped</span>
+            <strong>1,354</strong><span>Worker tests passed · 1 skipped</span>
           </div>
           <div class="count"><strong>2</strong><span>Full browser journeys passed</span></div>
         </div>
         <p class="check-note">
-          Results from this working tree, not a promise that every case is covered. Backend totals
-          include 44 focused preview, login and host checks. One earlier Worker test timed out; its
-          file and then the full suite passed on rerun.
+          Results from the branch after bringing in current main, not a promise that every case is
+          covered. We also reran 21 preview and login-helper checks, plus 10 host checks. One
+          earlier Worker test timed out; its file and then the full suite passed on rerun.
         </p>
         <div class="docker">
           <div>
             <h3>Docker passed too.</h3>
             <p>
-              A separate check ran the built backend in containers. It did not need a real cloud
-              sandbox.
+              A separate check ran the built backend in containers, and passed again before the PR.
+              It did not need a real cloud sandbox.
             </p>
           </div>
           <div class="docker-checks">
@@ -1697,16 +1697,24 @@
         </div>
         <div class="review-strip" aria-label="Fixes from the independent review">
           <div>
-            <strong>A second agent reviewed the work.</strong>
-            <p>It looked for weak tests, brittle code, and needless extra layers.</p>
+            <strong>A fresh agent checked it before the PR.</strong>
+            <p>
+              It looked for weak tests, brittle code, and needless extra layers. It approved the
+              fixes.
+            </p>
           </div>
           <div>
-            <strong>Three useful fixes came from it.</strong>
-            <p>Failed browser login loads, stuck shutdowns, and lost error logs.</p>
+            <strong>Setup can stop even when a request gets stuck.</strong>
+            <p>
+              New tests hold real requests open, then check that a stop or time limit cleans up.
+            </p>
           </div>
           <div>
-            <strong>Each fix got a test.</strong>
-            <p>We kept the small setup. No new test framework was needed.</p>
+            <strong>Logout checks the other user too.</strong>
+            <p>
+              A good status code is not enough. The test checks who is still signed in and what they
+              can open.
+            </p>
           </div>
         </div>
         <details>
@@ -1750,7 +1758,7 @@
         <span><strong>OpenInspect</strong> · Signed-in preview walkthrough</span
         ><span
           >Checked September 22, 2026 · Branch <code>authenticated-preview</code> · Base
-          <code>fab55fea1</code></span
+          <code>232bb74c5</code></span
         >
       </div>
     </footer>
