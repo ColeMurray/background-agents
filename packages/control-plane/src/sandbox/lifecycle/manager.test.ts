@@ -2786,9 +2786,11 @@ describe("SandboxLifecycleManager", () => {
         completed = true;
       });
 
-      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(
-        1011,
-        "Stop confirmation timed out"
+      await vi.waitFor(() =>
+        expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(
+          1011,
+          "Stop confirmation timed out"
+        )
       );
       expect(completed).toBe(false);
       resolveStop({ success: true });

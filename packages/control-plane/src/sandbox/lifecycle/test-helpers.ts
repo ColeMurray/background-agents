@@ -411,7 +411,9 @@ export function createUnmanagedShutdown() {
     recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
     isHolding: vi.fn(() => false),
     requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
-    preserveBeforeTermination: vi.fn(async () => undefined),
+    preserveBeforeTermination: vi.fn<SandboxShutdownLifecycle["preserveBeforeTermination"]>(
+      async () => "unmanaged"
+    ),
     captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
       outcome: "saved",
       imageId: "snapshot-img-123",

@@ -614,18 +614,20 @@ export class SandboxShutdownCoordinator {
    * never permission to replay interrupted work. No running-generation adoption
    * is needed; ownership is recorded only when retirement is actually requested.
    */
-  async preserveBeforeTermination(reason: string): Promise<void> {
+  async preserveBeforeTermination(reason: string): Promise<"owned" | "held" | "unmanaged"> {
     const row = this.deps.sandbox.getSandbox();
-    if (!row?.modal_sandbox_id) return;
+    if (!row?.modal_sandbox_id) return "unmanaged";
     const state = this.deps.store.read();
     if (
       state &&
       (!this.current(state) ||
         !this.providerMatches(state) ||
-        state.phase !== "running" ||
+        (state.phase !== "running" && state.phase !== "restoring") ||
         state.checkpointInFlight)
     )
-      return;
+      return "held";
+    const recovering = state?.restoreInvoked === true || state?.phase === "restoring";
+    if (!recovering && row.status !== "ready") return "unmanaged";
     const now = this.now();
     const end = Math.min(state?.expiresAtMs ?? Infinity, now + CAPTURE_MS + RETIRE_MS + MARGIN_MS);
     const next: ShutdownRecord = {
@@ -633,7 +635,10 @@ export class SandboxShutdownCoordinator {
       provider: this.deps.provider.name,
       providerObjectId: row.modal_object_id,
       sourceRetired: false,
-      phase: "capturing",
+      phase: recovering ? "unknown" : "capturing",
+      error: recovering
+        ? "The runtime failed during recovery; the provider startup outcome is unknown."
+        : undefined,
       reason,
       operationId: crypto.randomUUID(),
       stopByMs: now,
@@ -649,12 +654,14 @@ export class SandboxShutdownCoordinator {
       return message ? this.deps.failures.record(message.id, reason, now, "processing") : null;
     });
     this.broadcast({ type: "sandbox_status", status: "stale" });
+    if (recovering) this.announce(next);
     this.deps.retireAccess();
     if (failure) this.deps.failures.deliver(failure);
-    await this.capture(next);
+    if (!recovering) await this.capture(next);
     this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
       name: "sandbox.retirement_status",
     });
+    return recovering ? "held" : "owned";
   }
 
   async requestShutdown(reason: string): Promise<"owned" | "unmanaged" | "held"> {

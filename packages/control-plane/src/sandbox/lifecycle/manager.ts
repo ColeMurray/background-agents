@@ -115,7 +115,7 @@ export interface SandboxShutdownLifecycle {
   /** Requests terminal graceful shutdown; unmanaged permits the legacy lifecycle fallback. */
   requestShutdown(reason: string): Promise<"owned" | "unmanaged" | "held">;
   /** Owns crash-recovery capture and retirement; never silently replaces a serving execution. */
-  preserveBeforeTermination(reason: string): Promise<void>;
+  preserveBeforeTermination(reason: string): Promise<"owned" | "held" | "unmanaged">;
   /** Runs and classifies an ordinary checkpoint without exposing provider ambiguity to callers. */
   captureCheckpoint(
     generation: SandboxGeneration,
@@ -1864,11 +1864,7 @@ export class SandboxLifecycleManager
       return;
     }
 
-    const wasServing = sandbox.status === "ready";
-    if (wasServing) {
-      await this.shutdown.preserveBeforeTermination(trigger);
-      return;
-    }
+    if ((await this.shutdown.preserveBeforeTermination(trigger)) !== "unmanaged") return;
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.updateSandboxStatus("stale");
@@ -1916,36 +1912,29 @@ export class SandboxLifecycleManager
       error: reason,
     });
     this.isTerminatingSandbox = true;
-    const wasServing = sandbox.status === "ready";
-    if (wasServing) {
-      try {
-        await this.shutdown.preserveBeforeTermination("fatal_runtime_error");
+    try {
+      const ownership = await this.shutdown.preserveBeforeTermination("fatal_runtime_error");
+      if (ownership !== "unmanaged") {
         this.recordSpawnFailure(Date.now(), sandbox.created_at);
         this.reportSandboxError(reason);
-        return true;
-      } catch (error) {
-        this.log.warn("Emergency preservation failed", { error });
-        return false;
-      } finally {
-        this.isTerminatingSandbox = false;
+        return ownership === "owned";
       }
-    }
-    this.storage.updateSandboxStatus("failed");
-    this.recordSpawnFailure(Date.now(), sandbox.created_at);
-    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-    this.reportSandboxError(reason);
-    this.clearSandboxAccessState();
+      this.storage.updateSandboxStatus("failed");
+      this.recordSpawnFailure(Date.now(), sandbox.created_at);
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.reportSandboxError(reason);
+      this.clearSandboxAccessState();
 
-    const canStopProvider = this.canStopProviderSandbox();
-    if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
-    this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
+      const canStopProvider = this.canStopProviderSandbox();
+      if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
 
-    try {
       if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error", "destroy");
     } catch (error) {
       this.log.warn("Provider stop failed after fatal runtime error", {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     } finally {
       this.isTerminatingSandbox = false;
     }
@@ -2192,6 +2181,19 @@ export class SandboxLifecycleManager
     lifetime: SandboxLifetime
   ): Promise<boolean> {
     this.providerStartupPending = false;
+    const row = this.storage.getSandbox();
+    if (
+      row?.modal_sandbox_id === generation.sandboxId &&
+      row.created_at === generation.createdAt &&
+      this.shutdown.isHolding()
+    ) {
+      // This result may be the only retained recovery copy. A hold is neither
+      // startup permission nor permission to destroy a late provider result.
+      this.log.warn("Provider startup completed for a held generation", {
+        provider_object_id: providerObjectId,
+      });
+      return false;
+    }
     const status = this.storage.commitProviderStartup(
       generation,
       providerObjectId ?? null,

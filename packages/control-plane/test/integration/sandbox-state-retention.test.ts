@@ -41,6 +41,88 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
+  it.each([
+    ["snapshot", "connecting", "fatal"],
+    ["snapshot", "ready", "fatal"],
+    ["retained", "connecting", "fatal"],
+    ["retained", "ready", "fatal"],
+    ["snapshot", "connecting", "unresponsive"],
+    ["snapshot", "ready", "unresponsive"],
+    ["retained", "connecting", "unresponsive"],
+    ["retained", "ready", "unresponsive"],
+  ] as const)(
+    "holds %s recovery at %s after %s without destroying its artifact or accepting late startup",
+    async (kind, status, trigger) => {
+      const stub = await servingSession();
+      await runInSessionDO(stub, async (instance, durableState) => {
+        let resolveStartup!: (result: RestoreResult) => void;
+        const startup = vi.fn(
+          () =>
+            new Promise<RestoreResult>((resolve) => {
+              resolveStartup = resolve;
+            })
+        );
+        const provider = snapshotProvider({
+          capabilities: {
+            supportsSandboxTimeout: true,
+            supportsSnapshots: kind === "snapshot",
+            supportsRestore: kind === "snapshot",
+            supportsPersistentResume: kind === "retained",
+            supportsExplicitStop: true,
+          },
+          restoreFromSnapshot: startup,
+          resumeSandbox: startup,
+        });
+        const { manager, sandbox } = realLifecycleHarness(instance, durableState, provider);
+        const row = sandbox.getSandbox()!;
+        durableState.storage.sql.exec(
+          "UPDATE sandbox SET status = 'stopped', modal_object_id = ?",
+          kind === "retained" ? "legacy-source" : null
+        );
+        new SandboxShutdownRepository(durableState.storage.sql).write({
+          phase: "saved",
+          generation: { sandboxId: row.modal_sandbox_id!, createdAt: row.created_at },
+          provider: "modal",
+          providerObjectId: "legacy-source",
+          sourceRetired: true,
+          lifetimeKind: "none",
+          expiresAtMs: null,
+          drainAtMs: null,
+          generationReady: true,
+          receipt: {
+            kind,
+            artifactId: "legacy-source",
+            provider: "modal",
+            runtimeVersion: "v67-legacy",
+            savedAtMs: Date.now(),
+          },
+        });
+        const starting = manager.spawnSandbox();
+        await vi.waitFor(() => expect(startup).toHaveBeenCalledOnce());
+        sandbox.updateSandboxStatus(status);
+        if (trigger === "fatal") await manager.terminateFailedSandbox("recovering runtime crashed");
+        else await manager.terminateUnresponsiveSandbox("stop_send_failed");
+        expect(manager.shutdownSnapshot()).toMatchObject({
+          phase: "unknown",
+          hasRecoveryPoint: true,
+        });
+        resolveStartup({
+          success: true,
+          sandboxId: sandbox.getSandbox()!.modal_sandbox_id!,
+          providerObjectId: "legacy-source",
+          lifetime: { kind: "none", observedAtMs: Date.now() },
+        });
+        await starting;
+        expect(manager.shutdownSnapshot()).toMatchObject({ phase: "unknown" });
+        expect(sandbox.getSandbox()?.status).toBe("stale");
+        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(provider.stopSandbox).not.toHaveBeenCalled();
+        expect(provider.takeSnapshot).not.toHaveBeenCalled();
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+      });
+    }
+  );
+
   it.each(["fatal", "unresponsive"] as const)(
     "leaves access and dispatch intact when the %s retirement fence cannot commit",
     async (trigger) => {
