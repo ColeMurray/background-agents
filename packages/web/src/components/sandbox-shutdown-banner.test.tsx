@@ -49,10 +49,10 @@ describe("SandboxShutdownBanner", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "The previous prompt was interrupted and will not replay automatically"
+      "interrupted prompts will not replay automatically"
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Partial work was saved. Queued work will wait until you resume"
+      "Partial state was saved. Queued work will wait until you resume"
     );
     expect(onRecover).not.toHaveBeenCalled();
 
@@ -162,7 +162,7 @@ describe("SandboxShutdownBanner", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "The previous prompt was interrupted and will not replay automatically"
+      "interrupted prompts will not replay automatically"
     );
     expect(screen.queryByRole("button", { name: "Resume queued work" })).not.toBeInTheDocument();
   });

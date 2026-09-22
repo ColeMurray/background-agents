@@ -66,6 +66,7 @@ import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
+import { recordSessionWarning } from "./session-warnings";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
@@ -464,6 +465,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    recordWarning: (message, eventId) =>
+      recordSessionWarning(eventRepository, messenger, message, eventId),
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
@@ -983,6 +986,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 }
 
 interface LifecycleManagerDeps {
+  recordWarning: (message: string, eventId: string) => void;
   shutdown: SandboxShutdownLifecycle;
   provider: SandboxProvider;
   env: Env;
@@ -1094,6 +1098,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     mcpServerLookup,
     slackAgentNotifyLookup,
     sandboxDashboardUrlBuilder,
+    recordWarning: deps.recordWarning,
   };
 
   // The image lookup exists only for providers that support prebuilt images,
