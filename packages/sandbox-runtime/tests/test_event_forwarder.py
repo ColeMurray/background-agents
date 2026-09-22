@@ -5,6 +5,9 @@ Covers the reconnect-safe delivery state machine through its public surface:
 buffering while no connection is bound, bind-time backlog recovery (without
 double-sends), the ACK lifecycle, stale-send recovery after a rebind, and
 bounded-buffer overflow eviction.
+
+Retiring a connection whose write stalled lives in
+``test_event_forwarder_retirement.py``.
 """
 
 import asyncio
@@ -14,43 +17,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.event_forwarder import SEND_TIMEOUT_SECONDS, BufferedEventForwarder
-
-
-def make_forwarder(
-    max_buffer_size: int = 1000,
-    send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
-) -> BufferedEventForwarder:
-    return BufferedEventForwarder(
-        sandbox_id="test-sandbox",
-        log=MagicMock(),
-        max_buffer_size=max_buffer_size,
-        send_timeout_seconds=send_timeout_seconds,
-    )
-
-
-def open_ws() -> MagicMock:
-    ws = MagicMock()
-    ws.state = State.OPEN
-    ws.send = AsyncMock()
-    return ws
-
-
-def sent_events(ws: MagicMock) -> list[dict]:
-    return [json.loads(call.args[0]) for call in ws.send.await_args_list]
-
-
-def wedged_ws(fail_signal: asyncio.Event) -> MagicMock:
-    """A connection whose sends hang until signalled, then fail."""
-    ws = MagicMock()
-    ws.state = State.OPEN
-
-    async def wedged_send(data: str) -> None:
-        await fail_signal.wait()
-        raise ConnectionError("stale connection flap")
-
-    ws.send = wedged_send
-    return ws
+from tests.event_forwarder_fakes import (
+    hung_ws,
+    make_forwarder,
+    open_ws,
+    sent_events,
+    settle,
+    wedged_ws,
+)
 
 
 class GatedWs:
@@ -77,12 +51,6 @@ class GatedWs:
 
     def message_ids(self) -> list[str | None]:
         return [call.get("messageId") for call in self.calls]
-
-
-async def settle() -> None:
-    """Let every runnable coroutine advance to its next suspension point."""
-    for _ in range(5):
-        await asyncio.sleep(0)
 
 
 class TestBufferWhileDisconnected:
@@ -167,14 +135,7 @@ class TestSendWhileConnected:
     @pytest.mark.asyncio
     async def test_hung_direct_send_times_out_then_replays_critical_once(self):
         forwarder = make_forwarder(send_timeout_seconds=0.01)
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-        await forwarder.bind(hung_ws)
+        await forwarder.bind(hung_ws())
 
         delivered = await asyncio.wait_for(
             forwarder.send({"type": "execution_complete", "messageId": "msg-timeout"}),
@@ -492,14 +453,7 @@ class TestStaleSendRecovery:
         await settle()
 
         forwarder.unbind()
-        hung_replacement = MagicMock()
-        hung_replacement.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_replacement.send = never_completes
-        await forwarder.bind(hung_replacement)
+        await forwarder.bind(hung_ws())
         release_failure.set()
 
         assert await asyncio.wait_for(send_task, timeout=0.2) is False
@@ -734,15 +688,7 @@ class TestConcurrentRecovery:
         forwarder = make_forwarder(send_timeout_seconds=0.05)
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-
-        await forwarder.bind(hung_ws)  # returns: the timeout breaks the flush
+        await forwarder.bind(hung_ws())  # returns: the timeout breaks the flush
 
         assert len(forwarder._event_buffer) == 1
 
@@ -793,14 +739,7 @@ class TestUnbufferedSends:
     @pytest.mark.asyncio
     async def test_hung_unbuffered_send_times_out_without_replay(self):
         forwarder = make_forwarder(send_timeout_seconds=0.01)
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-        await forwarder.bind(hung_ws)
+        await forwarder.bind(hung_ws())
 
         delivered = await asyncio.wait_for(
             forwarder.send({"type": "boot_progress", "bootSeq": 3}, buffered=False),
