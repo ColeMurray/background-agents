@@ -22,7 +22,15 @@ from typing import Annotated, Any, Literal, Self
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
 from modal.exception import TimeoutError as ModalTimeoutError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    AnyUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
@@ -176,13 +184,24 @@ class LaunchMcpServerV1(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True)
     name: NonEmptyString
     type: Literal["local", "remote"]
-    id: str | None = None
+    id: NonEmptyString
     command: list[str] | None = None
     url: str | None = None
     env: dict[str, str] | None = None
     headers: dict[str, str] | None = None
     repoScopes: list[str] | None = None
-    enabled: bool | None = None
+    enabled: bool
+
+    @model_validator(mode="after")
+    def validate_transport(self) -> Self:
+        if self.type == "local" and not self.command:
+            raise ValueError("Local MCP servers require a nonempty command")
+        if self.type == "remote":
+            if not self.url:
+                raise ValueError("Remote MCP servers require a URL")
+            # Validate without rewriting a signed URL or adding a trailing slash.
+            TypeAdapter(AnyUrl).validate_python(self.url)
+        return self
 
 
 class LaunchSessionConfigV1(_RepositoryContextModel):

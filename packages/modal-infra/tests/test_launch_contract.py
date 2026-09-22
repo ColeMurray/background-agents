@@ -306,7 +306,13 @@ async def test_v1_rejects_malformed_mcp_before_native_creation(
     operation, field, value, native_calls
 ):
     case = _v1(operation)
-    server = {"name": "contract", "type": "local", "command": ["node", "server.js"]}
+    server = {
+        "id": "contract",
+        "enabled": True,
+        "name": "contract",
+        "type": "local",
+        "command": ["node", "server.js"],
+    }
     server[field] = value
     case["body"]["session_config"]["mcp_servers"] = [server]
     with pytest.raises(HTTPException) as error:
@@ -319,12 +325,74 @@ async def test_v1_rejects_malformed_mcp_before_native_creation(
 async def test_v1_preserves_mcp_extensions(operation, native_calls):
     case = _v1(operation)
     server = {
+        "id": "contract",
         "name": "contract",
         "type": "local",
         "command": ["node", "server.js"],
         "env": {"TOKEN": "synthetic"},
         "enabled": True,
         "future_option": {"value": True},
+    }
+    case["body"]["session_config"]["mcp_servers"] = [server]
+    await _invoke(case)
+    assert json.loads(native_calls[0]["env"]["SESSION_CONFIG"])["mcp_servers"] == [server]
+
+
+@pytest.mark.parametrize("operation", ["create", "restore"])
+@pytest.mark.parametrize(
+    "server",
+    [
+        {"type": "local"},
+        {"type": "local", "command": []},
+        {"type": "local", "command": None},
+        {"type": "remote"},
+        {"type": "remote", "url": ""},
+        {"type": "remote", "url": "not-a-url"},
+        {"type": "local", "command": ["node"], "id": None},
+        {"type": "local", "command": ["node"], "id": ""},
+        {"type": "local", "command": ["node"], "enabled": None},
+    ],
+)
+async def test_v1_requires_valid_mcp_semantics(operation, server, native_calls):
+    case = _v1(operation)
+    case["body"]["session_config"]["mcp_servers"] = [
+        {"id": "contract", "enabled": True, "name": "contract", **server}
+    ]
+    with pytest.raises(HTTPException) as error:
+        await _invoke(case)
+    assert error.value.status_code == 400
+    assert native_calls == []
+
+
+@pytest.mark.parametrize("operation", ["create", "restore"])
+@pytest.mark.parametrize("field", ["id", "enabled"])
+async def test_v1_requires_mcp_identity_and_enabled(operation, field, native_calls):
+    case = _v1(operation)
+    server = {
+        "id": "contract",
+        "enabled": True,
+        "name": "contract",
+        "type": "local",
+        "command": ["node"],
+    }
+    del server[field]
+    case["body"]["session_config"]["mcp_servers"] = [server]
+    with pytest.raises(HTTPException) as error:
+        await _invoke(case)
+    assert error.value.status_code == 400
+    assert native_calls == []
+
+
+@pytest.mark.parametrize("operation", ["create", "restore"])
+async def test_v1_remote_mcp_preserves_url_and_extensions(operation, native_calls):
+    case = _v1(operation)
+    server = {
+        "id": "contract",
+        "enabled": True,
+        "name": "contract",
+        "type": "remote",
+        "url": "https://mcp.example.test",
+        "future": "kept",
     }
     case["body"]["session_config"]["mcp_servers"] = [server]
     await _invoke(case)

@@ -124,16 +124,9 @@
           "type": "string"
         },
         "id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Id"
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
         },
         "command": {
           "anyOf": [
@@ -208,21 +201,15 @@
           "title": "Reposcopes"
         },
         "enabled": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Enabled"
+          "title": "Enabled",
+          "type": "boolean"
         }
       },
       "required": [
         "name",
-        "type"
+        "type",
+        "id",
+        "enabled"
       ],
       "title": "LaunchMcpServerV1",
       "type": "object"
