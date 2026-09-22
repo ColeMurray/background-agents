@@ -656,6 +656,51 @@ class TestTimedOutConnectionRetirement:
         ws.transport.abort.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_recovery_flush_timeout_retires_the_connection(self):
+        """Recovery is often the first write to a fresh connection, so it can
+        be the first to find one already wedged. The owner awaits ``bind``
+        before its receive loop starts, so leaving the socket bound here
+        costs another whole send before anything notices."""
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-8"})
+        ws = hung_ws()
+
+        await forwarder.bind(ws)
+
+        assert forwarder._ws is None
+        ws.close.assert_awaited_once()
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-8"]
+
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-8"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_pending_ack_resend_timeout_retires_the_connection(self):
+        """Same for the pending-ACK stage, which runs on an empty buffer."""
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        first = open_ws()
+        await forwarder.bind(first)
+        assert await forwarder.send({"type": "execution_complete", "messageId": "msg-9"}) is True
+        forwarder.unbind()
+        assert forwarder._event_buffer == []
+
+        ws = hung_ws()
+        await forwarder.bind(ws)
+
+        assert forwarder._ws is None
+        ws.close.assert_awaited_once()
+
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-9"
+        ]
+        assert forwarder.acknowledge("execution_complete:msg-9") is True
+
+    @pytest.mark.asyncio
     async def test_cancellation_during_retirement_aborts_and_keeps_the_event(self):
         """Cancellation must not leave the wedged connection bound: the abort
         still ends it, so the reconnect that recovers the buffered event is
@@ -910,15 +955,7 @@ class TestConcurrentRecovery:
         forwarder = make_forwarder(send_timeout_seconds=0.05)
         await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
 
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-
-        await forwarder.bind(hung_ws)  # returns: the timeout breaks the flush
+        await forwarder.bind(hung_ws())  # returns: the timeout breaks the flush
 
         assert len(forwarder._event_buffer) == 1
 

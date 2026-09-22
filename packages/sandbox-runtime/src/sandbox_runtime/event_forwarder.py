@@ -32,8 +32,8 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on a direct send, on retiring the connection a direct send timed out
-# on, and on each recovery stage. A timed-out direct send may spend two more
+# Bound on a direct send, on retiring a connection whose write timed out, and
+# on each recovery stage. A timed-out direct send may spend two more
 # budgets — closing the dead connection, then acquiring the recovery lock and
 # flushing after a rebind — so send() takes at most three configured budgets
 # before returning.
@@ -263,7 +263,9 @@ class BufferedEventForwarder:
 
         Must run under ``_recovery_lock``. The connection is re-read every
         iteration so a rebind while flushing migrates the walk onto the new
-        connection.
+        connection. A write that times out retires its connection, exactly as
+        on the direct path: recovery is often the first write to a fresh
+        connection, so it may be the first to find one already wedged.
 
         Known debt: an event ``json.dumps`` cannot serialize would be a
         poison pill at the buffer head — every flush breaks on it.
@@ -301,6 +303,8 @@ class BufferedEventForwarder:
                 if acknowledged and self._event_buffer and self._event_buffer[0] is event:
                     self._event_buffer.pop(0)
                 self._log.warn("bridge.flush_send_error", exc=e)
+                if isinstance(e, TimeoutError):
+                    await self._retire_timed_out_connection(ws)
                 break
             finally:
                 if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
@@ -347,6 +351,8 @@ class BufferedEventForwarder:
                 resent += 1
             except Exception as e:
                 self._log.warn("bridge.flush_pending_ack_error", ack_id=ack_id, exc=e)
+                if isinstance(e, TimeoutError):
+                    await self._retire_timed_out_connection(ws)
                 break
 
         self._log.info(
