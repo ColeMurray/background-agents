@@ -26,6 +26,7 @@ from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
+from .opencode_models_catalog import OpenCodeModelsCatalog
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
 from .repository_hooks import RepositoryHooks
@@ -146,6 +147,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         shutdown_event,
         log,
         boot_events=warnings,
+        models_catalog=OpenCodeModelsCatalog(log),
     )
 
 

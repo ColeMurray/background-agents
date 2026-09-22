@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .code_server import CodeServer
     from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
+    from .opencode_models_catalog import OpenCodeModelsCatalog
     from .repository_boot import RepositoryBoot, RepositoryBootResult
     from .web_terminal import WebTerminal
 
@@ -66,6 +67,7 @@ class SandboxSupervisor:
         log: Any,
         *,
         boot_events: BootEventLog | None = None,
+        models_catalog: OpenCodeModelsCatalog | None = None,
     ) -> None:
         self.config = config
         self.repository_boot = repository_boot
@@ -82,6 +84,8 @@ class SandboxSupervisor:
         self.web_terminal = web_terminal
         self.browser_desktop = browser_desktop
         self.managed_skills = managed_skills
+        # Refreshed into an image build so the image carries a current catalog.
+        self.models_catalog = models_catalog
         self.shutdown_event = shutdown_event
         self.log = log
         self.boot_mode = BootMode.FRESH
@@ -554,6 +558,8 @@ class SandboxSupervisor:
 
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
+                if self.models_catalog is not None:
+                    await self._run_until_shutdown(self.models_catalog.refresh)
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",

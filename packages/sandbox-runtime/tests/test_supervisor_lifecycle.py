@@ -7,7 +7,7 @@ from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
 
 
-def _supervisor(tmp_path, events):
+def _supervisor(tmp_path, events, models_catalog=None):
     config = RuntimeConfig.from_env(
         {"SANDBOX_ID": "sandbox-1", "REPO_OWNER": "acme", "REPO_NAME": "repo"},
         workspace_path=tmp_path,
@@ -55,6 +55,7 @@ def _supervisor(tmp_path, events):
         managed_skills,
         asyncio.Event(),
         MagicMock(),
+        models_catalog=models_catalog,
     )
     supervisor.monitor_processes = AsyncMock()
     return supervisor, repository, opencode_server, agent_bridge, code_server, terminal, desktop
@@ -154,6 +155,38 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     supervisor.managed_skills.materialize.assert_not_awaited()
     opencode_server.start.assert_not_awaited()
     agent_bridge.start.assert_not_awaited()
+
+
+async def test_build_boot_refreshes_models_catalog_before_reporting_success(tmp_path, monkeypatch):
+    events = []
+    models_catalog = MagicMock()
+    models_catalog.refresh = AsyncMock(side_effect=lambda: events.append("models_catalog"))
+    supervisor, *_ = _supervisor(tmp_path, events, models_catalog)
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    callback = MagicMock()
+
+    async def report_success(**_kwargs):
+        events.append("callback")
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=report_success)
+    callback.report_failure = AsyncMock()
+
+    assert await supervisor.run(callback) is True
+    assert events == ["repository:build", "models_catalog", "callback"]
+
+
+async def test_session_boot_leaves_models_catalog_to_opencode(tmp_path, monkeypatch):
+    models_catalog = MagicMock()
+    models_catalog.refresh = AsyncMock()
+    supervisor, *_ = _supervisor(tmp_path, [], models_catalog)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+    assert await supervisor.run() is True
+    models_catalog.refresh.assert_not_awaited()
 
 
 async def test_graceful_bridge_exit_requests_shutdown(tmp_path):
