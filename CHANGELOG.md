@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 22, 2026
+
+**Claude Opus 5.5, GPT-6 Sol, and GPT-6 Luna.** Adds `anthropic/claude-opus-5-5`,
+`openai/gpt-6-sol`, and `openai/gpt-6-luna` to the model picker and integrations. Opus 5.5 offers
+reasoning efforts from low through max with a medium default, matching its API default; the two new
+GPT-6 models offer none through max, also defaulting to medium. See
+[Available models](docs/AVAILABLE_MODELS.md).
+
 ## September 21, 2026
 
 **Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from
