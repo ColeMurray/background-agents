@@ -208,7 +208,7 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("restore");
   });
 
-  it("spawns fresh instead of restoring a snapshot below the runtime floor", () => {
+  it("holds instead of discarding a snapshot below the runtime floor", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "stopped",
@@ -220,13 +220,13 @@ describe("evaluateSpawnDecision", () => {
 
     const decision = evaluateSpawnDecision(state, config, now, false);
 
-    expect(decision.action).toBe("spawn");
-    if (decision.action === "spawn") {
+    expect(decision.action).toBe("hold");
+    if (decision.action === "hold") {
       expect(decision.reason).toContain(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`);
     }
   });
 
-  it("spawns fresh when the snapshot predates runtime-version recording", () => {
+  it("holds when the snapshot predates runtime-version recording", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "stopped",
@@ -238,8 +238,8 @@ describe("evaluateSpawnDecision", () => {
 
     const decision = evaluateSpawnDecision(state, config, now, false);
 
-    expect(decision.action).toBe("spawn");
-    if (decision.action === "spawn") {
+    expect(decision.action).toBe("hold");
+    if (decision.action === "hold") {
       expect(decision.reason).toContain("unknown");
     }
   });

@@ -1,4 +1,5 @@
 import { DEFAULT_FINAL_SNAPSHOT_BUFFER_MS } from "@open-inspect/shared/types/integrations";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
   sandboxShutdownSchema,
@@ -18,6 +19,7 @@ import type {
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
+import { legacyShutdownRecord } from "./legacy-shutdown-record";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
@@ -92,6 +94,19 @@ export class SandboxShutdownCoordinator {
     this.announce(state);
   }
 
+  /** Delivery cannot change the outcome of an already committed lifecycle operation. */
+  private broadcast(message: ServerMessage): void {
+    try {
+      this.deps.messenger.broadcast(message);
+    } catch (error) {
+      this.deps.log?.warn("Sandbox lifecycle announcement failed", {
+        event: "sandbox.announcement_failed",
+        message_type: message.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private announce(state: ShutdownRecord): void {
     this.deps.log?.info("sandbox.preservation", {
       event: "sandbox.preservation",
@@ -102,7 +117,7 @@ export class SandboxShutdownCoordinator {
       operation_id: state.operationId,
       expires_at_ms: state.expiresAtMs,
     });
-    this.deps.messenger.broadcast({
+    this.broadcast({
       type: "sandbox_preservation",
       preservation: sandboxShutdownSchema.parse({
         ...state,
@@ -163,10 +178,12 @@ export class SandboxShutdownCoordinator {
     const state = this.deps.store.read();
     if (!state || !this.current(state) || !this.matches(state, generation))
       throw new Error("Saved sandbox restore generation was superseded");
+    this.activeRestoreGeneration = generation;
     this.publish({
       ...state,
       restoreInvoked: true,
-      sourceRetired: false,
+      // Only retained resume reactivates the source described by the receipt.
+      sourceRetired: providerObjectId ? false : state.sourceRetired,
       providerObjectId: providerObjectId ?? null,
     });
   }
@@ -267,6 +284,7 @@ export class SandboxShutdownCoordinator {
     if (state.phase === "restoring" && !state.restoreInvoked) return "restore_required";
     if (state.phase !== "running" || !this.current(state)) return "held";
     if (!this.providerMatches(state)) return "held";
+    if (state.restoreInvoked) return "held";
     if (state.lifecyclePolicy === "legacy") {
       return state.checkpointInFlight ? "held" : "ready";
     }
@@ -343,13 +361,26 @@ export class SandboxShutdownCoordinator {
 
   holdFailedRecovery(error: string, generation?: SandboxGeneration): void {
     const state = this.deps.store.read();
-    if (!state || !this.current(state) || (generation && !this.matches(state, generation))) return;
-    if (state.receipt)
-      this.fail(
-        { ...state, sourceRetired: state.sourceRetired || state.phase === "saved" },
-        "unknown",
-        `Saved sandbox could not be restored: ${error}. No fresh sandbox was substituted.`
-      );
+    const row = this.deps.sandbox.getSandbox();
+    if (
+      !row?.modal_sandbox_id ||
+      (generation &&
+        (row.modal_sandbox_id !== generation.sandboxId ||
+          row.created_at !== generation.createdAt)) ||
+      (state && !this.current(state))
+    )
+      return;
+    if (!state?.receipt && !row.snapshot_image_id) return;
+    // Old snapshot projections lack receipt provenance. Retain them in place,
+    // without fabricating a verified receipt or permission to restore.
+    this.fail(
+      {
+        ...(state ?? legacyShutdownRecord(row, this.deps.provider.name)),
+        sourceRetired: state?.sourceRetired === true || state?.phase === "saved",
+      },
+      "unknown",
+      `Saved sandbox could not be restored: ${error}. No fresh sandbox was substituted. The snapshot reference is retained; contact your operator for recovery or start a separate session.`
+    );
   }
 
   /** Only an explicit authenticated, currently eligible user choice may leave a hold. */
@@ -475,19 +506,7 @@ export class SandboxShutdownCoordinator {
         row.created_at !== generation.createdAt
       )
         return { outcome: "held" };
-      state = {
-        phase: "running",
-        generation: checkpointGeneration,
-        provider: this.deps.provider.name,
-        providerObjectId: row.modal_object_id,
-        sourceRetired: false,
-        lifetimeKind: "none",
-        lifetimeSource: undefined,
-        expiresAtMs: null,
-        drainAtMs: null,
-        generationReady: true,
-        lifecyclePolicy: "legacy",
-      };
+      state = legacyShutdownRecord(row, this.deps.provider.name);
     }
 
     const deadlineAtMs = Math.min(
@@ -512,8 +531,7 @@ export class SandboxShutdownCoordinator {
         previousStatus,
         "snapshotting"
       );
-    if (statusChanged)
-      this.deps.messenger.broadcast({ type: "sandbox_status", status: "snapshotting" });
+    if (statusChanged) this.broadcast({ type: "sandbox_status", status: "snapshotting" });
     try {
       const result = await this.captureSnapshot(
         row.modal_object_id,
@@ -535,11 +553,11 @@ export class SandboxShutdownCoordinator {
         this.endCheckpoint(id, true);
         return { outcome: "unknown" };
       }
-      this.deps.messenger.broadcast({ type: "snapshot_saved", imageId: result.imageId, reason });
+      this.broadcast({ type: "snapshot_saved", imageId: result.imageId, reason });
       if (result.sourceStopped) {
         this.deps.sandbox.updateSandboxStatus("stopped");
         this.deps.retireAccess();
-        this.deps.messenger.broadcast({ type: "sandbox_status", status: "stopped" });
+        this.broadcast({ type: "sandbox_status", status: "stopped" });
       } else if (
         statusChanged &&
         reason !== "heartbeat_timeout" &&
@@ -549,9 +567,8 @@ export class SandboxShutdownCoordinator {
           previousStatus
         )
       ) {
-        this.deps.messenger.broadcast({ type: "sandbox_status", status: previousStatus });
-        if (previousStatus === "ready")
-          this.deps.messenger.broadcast({ type: "sandbox_access_changed" });
+        this.broadcast({ type: "sandbox_status", status: previousStatus });
+        if (previousStatus === "ready") this.broadcast({ type: "sandbox_access_changed" });
       }
       this.endCheckpoint(id, false);
       return {
@@ -592,27 +609,44 @@ export class SandboxShutdownCoordinator {
     else this.notifyLifecycleChange();
   }
 
-  async requestShutdown(reason: string): Promise<"owned" | "unmanaged" | "held"> {
+  /** Commit termination ownership before any teardown; emergency capture cannot prove quiescence. */
+  async requestShutdown(
+    reason: string,
+    mode: "graceful" | "emergency" = "graceful"
+  ): Promise<"owned" | "held" | "unmanaged"> {
+    const row = this.deps.sandbox.getSandbox();
     const state = this.deps.store.read();
-    if (!state) return "unmanaged";
-    if (!this.current(state) || state.phase !== "running" || !this.providerMatches(state))
-      return "held";
-    if (state.lifecyclePolicy === "legacy") {
-      return state.checkpointInFlight ? "held" : "unmanaged";
-    }
+    if (state && (!this.current(state) || !this.providerMatches(state))) return "held";
+    if (!row?.modal_sandbox_id) return state ? "held" : "unmanaged";
+    const emergency = mode === "emergency";
+    const recovering = state?.restoreInvoked === true || state?.phase === "restoring";
+    if (state && state.phase !== "running" && !(emergency && recovering)) return "held";
+    if (!emergency && (!state || state.lifecyclePolicy === "legacy"))
+      return state?.checkpointInFlight ? "held" : "unmanaged";
+    if (emergency && state?.checkpointInFlight) return "held";
+    if (emergency && !recovering && row.status !== "ready") return "unmanaged";
+    // A graceful stop reserves the prompt-stop allowance; an emergency cannot
+    // obtain runtime preparation and uses only the bounded capture/retire budget.
     const now = this.now();
-    const end = state.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS;
-    // A shorter buffer reduces capture time, not the prompt-stop allowance.
-    // Always leave room for source retirement and the final safety margin.
-    const stopByMs = Math.min(now + STOP_MS, end - RETIRE_MS - MARGIN_MS);
+    const end = emergency
+      ? Math.min(state?.expiresAtMs ?? Infinity, now + CAPTURE_MS + RETIRE_MS + MARGIN_MS)
+      : (state!.expiresAtMs ?? now + STOP_MS + CAPTURE_MS + RETIRE_MS + MARGIN_MS);
+    const stopByMs = emergency ? now : Math.min(now + STOP_MS, end - RETIRE_MS - MARGIN_MS);
     const next: ShutdownRecord = {
-      ...state,
-      phase: "draining",
+      ...(state ?? legacyShutdownRecord(row, this.deps.provider.name)),
+      providerObjectId: emergency ? row.modal_object_id : state!.providerObjectId,
+      sourceRetired: emergency && !recovering ? false : state?.sourceRetired,
+      phase: emergency ? (recovering ? "unknown" : "capturing") : "draining",
+      error:
+        emergency && recovering
+          ? "The runtime failed during recovery; the provider startup outcome is unknown."
+          : undefined,
       reason,
       operationId: crypto.randomUUID(),
       stopByMs,
       captureByMs: Math.min(stopByMs + CAPTURE_MS, end - RETIRE_MS - MARGIN_MS),
       retireByMs: end - MARGIN_MS,
+      continuationPaused: emergency || state?.continuationPaused,
     };
     const failure = this.deps.session.transaction(() => {
       const message = this.deps.messages.getProcessingMessage();
@@ -620,15 +654,22 @@ export class SandboxShutdownCoordinator {
         next.messageId = message.id;
         next.continuationPaused = true;
       }
-      this.deps.store.write(next); // Fence before any asynchronous work or terminal publication.
+      this.deps.store.write(next);
+      if (emergency) this.deps.sandbox.updateSandboxStatus("stale");
       return message ? this.deps.failures.record(message.id, reason, now, "processing") : null;
     });
-    this.publish(next);
+    this.announce(next);
     if (failure) this.deps.failures.deliver(failure);
-    this.deps.messenger.broadcast({ type: "processing_status", isProcessing: false });
+    this.broadcast({ type: "processing_status", isProcessing: false });
     this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
       name: "sandbox.preservation_status",
     });
+    if (emergency) {
+      this.broadcast({ type: "sandbox_status", status: "stale" });
+      this.deps.retireAccess();
+      if (!recovering) await this.capture(next);
+      return recovering ? "held" : "owned";
+    }
     await this.advance();
     return "owned";
   }
@@ -723,7 +764,7 @@ export class SandboxShutdownCoordinator {
   private normalizeInterruptedRestore(): ShutdownRecord | null {
     const state = this.deps.store.read();
     if (
-      state?.phase !== "restoring" ||
+      (state?.phase !== "restoring" && state?.phase !== "running") ||
       !state.restoreInvoked ||
       (this.activeRestoreGeneration && this.matches(state, this.activeRestoreGeneration)) ||
       !this.current(state)
@@ -795,13 +836,22 @@ export class SandboxShutdownCoordinator {
         receipt,
         savedAtMs: receipt.savedAtMs,
       };
-      this.publish(retiring); // Commit recovery locator BEFORE separately retiring the source.
-      if (!retained)
-        this.deps.sandbox.recordSandboxSnapshot(
-          state.generation.sandboxId,
-          artifactId,
-          receipt.runtimeVersion
-        );
+      // Receipt and legacy projection describe the same capture. Either both
+      // commit for this generation or neither may authorize source retirement.
+      this.deps.session.transaction(() => {
+        if (!this.owns(capturing)) throw new Error("Snapshot generation was superseded");
+        if (
+          !retained &&
+          !this.deps.sandbox.recordSandboxSnapshot(
+            state.generation.sandboxId,
+            artifactId,
+            receipt.runtimeVersion
+          )
+        )
+          throw new Error("Snapshot generation was superseded");
+        this.deps.store.write(retiring);
+      });
+      this.announce(retiring);
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
     } catch (error) {
@@ -860,13 +910,13 @@ export class SandboxShutdownCoordinator {
     this.deps.sandbox.updateSandboxStatus("stopped");
     this.deps.retireAccess();
     this.publish({ ...state, phase: "saved", sourceRetired: true });
-    this.deps.messenger.broadcast({ type: "sandbox_status", status: "stopped" });
+    this.broadcast({ type: "sandbox_status", status: "stopped" });
     this.notifyLifecycleChange();
   }
 
   private fail(state: ShutdownRecord, phase: "failed" | "unknown", error: string): void {
     this.publish({ ...state, phase, error });
-    this.deps.messenger.broadcast({
+    this.broadcast({
       type: "sandbox_warning",
       message: `Sandbox graceful shutdown ${phase}: ${error}`,
     });

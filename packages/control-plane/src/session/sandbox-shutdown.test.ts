@@ -546,7 +546,7 @@ describe("SandboxShutdownCoordinator", () => {
       phase: "saved",
       receipt: { kind: "snapshot", artifactId: "image-1", provider: "modal" },
     });
-    expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("snapshot-recorded"));
+    expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("provider-stop"));
     expect(f.calls.indexOf("snapshot-recorded")).toBeLessThan(f.calls.indexOf("provider-stop"));
     expect(f.calls).toContain("access-retired");
   });
@@ -995,7 +995,7 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value?.sourceRetired).toBe(true);
   });
 
-  it("keeps a reserved saved restore actionable until provider invocation", async () => {
+  it("holds an interrupted snapshot restore until explicit recovery from the retired source", async () => {
     const f = fixture();
     await readyFinite(f);
     f.store.write({
@@ -1035,12 +1035,16 @@ describe("SandboxShutdownCoordinator", () => {
       providerObjectId: "restored-provider-object",
       receipt: { artifactId: "saved-image" },
     });
-    await expect(interrupted.recover("restore_saved")).rejects.toThrow(
-      "Shutdown recovery is unavailable"
-    );
+    expect(interrupted.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
+    await interrupted.recover("restore_saved");
     expect(f.store.value).toMatchObject({
-      phase: "unknown",
+      phase: "saved",
+      sourceRetired: true,
       receipt: { artifactId: "saved-image" },
+    });
+    expect(interrupted.startupDecision()).toMatchObject({
+      kind: "restore_snapshot",
+      snapshotId: "saved-image",
     });
   });
 

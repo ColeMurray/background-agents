@@ -2,6 +2,7 @@ import {
   SELECT_TARGET_ACTION_ID,
   SELECT_TARGET_QUICK_PICK_ACTION_ID,
   baseActionId,
+  isTargetInteractionBlockId,
   parseTargetInteractionRequestId,
 } from "../target-clarification";
 import type { BackgroundTaskScheduler, SlackInteractionPayload, Env } from "../types";
@@ -32,7 +33,15 @@ export async function handleSlackInteraction(
         const parsedRequestId = action.block_id
           ? parseTargetInteractionRequestId(action.block_id, selectionSource)
           : undefined;
-        if (action.block_id && !parsedRequestId) return;
+        // Only refuse a block id this code minted and then failed to parse —
+        // a mismatched or malformed one. A clarification control posted by an
+        // earlier deployment carries the old `repo_quick_picks` block id (or a
+        // Slack-generated one), which never parses; those clicks still resolve
+        // through the pending request's channel and thread, so dropping them
+        // would silently break every control in flight across a deploy.
+        if (action.block_id && !parsedRequestId && isTargetInteractionBlockId(action.block_id)) {
+          return;
+        }
         const requestId = parsedRequestId ?? undefined;
         await handleTargetSelection(
           {

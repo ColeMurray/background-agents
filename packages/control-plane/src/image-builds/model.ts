@@ -97,11 +97,11 @@ export interface ImageBuildCallbackBuild {
 }
 
 /**
- * Compatibility floor for prebuilt-image runtimes.
+ * Compatibility floor for prebuilt images and session snapshot execution.
  *
  * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
- * bumps. v60 is the first runtime whose managed-provider plugins use the
- * generic token broker, so no image baked by an earlier runtime may be selected.
+ * bumps. Snapshot incompatibility holds startup; it must not discard the
+ * snapshot or silently replace the session with a clean checkout.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
 
