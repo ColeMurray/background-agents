@@ -16,11 +16,9 @@ import type {
   SandboxWorkAdmission,
 } from "../sandbox/lifecycle/ports";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
-import {
-  supportsConfirmedShutdown,
-  type ShutdownLifecyclePolicy,
-} from "../sandbox/lifecycle/shutdown-policy";
+import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
+import { adoptedShutdownRecord, adoptionLogFields } from "./sandbox-shutdown-adoption";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
@@ -117,61 +115,15 @@ export class SandboxShutdownCoordinator {
     });
   }
 
-  /**
-   * Put a generation this coordinator never started back under observation.
-   *
-   * `reserveStartup` is the only writer of an initial record and runs on spawn,
-   * restore and resume, so a sandbox already serving when this coordinator was
-   * deployed has no state at all. Nothing then assigns it a lifetime or
-   * schedules a capture, and `requestShutdown` reports it `unmanaged`, so the
-   * ordered shutdown whose whole purpose is to guarantee a recovery point never
-   * applies. Whether that generation's work survives comes down to which route
-   * ends it — the inactivity and heartbeat routes still snapshot, but the stale
-   * and failed termination routes destroy the filesystem outright.
-   *
-   * The adopted record is always `legacy`, whatever the runtime version says it
-   * could support, and this is load-bearing rather than merely cautious. The
-   * ordered protocol needs two facts adoption cannot supply: the generation
-   * handshake (which happened before this coordinator existed) and the provider
-   * lifetime (which only a launch result carries). Without them a `confirmed`
-   * record fails the admission gate's `lifetimeKind !== "unknown" &&
-   * generationReady` test and holds every dispatch, so adopting a healthy
-   * session would stop it working. `legacy` admits work and routes shutdown to
-   * the snapshot path, which does preserve state.
-   *
-   * So adoption buys observability and an owner, not a deadline capture: a
-   * generation whose provider lifetime expires before it next idles still has
-   * no drain scheduled. Closing that needs either a provider capability to read
-   * a running sandbox's lifetime, or a capture-and-replace sweep at activation.
-   */
+  /** Put a generation this coordinator never started back under observation. */
   private adoptUnmanagedGeneration(): ShutdownRecord | null {
     const row = this.deps.sandbox.getSandbox();
-    // Only a serving generation is adopted. Every other status either already
-    // has a record (a spawn writes one before the provider is invoked) or is on
-    // its way out, where the spawn decision and watchdogs are the owners.
-    if (!row?.modal_sandbox_id || row.status !== "ready") return null;
-    this.deps.log?.warn("Adopting a sandbox generation with no preservation record", {
-      event: "sandbox.preservation_adopted",
-      sandbox_id: row.modal_sandbox_id,
-      sandbox_status: row.status,
-      runtime_version: row.runtime_version,
-      // Recorded so a deploy that orphans a protocol-capable generation is
-      // still distinguishable in logs from one that never could participate.
-      runtime_supports_confirmed_shutdown: supportsConfirmedShutdown(row.runtime_version),
-    });
-    const adopted: ShutdownRecord = {
-      phase: "running",
-      generation: { sandboxId: row.modal_sandbox_id, createdAt: row.created_at },
-      provider: this.deps.provider.name,
-      providerObjectId: row.modal_object_id ?? null,
-      sourceRetired: false,
-      lifetimeKind: "unknown",
-      expiresAtMs: null,
-      drainAtMs: null,
-      generationReady: false,
-      adopted: true,
-      lifecyclePolicy: "legacy",
-    };
+    const adopted = adoptedShutdownRecord(row, this.deps.provider.name);
+    if (!adopted) return null;
+    this.deps.log?.warn(
+      "Adopting a sandbox generation with no preservation record",
+      adoptionLogFields(row!)
+    );
     this.publish(adopted);
     return adopted;
   }
