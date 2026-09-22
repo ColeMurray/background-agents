@@ -896,24 +896,29 @@ describe("sandbox graceful shutdown wiring", () => {
       clientRequestId: "resume-1",
       action: "restore_saved",
     });
+    // The integration outbound service answers every *.modal.run call with 404, so this restore
+    // always fails. Wait for that terminal state rather than for the pause to lift: the pause lifts
+    // at "restoring" while the restore is still in flight, so waiting on it raced the failure.
     await vi.waitFor(async () => {
+      expect(await readShutdown(stub)).toMatchObject({ phase: "unknown" });
       expect(await readShutdown(stub)).not.toMatchObject({ continuationPaused: true });
     });
-    const rejected = collectMessages(authenticated.ws, {
-      until: (message) => message.type === "error",
+    // A failed restore retains the receipt and deliberately re-offers restore_saved, so a further
+    // authenticated request is accepted rather than rejected.
+    const retried = collectMessages(authenticated.ws, {
+      until: (message) => message.type === "shutdown_recovery_accepted",
     });
     authenticated.ws.send(
       JSON.stringify({
         type: "recover_preservation",
         action: "restore_saved",
-        clientRequestId: "stale-1",
+        clientRequestId: "retry-1",
       })
     );
-    await expect(rejected).resolves.toContainEqual({
-      type: "error",
-      code: "RECOVERY_UNAVAILABLE",
-      message: "Shutdown recovery is unavailable",
-      clientRequestId: "stale-1",
+    await expect(retried).resolves.toContainEqual({
+      type: "shutdown_recovery_accepted",
+      clientRequestId: "retry-1",
+      action: "restore_saved",
     });
     authenticated.ws.close();
 
