@@ -271,6 +271,8 @@ class LaunchSettingsV1(BaseModel):
     terminalPort: Port
     terminalEnabled: bool
     tunnelPorts: list[Port]
+    cpuCores: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+    memoryMib: Annotated[int, Field(gt=0)] | None = None
 
 
 class _LaunchRequestV1(BaseModel):

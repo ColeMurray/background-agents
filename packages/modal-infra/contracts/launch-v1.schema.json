@@ -397,6 +397,32 @@
           },
           "title": "Tunnelports",
           "type": "array"
+        },
+        "cpuCores": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpucores"
+        },
+        "memoryMib": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memorymib"
         }
       },
       "required": [

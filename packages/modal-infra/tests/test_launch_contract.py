@@ -446,6 +446,41 @@ async def test_v1_requires_resolved_fields(operation, field, native_calls):
 @pytest.mark.parametrize("operation", ["create", "restore"])
 @pytest.mark.parametrize(
     "field,value",
+    [
+        ("cpuCores", "invalid"),
+        ("cpuCores", True),
+        ("cpuCores", 0),
+        ("cpuCores", -1),
+        ("cpuCores", float("inf")),
+        ("memoryMib", "3072"),
+        ("memoryMib", True),
+        ("memoryMib", 1.5),
+        ("memoryMib", 0),
+        ("memoryMib", -1),
+    ],
+)
+async def test_v1_rejects_invalid_resources_before_launch(operation, field, value, native_calls):
+    case = _v1(operation)
+    case["body"]["sandbox_settings"][field] = value
+    with pytest.raises(HTTPException) as error:
+        await _invoke(case)
+    assert error.value.status_code == 400
+    assert native_calls == []
+
+
+@pytest.mark.parametrize("operation", ["create", "restore"])
+@pytest.mark.parametrize("cpu,memory", [(None, None), (1.5, 3072)])
+async def test_v1_resource_values_reach_native_create(operation, cpu, memory, native_calls):
+    case = _v1(operation)
+    case["body"]["sandbox_settings"].update(cpuCores=cpu, memoryMib=memory)
+    await _invoke(case)
+    assert native_calls[0].get("cpu") == cpu
+    assert native_calls[0].get("memory") == memory
+
+
+@pytest.mark.parametrize("operation", ["create", "restore"])
+@pytest.mark.parametrize(
+    "field,value",
     [("timeout_seconds", "4321"), ("vnc_enabled", "false"), ("sandbox_auth_token", None)],
 )
 async def test_v1_rejects_invalid_known_values_without_echoing_secrets(
