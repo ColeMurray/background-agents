@@ -119,3 +119,31 @@ uv run --frozen --extra dev --python 3.12 pytest tests/ -q
 The cross-language runner generates only synthetic payloads in a temporary directory and removes
 them on exit. Standalone Python runs skip producer cases without that artifact; the dedicated CI job
 must pass the combined command.
+
+## Implementation review and validation
+
+Validated after rebasing onto `232bb74c5` (including PR #2014's preservation changes):
+
+- Control-plane unit suite: 321 files, 5,083 tests passed; all four type-check configurations and
+  Worker/Node builds passed.
+- Workerd lifecycle, alarm recovery, shutdown, core conformance and state-retention suites: 5 files,
+  77 tests passed.
+- Combined sender/receiver/runtime contract: 3 TypeScript tests and 72 Python cases passed.
+- Modal suite: 297 passed, 2 producer-artifact cases skipped in standalone mode (covered by the
+  combined runner). Targeted runtime configuration, boot, repository and service suites: 112 passed.
+- Targeted ESLint, Ruff, formatting, Terraform formatting, boundary lint tests and whitespace checks
+  passed.
+
+The independent reviewer found a v1 MCP validation gap and missing restore-version telemetry. The
+MCP issue was reproduced with eight failing endpoint regressions before adding strict known-field
+validation; unknown extensions remain preserved. Contract version now accompanies correlated
+success/error outcome logs. Re-review found no remaining blockers, including after the upstream
+rebase.
+
+Two diagnostic checks are not green at the research baseline or on this branch: Python mypy reports
+the same 15 existing `web_api.py` errors; Knip reports the same 32 unused exports, 10 unused
+exported types and one duplicate export. These are not represented as passing checks.
+
+All launch tests use synthetic data and mocked native resource creation. They do not establish live
+provider behavior, retained-image compatibility, deployment completion, or permission to activate
+v1.

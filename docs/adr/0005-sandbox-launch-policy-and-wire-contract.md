@@ -12,9 +12,11 @@ Modal create then reconstructed a Python `SessionConfig` from flat fields, while
 nested fields. Independent unit tests did not prove that actual TypeScript output reached the
 runtime consumers.
 
-The implementation baseline is `fab55fea1aa6a5e6d1876de22ed237822688c3f7`. Existing PR #1809
-overlaps the extraction but predates current harness and provider-settings behavior and parallelizes
-prerequisites. It was inspected, not applied. Check overlap again before merging either change.
+Research began at `fab55fea1aa6a5e6d1876de22ed237822688c3f7`; the implementation is rebased onto
+`232bb74c5b62ea290fa7bfd2b566dc7b1d52c2c5`, retaining PR #2014's lifecycle-preservation protections.
+Existing PR #1809 overlaps the extraction but predates current harness and provider-settings
+behavior and parallelizes prerequisites. It was inspected, not applied. Check overlap again before
+merging either change.
 
 ## Decision
 

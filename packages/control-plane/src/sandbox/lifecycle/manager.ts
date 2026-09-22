@@ -832,12 +832,6 @@ export class SandboxLifecycleManager
   }
 
   /**
-   * Resolve the scope's prebuilt image for a fresh spawn. Returns null on any
-   * miss or lookup failure — the session boots from base (never blocked,
-   * design §7.3) — logging the reason either way; miss-reason counts are the
-   * numbers that justify (or kill) the prebuild fast-follows.
-   */
-  /**
    * Best-effort: the base-image retry must proceed even when D1 is the thing
    * that is down. An unmarked row costs one more failed image boot on the
    * next spawn, not a broken session.
