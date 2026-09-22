@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from sandbox_runtime.types import SandboxStatus
-from src import web_api
+from src import launch_contract, web_api
 from src.sandbox import manager as manager_module
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, RepositoryImageUnavailableError
 
@@ -203,13 +203,13 @@ async def test_create_sandbox_passes_unknown_fields_to_session_config_helper(mon
     helper_requests = []
     _patch_auth(monkeypatch)
     _patch_manager(monkeypatch, captured)
-    original_helper = web_api._session_config_from_create_request
+    original_helper = launch_contract._session_config_from_create_request
 
     def capture_helper(request, **kwargs):
         helper_requests.append(request)
         return original_helper(request, **kwargs)
 
-    monkeypatch.setattr(web_api, "_session_config_from_create_request", capture_helper)
+    monkeypatch.setattr(launch_contract, "_session_config_from_create_request", capture_helper)
 
     result = await _call_create_sandbox({**CREATE_REQUEST, "future_launch_option": True})
 
@@ -518,8 +518,8 @@ async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
     assert result["success"] is True
     assert config.repo_owner is None
     assert config.repo_name is None
-    assert config.session_config.repo_owner is None
-    assert config.session_config.repo_name is None
+    assert config.session_config["repo_owner"] is None
+    assert config.session_config["repo_name"] is None
 
 
 @pytest.mark.asyncio
@@ -712,8 +712,8 @@ async def test_create_sandbox_threads_repositories_into_session_config(monkeypat
 
     assert result["success"] is True
     session_config = captured["config"].session_config
-    assert [dict(r) for r in session_config.repositories] == members
-    assert session_config.working_branch_name == "open-inspect/sess-1"
+    assert [dict(r) for r in session_config["repositories"]] == members
+    assert session_config["working_branch_name"] == "open-inspect/sess-1"
 
 
 @pytest.mark.asyncio
@@ -733,8 +733,8 @@ async def test_create_sandbox_repositories_default_to_none(monkeypatch):
     )
 
     assert result["success"] is True
-    assert captured["config"].session_config.repositories is None
-    assert captured["config"].session_config.working_branch_name is None
+    assert captured["config"].session_config["repositories"] is None
+    assert captured["config"].session_config["working_branch_name"] is None
 
 
 @pytest.mark.asyncio
@@ -777,7 +777,7 @@ async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
 
 def test_session_config_helper_prefers_normalized_identity():
     """The helper must take identity from the normalized pair, not the raw request."""
-    config = web_api._session_config_from_create_request(
+    config = launch_contract._session_config_from_create_request(
         {"session_id": "s1", "repo_owner": " Acme ", "repo_name": " App "},
         repo_owner="acme",
         repo_name="app",
@@ -789,7 +789,7 @@ def test_session_config_helper_prefers_normalized_identity():
 
 def test_session_config_helper_ignores_null_wire_values():
     """Explicit nulls on the wire must not clobber SessionConfig defaults."""
-    config = web_api._session_config_from_create_request(
+    config = launch_contract._session_config_from_create_request(
         {"session_id": "s1", "provider": None, "model": None, "branch": None},
         repo_owner=None,
         repo_name=None,

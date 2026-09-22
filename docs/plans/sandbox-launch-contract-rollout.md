@@ -35,8 +35,8 @@ skips null values. Legacy restore preserves extensions and explicit nulls. V1 re
 fields, while retaining unknown nested runtime fields. Disabled service variables are not
 generically serialized as `"false"`; several readers would interpret that string as enabled.
 
-The schema is generated from `CreateSandboxV1Request | RestoreSandboxV1Request` using Pydantic
-`TypeAdapter.json_schema()`, with a Draft 2020-12 `$schema` marker. It lives in
+The schema is generated from `launch_contract.CreateSandboxV1Request | RestoreSandboxV1Request`
+using Pydantic `TypeAdapter.json_schema()`, with a Draft 2020-12 `$schema` marker. It lives in
 `packages/modal-infra/contracts/launch-v1.schema.json`; the contract suite checks drift against the
 actual receiver models. To update it, generate from those models in the same inert-image/import
 context used by the tests. Do not update it merely to suppress a compatibility failure.

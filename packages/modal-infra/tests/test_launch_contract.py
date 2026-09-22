@@ -19,7 +19,7 @@ from sandbox_runtime.code_server import CodeServer
 from sandbox_runtime.repo_config import parse_repositories
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.web_terminal import WebTerminal
-from src import web_api
+from src import launch_contract, web_api
 from src.sandbox.manager import SandboxManager
 
 from .test_web_api_create_sandbox import _call_create_sandbox, _call_restore_sandbox, _patch_auth
@@ -27,7 +27,7 @@ from .test_web_api_create_sandbox import _call_create_sandbox, _call_restore_san
 
 def test_published_schema_matches_receiver():
     schema = TypeAdapter(
-        web_api.CreateSandboxV1Request | web_api.RestoreSandboxV1Request
+        launch_contract.CreateSandboxV1Request | launch_contract.RestoreSandboxV1Request
     ).json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     published = Path(__file__).parents[1] / "contracts" / "launch-v1.schema.json"
@@ -73,6 +73,20 @@ def native_calls(monkeypatch):
 async def _invoke(case):
     call = _call_create_sandbox if case["operation"] == "create" else _call_restore_sandbox
     return await call(case["body"])
+
+
+@pytest.mark.parametrize("operation", ["create", "restore"])
+async def test_v1_decodes_without_legacy_reparsing(operation, native_calls, monkeypatch):
+    legacy = (
+        launch_contract.CreateSandboxRequest
+        if operation == "create"
+        else launch_contract.RestoreSandboxRequest
+    )
+    monkeypatch.setattr(
+        legacy, "model_validate", Mock(side_effect=AssertionError("legacy parser invoked"))
+    )
+    await _invoke(_v1(operation))
+    assert len(native_calls) == 1
 
 
 def _assert_semantics(case, native):

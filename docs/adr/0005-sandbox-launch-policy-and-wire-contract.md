@@ -53,6 +53,11 @@ and session policy. The receiver validates known values and forwards runtime ext
 paths, rather than rebuilding create's `SessionConfig`. Missing, null or unknown contract versions
 are rejected unless the discriminator is absent (legacy).
 
+The focused `launch_contract.py` module owns transport models, version dispatch and direct mapping
+of each wire version to `LaunchCommand`. Endpoints retain auth, URL policy, telemetry and provider
+orchestration; v1 never dumps/reparses through legacy models. Shared redacted request-error handling
+lives in `request_validation.py`.
+
 The Python transport models own receiver validation. Their published JSON Schema is checked against
 those models. Actual TypeScript-emitted payloads run through those same validators and runtime
 readers in CI. This avoids a schema-generation framework and a second hand-maintained TS validator.
