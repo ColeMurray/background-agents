@@ -1143,6 +1143,7 @@ export class SandboxLifecycleManager
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     const restoreStartedAt = Date.now();
+    let startupClaimed = false;
     let session: SessionRow | null = null;
     let generation: SandboxGeneration | null = null;
 
@@ -1210,6 +1211,7 @@ export class SandboxLifecycleManager
           !(await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime))
         )
           return;
+        startupClaimed = true;
         if (result.codeServerUrl && result.codeServerPassword) {
           await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
@@ -1260,6 +1262,13 @@ export class SandboxLifecycleManager
         );
       }
     } catch (error) {
+      if (startupClaimed) {
+        this.log.warn("Restored sandbox access/publication failed", {
+          event: "sandbox.recovery_access_failed",
+          error,
+        });
+        return;
+      }
       if (error instanceof SpawnSupersededError) {
         this.log.warn("Restore attempt superseded; abandoning", {
           event: "sandbox.spawn_superseded",
@@ -1304,6 +1313,7 @@ export class SandboxLifecycleManager
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     let generation: SandboxGeneration | null = null;
+    let startupClaimed = false;
 
     try {
       const session = this.sessionContext.getSession();
@@ -1359,6 +1369,7 @@ export class SandboxLifecycleManager
       const finalProviderObjectId = result.providerObjectId ?? providerObjectId;
       if (!(await this.claimProviderStartup(generation, finalProviderObjectId, result.lifetime)))
         return;
+      startupClaimed = true;
 
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
@@ -1370,6 +1381,13 @@ export class SandboxLifecycleManager
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       this.broadcastProviderAccessIfConnected();
     } catch (error) {
+      if (startupClaimed) {
+        this.log.warn("Resumed sandbox access/publication failed", {
+          event: "sandbox.recovery_access_failed",
+          error,
+        });
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Failed to resume sandbox";
       this.failAttempt(generation, "connecting", errorMessage);
       if (restoringSavedState)
@@ -2226,11 +2244,17 @@ export class SandboxLifecycleManager
       return false;
     }
 
-    if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
     await this.shutdown.recordProviderStartup(generation, lifetime);
-
-    if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+    try {
+      if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
+      if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
+        this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+      }
+    } catch (error) {
+      this.log.warn("Provider startup announcement failed", {
+        event: "sandbox.startup_announcement_failed",
+        error,
+      });
     }
     return true;
   }

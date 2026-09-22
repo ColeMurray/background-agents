@@ -28,6 +28,7 @@ export function realLifecycleHarness(
     store?: ShutdownStore;
     onQueueAdmission?: (decision: string) => void;
     onAnnouncement?: (message: object) => void;
+    onLifecycleAnnouncement?: (message: object) => void;
     socket?: WebSocket;
   } = {}
 ) {
@@ -96,7 +97,12 @@ export function realLifecycleHarness(
     provider,
     sandbox,
     sessionContext,
-    { broadcast: (message) => lifecycleAnnouncements.push(message) },
+    {
+      broadcast: (message) => {
+        options.onLifecycleAnnouncement?.(message);
+        lifecycleAnnouncements.push(message);
+      },
+    },
     {
       getSandboxWebSocket: () =>
         sandbox.getSandbox()?.active_socket_id === "" ? null : (options.socket ?? null),

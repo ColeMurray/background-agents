@@ -41,6 +41,74 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
+  it.each([
+    ["snapshot", "access"],
+    ["snapshot", "announcement"],
+    ["retained", "access"],
+    ["retained", "announcement"],
+  ] as const)(
+    "keeps confirmed %s recovery running when optional %s fails",
+    async (kind, failure) => {
+      const stub = await servingSession();
+      await runInSessionDO(stub, async (instance, durableState) => {
+        const startup = vi.fn(
+          async (): Promise<RestoreResult> => ({
+            success: true,
+            sandboxId: "recovered-sandbox",
+            providerObjectId: "recovered-source",
+            lifetime: { kind: "none", observedAtMs: Date.now() },
+            codeServerUrl: "https://preview.test",
+            codeServerPassword: "preview-secret",
+          })
+        );
+        const provider = snapshotProvider({
+          capabilities: {
+            supportsSandboxTimeout: true,
+            supportsSnapshots: kind === "snapshot",
+            supportsRestore: kind === "snapshot",
+            supportsPersistentResume: kind === "retained",
+            supportsExplicitStop: true,
+          },
+          restoreFromSnapshot: startup,
+          resumeSandbox: startup,
+        });
+        let injectingFailure = false;
+        const { manager, sandbox } = realLifecycleHarness(instance, durableState, provider, {
+          onLifecycleAnnouncement: (message) => {
+            if (
+              injectingFailure &&
+              startup.mock.calls.length > 0 &&
+              failure === "announcement" &&
+              "type" in message &&
+              (message.type === "sandbox_restored" ||
+                (message.type === "sandbox_status" &&
+                  "status" in message &&
+                  message.status === "connecting"))
+            )
+              throw new Error("announcement unavailable");
+          },
+        });
+        await manager.terminateFailedSandbox("initial runtime crashed");
+        expect(manager.shutdownSnapshot()).toMatchObject({ phase: "saved" });
+        await manager.recoverShutdown("restore_saved");
+        vi.mocked(provider.stopSandbox!).mockClear();
+        if (failure === "access")
+          durableState.storage.sql.exec(
+            "CREATE TRIGGER reject_access BEFORE UPDATE OF code_server_url ON sandbox WHEN NEW.code_server_url IS NOT NULL BEGIN SELECT RAISE(FAIL, 'access unavailable'); END"
+          );
+        injectingFailure = true;
+        await manager.spawnSandbox();
+        expect(startup).toHaveBeenCalledOnce();
+        expect(manager.shutdownSnapshot()).toMatchObject({ phase: "running" });
+        expect(sandbox.getSandbox()?.status).toBe("connecting");
+        expect(sandbox.getSandbox()?.modal_object_id).toBe("recovered-source");
+        expect(provider.stopSandbox).not.toHaveBeenCalledWith(
+          expect.objectContaining({ providerObjectId: "recovered-source" })
+        );
+      });
+    }
+  );
+
   it("records continuity loss when persistent resume requests a fresh replacement", async () => {
     const stub = await servingSession();
     await queryDO(stub, "UPDATE sandbox SET status = 'stopped', last_heartbeat = ?", Date.now());
