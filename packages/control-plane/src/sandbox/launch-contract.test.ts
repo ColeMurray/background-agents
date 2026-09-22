@@ -79,7 +79,7 @@ describe("interactive launch producer contract", () => {
                       repoOwner: "group/subgroup",
                       repoName: "repo",
                       baseBranch: "feature/契約",
-                      baseSha: "abc123",
+                      baseSha: "a".repeat(40),
                     },
                     ...(shape === "multi"
                       ? [{ repoOwner: "group", repoName: "other", baseBranch: "develop" }]

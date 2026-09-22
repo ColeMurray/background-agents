@@ -204,6 +204,41 @@ class LaunchSessionConfigV1(_RepositoryContextModel):
     opencode_session_id: str | None = None
     working_branch_name: str | None = None
 
+    @model_validator(mode="after")
+    def validate_runtime_repositories(self) -> Self:
+        # Validate both forms independently: the runtime parser otherwise returns
+        # a nonempty member list without checking the scalar environment fallback.
+        members = parse_repositories(
+            {"repositories": [repo.model_dump() for repo in self.repositories or []]},
+            workspace_path=Path("/workspace"),
+        )
+        scalar = parse_repositories(
+            {"base_sha": self.base_sha},
+            workspace_path=Path("/workspace"),
+            scalar_owner=self.repo_owner or "",
+            scalar_name=self.repo_name or "",
+            scalar_branch=self.branch or "main",
+        )
+        if len(members) != len(self.repositories or []):
+            raise ValueError("Repository entries require owner and name")
+        if members:
+            primary = members[0]
+            if not scalar or (primary.owner.lower(), primary.name.lower(), primary.branch) != (
+                scalar[0].owner.lower(),
+                scalar[0].name.lower(),
+                scalar[0].branch,
+            ):
+                raise ValueError("Scalar repository must match the primary member")
+            if scalar[0].base_sha and scalar[0].base_sha != primary.base_sha:
+                raise ValueError("Scalar revision must match the primary member")
+        for repo, entry in zip(self.repositories or [], members, strict=True):
+            repo.repo_owner, repo.repo_name = entry.owner, entry.name
+            if "branch" in repo.model_fields_set and repo.branch is not None:
+                repo.branch = entry.branch
+            if "base_sha" in repo.model_fields_set:
+                repo.base_sha = entry.base_sha
+        return self
+
 
 Port = Annotated[int, Field(ge=1, le=65535)]
 
