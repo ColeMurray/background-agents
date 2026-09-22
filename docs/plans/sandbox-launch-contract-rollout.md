@@ -70,10 +70,11 @@ fixture files, PRs, logs, or evidence documents.
    `"legacy"` and `1`. Record its build identity; a generic healthy response is insufficient. This
    probe creates no sandbox.
 3. In staging, enable `MODAL_LAUNCH_CONTRACT_VERSION=1` (Node) or
-   `modal_launch_contract_v1_enabled=true` (Terraform), preserving the same receiver. Verify a base
-   launch, prepared image, current snapshot, retained old snapshot, repo-less/multi-repo sessions,
-   and service access. Exercise actual authorized SCM access. Test environment inheritance and
-   native secret isolation, not just requests.
+   `modal_launch_contract_v1_enabled=true` (local Terraform), or the repository variable
+   `MODAL_LAUNCH_CONTRACT_V1_ENABLED=true` (Actions Plan/Apply), preserving the same receiver.
+   Verify a base launch, prepared image, current snapshot, retained old snapshot,
+   repo-less/multi-repo sessions, and service access. Exercise actual authorized SCM access. Test
+   environment inheritance and native secret isolation, not just requests.
 4. Verify invalid v1 and unsupported versions fail before provider work. Verify lost/malformed
    responses do not create a second sandbox through protocol fallback. Preserve existing saved-state
    holds and native late-result cleanup.

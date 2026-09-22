@@ -69,6 +69,8 @@ modal_token_secret = ""
 #   empty suffix:      https://myworkspace--app.modal.run
 #   "production":      https://myworkspace-production--app.modal.run
 modal_workspace               = ""
+# Receiver-first rollout only; Actions uses MODAL_LAUNCH_CONTRACT_V1_ENABLED.
+modal_launch_contract_v1_enabled = false
 modal_environment             = "main"
 modal_environment_web_suffix  = ""
 
