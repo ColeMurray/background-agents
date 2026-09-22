@@ -181,6 +181,8 @@ export interface UnresolvedProviderOperationRow {
   provider: ImageBuildProvider;
   provider_session_id: string | null;
   provider_operation_ref: string;
+  /** Fixed wall-clock deadline (ms) the reservation recorded; null before it existed. */
+  provider_operation_deadline_at: number | null;
   created_at: number;
 }
 
@@ -225,7 +227,7 @@ export const UNBOUND_SOURCE_INTENTS_SQL = `SELECT id, provider, created_at
  * still listed here is an obligation nothing else on the row records.
  */
 export const UNRESOLVED_PROVIDER_OPERATIONS_SQL = `SELECT id, provider, provider_session_id,
-        provider_operation_ref, created_at
+        provider_operation_ref, provider_operation_deadline_at, created_at
  FROM image_builds
  WHERE status IN ('failed', 'superseded')
    AND provider_operation_ref IS NOT NULL
