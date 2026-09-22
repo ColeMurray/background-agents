@@ -1,11 +1,29 @@
 import { writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_MODEL, extractProviderAndModel } from "@open-inspect/shared/models";
 import { createModalClient, type CreateSandboxRequest } from "./client";
-import { parseModalLaunchContractVersion } from "./modal-launch-contract";
+import { encodeModalCreate, parseModalLaunchContractVersion } from "./modal-launch-contract";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("interactive launch producer contract", () => {
+  it.each(["legacy", "1"] as const)("uses split catalog defaults for %s", (version) => {
+    const encoded = encodeModalCreate(
+      {
+        sessionId: "session-contract",
+        sandboxId: "sandbox-contract",
+        repoOwner: null,
+        repoName: null,
+        harness: "opencode",
+        controlPlaneUrl: "https://control.example.test",
+        sandboxAuthToken: "synthetic-auth",
+      },
+      version
+    );
+    const config = "session_config" in encoded ? encoded.session_config : encoded;
+    expect(config).toMatchObject(extractProviderAndModel(DEFAULT_MODEL));
+    expect(config.model).not.toBe(DEFAULT_MODEL);
+  });
   it("emits real client requests for the Python/runtime contract suite", async () => {
     const logs = vi.spyOn(console, "log").mockImplementation(() => {});
     const emitted: unknown[] = [];

@@ -1,4 +1,5 @@
 /** Interactive Modal wire encodings. Resume and image builds are separate contracts. */
+import { DEFAULT_MODEL, extractProviderAndModel } from "@open-inspect/shared/models";
 import type { CreateSandboxRequest, RestoreSandboxRequest } from "./client";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "./provider";
 import { buildSessionConfig } from "./sandbox-env";
@@ -14,11 +15,14 @@ export function parseModalLaunchContractVersion(value?: string): ModalLaunchCont
 
 type LaunchRequest = CreateSandboxRequest | RestoreSandboxRequest;
 
+const { provider: DEFAULT_MODAL_PROVIDER, model: DEFAULT_MODAL_MODEL } =
+  extractProviderAndModel(DEFAULT_MODEL);
+
 function sessionConfig(request: LaunchRequest) {
   return buildSessionConfig({
     ...request,
-    provider: request.provider || "anthropic",
-    model: request.model || "claude-sonnet-4-6",
+    provider: request.provider || DEFAULT_MODAL_PROVIDER,
+    model: request.model || DEFAULT_MODAL_MODEL,
   });
 }
 
