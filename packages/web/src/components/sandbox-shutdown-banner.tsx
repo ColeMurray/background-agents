@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   SandboxShutdownState,
   ShutdownRecoveryAction,
@@ -26,6 +26,15 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
   const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
+  // A recovery message reports the outcome of a request against one shutdown phase. A newer
+  // authoritative phase supersedes it, so the stale message must not outlive that phase, and a
+  // request still in flight when the phase changes must not report against the newer phase.
+  const phaseGeneration = useRef(0);
+  useEffect(() => {
+    phaseGeneration.current += 1;
+    setRecoveryError(null);
+  }, [shutdown?.phase]);
+
   if (!shutdown) return null;
 
   const { phase } = shutdown;
@@ -46,18 +55,20 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
     if (!onRecover || pendingAction) return;
     setPendingAction(action);
     setRecoveryError(null);
+    const generation = phaseGeneration.current;
+    const reportFailure = (message: string) => {
+      if (generation === phaseGeneration.current) setRecoveryError(message);
+    };
     try {
       const result = await onRecover(action);
       if (result.ok) return;
-      setRecoveryError(
+      reportFailure(
         result.reason === "rejected"
           ? (result.message ?? "The recovery request was rejected.")
           : "Recovery was not confirmed. Check the current sandbox state before retrying."
       );
     } catch {
-      setRecoveryError(
-        "Recovery was not confirmed. Check the current sandbox state before retrying."
-      );
+      reportFailure("Recovery was not confirmed. Check the current sandbox state before retrying.");
     } finally {
       setPendingAction(null);
     }
