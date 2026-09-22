@@ -381,6 +381,28 @@ class ClaudeHarness:
             await self._tool_client.aclose()
             self._tool_client = None
 
+    async def apply_provider_account(
+        self, identity: dict[str, Any], *, model: str, reasoning_effort: str | None
+    ) -> None:
+        """Reconnect the same transcript with the committed credential; never create a session."""
+        async with self._client_lifecycle_lock:
+            if (
+                self._client is not None
+                or not self.config.oauth_managed
+                or self.credential_client is None
+            ):
+                raise RuntimeError("Previous execution has not been contained")
+            conversation = identity["conversationId"]
+            if self.session_id != conversation or not await self.resume_session(conversation):
+                raise RuntimeError("Conversation unavailable")
+            issued = await self.credential_client.fetch("anthropic", identity)
+            self.credential = ClaudeCredential.oauth_token(issued.secret)
+            # A restored transcript may never have had a client in this process.
+            # Use the authoritative session configuration supplied by the control plane.
+            await self._ensure_client_locked(
+                bare_model_id(model, self.config.default_model), reasoning_effort
+            )
+
     async def resume_session(self, persisted_id: str) -> bool:
         if not self._transcript_exists(persisted_id, self.config.workdir, self.config.config_dir):
             self.log.info("claude.session.invalid", agent_session_id=persisted_id)

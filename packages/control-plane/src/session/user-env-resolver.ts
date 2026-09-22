@@ -38,6 +38,7 @@ import type { SessionRow } from "./types";
  * Dependencies injected into UserEnvResolver.
  */
 export interface UserEnvResolverDeps {
+  providerSwitchQualified?: string;
   db: SqlDatabase;
   sessionCoreRepository: SessionCoreRepository;
   /**
@@ -62,6 +63,7 @@ interface UserEnvContext {
 }
 
 export class UserEnvResolver {
+  private readonly providerSwitchQualified: string | undefined;
   private readonly db: SqlDatabase;
   private readonly sessionCoreRepository: SessionCoreRepository;
   private readonly resolveRepoId: (session: SessionRow) => Promise<number>;
@@ -71,6 +73,7 @@ export class UserEnvResolver {
   private readonly log: Logger;
 
   constructor(deps: UserEnvResolverDeps) {
+    this.providerSwitchQualified = deps.providerSwitchQualified;
     this.db = deps.db;
     this.sessionCoreRepository = deps.sessionCoreRepository;
     this.resolveRepoId = deps.resolveRepoId;
@@ -86,8 +89,13 @@ export class UserEnvResolver {
    */
   async getUserEnvVars(): Promise<Record<string, string> | undefined> {
     const context = await this.loadUserEnvContext();
-    if (!context) return undefined;
-    return Object.keys(context.sandboxEnv).length === 0 ? undefined : context.sandboxEnv;
+    const vars = {
+      ...context?.sandboxEnv,
+      ...(this.providerSwitchQualified
+        ? { PROVIDER_ACCOUNT_SWITCH_QUALIFIED: this.providerSwitchQualified }
+        : {}),
+    };
+    return Object.keys(vars).length === 0 ? undefined : vars;
   }
 
   /**

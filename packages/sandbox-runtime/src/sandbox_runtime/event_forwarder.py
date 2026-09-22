@@ -28,6 +28,7 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "push_error",
         "preservation_prepared",
         "sandbox_generation_ready",
+        "provider_account_switch",
     }
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
@@ -405,6 +406,8 @@ class BufferedEventForwarder:
         """
         event_type = event.get("type", "unknown")
         operation_id = event.get("operationId")
+        if event_type == "provider_account_switch" and operation_id:
+            return f"{event_type}:{operation_id}:{event.get('bindingRevision')}:{event.get('outcome')}"
         if operation_id:
             return f"{event_type}:{operation_id}"
         generation = event.get("generation")

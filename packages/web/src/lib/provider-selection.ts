@@ -7,6 +7,7 @@ import {
   type ProviderAuthSelection,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import type { ProviderAccountRouting } from "@open-inspect/shared/types/provider-account-routing";
 
 export type ProviderSelectionDrafts = ModelProviderSelections;
 export const EMPTY_PROVIDER_SELECTIONS: ProviderSelectionDrafts = {};
@@ -14,23 +15,43 @@ export const EMPTY_PROVIDER_SELECTIONS: ProviderSelectionDrafts = {};
 export type InteractiveProviderRoutingIdentity = Record<
   SubscriptionProviderId,
   | { mode: "api_key" | "legacy_scoped_oauth" }
+  | { mode: "random"; policyRevision: number; eligibility: string[] }
   | {
       mode: "provider_account";
       accountId: string;
       status: ModelProviderAccount["status"] | "unavailable";
       archivedAt: number | null;
+      policyRevision?: number;
     }
 >;
 
 export function buildInteractiveProviderRoutingIdentity(
   selections: ModelProviderSelections,
   defaults: ModelProviderAccountDefault[],
-  accounts: ModelProviderAccount[]
+  accounts: ModelProviderAccount[],
+  policies: ProviderAccountRouting[] = []
 ): InteractiveProviderRoutingIdentity {
   return Object.fromEntries(
     SUBSCRIPTION_PROVIDER_IDS.map((provider) => {
       const explicit = selections[provider];
       if (explicit?.mode === "api_key") return [provider, { mode: "api_key" }];
+      const policy = policies.find((item) => item.provider === provider);
+      if (!explicit && policy?.selection.mode === "random")
+        return [
+          provider,
+          {
+            mode: "random",
+            policyRevision: policy.policyRevision,
+            eligibility: policy.selection.accountIds
+              .map((id) => {
+                const account = accounts.find(
+                  (candidate) => candidate.provider === provider && candidate.id === id
+                );
+                return `${id}:${account?.status ?? "unavailable"}:${account?.archivedAt ?? ""}`;
+              })
+              .sort(),
+          },
+        ];
 
       const accountId =
         explicit?.mode === "provider_account"
@@ -49,6 +70,7 @@ export function buildInteractiveProviderRoutingIdentity(
           accountId,
           status: account?.status ?? "unavailable",
           archivedAt: account?.archivedAt ?? null,
+          ...(!explicit && policy ? { policyRevision: policy.policyRevision } : {}),
         },
       ];
     })

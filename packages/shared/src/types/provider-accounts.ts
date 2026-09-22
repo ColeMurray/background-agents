@@ -165,6 +165,9 @@ export type ModelProviderAccountDefaultsResponse = z.infer<
 
 const sessionModelProviderAuthRoutingSchema = {
   selectionSource: z.string().min(1),
+  bindingRevision: z.number().int().positive().optional(),
+  allocationPolicyRevision: z.number().int().positive().optional(),
+  lastSwitchOperationId: z.string().min(1).max(128).optional(),
 } as const;
 
 export const sessionModelProviderAuthSchema = z.discriminatedUnion("authMode", [

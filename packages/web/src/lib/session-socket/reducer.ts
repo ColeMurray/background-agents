@@ -297,6 +297,11 @@ function reduceServerMessage(
         ...prev,
         sandboxPreservation: message.preservation,
       }));
+    case "provider_account_recovery":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        providerAccountRecovery: message.operation,
+      }));
 
     case "artifact_created":
     case "artifact_updated":

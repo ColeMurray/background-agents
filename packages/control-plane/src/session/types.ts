@@ -3,6 +3,7 @@
  */
 
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
+import type { ProviderAccountSwitchCommand } from "@open-inspect/shared/types/provider-account-switch";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import {
   messageStatusSchema,
@@ -267,6 +268,7 @@ interface RefreshDiffCommand {
 }
 
 export type SandboxCommand =
+  | ProviderAccountSwitchCommand
   | { type: "sandbox_generation"; generation: { sandboxId: string; createdAt: number } }
   | {
       type: "prepare_preservation";

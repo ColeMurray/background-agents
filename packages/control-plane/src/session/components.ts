@@ -25,6 +25,8 @@ import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
+import { authenticateSession } from "../auth/user/session-authenticator";
+import { ProviderAccountSwitchHandler } from "./http/handlers/provider-account-switch.handler";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
 import type { SandboxProvider } from "../sandbox/provider";
@@ -51,6 +53,10 @@ import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
+import { ProviderAccountSwitchRepository } from "./provider-account-switch-repository";
+import { ProviderAccountSwitchCoordinator } from "./provider-account-switch";
+import { SessionProviderBindingStore } from "../db/session-provider-binding";
+import { prepareSwitchTarget } from "../model-provider-accounts/prepare-switch-target";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
@@ -324,6 +330,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Tier 4 — session-scoped domain services.
   const userEnvResolver = new UserEnvResolver({
+    // Capability survives disabling new admission so saved bindings can recover.
+    providerSwitchQualified: env.PROVIDER_ACCOUNT_SWITCH_QUALIFIED,
     db,
     sessionCoreRepository,
     resolveRepoId,
@@ -433,7 +441,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     recordTerminalMessage
   );
-  const shutdown = new SandboxShutdownCoordinator({
+  const shutdown: SandboxShutdownCoordinator = new SandboxShutdownCoordinator({
+    onGenerationReserved: (owner, generation) => {
+      if (generation.sandboxId)
+        return providerSwitch.generationReserved(owner, {
+          sandboxId: generation.sandboxId,
+          createdAt: generation.createdAt,
+        });
+      return owner;
+    },
     log,
     store: new SandboxShutdownRepository(sql),
     provider: sandboxProvider,
@@ -447,7 +463,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     background: backgroundTasks,
     // These closures are invoked only by later lifecycle work, after this
     // composition function has constructed and returned the complete graph.
-    onLifecycleChange: () => messageQueue.processMessageQueue(),
+    onLifecycleChange: async () => {
+      if (providerSwitch.operation()?.phase === "restoring") await providerSwitch.reconcile();
+      await messageQueue.processMessageQueue();
+    },
     reconcileStatusFromMessages: () => statusService.reconcileFromMessageState(),
     retireAccess: () => lifecycleManager.retireShutdownAccess(),
   });
@@ -479,6 +498,59 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (): void => messageQueue.broadcastPromptQueue(),
     (): Promise<void> => messageQueue.processMessageQueue()
   );
+  const providerSwitch: ProviderAccountSwitchCoordinator = new ProviderAccountSwitchCoordinator({
+    deliverAudit: () =>
+      new SessionProviderBindingStore(db).deliverEvents(getPublicSessionId(), (event) => {
+        const inserted = eventRepository.createEventOnce({
+          id: `provider-account:${event.operationId}:${event.bindingRevision}`,
+          type: event.type,
+          data: JSON.stringify(event),
+          messageId: null,
+          createdAt: event.timestamp,
+        });
+        if (inserted) messenger.broadcast({ type: "sandbox_event", event });
+      }),
+    store: new ProviderAccountSwitchRepository(sql),
+    session: () => sessionCoreRepository.getSession(),
+    sessionId: getPublicSessionId,
+    sandbox: () => sandboxRepository.getSandbox(),
+    pendingCount: () => messageRepository.getPendingOrProcessingCount(),
+    processing: () => !!messageRepository.getProcessingMessage(),
+    canAdmit: () =>
+      !lifecycleManager.isSpawning() &&
+      (!shutdown.isHolding() || shutdown.canRestoreProviderSwitch()),
+    enabled: () => env.PROVIDER_ACCOUNT_SWITCH_ENABLED === "true",
+    claim: (operation, persist) =>
+      shutdown.claimProviderSwitch(operation.operationId, operation.generation, persist),
+    owns: (operation) => shutdown.ownsProviderSwitch(operation.operationId, operation.generation),
+    release: (id) => shutdown.releaseProviderSwitch(id),
+    preservation: () => shutdown.snapshot(),
+    retain: (operation) =>
+      shutdown.retainProviderSwitch(operation.operationId, operation.generation),
+    inactivityMs: () => parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
+    canRestore: () => shutdown.canRestoreProviderSwitch(),
+    restore: async (operationId) => {
+      await shutdown.authorizeProviderSwitchRestore(operationId);
+      await lifecycleManager.spawnSandbox({ kind: "provider_switch", operationId });
+    },
+    index: sessionIndexStore,
+    bindings: new SessionProviderBindingStore(db),
+    prepare: async (provider, accountId, actorId) => {
+      const authorization = new AuthorizationService(db);
+      await authorization.requirePermission(actorId, "sessions.lifecycle");
+      await prepareSwitchTarget(db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY, provider, accountId);
+      await authorization.requirePermission(actorId, "provider_accounts.read");
+      await authorization.requirePermission(actorId, "sessions.lifecycle");
+    },
+    send: (command) => {
+      const socket = wsManager.getSandboxSocket();
+      return socket ? wsManager.send(socket, command) : false;
+    },
+    schedule: (deadline) => alarmScheduler.schedule(deadline),
+    changed: (operation) => messenger.broadcast({ type: "provider_account_recovery", operation }),
+    pump: () => messageQueue.processMessageQueue(),
+  });
+  lifecycleManager.setProviderRecoveryGuard(() => providerSwitch.held());
   const messageQueue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
@@ -499,7 +571,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     executionStop,
     getExecutionTimeoutMs,
-    () => lifecycleManager.mayProcessQueuedWork()
+    () => lifecycleManager.mayProcessQueuedWork(),
+    () => providerSwitch.epoch()
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -600,6 +673,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     {
       generationReady: (event) => lifecycleManager.onShutdownGenerationReady(event),
       prepared: (event) => lifecycleManager.onShutdownPrepared(event),
+    },
+    {
+      ready: (supported) => providerSwitch.runtimeReady(supported),
+      event: (event) => providerSwitch.event(event),
     }
   );
 
@@ -613,7 +690,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getExecutionTimeoutMs,
     now: () => Date.now(),
     log,
-    preserveBeforeWatchdogs: () => lifecycleManager.handleShutdownAlarm(),
+    preserveBeforeWatchdogs: async () => {
+      const preservation = await lifecycleManager.handleShutdownAlarm();
+      const recovery = await providerSwitch.alarm();
+      return preservation === "hold_watchdogs" || recovery === "hold_watchdogs"
+        ? "hold_watchdogs"
+        : "continue";
+    },
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
@@ -732,7 +815,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     durableObjectId,
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
-    }
+    },
+    () => providerSwitch.cancel()
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()
@@ -773,6 +857,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   // Tier 9 — the read models, connection admission, and the server stack.
   const snapshotReader = new SessionSnapshotReader({
+    getProviderAccountRecovery: () => providerSwitch.operation(),
     getShutdown: () => lifecycleManager.shutdownSnapshot(),
     sessionCoreRepository,
     sandboxRepository,
@@ -829,7 +914,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   // Internal HTTP route table (transport wiring only).
+  const providerSwitchHandler = new ProviderAccountSwitchHandler(
+    providerSwitch,
+    async (request, mutation) => {
+      const user = await authenticateSession(getUserAuth(env, db).api, request.headers);
+      if (!user) throw new AuthorizationError(401, "human_session_required");
+      const authorization = new AuthorizationService(db);
+      await authorization.requirePermission(user.userId, "provider_accounts.read");
+      await authorization.requirePermission(
+        user.userId,
+        mutation ? "sessions.lifecycle" : "sessions.read"
+      );
+      return user.userId;
+    }
+  );
   const routes = createSessionInternalRoutes({
+    providerAuth: (request) => providerSwitchHandler.handle(request, "read"),
+    providerSwitch: (request) => providerSwitchHandler.handle(request, "switch"),
+    providerResume: (request) => providerSwitchHandler.handle(request, "resume"),
     init: (request, _url, requestLog) => sessionInitHandler.init(request, requestLog),
     state: () => sessionLifecycleHandler.getState(),
     snapshot: () => snapshotReader.handleSnapshot(),
@@ -872,7 +974,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     activePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
     childSummary: (_request, url) => childSummaryHandler.getChildSummary(url),
     parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
-    cancel: () => sessionLifecycleHandler.cancel(),
+    cancel: () => {
+      providerSwitch.cancel();
+      return sessionLifecycleHandler.cancel();
+    },
     childSessionUpdate: (request) => childSessionsHandler.childSessionUpdate(request),
     diffState: () => diffsHandler.state(),
     diffStore: (request) => diffsHandler.storeBundle(request),

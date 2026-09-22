@@ -14,6 +14,11 @@
  */
 
 import { Hono } from "hono";
+import {
+  captureIssuanceGeneration,
+  verifyIssuanceFence,
+  StaleProviderBindingError,
+} from "../model-provider-accounts/issuance-fence";
 import { subscriptionProviderIdSchema } from "@open-inspect/shared/types/provider-accounts";
 import { z } from "zod";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
@@ -92,6 +97,13 @@ async function handleRuntimeCredential(
   if (!binding || binding.authMode !== "provider_account") {
     return error("Session does not use a connected provider account", 404);
   }
+  let generation;
+  try {
+    generation = await captureIssuanceGeneration(request, env, ctx, binding);
+  } catch (cause) {
+    if (cause instanceof StaleProviderBindingError) return error(cause.message, 409);
+    throw cause;
+  }
 
   const accounts = new ModelProviderAccountStore(ctx.db);
   const account = await accounts.getById(binding.providerAccountId);
@@ -155,7 +167,16 @@ async function handleRuntimeCredential(
     credential_version: state.credentialVersion,
   });
   await accounts.touchLastUsed(account.id, account.lastUsedAt ?? 0, now).catch(() => false);
+  try {
+    await verifyIssuanceFence(request, env, ctx, binding, generation, state.credentialVersion);
+  } catch (cause) {
+    if (cause instanceof StaleProviderBindingError) return error(cause.message, 409);
+    throw cause;
+  }
   return json({
+    providerAccountId: account.id,
+    bindingRevision: binding.bindingRevision ?? 1,
+    generation,
     kind: "stored_provider_secret",
     secret: credential.token,
     credentialVersion: state.credentialVersion,

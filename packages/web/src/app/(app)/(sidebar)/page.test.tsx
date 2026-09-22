@@ -194,6 +194,7 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
     providers: [],
     accounts: mocks.providerAccountsValue,
     defaults: [],
+    policies: [],
     loading: mocks.providerAccountsLoadingValue,
     error: undefined,
     refresh: vi.fn(),

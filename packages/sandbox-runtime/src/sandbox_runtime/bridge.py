@@ -65,6 +65,7 @@ from .harness import (
 )
 from .log_config import configure_logging, get_logger
 from .prompt_budgets import resolve_prompt_limits
+from .provider_account_switch import ProviderAccountSwitchRuntime
 from .push_operation import PushOperation, PushRejected, PushRequest
 from .repo_config import load_repo_manifest
 from .shutdown_preparation import ShutdownPreparationCoordinator
@@ -211,6 +212,7 @@ class AgentBridge:
             )
         )
         self.shutdown_preparation = ShutdownPreparationCoordinator()
+        self.provider_account_switch = ProviderAccountSwitchRuntime(self)
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -283,6 +285,12 @@ class AgentBridge:
             "opencodeSessionId": harness.session_id,
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
+            "providerAccountSwitchV1": self.provider_account_switch.supported(),
+            "providerAccountSwitchProviders": [
+                provider
+                for provider in ("openai", "xai", "anthropic")
+                if self.provider_account_switch.supported(provider)
+            ],
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -609,7 +617,7 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
-            if self.shutdown_preparation.fenced:
+            if self.shutdown_preparation.fenced or self.provider_account_switch.fenced:
                 await self._send_event(
                     {
                         "type": "execution_complete",
@@ -633,17 +641,19 @@ class AgentBridge:
             await self._handle_sandbox_generation(cmd)
         elif cmd_type == "prepare_preservation":
             await self._handle_prepare_shutdown(cmd)
+        elif cmd_type in ("provider_account_quiesce", "provider_account_apply"):
+            await self.provider_account_switch.handle(cmd)
         elif cmd_type == "shutdown":
             await self._handle_shutdown()
         elif cmd_type == "git_sync_complete":
             self.git_sync_complete.set()
         elif cmd_type == "push":
-            if self.shutdown_preparation.fenced:
+            if self.shutdown_preparation.fenced or self.provider_account_switch.fenced:
                 await self._refuse_push_for_shutdown(cmd)
             else:
                 self._start_push(cmd)
         elif cmd_type == "refresh_diff":
-            if self.shutdown_preparation.fenced:
+            if self.shutdown_preparation.fenced or self.provider_account_switch.fenced:
                 self.log.warn("bridge.command_refused_for_preservation", cmd_type=cmd_type)
             else:
                 self.diff_refresh.request(None)
@@ -789,7 +799,7 @@ class AgentBridge:
         running turn.
         """
         try:
-            if self.shutdown_preparation.fenced:
+            if self.shutdown_preparation.fenced or self.provider_account_switch.fenced:
                 raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 await self.boot_attach.wait_until_ready(message_id, deadline)
@@ -814,7 +824,7 @@ class AgentBridge:
             if self.boot_attach.booting:
                 raise RuntimeError(f"sandbox did not become ready within {budget} s") from None
             raise RuntimeError(f"prompt could not start within {budget} s") from None
-        if self.shutdown_preparation.fenced:
+        if self.shutdown_preparation.fenced or self.provider_account_switch.fenced:
             raise RuntimeError("sandbox_lifetime_expiring")
         return harness, attachments
 
@@ -862,6 +872,7 @@ class AgentBridge:
         if generation is None or generation["sandboxId"] != self.sandbox_id:
             self.log.warn("bridge.sandbox_generation_invalid")
             return
+        self.provider_account_switch.establish_generation(generation)
         await self._send_event(self.shutdown_preparation.establish_generation(generation))
 
     async def _handle_prepare_shutdown(self, cmd: dict[str, Any]) -> None:
@@ -872,6 +883,11 @@ class AgentBridge:
             return
 
         async def contain_activity(deadline: float) -> bool:
+            # Switch quiescence already joined all activity and stopped the owned
+            # service. Its HTTP endpoint is intentionally unavailable here.
+            switch = self.provider_account_switch
+            if switch.fenced and switch.quiesced and not switch.applied:
+                return True
             harness = self._require_harness()
             return await self.activity.drain_for_shutdown(
                 deadline=deadline,
@@ -928,7 +944,7 @@ class AgentBridge:
 
     def _start_push(self, cmd: dict[str, Any]) -> None:
         async def execute() -> dict[str, Any]:
-            if self.shutdown_preparation.fenced:
+            if self.shutdown_preparation.fenced or self.provider_account_switch.fenced:
                 return self._shutdown_push_error_event(cmd)
             return await self._handle_push(cmd)
 

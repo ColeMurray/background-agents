@@ -246,6 +246,7 @@ function makeHarness(
     encryptionKey?: string;
     /** Omit to model an unset SECRETS_CAP_ENFORCEMENT (fail-closed enforce). */
     capEnforcement?: string;
+    providerSwitchQualified?: string;
     resolveRepoId?: (session: SessionRow) => Promise<number>;
   } = {}
 ) {
@@ -267,6 +268,7 @@ function makeHarness(
       ));
 
   const resolver = new UserEnvResolver({
+    providerSwitchQualified: options.providerSwitchQualified,
     db,
     sessionCoreRepository,
     resolveRepoId: (sessionForRepoId) => {
@@ -293,6 +295,13 @@ function makeHarness(
 // ---------------------------------------------------------------------------
 
 describe("UserEnvResolver", () => {
+  it("forwards independently qualified runtime recovery capability without a new-switch admission flag", async () => {
+    const h = makeHarness({ providerSwitchQualified: "opencode/openai,claude/anthropic" });
+    h.db.providerAuthRows = providerAuthRows({ openai: "api_key", xai: "api_key" });
+    expect(await h.resolver.getUserEnvVars()).toMatchObject({
+      PROVIDER_ACCOUNT_SWITCH_QUALIFIED: "opencode/openai,claude/anthropic",
+    });
+  });
   describe("missing session row", () => {
     it("returns undefined from getUserEnvVars after a warn, without touching D1", async () => {
       const h = makeHarness({ session: null });

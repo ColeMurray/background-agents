@@ -92,6 +92,9 @@ describe("stored provider secret delivery", () => {
       kind: "stored_provider_secret",
       secret: "sk-ant-oat01-integration-secret",
       credentialVersion: 1,
+      bindingRevision: 1,
+      providerAccountId: ANTHROPIC_ACCOUNT_ID,
+      generation: { sandboxId: "sandbox-1", createdAt: expect.any(Number) },
       expiresAt: expect.any(Number),
     });
   });

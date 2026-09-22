@@ -28,6 +28,9 @@ export const sessionMessagePageSchema = z.discriminatedUnion("hasMore", [
 export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 
 export const SessionInternalPaths = {
+  providerAuth: "/internal/provider-auth",
+  providerSwitch: "/internal/provider-auth-switch",
+  providerResume: "/internal/provider-auth-resume",
   init: "/internal/init",
   state: "/internal/state",
   snapshot: "/internal/snapshot",

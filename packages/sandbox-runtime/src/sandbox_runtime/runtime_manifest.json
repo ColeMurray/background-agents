@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v71-final-sandbox-preservation",
-  "generation": 71,
+  "runtimeVersion": "v72-provider-account-rotation",
+  "generation": 72,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 71,

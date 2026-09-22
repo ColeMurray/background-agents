@@ -54,9 +54,11 @@ describe("ProviderAuthControls menu", () => {
       "true"
     );
     expect(screen.queryByText(/acct_public/)).not.toBeInTheDocument();
-    expect(screen.getByRole("menuitemradio", { name: "Use default" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitemradio", { name: "Use installation policy" })
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "No account" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "API key" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ mode: "api_key" }));
   });
 
@@ -154,7 +156,7 @@ describe("ProviderAuthControls menu", () => {
     );
 
     expect(screen.getByRole("combobox")).toHaveTextContent(
-      "Use defaults when each run starts: No account"
+      "Use defaults when each run starts: API key"
     );
     expect(screen.queryByText(/Use defaults when each run starts: Team ChatGPT/)).toBeNull();
   });
@@ -211,7 +213,7 @@ describe("ProviderAuthControls menu", () => {
     });
     authenticationMenu.focus();
     fireEvent.keyDown(authenticationMenu, { key: "ArrowRight" });
-    const noAccount = await screen.findByRole("menuitemradio", { name: "No account" });
+    const noAccount = await screen.findByRole("menuitemradio", { name: "API key" });
 
     rerender(
       <ProviderAuthControls
@@ -256,7 +258,7 @@ describe("ProviderAuthControls harness capabilities", () => {
       />
     );
 
-    expect(screen.getByRole("combobox")).toHaveTextContent("Use default: No account");
+    expect(screen.getByRole("combobox")).toHaveTextContent("Use installation policy: API key");
     expect(
       screen.getByText(
         "OpenCode runs Anthropic on its API key; connected accounts are not offered."

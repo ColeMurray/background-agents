@@ -1,5 +1,19 @@
 import { parseBody } from "./body";
 import {
+  providerAccountSwitchRequestSchema,
+  providerAccountResumeRequestSchema,
+} from "@open-inspect/shared/types/provider-account-switch";
+import {
+  captureIssuanceGeneration,
+  verifyIssuanceFence,
+  StaleProviderBindingError,
+} from "../model-provider-accounts/issuance-fence";
+import { providerAccountRoutingRequestSchema } from "@open-inspect/shared/types/provider-account-routing";
+import {
+  ProviderAccountRoutingStore,
+  ProviderRoutingConflictError,
+} from "../db/provider-account-routing";
+import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
   completeProviderAuthorizationCodeRequestSchema,
@@ -453,9 +467,45 @@ modelProviderAccountRoutes.delete("/model-provider-accounts/:id", ACCOUNTS_MANAG
   })
 );
 modelProviderAccountRoutes.get("/model-provider-account-defaults", ACCOUNTS_READ, (c) =>
+  dispatch(c, async (_request, _env, _params, ctx) => {
+    try {
+      return json({ defaults: await new ProviderDefaultStore(ctx.db).list() });
+    } catch (cause) {
+      if (cause instanceof ProviderDefaultConstraintError) return error(cause.message, 409);
+      throw cause;
+    }
+  })
+);
+modelProviderAccountRoutes.get("/model-provider-account-routing", ACCOUNTS_READ, (c) =>
   dispatch(c, async (_request, _env, _params, ctx) =>
-    json({ defaults: await new ProviderDefaultStore(ctx.db).list() })
+    json({ policies: await new ProviderAccountRoutingStore(ctx.db).list() })
   )
+);
+modelProviderAccountRoutes.put("/model-provider-account-routing/:provider", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (request, env, params, ctx) => {
+    const parsedProvider = provider(params.provider);
+    if (parsedProvider instanceof Response) return parsedProvider;
+    const body = await parseBody(
+      request,
+      providerAccountRoutingRequestSchema,
+      "Invalid provider routing policy"
+    );
+    if (body instanceof Response) return body;
+    if (body.selection.mode === "random" && env.PROVIDER_ACCOUNT_RANDOM_ENABLED !== "true")
+      return error("Random provider allocation is temporarily unavailable", 409);
+    try {
+      return json(
+        await new ProviderAccountRoutingStore(ctx.db).set(
+          parsedProvider,
+          body,
+          ctx.principal.userId
+        )
+      );
+    } catch (cause) {
+      if (cause instanceof ProviderRoutingConflictError) return error(cause.message, 409);
+      throw cause;
+    }
+  })
 );
 modelProviderAccountRoutes.put("/model-provider-account-defaults/:provider", ACCOUNTS_MANAGE, (c) =>
   dispatch(c, async (request, _env, params, ctx) => {
@@ -504,7 +554,12 @@ modelProviderAccountRoutes.delete(
     dispatch(c, async (_request, _env, params, ctx) => {
       const parsedProvider = provider(params.provider);
       if (parsedProvider instanceof Response) return parsedProvider;
-      await new ProviderDefaultStore(ctx.db).remove(parsedProvider);
+      try {
+        await new ProviderDefaultStore(ctx.db).remove(parsedProvider);
+      } catch (cause) {
+        if (cause instanceof ProviderDefaultConstraintError) return error(cause.message, 409);
+        throw cause;
+      }
       return new Response(null, { status: 204 });
     })
 );
@@ -534,7 +589,7 @@ async function handleLegacyProviderAccess(
 }
 
 async function handleProviderAccess(
-  _request: Request,
+  request: Request,
   env: Env,
   params: { id: string; provider: string },
   ctx: SandboxRouteContext
@@ -590,8 +645,17 @@ async function handleProviderAccess(
     { now: () => Date.now(), createOwner: () => generateId() }
   );
   try {
-    return json(await broker.getAccess(binding.providerAccountId, parsedProvider));
+    const generation = await captureIssuanceGeneration(request, env, ctx, binding);
+    const access = await broker.getAccess(binding.providerAccountId, parsedProvider);
+    await verifyIssuanceFence(request, env, ctx, binding, generation, access.credentialVersion);
+    return json({
+      ...access,
+      bindingRevision: binding.bindingRevision ?? 1,
+      providerAccountId: binding.providerAccountId,
+      generation,
+    });
   } catch (cause) {
+    if (cause instanceof StaleProviderBindingError) return error(cause.message, 409);
     if (cause instanceof ModelProviderAccountBrokerError) {
       const status =
         cause.code === "account_not_found" ? 404 : cause.code === "upstream_retry_safe" ? 502 : 409;
@@ -605,4 +669,91 @@ modelProviderAccountRoutes.post(
   "/sessions/:id/provider-auth/:provider/access-token",
   admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, cacheControl: NO_STORE, authorization: NO_AUTHORIZATION }),
   (c) => dispatch(c, handleProviderAccess)
+);
+modelProviderAccountRoutes.get(
+  "/sessions/:id/provider-auth/:provider/binding",
+  admit({ ...SCM_AGNOSTIC_SANDBOX_ROUTE, cacheControl: NO_STORE, authorization: NO_AUTHORIZATION }),
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) => {
+      const parsed = provider(params.provider);
+      if (parsed instanceof Response) return parsed;
+      const binding = await new SessionIndexStore(ctx.db).getProviderAuthForProvider(
+        params.id,
+        parsed
+      );
+      if (!binding) return error("Session provider binding unavailable", 404);
+      try {
+        const generation = await captureIssuanceGeneration(request, env, ctx, binding, false);
+        return json({
+          bindingRevision: binding.bindingRevision ?? 1,
+          providerAccountId:
+            binding.authMode === "provider_account" ? binding.providerAccountId : null,
+          generation,
+        });
+      } catch {
+        return error("Stale sandbox generation", 409);
+      }
+    })
+);
+
+modelProviderAccountRoutes.get(
+  "/sessions/:id/provider-auth",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    cacheControl: PRIVATE_NO_STORE,
+    authorization: requirePermission("provider_accounts.read"),
+  }),
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) =>
+      createSessionRuntimeClient(env, ctx).fetch(params.id, SessionInternalPaths.providerAuth, {
+        headers: request.headers,
+      })
+    )
+);
+modelProviderAccountRoutes.post(
+  "/sessions/:id/provider-auth/:provider/switch",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    cacheControl: PRIVATE_NO_STORE,
+    authorization: requirePermission("sessions.lifecycle"),
+  }),
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) => {
+      const parsed = provider(params.provider);
+      if (parsed instanceof Response) return parsed;
+      const body = await parseBody(
+        request,
+        providerAccountSwitchRequestSchema,
+        "Invalid provider switch request"
+      );
+      if (body instanceof Response) return body;
+      return createSessionRuntimeClient(env, ctx).fetch(
+        params.id,
+        SessionInternalPaths.providerSwitch,
+        { method: "POST", headers: request.headers, body: JSON.stringify(body) },
+        `?provider=${parsed}`
+      );
+    })
+);
+modelProviderAccountRoutes.post(
+  "/sessions/:id/provider-auth/resume",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    cacheControl: PRIVATE_NO_STORE,
+    authorization: requirePermission("sessions.lifecycle"),
+  }),
+  (c) =>
+    dispatch(c, async (request, env, params, ctx) => {
+      const body = await parseBody(
+        request,
+        providerAccountResumeRequestSchema,
+        "Invalid provider resume request"
+      );
+      if (body instanceof Response) return body;
+      return createSessionRuntimeClient(env, ctx).fetch(
+        params.id,
+        SessionInternalPaths.providerResume,
+        { method: "POST", headers: request.headers, body: JSON.stringify(body) }
+      );
+    })
 );

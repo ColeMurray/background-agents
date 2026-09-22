@@ -74,17 +74,25 @@ describe("session provider auth persistence", () => {
 
     await expect(new SessionIndexStore(env.DB).getCompleteProviderAuth(sessionId)).resolves.toEqual(
       [
-        { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
+        {
+          provider: "anthropic",
+          authMode: "api_key",
+          selectionSource: "api_key_fallback",
+          bindingRevision: 1,
+        },
         {
           provider: "openai",
           authMode: "provider_account",
           providerAccountId: FIRST_ACCOUNT_ID,
           selectionSource: "installation_default",
+          bindingRevision: 1,
+          allocationPolicyRevision: 1,
         },
         {
           provider: "xai",
           authMode: "legacy_scoped_oauth",
           selectionSource: "legacy_fallback",
+          bindingRevision: 1,
         },
       ]
     );

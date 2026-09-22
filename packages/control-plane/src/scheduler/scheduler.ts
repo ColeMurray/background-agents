@@ -75,6 +75,9 @@ import { SessionInternalPaths } from "../session/contracts";
 import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
+import { ProviderAccountRoutingStore } from "../db/provider-account-routing";
+import type { ProviderAccountRouting } from "@open-inspect/shared/types/provider-account-routing";
+import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/timeouts";
@@ -498,16 +501,15 @@ export class Scheduler {
     // for this firing: edits made after the conditional insert cannot change which
     // account an admitted child uses.
     let providerAuthSnapshot:
-      | { providerAuth: SessionModelProviderAuthInput[] }
-      | { error: unknown } = { providerAuth: [] };
+      | { explicit: ModelProviderSelections; policies: ProviderAccountRouting[] }
+      | { error: unknown } = { explicit: {}, policies: [] };
     if (launchCandidates.length > 0) {
       try {
         providerAuthSnapshot = {
-          providerAuth: await resolveAutomationProviderAuth(
-            this.db,
-            automation.id,
-            getValidHarnessOrDefault(automation.harness)
+          explicit: toProviderSelections(
+            await new AutomationModelProviderAuthStore(this.db).list(automation.id)
           ),
+          policies: await new ProviderAccountRoutingStore(this.db).list(),
         };
       } catch (error) {
         providerAuthSnapshot = { error };
@@ -604,7 +606,20 @@ export class Scheduler {
           store,
           automation,
           child,
-          providerAuthSnapshot.providerAuth,
+          (
+            await resolveSessionProviderAuth(this.db, {
+              sessionId,
+              explicit: providerAuthSnapshot.explicit,
+              policies: providerAuthSnapshot.policies,
+              unattended: true,
+              harness: getValidHarnessOrDefault(automation.harness),
+              randomEnabled: this.env.PROVIDER_ACCOUNT_RANDOM_ENABLED === "true",
+            })
+          ).map((auth) =>
+            auth.selectionSource === "explicit"
+              ? { ...auth, selectionSource: "automation_pin" }
+              : auth
+          ),
           sessionId,
           executionPrincipal,
           claimedAt

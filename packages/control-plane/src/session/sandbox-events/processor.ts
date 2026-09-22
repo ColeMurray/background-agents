@@ -20,6 +20,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
   "sandbox_generation_ready",
   "preservation_prepared",
+  "provider_account_switch",
 ]);
 
 /**
@@ -42,6 +43,10 @@ export class SessionSandboxEventProcessor {
     private readonly shutdown?: {
       generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
       prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+    },
+    private readonly providerSwitch?: {
+      ready(supported: ("openai" | "xai" | "anthropic")[]): Promise<void>;
+      event(event: Extract<SandboxEvent, { type: "provider_account_switch" }>): Promise<void>;
     }
   ) {}
 
@@ -70,6 +75,12 @@ export class SessionSandboxEventProcessor {
 
   private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
+      case "provider_account_changed":
+        // This audit fact is authored only by the binding receipt outbox.
+        return;
+      case "provider_account_switch":
+        await this.providerSwitch?.event(event);
+        return;
       case "sandbox_generation_ready":
         if (!this.shutdown) {
           throw new Error("Sandbox graceful shutdown event handlers are not configured");
@@ -90,6 +101,9 @@ export class SessionSandboxEventProcessor {
         return;
       case "ready":
         await this.runtime.handleReady(event, context);
+        await this.providerSwitch?.ready(
+          event.providerAccountSwitchV1 === true ? (event.providerAccountSwitchProviders ?? []) : []
+        );
         return;
       case "boot_progress":
         this.runtime.handleBootProgress(event, context);

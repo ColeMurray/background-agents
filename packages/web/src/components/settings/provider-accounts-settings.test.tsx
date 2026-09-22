@@ -78,12 +78,24 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
     providers,
     accounts: accountsResult,
     defaults: defaultsResult,
+    policies: providers.map(({ provider }) => {
+      const existing = defaultsResult.find((item) => item.provider === provider);
+      return {
+        provider,
+        policyRevision: existing ? 1 : 0,
+        unattendedMode: existing?.unattendedMode ?? "provider_account",
+        selection: existing
+          ? { mode: "fixed", accountId: existing.providerAccountId }
+          : { mode: "unconfigured" },
+      };
+    }),
     loading: false,
     error: undefined,
     refresh,
   }),
   useLegacyProviderCredentials: () => legacyCredentialsResult,
   runProviderAccountAction: (...args: unknown[]) => runAction(...args),
+  setProviderAccountRouting: (...args: unknown[]) => setDefault(...args),
   archiveProviderAccount: vi.fn(),
   connectProviderAccount: (...args: unknown[]) => connectAccount(...args),
   reconnectProviderAccount: (...args: unknown[]) => reconnectAccount(...args),
@@ -305,7 +317,9 @@ describe("ProviderAccountsSettings", () => {
 
     expect(screen.getByRole("heading", { name: "Connected accounts" })).toBeInTheDocument();
     expect(screen.getByText("Team ChatGPT")).toBeInTheDocument();
-    expect(screen.getByText("SuperGrok")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "xai new-session account selection" })
+    ).toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
       button: 0,
@@ -361,7 +375,9 @@ describe("ProviderAccountsSettings", () => {
   it("starts Claude through the authorization-code dialog from the provider picker", async () => {
     render(<ProviderAccountsSettings />);
 
-    expect(screen.getByText("Claude")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "anthropic new-session account selection" })
+    ).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add account" }), {
       button: 0,
       ctrlKey: false,
@@ -514,18 +530,9 @@ describe("ProviderAccountsSettings", () => {
   it("shows an actionable empty state when automated sessions have no default", () => {
     render(<ProviderAccountsSettings />);
 
-    expect(screen.getByRole("heading", { name: "Automated sessions" })).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Choose credentials for sessions started by automations, bots, or other agents."
-      )
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
-    expect(screen.getAllByText("No default account selected")).toHaveLength(3);
-    expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(3);
-    expect(screen.getAllByTitle("OpenAI")).not.toHaveLength(0);
-    expect(screen.getAllByTitle("Grok")).not.toHaveLength(0);
-    expect(screen.getAllByTitle("Anthropic")).not.toHaveLength(0);
+    expect(screen.getAllByLabelText("Selection")).toHaveLength(3);
+    expect(screen.getAllByLabelText("Automated authentication")).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Save selection policy" })).toHaveLength(3);
   });
 
   it("names the effective account used by automated sessions", () => {
@@ -542,9 +549,8 @@ describe("ProviderAccountsSettings", () => {
     ];
     render(<ProviderAccountsSettings />);
 
-    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
-      "Use default: Team ChatGPT"
-    );
+    expect(screen.getAllByLabelText("Automated authentication")[0]).toHaveValue("provider_account");
+    expect(screen.getByRole("radio", { name: "Team ChatGPT" })).toBeChecked();
     expect(screen.getByText("Default for automation")).toBeInTheDocument();
   });
 
@@ -562,9 +568,7 @@ describe("ProviderAccountsSettings", () => {
     ];
     render(<ProviderAccountsSettings />);
 
-    expect(screen.getByLabelText("Automated authentication")).toHaveTextContent(
-      "No account (API key)"
-    );
+    expect(screen.getAllByLabelText("Automated authentication")[0]).toHaveValue("api_key");
     expect(screen.queryByText("Default for automation")).not.toBeInTheDocument();
   });
 
@@ -579,7 +583,11 @@ describe("ProviderAccountsSettings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Make default" }));
 
     await waitFor(() => {
-      expect(setDefault).toHaveBeenCalledWith("openai", account.id, "provider_account");
+      expect(setDefault).toHaveBeenCalledWith("openai", {
+        expectedPolicyRevision: 0,
+        selection: { mode: "fixed", accountId: account.id },
+        unattendedMode: "provider_account",
+      });
     });
   });
 

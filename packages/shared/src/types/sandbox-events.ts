@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { providerAccountSwitchEventSchema } from "./provider-account-switch";
 import { harnessIdSchema } from "../harnesses";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
@@ -94,6 +95,18 @@ export const sandboxGenerationSchema = z.object({
 
 // Sandbox events from Modal or synthesized by the control plane.
 export const sandboxEventSchema = z.discriminatedUnion("type", [
+  // Control-plane fact, emitted only after the global binding receipt commits.
+  z.object({
+    type: z.literal("provider_account_changed"),
+    operationId: z.string(),
+    provider: z.enum(["openai", "xai", "anthropic"]),
+    sourceAccountId: z.string(),
+    targetAccountId: z.string(),
+    bindingRevision: z.number().int().positive(),
+    actorId: z.string(),
+    timestamp: z.number(),
+  }),
+  providerAccountSwitchEventSchema.extend(sandboxEventBaseSchema.shape),
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
   }),
@@ -108,6 +121,11 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
     preservationProtocolVersion: z.literal(1).optional(),
+    providerAccountSwitchV1: z.boolean().optional(),
+    providerAccountSwitchProviders: z
+      .array(z.enum(["openai", "xai", "anthropic"]))
+      .max(3)
+      .optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   sandboxEventBaseSchema.extend({

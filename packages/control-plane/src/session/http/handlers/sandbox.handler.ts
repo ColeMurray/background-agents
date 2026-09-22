@@ -289,9 +289,27 @@ export class SandboxHandler {
       return Response.json({ valid: false, error: "Invalid token" }, { status: 401 });
     }
 
+    const current = this.sandboxRepository.getSandbox();
+    if (
+      !current ||
+      current.id !== sandbox.id ||
+      current.created_at !== sandbox.created_at ||
+      current.auth_token_hash !== sandbox.auth_token_hash ||
+      current.auth_token !== sandbox.auth_token ||
+      current.modal_sandbox_id !== sandbox.modal_sandbox_id ||
+      current.fenced ||
+      isSandboxReconnectBlockedStatus(current.status)
+    ) {
+      return Response.json({ valid: false, error: "Stale sandbox generation" }, { status: 403 });
+    }
+
     log.info("Sandbox token verified successfully");
     return Response.json(
-      { valid: true, sandboxId: sandbox.modal_sandbox_id ?? sandbox.id },
+      {
+        valid: true,
+        sandboxId: sandbox.modal_sandbox_id ?? sandbox.id,
+        createdAt: sandbox.created_at,
+      },
       { status: 200 }
     );
   }

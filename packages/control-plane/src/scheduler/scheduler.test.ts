@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type * as AuthCrypto from "../auth/crypto";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -34,6 +35,20 @@ vi.mock("../source-control", () => ({
 
 vi.mock("../session/provider-account-resolution", () => ({
   resolveSessionProviderAuth: mockResolveSessionProviderAuth,
+}));
+vi.mock("../db/provider-account-routing", () => ({
+  ProviderAccountRoutingStore: vi.fn().mockImplementation(function () {
+    return {
+      list: vi.fn(async () =>
+        ["openai", "xai", "anthropic"].map((provider) => ({
+          provider,
+          policyRevision: 0,
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        }))
+      ),
+    };
+  }),
 }));
 
 vi.mock("../automation/authorization-guard", async (importOriginal) => {
@@ -199,7 +214,8 @@ vi.mock("../db/slack-channel-store", () => ({
   }),
 }));
 
-vi.mock("../auth/crypto", () => ({
+vi.mock("../auth/crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthCrypto>()),
   generateId: vi.fn(() => `id-${Math.random().toString(36).slice(2, 8)}`),
 }));
 
@@ -535,6 +551,11 @@ describe("Scheduler", () => {
       const scheduler = createScheduler(env);
       const result = await scheduler.tick();
 
+      expect(
+        mockStore.updateRun.mock.calls.filter(
+          ([, update]) => (update as { status?: string }).status === "failed"
+        )
+      ).toEqual([]);
       expect(result).toMatchObject({ processed: 1 });
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
@@ -658,7 +679,7 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledTimes(2);
     });
 
-    it("resolves one provider auth snapshot for every child in a fan-out invocation", async () => {
+    it("allocates independently for each claimed child using one frozen policy snapshot", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [
         repositoryRow("auto-1", { repo_name: "web-app" }),
@@ -691,11 +712,17 @@ describe("Scheduler", () => {
 
       const scheduler = createScheduler();
       await scheduler.tick();
-      expect(mockResolveSessionProviderAuth).toHaveBeenCalledTimes(1);
+      expect(mockResolveSessionProviderAuth).toHaveBeenCalledTimes(2);
+      expect(mockResolveSessionProviderAuth.mock.calls[0][1].policies).toEqual(
+        mockResolveSessionProviderAuth.mock.calls[1][1].policies
+      );
       expect(mockSessionStoreCreate).toHaveBeenCalledTimes(2);
       expect(mockSessionStoreCreate.mock.calls.map(([session]) => session.providerAuth)).toEqual([
         invocationProviderAuth,
-        invocationProviderAuth,
+        [
+          { ...invocationProviderAuth[0], providerAccountId: "b".repeat(32) },
+          invocationProviderAuth[1],
+        ],
       ]);
     });
 

@@ -17,6 +17,7 @@ from .constants import (
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
 )
 from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
+from .provider_switch_control import HarnessSwitchControl
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 
@@ -77,6 +78,7 @@ class SandboxSupervisor:
         # Supervisor half of the harness seam: staging plus any resident
         # vendor process (``opencode serve`` today; nothing for claude).
         self.harness_process = harness_process
+        self.provider_switch_control = HarnessSwitchControl(harness_process, config.sandbox_token)
         self.agent_bridge = agent_bridge
         self.code_server = code_server
         self.web_terminal = web_terminal
@@ -176,6 +178,15 @@ class SandboxSupervisor:
         return True
 
     async def _handle_harness_process_exit(self, restart_count: int) -> int:
+        async with self.provider_switch_control.lock:
+            if (
+                self.provider_switch_control.operation is not None
+                and not self.provider_switch_control.applied
+            ):
+                return restart_count
+            return await self._restart_crashed_harness(restart_count)
+
+    async def _restart_crashed_harness(self, restart_count: int) -> int:
         exit_code = self.harness_process.exit_code()
         if exit_code is None:
             return restart_count
@@ -623,7 +634,11 @@ class SandboxSupervisor:
             await self._stop_bridge_watch()
             if self._bridge_watch_failure is not None:
                 raise self._bridge_watch_failure
-            await self.monitor_processes()
+            await self.provider_switch_control.start()
+            try:
+                await self.monitor_processes()
+            finally:
+                await self.provider_switch_control.close()
         except BootExecutionCancelled:
             event = (
                 "image_build.cancelled"

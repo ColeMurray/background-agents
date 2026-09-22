@@ -9,6 +9,7 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
+import { hashToken } from "../auth/crypto";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
@@ -21,6 +22,18 @@ const logger = createLogger("session-init");
 
 function hasBranchContext(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function canonicalIntent(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalIntent);
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, canonicalIntent(item)])
+    );
+  return value;
 }
 
 /**
@@ -164,7 +177,31 @@ export async function initializeSession(
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
-  await sessionStore.create({
+  const creationIntentHash = await hashToken(
+    JSON.stringify(
+      canonicalIntent({
+        ...input,
+        managedSkillsManifest: input.managedSkillsManifest?.selection,
+        providerAuth: [...input.providerAuth]
+          .sort((a, b) => a.provider.localeCompare(b.provider))
+          .map((auth) => ({
+            provider: auth.provider,
+            authMode: auth.authMode,
+            selectionSource: auth.selectionSource,
+            ...(auth.inheritedFromSessionId
+              ? { inheritedFromSessionId: auth.inheritedFromSessionId }
+              : auth.selectionSource === "explicit" || auth.selectionSource === "automation_pin"
+                ? {
+                    providerAccountId:
+                      auth.authMode === "provider_account" ? auth.providerAccountId : undefined,
+                  }
+                : {}),
+          })),
+      })
+    )
+  );
+  const creation = await sessionStore.create({
+    creationIntentHash,
     id: input.sessionId,
     title: input.title || null,
     repoOwner: input.repoOwner,
@@ -228,12 +265,12 @@ export async function initializeSession(
       }
     );
   } catch (transportError) {
-    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
+    if (creation !== "reused") await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
     throw transportError;
   }
 
   if (!initResponse.ok) {
-    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
+    if (creation !== "reused") await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
     const errorText = await initResponse.text().catch(() => "unknown");
     logger.error("DO init failed", {
       session_id: input.sessionId,

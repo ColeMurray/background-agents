@@ -12,6 +12,8 @@ export type ProviderUnattendedMode = ProviderAuthMode;
 export type ProviderDefault = ModelProviderAccountDefault;
 
 interface DefaultRow {
+  configured: number;
+  selection_mode: string;
   provider: string;
   provider_account_id: string;
   unattended_mode: ProviderUnattendedMode;
@@ -22,6 +24,7 @@ interface DefaultRow {
 }
 
 function toDefault(row: DefaultRow): ProviderDefault {
+  if (row.selection_mode !== "fixed") throw new ProviderDefaultUpgradeRequiredError();
   assertModelProviderId(row.provider);
   return {
     provider: row.provider,
@@ -35,6 +38,11 @@ function toDefault(row: DefaultRow): ProviderDefault {
 }
 
 export class ProviderDefaultConstraintError extends Error {}
+export class ProviderDefaultUpgradeRequiredError extends ProviderDefaultConstraintError {
+  constructor() {
+    super("provider_routing_upgrade_required: use provider account routing");
+  }
+}
 
 export class ProviderDefaultStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -58,11 +66,16 @@ export class ProviderDefaultStore {
            provider_account_id = excluded.provider_account_id,
            unattended_mode = excluded.unattended_mode,
            updated_by = excluded.updated_by,
-           updated_at = excluded.updated_at`
+           updated_at = excluded.updated_at,
+           configured = 1,
+           selection_mode = 'fixed',
+           policy_revision = model_provider_account_defaults.policy_revision + 1
+         WHERE model_provider_account_defaults.configured = 0 OR model_provider_account_defaults.selection_mode = 'fixed'`
       )
       .bind(provider, unattendedMode, actorId, actorId, now, now, providerAccountId, provider)
       .run();
     if (result.meta.changes === 0) {
+      await this.get(provider);
       throw new ProviderDefaultConstraintError(`Default requires an active ${provider} account`);
     }
   }
@@ -83,13 +96,17 @@ export class ProviderDefaultStore {
          FROM model_provider_accounts
          WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
            AND NOT EXISTS (
-             SELECT 1 FROM model_provider_account_defaults WHERE provider = ?
+             SELECT 1 FROM model_provider_account_defaults WHERE provider = ? AND configured = 1
            )
            AND NOT EXISTS (
              SELECT 1 FROM model_provider_accounts
              WHERE provider = ? AND status = 'active' AND archived_at IS NULL AND id <> ?
            )
-         ON CONFLICT(provider) DO NOTHING`
+         ON CONFLICT(provider) DO UPDATE SET
+           provider_account_id = excluded.provider_account_id, unattended_mode = excluded.unattended_mode,
+           configured = 1, selection_mode = 'fixed', policy_revision = model_provider_account_defaults.policy_revision + 1,
+           updated_by = excluded.updated_by, updated_at = excluded.updated_at
+         WHERE model_provider_account_defaults.configured = 0`
       )
       .bind(
         provider,
@@ -111,22 +128,28 @@ export class ProviderDefaultStore {
       .prepare("SELECT * FROM model_provider_account_defaults WHERE provider = ?")
       .bind(provider)
       .first<DefaultRow>();
-    return row ? toDefault(row) : null;
+    return row?.configured ? toDefault(row) : null;
   }
 
   async list(): Promise<ProviderDefault[]> {
     const rows = await this.db
-      .prepare("SELECT * FROM model_provider_account_defaults ORDER BY provider")
+      .prepare(
+        "SELECT * FROM model_provider_account_defaults WHERE configured = 1 ORDER BY provider"
+      )
       .all<DefaultRow>();
     return rows.results.map(toDefault);
   }
 
   async remove(provider: ModelProviderId): Promise<boolean> {
     assertModelProviderId(provider);
+    await this.get(provider);
     const result = await this.db
-      .prepare("DELETE FROM model_provider_account_defaults WHERE provider = ?")
+      .prepare(
+        "UPDATE model_provider_account_defaults SET configured = 0, provider_account_id = NULL, policy_revision = policy_revision + 1 WHERE provider = ? AND configured = 1 AND selection_mode = 'fixed'"
+      )
       .bind(provider)
       .run();
+    if (result.meta.changes === 0) await this.get(provider);
     return result.meta.changes > 0;
   }
 }

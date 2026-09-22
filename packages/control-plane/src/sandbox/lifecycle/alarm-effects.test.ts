@@ -196,7 +196,12 @@ describe("cross-path alarm effects", () => {
       expect(result).toEqual(
         trigger === "heartbeat"
           ? "sandbox_terminated"
-          : { kind: "boot_budget_exceeded", reason: sandbox.last_spawn_error }
+          : {
+              kind: "boot_budget_exceeded",
+              reason: sandbox.last_spawn_error,
+              owner: undefined,
+              generation: { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at },
+            }
       );
       expect(sandbox.spawn_failure_count).toBe(3);
       expect(sandbox.last_spawn_failure).toBe(now);

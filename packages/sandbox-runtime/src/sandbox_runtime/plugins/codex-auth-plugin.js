@@ -55,6 +55,7 @@ async function ensureAccessToken(getAuth, setAuth) {
 }
 
 export const CodexAuthProxy = async (input) => {
+  await tokenBroker.prepareSwitch();
   return {
     auth: {
       provider: "openai",
@@ -133,6 +134,7 @@ export const CodexAuthProxy = async (input) => {
 
             // Replace the dummy API key without discarding source Request options.
             proxiedRequest.headers.set("authorization", `Bearer ${accessToken}`);
+            proxiedRequest.headers.delete("ChatGPT-Account-Id");
             if (accountId) proxiedRequest.headers.set("ChatGPT-Account-Id", accountId);
 
             return fetch(proxiedRequest);

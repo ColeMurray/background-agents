@@ -40,6 +40,8 @@ describe("boot budget alarm effects", () => {
 
     expect(result).toEqual({
       kind: "boot_budget_exceeded",
+      owner: undefined,
+      generation: { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at },
       reason: expect.stringContaining("SANDBOX_BOOT_TIMEOUT_MS"),
     });
     // Shutdown must go out while the socket is adoptable; sends refuse failed rows.
@@ -117,7 +119,7 @@ describe("boot budget alarm effects", () => {
       await pending;
     }
 
-    await expect(pending).resolves.toEqual({ kind: "boot_budget_exceeded", reason });
+    await expect(pending).resolves.toMatchObject({ kind: "boot_budget_exceeded", reason });
     expect(h.manager.isSpawning()).toBe(false);
     await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
     expect(h.storage.incrementCircuitBreakerFailure).toHaveBeenCalledOnce();
@@ -147,6 +149,8 @@ describe("boot budget alarm effects", () => {
 
       expect(result).toEqual({
         kind: "boot_budget_exceeded",
+        owner: undefined,
+        generation: { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at },
         reason: sandbox.last_spawn_error,
       });
 

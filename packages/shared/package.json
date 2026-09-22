@@ -134,6 +134,14 @@
       "import": "./dist/types/provider-accounts.js",
       "types": "./dist/types/provider-accounts.d.ts"
     },
+    "./types/provider-account-routing": {
+      "import": "./dist/types/provider-account-routing.js",
+      "types": "./dist/types/provider-account-routing.d.ts"
+    },
+    "./types/provider-account-switch": {
+      "import": "./dist/types/provider-account-switch.js",
+      "types": "./dist/types/provider-account-switch.d.ts"
+    },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
       "types": "./dist/types/websocket.d.ts"

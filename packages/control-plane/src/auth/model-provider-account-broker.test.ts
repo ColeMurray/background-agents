@@ -169,6 +169,7 @@ describe("ModelProviderAccountBroker", () => {
 
     await expect(broker.getAccess("account-1", "openai")).resolves.toMatchObject({
       accessToken: "cached",
+      credentialVersion: 1,
       providerMetadata: { accountId: "external-1" },
     });
     expect(refresh).not.toHaveBeenCalled();
@@ -198,7 +199,10 @@ describe("ModelProviderAccountBroker", () => {
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     release();
 
-    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ accessToken: "access", credentialVersion: 2 }),
+      expect.objectContaining({ accessToken: "access", credentialVersion: 2 }),
+    ]);
     expect(stores.credentials.tryBeginExchange).toHaveBeenCalledTimes(1);
   });
 
@@ -215,6 +219,7 @@ describe("ModelProviderAccountBroker", () => {
 
     await expect(broker.getAccess("account-1", "openai")).resolves.toMatchObject({
       accessToken: "winner",
+      credentialVersion: 2,
     });
     expect(refresh).not.toHaveBeenCalled();
     expect(stores.credentials.readCredentialState).toHaveBeenCalledTimes(2);

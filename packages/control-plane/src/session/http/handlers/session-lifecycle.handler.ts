@@ -68,7 +68,8 @@ export class SessionLifecycleHandler {
     private readonly titleService: SessionTitleService,
     private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
-    private readonly cancelSession: () => Promise<void>
+    private readonly cancelSession: () => Promise<void>,
+    private readonly fenceRecovery: () => void = () => {}
   ) {}
 
   getState(): Response {
@@ -162,6 +163,7 @@ export class SessionLifecycleHandler {
       });
     }
 
+    this.fenceRecovery();
     await this.statusService.transition("archived");
     try {
       await this.statusService.confirmIndexStatus("archived");

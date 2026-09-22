@@ -57,6 +57,9 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
 );`;
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS provider_account_recovery (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sandbox_preservation (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   state TEXT NOT NULL
@@ -722,6 +725,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
     )`,
+  },
+  {
+    id: 55,
+    description: "Persist provider account recovery ownership",
+    run: `CREATE TABLE IF NOT EXISTS provider_account_recovery (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL)`,
   },
 ];
 

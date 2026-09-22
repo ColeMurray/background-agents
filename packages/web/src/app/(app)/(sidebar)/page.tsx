@@ -239,7 +239,8 @@ export default function Home() {
   const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
     availableProviderSelections,
     providerAccounts.defaults,
-    providerAccounts.accounts
+    providerAccounts.accounts,
+    providerAccounts.policies
   );
   const {
     sessionId: pendingSessionId,
@@ -658,6 +659,9 @@ function HomeContent({
 
                     {selectedProvider && (
                       <ProviderAuthControls
+                        policy={providerAccounts.policies.find(
+                          (policy) => policy.provider === selectedProvider
+                        )}
                         harness={harness}
                         variant="menu"
                         provider={selectedProvider}
