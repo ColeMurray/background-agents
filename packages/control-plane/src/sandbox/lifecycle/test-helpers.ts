@@ -411,6 +411,7 @@ export function createUnmanagedShutdown() {
     recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
     isHolding: vi.fn(() => false),
     requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
+    preserveBeforeTermination: vi.fn(async () => undefined),
     captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
       outcome: "saved",
       imageId: "snapshot-img-123",
@@ -450,6 +451,8 @@ export function createCheckpointShutdown(
       getSession: () => storage.getSession(),
       transaction: <T>(operation: () => T): T => operation(),
     },
+    messages: { getProcessingMessage: () => null },
+    failures: { record: vi.fn(), deliver: vi.fn() },
     messenger,
     sockets: { getSandboxSocket: () => null },
     alarm: createMockAlarmScheduler(),
@@ -461,6 +464,9 @@ export function createCheckpointShutdown(
   return {
     ...createUnmanagedShutdown(),
     captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    preserveBeforeTermination: (reason) => coordinator.preserveBeforeTermination(reason),
+    isHolding: () => coordinator.isHolding(),
+    admissionDecision: () => coordinator.admissionDecision(),
   };
 }
 

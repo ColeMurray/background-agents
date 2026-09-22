@@ -48,6 +48,14 @@ Ordinary and terminal capture share ownership of provider invocation, outcome cl
 recording, and operation-scoped settlement. The public operation reports domain outcomes rather than
 exposing a generic promise runner and a caller-controlled `finish()`.
 
+An unreachable serving execution may need emergency retirement without runtime preparation. The same
+shutdown owner captures crash-recovery state and commits its receipt and snapshot projection
+atomically before retiring the source. This does not assert quiescence: continuation requires
+explicit recovery. Legacy records are initialized only when an operation needs ownership, not by
+adopting healthy running executions after deployment. Snapshot incompatibility blocks execution
+without discarding the retained reference. See [sandbox upgrades](../SANDBOX_UPGRADES.md) for the
+one-time rollout procedure and its limits.
+
 A provider timeout, transport exception, ambiguous unsuccessful response, or lost response is
 unknown unless the provider contract establishes a stronger outcome. Aborting a local request or
 expiring a timer does not establish remote cancellation. Stale results cannot publish a checkpoint

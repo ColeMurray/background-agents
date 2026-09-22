@@ -546,7 +546,7 @@ describe("SandboxShutdownCoordinator", () => {
       phase: "saved",
       receipt: { kind: "snapshot", artifactId: "image-1", provider: "modal" },
     });
-    expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("snapshot-recorded"));
+    expect(f.calls.indexOf("phase:retiring")).toBeLessThan(f.calls.indexOf("provider-stop"));
     expect(f.calls.indexOf("snapshot-recorded")).toBeLessThan(f.calls.indexOf("provider-stop"));
     expect(f.calls).toContain("access-retired");
   });
