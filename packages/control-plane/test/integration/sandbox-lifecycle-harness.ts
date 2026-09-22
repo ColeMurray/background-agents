@@ -114,13 +114,14 @@ export function realLifecycleHarness(
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl: "https://control-plane.test",
       model: "anthropic/claude-sonnet-4-5",
-      recordWarning: (message: string) =>
+      recordWarning: (message: string, eventId: string) =>
         recordSessionWarning(
           new EventRepository(durableState.storage.sql, (operation) =>
             durableState.storage.transactionSync(operation)
           ),
           { broadcast: (event) => lifecycleAnnouncements.push(event) },
-          message
+          message,
+          eventId
         ),
     }
   );

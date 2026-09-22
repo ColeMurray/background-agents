@@ -41,6 +41,61 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
+  it("does not duplicate the continuity warning when replacement reservation is retried", async () => {
+    const stub = await servingSession();
+    await queryDO(stub, "UPDATE sandbox SET status = 'stopped', last_heartbeat = ?", Date.now());
+    await runInSessionDO(stub, async (instance, durableState) => {
+      durableState.storage.sql.exec(
+        "CREATE TRIGGER reject_reservation BEFORE INSERT ON sandbox_preservation BEGIN SELECT RAISE(FAIL, 'reservation unavailable'); END"
+      );
+      const provider = snapshotProvider();
+      await realLifecycleHarness(instance, durableState, provider).manager.spawnSandbox();
+      expect(provider.stopSandbox).not.toHaveBeenCalled();
+      durableState.storage.sql.exec("DROP TRIGGER reject_reservation");
+      await realLifecycleHarness(instance, durableState, provider).manager.spawnSandbox();
+      expect(provider.createSandbox).toHaveBeenCalledOnce();
+      expect(
+        durableState.storage.sql
+          .exec("SELECT COUNT(*) AS count FROM events WHERE type = 'warning'")
+          .toArray()
+      ).toEqual([{ count: 1 }]);
+    });
+  });
+
+  it("persists the continuity warning before an interrupted replacement can lose its source metadata", async () => {
+    const stub = await servingSession();
+    await queryDO(stub, "UPDATE sandbox SET status = 'stopped', last_heartbeat = ?", Date.now());
+    await runInSessionDO(stub, async (instance, durableState) => {
+      let finishStop!: () => void;
+      const provider = snapshotProvider({
+        stopSandbox: vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            finishStop = resolve;
+          });
+          return { success: true };
+        }),
+      });
+      const initial = realLifecycleHarness(instance, durableState, provider);
+      const spawning = initial.manager.spawnSandbox();
+      await vi.waitFor(() => expect(provider.stopSandbox).toHaveBeenCalledOnce());
+      expect(
+        durableState.storage.sql
+          .exec("SELECT COUNT(*) AS count FROM events WHERE type = 'warning'")
+          .toArray()
+      ).toEqual([{ count: 1 }]);
+      expect(initial.sandbox.getSandbox()?.last_heartbeat).toBeNull();
+      const restarted = realLifecycleHarness(instance, durableState, provider);
+      await restarted.manager.spawnSandbox();
+      finishStop();
+      await spawning;
+      expect(
+        durableState.storage.sql
+          .exec("SELECT COUNT(*) AS count FROM events WHERE type = 'warning'")
+          .toArray()
+      ).toEqual([{ count: 1 }]);
+    });
+  });
+
   it.each([
     ["snapshot", "connecting", "fatal"],
     ["snapshot", "ready", "fatal"],

@@ -335,7 +335,7 @@ interface AlarmContext {
  */
 export interface SandboxLifecycleConfig extends AlarmPolicyConfig {
   /** Persist a user-visible lifecycle warning in the session event stream. */
-  recordWarning?: (message: string) => void;
+  recordWarning?: (message: string, eventId: string) => void;
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
@@ -709,23 +709,15 @@ export class SandboxLifecycleManager
 
       const now = Date.now();
       const sessionId = session.session_name || session.id;
-      const discardingState = this.storage.getSandbox()?.last_heartbeat != null;
-      const hasRepository = sessionHasRepository(session);
-      const reserved = this.spawnGeneration(session, now);
-      generation = reserved;
-      let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
-        preserveProviderObjectId: true,
-        shutdownPolicy: shutdownPolicyForLaunch("new", null),
-      });
-
-      await this.stopPriorProviderSandbox();
-      if (discardingState) {
+      const previous = this.storage.getSandbox();
+      if (previous?.last_heartbeat != null) {
         this.log.warn("Replacing a sandbox without restoring its state", {
           event: "sandbox.state_discarded",
         });
         try {
           this.config.recordWarning?.(
-            "The previous sandbox's state could not be restored. Uncommitted changes and earlier conversation context are not carried over."
+            "A fresh sandbox was requested without restoring the previous state. Uncommitted changes and earlier conversation context will not be carried over.",
+            `sandbox-state-discarded:${previous.modal_sandbox_id}:${previous.created_at}`
           );
         } catch (error) {
           this.log.warn("Could not record sandbox continuity warning", {
@@ -734,6 +726,15 @@ export class SandboxLifecycleManager
           });
         }
       }
+
+      const hasRepository = sessionHasRepository(session);
+      const reserved = this.spawnGeneration(session, now);
+      generation = reserved;
+      let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
+        preserveProviderObjectId: true,
+        shutdownPolicy: shutdownPolicyForLaunch("new", null),
+      });
+      await this.stopPriorProviderSandbox();
 
       const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);

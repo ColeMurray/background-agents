@@ -6,7 +6,8 @@ import type { SessionMessenger } from "./messenger";
 export function recordSessionWarning(
   events: EventRepository,
   messenger: Pick<SessionMessenger, "broadcast">,
-  message: string
+  message: string,
+  eventId: string
 ): void {
   const now = Date.now();
   const event: Extract<SandboxEvent, { type: "warning" }> = {
@@ -15,12 +16,12 @@ export function recordSessionWarning(
     message,
     timestamp: now / 1000,
   };
-  events.createEvent({
-    id: crypto.randomUUID(),
+  const created = events.createEventIfAbsent({
+    id: eventId,
     type: "warning",
     data: JSON.stringify(event),
     messageId: null,
     createdAt: now,
   });
-  messenger.broadcast({ type: "sandbox_event", event });
+  if (created) messenger.broadcast({ type: "sandbox_event", event });
 }

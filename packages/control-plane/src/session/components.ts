@@ -465,7 +465,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
-    recordWarning: (message) => recordSessionWarning(eventRepository, messenger, message),
+    recordWarning: (message, eventId) =>
+      recordSessionWarning(eventRepository, messenger, message, eventId),
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
@@ -985,7 +986,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 }
 
 interface LifecycleManagerDeps {
-  recordWarning: (message: string) => void;
+  recordWarning: (message: string, eventId: string) => void;
   shutdown: SandboxShutdownLifecycle;
   provider: SandboxProvider;
   env: Env;
