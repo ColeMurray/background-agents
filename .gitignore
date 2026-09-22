@@ -43,6 +43,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # Test
+.preview/
+playwright-report/
+test-results/
 coverage/
 .nyc_output/
 

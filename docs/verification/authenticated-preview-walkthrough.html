@@ -1,0 +1,1865 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A plain-language tour of OpenInspect's signed-in local preview: what runs, how access works, and what was checked."
+    />
+    <title>A real app. A safe place to test. — OpenInspect</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f7f0;
+        --white: #fff;
+        --ink: #18342b;
+        --muted: #54675f;
+        --line: #d6ddd4;
+        --green: #206649;
+        --mint: #e1eee2;
+        --lime: #d9f49b;
+        --amber: #865019;
+        --sand: #faf0df;
+        --red: #9b3d37;
+        --pink: #f8e7e2;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 90px;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+      a {
+        color: inherit;
+        text-underline-offset: 4px;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid var(--green);
+        outline-offset: 5px;
+      }
+      button:disabled {
+        cursor: default;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1,
+      h2 {
+        letter-spacing: -0.045em;
+        line-height: 1.06;
+        font-weight: 580;
+      }
+      h1 {
+        font-size: clamp(44px, 6.3vw, 78px);
+        max-width: 720px;
+      }
+      h2 {
+        font-size: clamp(31px, 4vw, 48px);
+      }
+      h3 {
+        font-size: 19px;
+        letter-spacing: -0.025em;
+        line-height: 1.25;
+      }
+      p {
+        max-width: 66ch;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+      .wrap {
+        max-width: 1160px;
+        margin: 0 auto;
+        padding: 0 36px;
+      }
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: rgba(247, 247, 240, 0.97);
+        border-bottom: 1px solid var(--line);
+      }
+      .topbar .wrap {
+        min-height: 72px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 750;
+        text-decoration: none;
+        letter-spacing: -0.03em;
+      }
+      .mark {
+        display: inline-grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        background: var(--ink);
+        color: var(--lime);
+        border-radius: 7px;
+        font-size: 17px;
+      }
+      .nav {
+        display: flex;
+        gap: 24px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .nav a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+      .nav a:hover {
+        color: var(--green);
+        text-decoration: underline;
+      }
+      .hero {
+        padding: 68px 0 52px;
+      }
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        margin-bottom: 22px;
+      }
+      .eyebrow::before {
+        content: "";
+        width: 25px;
+        height: 2px;
+        background: currentColor;
+      }
+      .hero-row {
+        display: grid;
+        grid-template-columns: 1.4fr 0.75fr;
+        gap: 56px;
+        align-items: center;
+      }
+      .hero h1 em {
+        font-family: Georgia, serif;
+        font-weight: 400;
+        color: var(--green);
+      }
+      .lead {
+        font-size: 19px;
+        line-height: 1.55;
+        color: var(--muted);
+        max-width: 510px;
+        margin-top: 22px;
+      }
+      .stamp {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 28px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .stamp span:first-child {
+        padding: 5px 9px;
+        background: var(--mint);
+        color: var(--green);
+        border-radius: 4px;
+      }
+      .hero-visual {
+        position: relative;
+        padding: 25px 0;
+      }
+      .browser-drawing {
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 9px 12px 0 var(--mint);
+      }
+      .browser-bar {
+        border-bottom: 1px solid var(--line);
+        padding: 12px 15px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .browser-bar i {
+        width: 6px;
+        height: 6px;
+        background: var(--line);
+        border-radius: 50%;
+      }
+      .browser-bar span {
+        margin-left: 8px;
+      }
+      .browser-body {
+        padding: 25px 24px;
+      }
+      .mini-user {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .avatar {
+        display: grid;
+        place-items: center;
+        width: 29px;
+        height: 29px;
+        background: var(--mint);
+        border-radius: 50%;
+        color: var(--green);
+        font-weight: 750;
+      }
+      .mini-title {
+        font-size: 21px;
+        margin: 25px 0 14px;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+      }
+      .mini-prompt {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 13px 11px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .mini-reply {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        margin-top: 18px;
+        color: var(--green);
+      }
+      .checkmark {
+        font-weight: 800;
+      }
+      .caption {
+        margin-top: 14px;
+        font-size: 11px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .shift {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 30px;
+        margin-top: 48px;
+        padding-top: 26px;
+        border-top: 1px solid var(--line);
+      }
+      .shift-label {
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        margin-bottom: 10px;
+      }
+      .old {
+        color: var(--muted);
+      }
+      .new {
+        color: var(--green);
+      }
+      .path {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+      }
+      .blocked {
+        color: var(--red);
+        border-bottom: 2px dotted #ccaaa0;
+      }
+      .path .arrow {
+        opacity: 0.55;
+      }
+      .section {
+        padding: 56px 0;
+        border-top: 1px solid var(--line);
+      }
+      .section-head {
+        display: grid;
+        grid-template-columns: 60px 1fr;
+        gap: 8px;
+        margin-bottom: 32px;
+      }
+      .number {
+        font-family: ui-monospace, monospace;
+        color: var(--green);
+        font-size: 13px;
+        padding-top: 7px;
+      }
+      .section-head p {
+        margin-top: 14px;
+        color: var(--muted);
+        max-width: 650px;
+      }
+      .legend {
+        display: flex;
+        gap: 22px;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+      .legend span {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .legend i {
+        width: 11px;
+        height: 11px;
+        border-radius: 2px;
+        background: var(--mint);
+        border: 1px solid var(--green);
+      }
+      .legend .stand-in {
+        background: var(--sand);
+        border: 1px dashed var(--amber);
+      }
+      .system {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 24px;
+        background: var(--white);
+      }
+      .system-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.13em;
+        color: var(--muted);
+        margin-bottom: 22px;
+      }
+      .main-flow {
+        display: grid;
+        grid-template-columns: 1fr 38px 1fr 38px 1.25fr;
+        align-items: stretch;
+      }
+      .node {
+        padding: 22px 18px;
+        border-radius: 8px;
+        background: var(--mint);
+        border: 1px solid #c7dec8;
+      }
+      .node small {
+        display: block;
+        color: var(--green);
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        font-weight: 800;
+        margin-bottom: 14px;
+      }
+      .node p {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+      .flow-arrow {
+        display: grid;
+        place-items: center;
+        color: var(--green);
+        font-size: 24px;
+      }
+      .lower-flow {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 20px;
+        margin-top: 12px;
+      }
+      .fanout {
+        margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .branch {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      .branch-line {
+        font-size: 22px;
+        color: var(--muted);
+      }
+      .branch p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .branch h3 {
+        font-size: 15px;
+      }
+      .fake {
+        padding: 15px;
+        background: var(--sand);
+        border: 1px dashed #ba9b71;
+        border-radius: 8px;
+      }
+      .fake .branch-line {
+        color: var(--amber);
+      }
+      .under-note {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px 24px;
+        margin-top: 18px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .under-note strong {
+        color: var(--green);
+        font-weight: 650;
+      }
+      .start-grid {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr;
+        gap: 44px;
+        align-items: start;
+      }
+      .terminal {
+        background: var(--ink);
+        color: var(--white);
+        padding: 23px;
+        border-radius: 10px;
+      }
+      .terminal-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        color: #b4c5bb;
+        font-size: 11px;
+        margin-bottom: 24px;
+      }
+      .copy {
+        border: 1px solid #657e71;
+        background: transparent;
+        color: #e8f4e9;
+        padding: 6px 10px;
+        border-radius: 5px;
+        font-size: 12px;
+      }
+      .copy:hover {
+        background: #355345;
+      }
+      .terminal code {
+        display: block;
+        color: var(--lime);
+        font-size: 14px;
+        line-height: 1.8;
+        overflow-wrap: anywhere;
+      }
+      .terminal-note {
+        color: #c1cfc6;
+        font-size: 12px;
+        margin-top: 22px;
+      }
+      .copy-status {
+        color: #dfefdf;
+        font-size: 11px;
+        min-height: 18px;
+        margin-top: 12px;
+      }
+      .setup-note {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 15px;
+      }
+      details {
+        margin-top: 16px;
+        border-top: 1px solid var(--line);
+        padding-top: 13px;
+      }
+      summary {
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      details p,
+      details li {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      details p {
+        margin-top: 12px;
+      }
+      details ul {
+        padding-left: 19px;
+      }
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .steps li {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 14px;
+        position: relative;
+        padding-bottom: 22px;
+      }
+      .steps li:not(:last-child)::before {
+        content: "";
+        width: 1px;
+        position: absolute;
+        top: 31px;
+        bottom: 2px;
+        left: 15px;
+        background: var(--line);
+      }
+      .step-dot {
+        display: grid;
+        place-items: center;
+        border: 1px solid #bad0bb;
+        width: 31px;
+        height: 31px;
+        border-radius: 50%;
+        font-size: 12px;
+        font-weight: 700;
+        background: var(--paper);
+        color: var(--green);
+      }
+      .steps strong {
+        font-size: 15px;
+        font-weight: 650;
+      }
+      .steps p {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .choose {
+        margin-top: 22px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .choice {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+      }
+      .choice strong {
+        display: block;
+        font-size: 13px;
+      }
+      .choice p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .sheet {
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .persona-controls {
+        padding: 20px 22px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        border-bottom: 1px solid var(--line);
+      }
+      .persona-controls button {
+        background: var(--paper);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 13px;
+        font-size: 13px;
+      }
+      .persona-controls button[aria-pressed="true"] {
+        background: var(--ink);
+        color: var(--white);
+        border-color: var(--ink);
+      }
+      .persona-controls button:hover:not([aria-pressed="true"]) {
+        border-color: var(--green);
+      }
+      .persona-body {
+        display: grid;
+        grid-template-columns: 1fr 1.6fr;
+        gap: 32px;
+        padding: 28px;
+      }
+      .person-id {
+        display: flex;
+        gap: 13px;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+      .person-id .avatar {
+        width: 42px;
+        height: 42px;
+        font-size: 17px;
+      }
+      .person-id h3 {
+        font-size: 21px;
+      }
+      .person-id small {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      #persona-note {
+        color: var(--muted);
+        font-size: 13px;
+        min-height: 61px;
+      }
+      .gates {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .gate {
+        padding: 13px;
+        border-left: 2px solid #b3d4b9;
+        background: #f1f7f0;
+      }
+      .gate.block {
+        background: var(--pink);
+        border-color: #dcb1a3;
+      }
+      .gate small {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.07em;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+      }
+      .gate strong {
+        display: block;
+        font-size: 14px;
+      }
+      .gate p {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .access-result {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+        font-size: 12px;
+      }
+      .result-pill {
+        padding: 4px 8px;
+        border-radius: 4px;
+        background: var(--mint);
+        color: var(--green);
+        font-weight: 650;
+      }
+      .result-pill.deny {
+        background: var(--pink);
+        color: var(--red);
+      }
+      .sheet-foot {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 6px 24px;
+        padding: 13px 24px;
+        background: #f3f5ef;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .two-keys {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        gap: 14px;
+        align-items: center;
+        margin-top: 24px;
+      }
+      .key-item {
+        padding: 16px 0;
+      }
+      .key-item strong {
+        font-size: 14px;
+      }
+      .key-item p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .key-symbol {
+        color: var(--green);
+        font-size: 25px;
+      }
+      .check-layout {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr;
+        gap: 36px;
+      }
+      .journey {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .journey-item {
+        padding: 16px 12px;
+        border-top: 2px solid var(--green);
+        background: var(--mint);
+      }
+      .journey-item b {
+        font-size: 11px;
+        color: var(--green);
+        display: block;
+        margin-bottom: 17px;
+      }
+      .journey-item strong {
+        display: block;
+        font-size: 14px;
+      }
+      .journey-item p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .qa-list {
+        display: grid;
+        gap: 11px;
+        margin-top: 22px;
+      }
+      .qa-item {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font-size: 13px;
+      }
+      .qa-item span {
+        color: var(--green);
+      }
+      .faults {
+        border-left: 1px solid var(--line);
+        padding-left: 28px;
+      }
+      .faults h3 {
+        margin-bottom: 20px;
+      }
+      .fault {
+        padding-bottom: 19px;
+        margin-bottom: 19px;
+        border-bottom: 1px solid var(--line);
+      }
+      .fault:last-child {
+        padding: 0;
+        margin: 0;
+        border: 0;
+      }
+      .fault strong {
+        font-size: 13px;
+      }
+      .fault p {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .caught {
+        display: inline-block;
+        color: var(--red);
+        background: var(--pink);
+        font-size: 10px;
+        padding: 3px 6px;
+        margin-top: 9px;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .counts {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        margin-top: 32px;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .count {
+        padding: 22px 16px 22px 0;
+      }
+      .count strong {
+        display: block;
+        font-size: 32px;
+        letter-spacing: -0.05em;
+        font-weight: 550;
+      }
+      .count span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .check-note {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 12px;
+      }
+      .docker {
+        display: grid;
+        grid-template-columns: 0.85fr 2fr;
+        gap: 24px;
+        align-items: center;
+        background: var(--ink);
+        color: var(--white);
+        border-radius: 10px;
+        margin-top: 30px;
+        padding: 25px;
+      }
+      .docker h3 {
+        color: var(--lime);
+        font-size: 23px;
+      }
+      .docker p {
+        color: #c7d5cb;
+        font-size: 12px;
+        margin-top: 7px;
+      }
+      .docker-checks {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 9px 20px;
+        font-size: 12px;
+        color: #e2eee5;
+      }
+      .docker-checks span::before {
+        content: "✓ ";
+        color: var(--lime);
+      }
+      .safe-grid {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr;
+        gap: 50px;
+      }
+      .lifecycle {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 22px;
+        margin-bottom: 22px;
+      }
+      .lifecycle span {
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .lifecycle .flow-arrow {
+        font-weight: 400;
+      }
+      .safety-list {
+        display: grid;
+        gap: 17px;
+      }
+      .safety-list strong {
+        font-size: 14px;
+      }
+      .safety-list p {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .limits {
+        background: var(--sand);
+        padding: 25px;
+        border-radius: 10px;
+      }
+      .limits h3 {
+        color: var(--amber);
+      }
+      .limits ul {
+        list-style: none;
+        padding: 0;
+        display: grid;
+        gap: 12px;
+        font-size: 14px;
+        margin: 23px 0;
+      }
+      .limits li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .limits li::before {
+        content: "—";
+        color: var(--amber);
+      }
+      .limits p {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .review-strip {
+        margin-top: 30px;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 22px;
+        padding-top: 23px;
+        border-top: 1px solid var(--line);
+      }
+      .review-strip strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .review-strip p {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .files {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px 30px;
+        margin-top: 20px;
+      }
+      .files code {
+        font-size: 11px;
+        overflow-wrap: anywhere;
+      }
+      .files p {
+        margin-top: 3px;
+        font-size: 12px;
+      }
+      footer {
+        margin-top: 4px;
+        padding: 26px 0 40px;
+        border-top: 1px solid var(--line);
+      }
+      footer .wrap {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 15px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .skip {
+        position: fixed;
+        top: -80px;
+        left: 20px;
+        z-index: 20;
+        padding: 10px 20px;
+        background: var(--ink);
+        color: var(--white);
+      }
+      .skip:focus {
+        top: 12px;
+      }
+      @media (max-width: 850px) {
+        .hero-row {
+          gap: 30px;
+          grid-template-columns: 1.25fr 1fr;
+        }
+        .hero {
+          padding-top: 46px;
+        }
+        .start-grid,
+        .check-layout,
+        .safe-grid {
+          gap: 25px;
+        }
+        .persona-body {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+        #persona-note {
+          min-height: auto;
+        }
+        .lower-flow {
+          gap: 12px;
+        }
+        .main-flow {
+          grid-template-columns: 1fr 26px 1fr 26px 1.2fr;
+        }
+        .node {
+          padding: 18px 12px;
+        }
+        .journey {
+          grid-template-columns: 1fr 1fr;
+        }
+        .nav {
+          gap: 16px;
+        }
+      }
+      @media (max-width: 640px) {
+        html {
+          scroll-padding-top: 70px;
+        }
+        .wrap {
+          padding: 0 22px;
+        }
+        .topbar .wrap {
+          min-height: 60px;
+        }
+        .nav {
+          gap: 14px;
+          font-size: 11px;
+        }
+        .nav a:first-child {
+          display: none;
+        }
+        .brand {
+          font-size: 14px;
+        }
+        .brand .tagline {
+          display: none;
+        }
+        .nav a {
+          white-space: nowrap;
+        }
+        .hero-row,
+        .start-grid,
+        .check-layout,
+        .safe-grid {
+          grid-template-columns: 1fr;
+        }
+        .hero-row {
+          gap: 16px;
+        }
+        .hero-visual {
+          max-width: 370px;
+          width: 100%;
+          margin: 0 auto;
+        }
+        .hero {
+          padding: 36px 0;
+        }
+        .lead {
+          font-size: 17px;
+        }
+        .shift {
+          grid-template-columns: 1fr;
+          gap: 22px;
+          margin-top: 30px;
+        }
+        .section {
+          padding: 37px 0;
+        }
+        .section-head {
+          grid-template-columns: 32px 1fr;
+          margin-bottom: 24px;
+        }
+        .section-head p {
+          font-size: 14px;
+        }
+        .system {
+          padding: 18px;
+        }
+        .main-flow {
+          grid-template-columns: 1fr;
+        }
+        .node {
+          padding: 18px;
+        }
+        .node small {
+          margin-bottom: 8px;
+        }
+        .main-flow .flow-arrow {
+          transform: rotate(90deg);
+          min-height: 34px;
+        }
+        .lower-flow {
+          grid-template-columns: 1fr;
+          gap: 15px;
+        }
+        .lower-flow > .branch {
+          padding: 12px;
+        }
+        .under-note {
+          font-size: 12px;
+        }
+        .persona-controls {
+          padding: 16px;
+          gap: 7px;
+        }
+        .persona-controls button {
+          flex: 1 0 28%;
+          padding: 9px 6px;
+          font-size: 12px;
+        }
+        .persona-body {
+          padding: 20px;
+        }
+        .gates {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+        .gate {
+          display: grid;
+          grid-template-columns: 90px 1fr;
+          column-gap: 7px;
+        }
+        .gate small {
+          margin: 0;
+        }
+        .gate p {
+          grid-column: 2;
+        }
+        .two-keys {
+          grid-template-columns: 1fr;
+          gap: 0;
+        }
+        .key-item {
+          padding: 10px 0;
+        }
+        .key-symbol {
+          font-size: 22px;
+        }
+        .two-keys .key-symbol:last-of-type {
+          transform: rotate(90deg);
+          width: 20px;
+        }
+        .faults {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+          padding-left: 0;
+          padding-top: 25px;
+        }
+        .counts {
+          grid-template-columns: 1fr 1fr;
+        }
+        .count:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--line);
+        }
+        .docker {
+          grid-template-columns: 1fr;
+          padding: 22px;
+        }
+        .docker-checks {
+          font-size: 11px;
+          gap: 12px;
+        }
+        .review-strip,
+        .files {
+          grid-template-columns: 1fr;
+        }
+        footer .wrap {
+          display: grid;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+      @media print {
+        .topbar {
+          position: static;
+        }
+        .nav,
+        .copy {
+          display: none;
+        }
+        body {
+          background: #fff;
+          font-size: 11pt;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        .wrap {
+          max-width: none;
+          padding: 0;
+        }
+        .hero,
+        .section {
+          padding: 24px 0;
+        }
+        h1 {
+          font-size: 40pt;
+        }
+        h2 {
+          font-size: 25pt;
+        }
+        .system,
+        .sheet,
+        .docker,
+        .terminal,
+        .limits,
+        .counts {
+          break-inside: avoid;
+        }
+        .browser-drawing {
+          box-shadow: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to the walkthrough</a>
+    <header class="topbar">
+      <div class="wrap">
+        <a class="brand" href="#main"
+          ><span class="mark" aria-hidden="true">↗</span> OpenInspect
+          <span class="tagline" style="font-weight: 400; color: var(--muted)"
+            >/ field guide</span
+          ></a
+        >
+        <nav class="nav" aria-label="Page sections">
+          <a href="#inside">What runs</a><a href="#users">Test users</a
+          ><a href="#proof">The checks</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class="wrap">
+      <section class="hero" aria-labelledby="title">
+        <div class="eyebrow">Signed-in local preview</div>
+        <div class="hero-row">
+          <div>
+            <h1>A real app.<br />A <em>safe place</em> to test.</h1>
+            <p class="lead">
+              An agent can open the app as a test user, make a change, and see what really happens.
+              No fresh login puzzle each time.
+            </p>
+            <div class="stamp">
+              <span>Built &amp; checked</span><span>Local checks · September 22, 2026</span>
+            </div>
+          </div>
+          <figure
+            class="hero-visual"
+            style="margin: 0"
+            aria-label="Illustration of a signed-in preview with a saved test reply"
+          >
+            <div class="browser-drawing">
+              <div class="browser-bar">
+                <i></i><i></i><i></i><span>localhost / your changed app</span>
+              </div>
+              <div class="browser-body">
+                <div class="mini-user">
+                  <span class="avatar">M</span> Preview member
+                  <span style="margin-left: auto; color: var(--green)">✓</span>
+                </div>
+                <div class="mini-title">What do you want to build?</div>
+                <div class="mini-prompt">Try the change. Watch the reply.</div>
+                <div class="mini-reply">
+                  <span class="checkmark">✓</span> Reply saved. Still here after reload.
+                </div>
+              </div>
+            </div>
+            <figcaption class="caption">A simple sketch of the flow, not a live app.</figcaption>
+          </figure>
+        </div>
+        <div class="shift" aria-label="Before and after">
+          <div class="old">
+            <div class="shift-label">BEFORE</div>
+            <div class="path">
+              <span>Make a change</span><span class="arrow" aria-hidden="true">→</span
+              ><span class="blocked">Get stuck at login</span
+              ><span class="arrow" aria-hidden="true">→</span><span>Make up test data</span>
+            </div>
+          </div>
+          <div class="new">
+            <div class="shift-label">NOW</div>
+            <div class="path">
+              <strong>Start the preview</strong><span class="arrow" aria-hidden="true">→</span
+              ><strong>Open as a test user</strong><span class="arrow" aria-hidden="true">→</span
+              ><strong>Check the change</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="inside" aria-labelledby="inside-title">
+        <div class="section-head">
+          <span class="number">01 /</span>
+          <div>
+            <h2>The app stays real.</h2>
+            <p>
+              We built a small test world around the app. Its pages, access rules, saved data, and
+              live replies still use the real code.
+            </p>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i aria-hidden="true"></i> Real app code</span
+          ><span><i class="stand-in" aria-hidden="true"></i> Test stand-in</span>
+        </div>
+        <div
+          class="system"
+          role="group"
+          aria-label="Local system map: browser to web server to control plane, with saved data and two test stand-ins"
+        >
+          <div class="system-label">All running on your machine</div>
+          <div class="main-flow">
+            <div class="node">
+              <small>YOU OR THE AGENT</small>
+              <h3>Browser</h3>
+              <p>The changed pages.<br />A separate test-user login.</p>
+            </div>
+            <div class="flow-arrow" aria-label="talks to">→</div>
+            <div class="node">
+              <small>REAL APP</small>
+              <h3>Web server</h3>
+              <p>Passes the login along.<br />Signs calls to the backend.</p>
+            </div>
+            <div class="flow-arrow" aria-label="talks to">→</div>
+            <div class="node">
+              <small>REAL APP</small>
+              <h3>Control plane</h3>
+              <p>Checks access, runs sessions,<br />and sends live updates.</p>
+            </div>
+          </div>
+          <div class="fanout">The control plane also connects to ↓</div>
+          <div class="lower-flow">
+            <div class="branch">
+              <span class="branch-line" aria-hidden="true">↳</span>
+              <div>
+                <h3>Real saved data</h3>
+                <p>The control plane writes to a fresh local database. Reload reads it back.</p>
+              </div>
+            </div>
+            <div class="branch fake">
+              <span class="branch-line" aria-hidden="true">↳</span>
+              <div>
+                <h3>GitHub stand-in</h3>
+                <p>Gives the app one test repo and two branches. No live GitHub fallback.</p>
+              </div>
+            </div>
+            <div class="branch fake">
+              <span class="branch-line" aria-hidden="true">↳</span>
+              <div>
+                <h3>Sandbox stand-in</h3>
+                <p>Sends a planned reply through the real live-update path. No AI job runs.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="under-note">
+          <span><strong>Calls inside the app stay real.</strong> Access is still checked.</span
+          ><span>File uploads use a small, throwaway store.</span>
+        </div>
+      </section>
+
+      <section class="section" id="start" aria-labelledby="start-title">
+        <div class="section-head">
+          <span class="number">02 /</span>
+          <div>
+            <h2>One command gets it ready.</h2>
+            <p>
+              Once the tools are installed, start the preview and keep that command running while
+              you work.
+            </p>
+          </div>
+        </div>
+        <div class="start-grid">
+          <div>
+            <div class="terminal">
+              <div class="terminal-top">
+                <span>FROM THE REPO ROOT</span
+                ><button class="copy" id="copy-command" type="button">Copy command</button>
+              </div>
+              <code id="start-command"
+                >npm run preview -- --scenario populated --persona member --browser
+                agent-browser</code
+              >
+              <p class="terminal-note">
+                Wait for the “ready” line. It tells you the URL, browser session name, and test
+                conversation IDs.
+              </p>
+              <div class="copy-status" id="copy-status" role="status"></div>
+            </div>
+            <p class="setup-note">
+              Needs Node 22.13+, project packages, agent-browser 0.37.0 and Chrome. No Docker is
+              needed for the preview itself.
+            </p>
+            <details>
+              <summary>First-time setup &amp; other ways to run</summary>
+              <ul>
+                <li>Run <code>npm ci</code> to install project packages.</li>
+                <li>
+                  Install the pinned <code>agent-browser@0.37.0</code> and Chrome if they are not
+                  already there. The OpenInspect image includes them.
+                </li>
+                <li>Use <code>--browser none</code> to start without an agent browser.</li>
+                <li>
+                  Use <code>npm run test:preview</code> for the browser tests; first install their
+                  browser with <code>npx playwright install chromium</code>.
+                </li>
+              </ul>
+              <p>
+                The preview does not install tools for you. First-time setup may need the internet.
+              </p>
+            </details>
+            <div class="choose">
+              <div class="choice">
+                <strong><code>populated</code> · default</strong>
+                <p>A test repo plus one finished conversation, ready to inspect.</p>
+              </div>
+              <div class="choice">
+                <strong><code>empty</code></strong>
+                <p>The same repo, with no finished conversation. Start a fresh one.</p>
+              </div>
+            </div>
+          </div>
+          <ol class="steps">
+            <li>
+              <span class="step-dot">1</span>
+              <div>
+                <strong>Make a fresh space</strong>
+                <p>Create private files, new test keys, and free local ports.</p>
+              </div>
+            </li>
+            <li>
+              <span class="step-dot">2</span>
+              <div>
+                <strong>Add known test users and data</strong>
+                <p>Create real user and login records with clear access rules.</p>
+              </div>
+            </li>
+            <li>
+              <span class="step-dot">3</span>
+              <div>
+                <strong>Start and check the app</strong>
+                <p>Start the backend and web server. Confirm the web app sees the right user.</p>
+              </div>
+            </li>
+            <li>
+              <span class="step-dot">4</span>
+              <div>
+                <strong>Open a named browser session</strong>
+                <p>Load that test login once. Leave your own browser and account alone.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section" id="users" aria-labelledby="users-title">
+        <div class="section-head">
+          <span class="number">03 /</span>
+          <div>
+            <h2>Try more than the happy path.</h2>
+            <p>
+              Six test users make access checks easy to repeat. Pick one below to see the expected
+              result.
+            </p>
+          </div>
+        </div>
+        <div class="sheet">
+          <div class="persona-controls" role="group" aria-label="Choose a test user">
+            <button type="button" data-persona="member" aria-pressed="true">Member</button>
+            <button type="button" data-persona="owner" aria-pressed="false">Owner</button>
+            <button type="button" data-persona="viewer" aria-pressed="false">Viewer</button>
+            <button type="button" data-persona="suspended" aria-pressed="false">Suspended</button>
+            <button type="button" data-persona="expired" aria-pressed="false">Expired</button>
+            <button type="button" data-persona="anonymous" aria-pressed="false">Anonymous</button>
+          </div>
+          <div class="persona-body" aria-live="polite" aria-atomic="true">
+            <div>
+              <div class="person-id">
+                <span class="avatar" id="persona-avatar">M</span>
+                <div>
+                  <h3 id="persona-name">Member</h3>
+                  <small id="persona-label">The default test user</small>
+                </div>
+              </div>
+              <p id="persona-note">
+                Can use the app and start a conversation. Tests begin here, not with the
+                all-powerful owner.
+              </p>
+            </div>
+            <div>
+              <div class="gates">
+                <div class="gate">
+                  <small>Web call</small><strong>✓ Signed</strong>
+                  <p>The web server proves the call came through it.</p>
+                </div>
+                <div class="gate" id="login-gate">
+                  <small>Login</small><strong id="login-result">✓ Valid</strong>
+                  <p id="login-note">The app finds this test user.</p>
+                </div>
+                <div class="gate" id="role-gate">
+                  <small>Access rule</small><strong id="role-result">✓ Can write</strong>
+                  <p id="role-note">A member can send a prompt.</p>
+                </div>
+              </div>
+              <div class="access-result">
+                <span class="result-pill" id="read-result">View sessions: yes</span
+                ><span class="result-pill" id="write-result">Start a session: yes</span>
+              </div>
+            </div>
+          </div>
+          <div class="sheet-foot">
+            <span>This picker explains the rules; it does not start a live preview.</span
+            ><span>Each real test user gets a separate browser session.</span>
+          </div>
+        </div>
+        <div
+          class="two-keys"
+          aria-label="Both a signed web call and a valid user login are required, then access rules apply"
+        >
+          <div class="key-item">
+            <strong>A signed web call</strong>
+            <p>Proves which app sent the request.</p>
+          </div>
+          <span class="key-symbol" aria-hidden="true">+</span>
+          <div class="key-item">
+            <strong>A real test-user login</strong>
+            <p>Proves who is asking.</p>
+          </div>
+          <span class="key-symbol" aria-hidden="true">→</span>
+          <div class="key-item">
+            <strong>The normal access rules</strong>
+            <p>No “skip login” switch in the app.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="proof" aria-labelledby="proof-title">
+        <div class="section-head">
+          <span class="number">04 /</span>
+          <div>
+            <h2>We used it. Then tried to break it.</h2>
+            <p>
+              Small tests still matter. Now there are also checks that walk through the app as a
+              user would.
+            </p>
+          </div>
+        </div>
+        <div class="check-layout">
+          <div>
+            <div class="journey" aria-label="Browser journey: open, send, watch, reload">
+              <div class="journey-item">
+                <b>01 →</b><strong>Open</strong>
+                <p>See the right user and repo.</p>
+              </div>
+              <div class="journey-item">
+                <b>02 →</b><strong>Send</strong>
+                <p>Submit a prompt through the page.</p>
+              </div>
+              <div class="journey-item">
+                <b>03 →</b><strong>Watch</strong>
+                <p>See the reply arrive, then finish.</p>
+              </div>
+              <div class="journey-item">
+                <b>04 ✓</b><strong>Reload</strong>
+                <p>The saved reply is still there.</p>
+              </div>
+            </div>
+            <div class="qa-list">
+              <div class="qa-item">
+                <span aria-hidden="true">✓</span> A source edit showed up through hot reload.
+              </div>
+              <div class="qa-item">
+                <span aria-hidden="true">✓</span> A viewer’s direct write request was blocked, not
+                just hidden.
+              </div>
+              <div class="qa-item">
+                <span aria-hidden="true">✓</span> Sign-out stayed signed out when the browser was
+                reopened.
+              </div>
+              <div class="qa-item">
+                <span aria-hidden="true">✓</span> Idle save, stop, and resume used the real session
+                code.
+              </div>
+            </div>
+          </div>
+          <aside class="faults" aria-label="Deliberate faults">
+            <h3>Bad setup should fail.</h3>
+            <div class="fault">
+              <strong>We used the wrong web signing key.</strong>
+              <p>The web login check failed with 401: no access.</p>
+              <span class="caught">Caught at startup</span>
+            </div>
+            <div class="fault">
+              <strong>We pointed live updates at the wrong address.</strong>
+              <p>The browser never showed “Connected,” so the test failed.</p>
+              <span class="caught">Caught by the browser test</span>
+            </div>
+            <p style="font-size: 11px; color: var(--muted); margin-top: 17px">
+              Both changes were undone. The good setup passed again.
+            </p>
+          </aside>
+        </div>
+        <div class="counts" aria-label="Passed test counts">
+          <div class="count"><strong>5,084</strong><span>Backend tests passed</span></div>
+          <div class="count"><strong>1,805</strong><span>Web tests passed</span></div>
+          <div class="count">
+            <strong>1,320</strong><span>Worker tests passed · 1 skipped</span>
+          </div>
+          <div class="count"><strong>2</strong><span>Full browser journeys passed</span></div>
+        </div>
+        <p class="check-note">
+          Results from this working tree, not a promise that every case is covered. Backend totals
+          include 44 focused preview, login and host checks. One earlier Worker test timed out; its
+          file and then the full suite passed on rerun.
+        </p>
+        <div class="docker">
+          <div>
+            <h3>Docker passed too.</h3>
+            <p>
+              A separate check ran the built backend in containers. It did not need a real cloud
+              sandbox.
+            </p>
+          </div>
+          <div class="docker-checks">
+            <span>79 database updates applied</span><span>Prompt and live reply worked</span
+            ><span>Scheduled work ran</span><span>Database backup was copied</span
+            ><span>Shutdown finished cleanly</span><span>A missing key stopped startup</span>
+          </div>
+        </div>
+        <p class="check-note">
+          The code, style and build checks passed too. The new CI job runs both browser journeys
+          with no retries; only failure screenshots are kept, for three days.
+        </p>
+      </section>
+
+      <section class="section" id="limits" aria-labelledby="limits-title">
+        <div class="section-head">
+          <span class="number">05 /</span>
+          <div>
+            <h2>Easy to reset. Clear about its limits.</h2>
+            <p>This is a place to check changes, not a copy of the live system.</p>
+          </div>
+        </div>
+        <div class="safe-grid">
+          <div>
+            <div class="lifecycle" aria-label="Start, check, stop, and start fresh">
+              <span>Start fresh</span><span class="flow-arrow" aria-hidden="true">→</span
+              ><span>Check</span><span class="flow-arrow" aria-hidden="true">→</span
+              ><span>Stop &amp; clear</span>
+            </div>
+            <div class="safety-list">
+              <div>
+                <strong>Your work stays yours.</strong>
+                <p>
+                  Separate files, test keys and browser sessions. No changes to your
+                  <code>.env.local</code>. One preview per checkout.
+                </p>
+              </div>
+              <div>
+                <strong>Sign-out means sign-out.</strong>
+                <p>
+                  The login is loaded once, not added back on every open. A failed first login load
+                  makes you restart the preview.
+                </p>
+              </div>
+              <div>
+                <strong>Stop clears the test world.</strong>
+                <p>
+                  Ctrl-C stops owned servers and browsers, then removes the temporary database and
+                  login files. Runs end after four hours.
+                </p>
+              </div>
+              <div>
+                <strong>Failures leave a clue.</strong>
+                <p>
+                  A short error log stays behind with known test secrets removed. Read it before
+                  sharing. Stuck tasks are reported as failures.
+                </p>
+              </div>
+            </div>
+          </div>
+          <aside class="limits">
+            <h3>Still needs a separate check</h3>
+            <ul>
+              <li>Signing in through real GitHub</li>
+              <li>A real AI model doing the work</li>
+              <li>A real cloud sandbox saving or waking</li>
+              <li>Cloud storage and live site settings</li>
+            </ul>
+            <p>
+              The preview uses stand-ins for outside services. The Docker check adds local container
+              and backup proof; neither is a live-system test. No remote OpenInspect sandbox was
+              used.
+            </p>
+          </aside>
+        </div>
+        <div class="review-strip" aria-label="Fixes from the independent review">
+          <div>
+            <strong>A second agent reviewed the work.</strong>
+            <p>It looked for weak tests, brittle code, and needless extra layers.</p>
+          </div>
+          <div>
+            <strong>Three useful fixes came from it.</strong>
+            <p>Failed browser login loads, stuck shutdowns, and lost error logs.</p>
+          </div>
+          <div>
+            <strong>Each fix got a test.</strong>
+            <p>We kept the small setup. No new test framework was needed.</p>
+          </div>
+        </div>
+        <details>
+          <summary>Where the pieces live</summary>
+          <div class="files">
+            <div>
+              <code>scripts/preview.mjs</code>
+              <p>The command that builds and starts the preview.</p>
+            </div>
+            <div>
+              <code>packages/control-plane/test/preview/</code>
+              <p>Test users, starter data, stand-ins, startup and cleanup.</p>
+            </div>
+            <div>
+              <code>packages/control-plane/test/support/browser-session.ts</code>
+              <p>Shared setup for real test-user login records and cookies.</p>
+            </div>
+            <div>
+              <code>packages/control-plane/test/smoke/fake-modal-server.mjs</code>
+              <p>The sandbox stand-in shared with the Docker check.</p>
+            </div>
+            <div>
+              <code>packages/web/e2e/</code>
+              <p>The two browser journeys through the real local stack.</p>
+            </div>
+            <div>
+              <code>.github/workflows/authenticated-preview.yml</code>
+              <p>Runs the browser checks for pull requests and main.</p>
+            </div>
+          </div>
+          <p>
+            The main app change is small: the Node host now accepts a file store passed in by its
+            caller. The live app still uses its normal S3 store; the preview uses a throwaway one.
+            No test login route was added.
+          </p>
+        </details>
+      </section>
+    </main>
+    <footer>
+      <div class="wrap">
+        <span><strong>OpenInspect</strong> · Signed-in preview walkthrough</span
+        ><span
+          >Checked September 22, 2026 · Branch <code>authenticated-preview</code> · Base
+          <code>fab55fea1</code></span
+        >
+      </div>
+    </footer>
+    <script>
+      (() => {
+        const users = {
+          member: {
+            name: "Member",
+            label: "The default test user",
+            note: "Can use the app and start a conversation. Tests begin here, not with the all-powerful owner.",
+            login: true,
+            access: "✓ Can write",
+            rule: "A member can send a prompt.",
+            read: true,
+            write: true,
+          },
+          owner: {
+            name: "Owner",
+            label: "The user with admin access",
+            note: "Can use the app and manage access. Useful when a change touches settings that only an owner may change.",
+            login: true,
+            access: "✓ Can manage",
+            rule: "An owner has the admin role.",
+            read: true,
+            write: true,
+          },
+          viewer: {
+            name: "Viewer",
+            label: "A signed-in, read-only user",
+            note: "Can view sessions but cannot start one. The page hides write controls, and the backend blocks write calls too.",
+            login: true,
+            access: "— Read only",
+            rule: "Write calls are blocked with 403.",
+            read: true,
+            write: false,
+          },
+          suspended: {
+            name: "Suspended",
+            label: "A known user with access paused",
+            note: "The login still identifies the user. Protected actions are blocked because this account has been suspended.",
+            login: true,
+            access: "× Blocked",
+            rule: "Protected calls are blocked with 403.",
+            read: false,
+            write: false,
+          },
+          expired: {
+            name: "Expired",
+            label: "A login that is no longer valid",
+            note: "The old login does not grant access. The app needs a new sign-in; protected calls return 401.",
+            login: false,
+            access: "× No access",
+            rule: "A valid login is needed first.",
+            read: false,
+            write: false,
+          },
+          anonymous: {
+            name: "Anonymous",
+            label: "No user login at all",
+            note: "No login cookie is loaded. The app asks for sign-in, and protected calls return 401.",
+            login: false,
+            access: "× No access",
+            rule: "A valid login is needed first.",
+            read: false,
+            write: false,
+          },
+        };
+        const text = (id, value) => {
+          document.getElementById(id).textContent = value;
+        };
+        const buttons = [...document.querySelectorAll("[data-persona]")];
+        buttons.forEach((button) =>
+          button.addEventListener("click", () => {
+            const user = users[button.dataset.persona];
+            buttons.forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+            text("persona-name", user.name);
+            text("persona-label", user.label);
+            text("persona-avatar", user.name[0]);
+            text("persona-note", user.note);
+            text("login-result", user.login ? "✓ Valid" : "× Not valid");
+            text(
+              "login-note",
+              user.login ? "The app finds this test user." : "The app has no valid user login."
+            );
+            text("role-result", user.access);
+            text("role-note", user.rule);
+            document.getElementById("login-gate").classList.toggle("block", !user.login);
+            document.getElementById("role-gate").classList.toggle("block", !user.write);
+            text("read-result", `View sessions: ${user.read ? "yes" : "blocked"}`);
+            text("write-result", `Start a session: ${user.write ? "yes" : "blocked"}`);
+            document.getElementById("read-result").classList.toggle("deny", !user.read);
+            document.getElementById("write-result").classList.toggle("deny", !user.write);
+          })
+        );
+        document.getElementById("copy-command").addEventListener("click", async () => {
+          const command = document.getElementById("start-command");
+          try {
+            await navigator.clipboard.writeText(command.textContent.trim());
+            text("copy-status", "Copied. Run it from the repo root.");
+          } catch {
+            const range = document.createRange();
+            range.selectNodeContents(command);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            text("copy-status", "Command selected. Press Ctrl+C or ⌘C to copy.");
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -7,6 +7,9 @@
     "packages/*"
   ],
   "scripts": {
+    "preview": "node scripts/preview.mjs",
+    "preview:open": "node scripts/preview.mjs open",
+    "test:preview": "npm run build -w @open-inspect/shared && playwright test --config packages/web/playwright.config.ts",
     "sandbox:images": "python3 packages/sandbox-images/cli.py",
     "lint": "eslint .",
     "lint:complexity": "node scripts/lint-complexity.mjs",
@@ -34,6 +37,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
+    "@playwright/test": "1.63.0",
     "@types/node": "^22.10.5",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
