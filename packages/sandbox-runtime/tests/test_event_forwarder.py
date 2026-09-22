@@ -14,18 +14,24 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.event_forwarder import SEND_TIMEOUT_SECONDS, BufferedEventForwarder
+from sandbox_runtime.event_forwarder import (
+    RETIRE_CLOSE_TIMEOUT_SECONDS,
+    SEND_TIMEOUT_SECONDS,
+    BufferedEventForwarder,
+)
 
 
 def make_forwarder(
     max_buffer_size: int = 1000,
     send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
+    retire_close_timeout_seconds: float = RETIRE_CLOSE_TIMEOUT_SECONDS,
 ) -> BufferedEventForwarder:
     return BufferedEventForwarder(
         sandbox_id="test-sandbox",
         log=MagicMock(),
         max_buffer_size=max_buffer_size,
         send_timeout_seconds=send_timeout_seconds,
+        retire_close_timeout_seconds=retire_close_timeout_seconds,
     )
 
 
@@ -557,10 +563,15 @@ class TestTimedOutConnectionRetirement:
         assert [event.get("messageId") for event in forwarder._event_buffer] == [None, "msg-2"]
 
     @pytest.mark.asyncio
-    async def test_close_that_also_stalls_aborts_the_transport(self):
+    async def test_close_that_also_stalls_is_aborted_within_the_short_grace(self):
         """The close frame goes through the same blocked flow control as the
-        write that just timed out, so closing gracefully can stall too."""
-        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        write that just timed out, so closing gracefully usually stalls too.
+
+        It must not cost a second send budget: the write timeout already
+        spent most of the window the owner has to reconnect and heartbeat in
+        before the control plane calls the sandbox stale.
+        """
+        forwarder = make_forwarder(send_timeout_seconds=0.2, retire_close_timeout_seconds=0.02)
         ws = hung_ws()
 
         async def hanging_close() -> None:
@@ -569,11 +580,15 @@ class TestTimedOutConnectionRetirement:
         ws.close = AsyncMock(side_effect=hanging_close)
         await forwarder.bind(ws)
 
+        started = asyncio.get_running_loop().time()
         delivered = await asyncio.wait_for(
-            forwarder.send({"type": "execution_complete", "messageId": "msg-3"}), timeout=0.5
+            forwarder.send({"type": "execution_complete", "messageId": "msg-3"}), timeout=1
         )
+        elapsed = asyncio.get_running_loop().time() - started
 
         assert delivered is False
+        # One send budget plus the short grace, not two send budgets.
+        assert elapsed < 0.3
         ws.transport.abort.assert_called_once()
         assert forwarder._ws is None
         assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-3"]
@@ -705,7 +720,7 @@ class TestTimedOutConnectionRetirement:
         """Cancellation must not leave the wedged connection bound: the abort
         still ends it, so the reconnect that recovers the buffered event is
         guaranteed to come."""
-        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        forwarder = make_forwarder(send_timeout_seconds=0.01, retire_close_timeout_seconds=0.5)
         ws = hung_ws()
         close_entered = asyncio.Event()
 

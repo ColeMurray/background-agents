@@ -32,12 +32,20 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on a direct send, on retiring a connection whose write timed out, and
-# on each recovery stage. A timed-out direct send may spend two more
-# budgets — closing the dead connection, then acquiring the recovery lock and
-# flushing after a rebind — so send() takes at most three configured budgets
-# before returning.
+# Bound on a direct send and on each recovery stage. A timed-out direct send
+# spends one retirement grace closing the dead connection, and may spend one
+# further budget acquiring the recovery lock and flushing after a rebind, so
+# send() returns within two budgets plus RETIRE_CLOSE_TIMEOUT_SECONDS.
 SEND_TIMEOUT_SECONDS: Final = 30.0
+
+# Grace for the close that retires a connection whose write timed out —
+# deliberately much shorter than a send budget. That close frame drains
+# through the transport that just stalled, so it usually cannot complete and
+# has to be abandoned. Retiring, reconnecting, and heartbeating all have to
+# finish before the control plane calls the sandbox stale, and the write
+# timeout already spent most of that window; a second full budget here would
+# push the reconnect past it.
+RETIRE_CLOSE_TIMEOUT_SECONDS: Final = 5.0
 
 
 class BufferedEventForwarder:
@@ -69,11 +77,13 @@ class BufferedEventForwarder:
         log: StructuredLogger,
         max_buffer_size: int = MAX_EVENT_BUFFER_SIZE,
         send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
+        retire_close_timeout_seconds: float = RETIRE_CLOSE_TIMEOUT_SECONDS,
     ) -> None:
         self._sandbox_id = sandbox_id
         self._log = log
         self._max_buffer_size = max_buffer_size
         self._send_timeout_seconds = send_timeout_seconds
+        self._retire_close_timeout_seconds = retire_close_timeout_seconds
         self._ws: ClientConnection | None = None
 
         # Serializes every buffer walk (bind recovery and stale-send drains).
@@ -202,15 +212,17 @@ class BufferedEventForwarder:
         was parked stays bound, and the caller drains through it.
 
         The close frame travels the same blocked path as the write that just
-        timed out, so a graceful close can stall too; abort the transport
-        when it does, including under cancellation. The abort is what makes
-        the reconnect certain, so a cancelled retirement can still leave the
-        buffered event for the next bind to recover.
+        timed out, so a graceful close usually stalls too — ``close()`` waits
+        on the same flow control, and websockets' own ``close_timeout`` does
+        not cover that wait. Give it only RETIRE_CLOSE_TIMEOUT_SECONDS and
+        then abort the transport, including under cancellation. The abort is
+        what makes the reconnect certain, so a cancelled retirement can still
+        leave the buffered event for the next bind to recover.
         """
         if self._ws is ws:
             self._ws = None
         try:
-            async with asyncio.timeout(self._send_timeout_seconds):
+            async with asyncio.timeout(self._retire_close_timeout_seconds):
                 await ws.close()
         except asyncio.CancelledError:
             ws.transport.abort()
