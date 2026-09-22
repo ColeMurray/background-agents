@@ -1869,6 +1869,26 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
   });
 
+  it("retains the stop marker and does not advance the queue when the retirement fence rejects", async () => {
+    const h = buildQueue();
+    const deadline = Date.now() - 1;
+    h.repository.markMessageAwaitingStopConfirmation("msg-stopped", deadline);
+    h.sandboxLifecycle.terminateUnresponsiveSandbox.mockRejectedValue(
+      new Error("retirement fence unavailable")
+    );
+
+    await expect(h.executionStop.recoverStopConfirmationTimeout()).rejects.toThrow(
+      "retirement fence unavailable"
+    );
+
+    expect(h.repository.getMessageAwaitingStopConfirmation()).toEqual({
+      id: "msg-stopped",
+      deadline,
+    });
+    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+  });
+
   it("does not recover an expired stop while dispatch is held", async () => {
     let dispatchAllowed = false;
     const mayDispatch = vi.fn(() => dispatchAllowed);
