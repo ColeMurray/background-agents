@@ -32,21 +32,11 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on a direct send and on each recovery stage. A timed-out direct send
-# spends one retirement grace closing the dead connection, and may spend one
-# further budget acquiring the recovery lock and flushing after a rebind —
-# plus a second grace if that replacement stalls too. So send() returns
-# within two budgets plus two RETIRE_CLOSE_TIMEOUT_SECONDS.
+# Bound on every write and on each recovery stage. Retiring a connection
+# whose write timed out is synchronous and costs nothing, so a failed direct
+# send may spend only one further budget acquiring the recovery lock and
+# flushing after a rebind: send() returns within two configured budgets.
 SEND_TIMEOUT_SECONDS: Final = 30.0
-
-# Grace for the close that retires a connection whose write timed out —
-# deliberately much shorter than a send budget. That close frame drains
-# through the transport that just stalled, so it usually cannot complete and
-# has to be abandoned. Retiring, reconnecting, and heartbeating all have to
-# finish before the control plane calls the sandbox stale, and the write
-# timeout already spent most of that window; a second full budget here would
-# push the reconnect past it.
-RETIRE_CLOSE_TIMEOUT_SECONDS: Final = 5.0
 
 
 class BufferedEventForwarder:
@@ -66,9 +56,9 @@ class BufferedEventForwarder:
 
     The owner drives the connection lifecycle explicitly via ``bind`` /
     ``unbind``, with one exception: a write that times out leaves a
-    connection nothing else can end, so the forwarder closes it (see
+    connection nothing else can end, so the forwarder aborts it (see
     ``_retire_timed_out_connection``). It still never reaches back into its
-    owner — closing the socket is what lets the owner notice and reconnect.
+    owner — ending the socket is what lets the owner notice and reconnect.
     """
 
     def __init__(
@@ -78,13 +68,11 @@ class BufferedEventForwarder:
         log: StructuredLogger,
         max_buffer_size: int = MAX_EVENT_BUFFER_SIZE,
         send_timeout_seconds: float = SEND_TIMEOUT_SECONDS,
-        retire_close_timeout_seconds: float = RETIRE_CLOSE_TIMEOUT_SECONDS,
     ) -> None:
         self._sandbox_id = sandbox_id
         self._log = log
         self._max_buffer_size = max_buffer_size
         self._send_timeout_seconds = send_timeout_seconds
-        self._retire_close_timeout_seconds = retire_close_timeout_seconds
         self._ws: ClientConnection | None = None
 
         # Serializes every buffer walk (bind recovery and stale-send drains).
@@ -167,7 +155,7 @@ class BufferedEventForwarder:
             self._pending_acks[ack_id] = event
             self._in_flight_acks[ack_id] = event
         try:
-            await asyncio.wait_for(ws.send(json.dumps(event)), timeout=self._send_timeout_seconds)
+            await self._write(ws, event)
         except asyncio.CancelledError:
             # A prompt task cancelled mid-send must not strand its event:
             # re-buffer it, then let the cancellation proceed. An unbuffered
@@ -185,58 +173,56 @@ class BufferedEventForwarder:
             replayable = ack_id is None or self._pending_acks.get(ack_id) is event
             if ack_id is not None and replayable:
                 self._pending_acks.pop(ack_id, None)
-            recoverable = buffered and replayable
-            if recoverable:
-                # Buffer before retiring the connection: that await can be
-                # cancelled, and the event must not be stranded if it is.
+            if buffered and replayable:
                 self._buffer_event(event)
+                await self._drain_if_rebound(failed_ws=ws)
             else:
                 self._log.debug("bridge.event_dropped_send_failed", event_type=event_type)
-            if isinstance(e, TimeoutError):
-                # Retire even when the event itself was dropped: the wedge a
-                # `buffered=False` send discovered is just as real.
-                await self._retire_timed_out_connection(ws)
-            if recoverable:
-                await self._drain_if_rebound(failed_ws=ws)
             return False
         finally:
             if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
                 self._in_flight_acks.pop(ack_id, None)
         return True
 
-    async def _retire_timed_out_connection(self, ws: ClientConnection) -> None:
-        """Close a connection whose write timed out, so the owner reconnects.
+    async def _write(self, ws: ClientConnection, event: dict[str, Any]) -> None:
+        """Write one event, retiring the connection if the write stalls.
+
+        Every write in this class goes through here, so "a stalled write
+        retires its connection" is one policy instead of three copies that
+        can drift. This owns only the transport verdict; each caller keeps
+        its own ACK and buffer reconciliation in its exception handlers.
+        """
+        try:
+            await asyncio.wait_for(ws.send(json.dumps(event)), timeout=self._send_timeout_seconds)
+        except TimeoutError:
+            self._retire_timed_out_connection(ws)
+            raise
+
+    def _retire_timed_out_connection(self, ws: ClientConnection) -> None:
+        """Abort a connection whose write timed out, so the owner reconnects.
 
         A peer that stops reading leaves the socket OPEN indefinitely: the
         write parks in flow control, and the keepalive ping parks behind it
         before its pong deadline is armed, so the connection never fails on
-        its own. The owner's receive loop only ends when the connection
-        closes, so closing it here is the single signal that starts a
-        reconnect — without it every later send re-enters the same dead
-        socket and burns another timeout.
+        its own. The owner's receive loop only ends when the connection does,
+        so ending it here is the single signal that starts a reconnect —
+        without it every later send re-enters the same dead socket and burns
+        another timeout.
+
+        Abort rather than close. ``close()`` writes its close frame through
+        the very flow control that just stalled, and websockets' own
+        ``close_timeout`` does not cover that wait, so a graceful close parks
+        exactly like the write did. Waiting on it would spend the window the
+        owner still needs to reconnect and heartbeat in before the control
+        plane calls the sandbox stale. Aborting is synchronous, so retirement
+        also stays off the cancellation path entirely.
 
         Only this connection is retired. A replacement bound while the write
         was parked stays bound, and the caller drains through it.
-
-        The close frame travels the same blocked path as the write that just
-        timed out, so a graceful close usually stalls too — ``close()`` waits
-        on the same flow control, and websockets' own ``close_timeout`` does
-        not cover that wait. Give it only RETIRE_CLOSE_TIMEOUT_SECONDS and
-        then abort the transport, including under cancellation. The abort is
-        what makes the reconnect certain, so a cancelled retirement can still
-        leave the buffered event for the next bind to recover.
         """
         if self._ws is ws:
             self._ws = None
-        try:
-            async with asyncio.timeout(self._retire_close_timeout_seconds):
-                await ws.close()
-        except asyncio.CancelledError:
-            ws.transport.abort()
-            raise
-        except Exception as e:
-            self._log.warn("bridge.retire_close_error", exc=e)
-            ws.transport.abort()
+        ws.transport.abort()
 
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.
@@ -285,7 +271,7 @@ class BufferedEventForwarder:
                 stalled = self._cancelled_write_ws
                 self._cancelled_write_ws = None
                 if stalled is not None:
-                    await self._retire_timed_out_connection(stalled)
+                    self._retire_timed_out_connection(stalled)
 
     async def _flush_buffer(self) -> None:
         """Flush buffered events over the currently bound connection.
@@ -315,9 +301,7 @@ class BufferedEventForwarder:
                 self._pending_acks[ack_id] = event
                 self._in_flight_acks[ack_id] = event
             try:
-                await asyncio.wait_for(
-                    ws.send(json.dumps(event)), timeout=self._send_timeout_seconds
-                )
+                await self._write(ws, event)
             except asyncio.CancelledError:
                 acknowledged = ack_id is not None and self._pending_acks.get(ack_id) is not event
                 if ack_id is not None and not acknowledged:
@@ -336,8 +320,6 @@ class BufferedEventForwarder:
                 if acknowledged and self._event_buffer and self._event_buffer[0] is event:
                     self._event_buffer.pop(0)
                 self._log.warn("bridge.flush_send_error", exc=e)
-                if isinstance(e, TimeoutError):
-                    await self._retire_timed_out_connection(ws)
                 break
             finally:
                 if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
@@ -378,14 +360,10 @@ class BufferedEventForwarder:
             if not ws or ws.state != State.OPEN:
                 break
             try:
-                await asyncio.wait_for(
-                    ws.send(json.dumps(event)), timeout=self._send_timeout_seconds
-                )
+                await self._write(ws, event)
                 resent += 1
             except Exception as e:
                 self._log.warn("bridge.flush_pending_ack_error", ack_id=ack_id, exc=e)
-                if isinstance(e, TimeoutError):
-                    await self._retire_timed_out_connection(ws)
                 break
 
         self._log.info(
