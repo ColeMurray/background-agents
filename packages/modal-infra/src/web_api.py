@@ -958,7 +958,7 @@ async def api_recover_build_sandbox(
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
-) -> dict:
+) -> dict[str, Any]:
     """Recover an owned build source whose create response was lost."""
     async with _execute_endpoint(
         endpoint_name="api_recover_build_sandbox",

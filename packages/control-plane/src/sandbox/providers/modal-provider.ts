@@ -84,7 +84,7 @@ export interface ModalImageBuildProvider {
  * @example
  * ```typescript
  * const client = createModalClient(secret, workspace, environmentWebSuffix);
- * const provider = new ModalSandboxProvider(client);
+ * const provider = new ModalSandboxProvider(client, "modal");
  *
  * try {
  *   const result = await provider.createSandbox(config);

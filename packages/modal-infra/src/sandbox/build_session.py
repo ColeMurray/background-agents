@@ -3,7 +3,7 @@
 import json
 import time
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import modal
 
@@ -86,7 +86,7 @@ class ModalBuildSessionService:
         user_env_vars: dict[str, str] | None = None,
         build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
-        sandbox_settings: dict | None = None,
+        sandbox_settings: dict[str, Any] | None = None,
         sandbox_backend: ModalBackend = "modal",
     ) -> BuildSessionLaunch:
         start_time = time.time()
