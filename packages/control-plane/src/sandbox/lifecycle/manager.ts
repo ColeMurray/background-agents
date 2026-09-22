@@ -692,7 +692,7 @@ export class SandboxLifecycleManager
   /**
    * Execute a fresh sandbox spawn.
    */
-  private async doSpawn(): Promise<void> {
+  private async doSpawn(replacedGeneration?: SandboxGeneration): Promise<void> {
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     const spawnStartedAt = Date.now();
@@ -711,14 +711,19 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const previous = this.storage.getSandbox();
-      if (previous?.last_heartbeat != null) {
+      const replaced =
+        replacedGeneration ??
+        (previous?.last_heartbeat != null && previous.modal_sandbox_id
+          ? { sandboxId: previous.modal_sandbox_id, createdAt: previous.created_at }
+          : undefined);
+      if (replaced) {
         this.log.warn("Replacing a sandbox without restoring its state", {
           event: "sandbox.state_discarded",
         });
         try {
           this.config.recordWarning?.(
             "A fresh sandbox was requested without restoring the previous state. Uncommitted changes and earlier conversation context will not be carried over.",
-            `sandbox-state-discarded:${previous.modal_sandbox_id}:${previous.created_at}`
+            `sandbox-state-discarded:${replaced.sandboxId}:${replaced.createdAt}`
           );
         } catch (error) {
           this.log.warn("Could not record sandbox continuity warning", {
@@ -1309,6 +1314,10 @@ export class SandboxLifecycleManager
       }
 
       const now = Date.now();
+      const previousGeneration =
+        sandbox.last_heartbeat != null
+          ? { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at }
+          : undefined;
       generation = { sandboxId: sandbox.modal_sandbox_id, createdAt: now };
       const shutdownPolicy = shutdownPolicyForLaunch("existing", sourceRuntimeVersion);
       this.storage.setLastSpawnError(null, null);
@@ -1340,7 +1349,7 @@ export class SandboxLifecycleManager
             provider_object_id: providerObjectId,
             error: result.error,
           });
-          await this.doSpawn();
+          await this.doSpawn(previousGeneration);
           return;
         }
 

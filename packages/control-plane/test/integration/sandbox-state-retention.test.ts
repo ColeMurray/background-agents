@@ -41,6 +41,37 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
+  it("records continuity loss when persistent resume requests a fresh replacement", async () => {
+    const stub = await servingSession();
+    await queryDO(stub, "UPDATE sandbox SET status = 'stopped', last_heartbeat = ?", Date.now());
+    await runInSessionDO(stub, async (instance, durableState) => {
+      const provider = snapshotProvider({
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: false,
+          supportsRestore: false,
+          supportsPersistentResume: true,
+          supportsExplicitStop: true,
+        },
+        resumeSandbox: vi.fn<NonNullable<SandboxProvider["resumeSandbox"]>>(async () => ({
+          success: false,
+          shouldSpawnFresh: true,
+          error: "retained sandbox is gone",
+        })),
+      });
+      await realLifecycleHarness(instance, durableState, provider).manager.spawnSandbox();
+      expect(provider.resumeSandbox).toHaveBeenCalledOnce();
+      expect(provider.createSandbox).toHaveBeenCalledOnce();
+      const warnings = durableState.storage.sql
+        .exec("SELECT data FROM events WHERE type = 'warning'")
+        .toArray();
+      expect(warnings).toHaveLength(1);
+      expect(JSON.parse(warnings[0].data as string).message).toContain(
+        "Uncommitted changes and earlier conversation context"
+      );
+    });
+  });
+
   it("does not duplicate the continuity warning when replacement reservation is retried", async () => {
     const stub = await servingSession();
     await queryDO(stub, "UPDATE sandbox SET status = 'stopped', last_heartbeat = ?", Date.now());
