@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sandbox_runtime.constants import (
-    CODE_SERVER_PORT,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     NOVNC_PORT,
     TTYD_PORT,
-    TTYD_PROXY_PORT,
 )
 from src.sandbox.manager import (
+    CODE_SERVER_PORT,
+    TTYD_PROXY_PORT,
     SandboxConfig,
     SandboxManager,
 )

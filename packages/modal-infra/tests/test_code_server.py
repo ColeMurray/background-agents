@@ -4,9 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime.constants import CODE_SERVER_PORT
 from src.sandbox.launch import SandboxLauncher
-from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
 from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 

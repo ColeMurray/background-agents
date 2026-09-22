@@ -5,16 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sandbox_runtime.constants import (
-    CODE_SERVER_PORT,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     NOVNC_PORT,
     NOVNC_PORT_ENV_VAR,
-    TTYD_PROXY_PORT,
     VNC_PASSWORD_ENV_VAR,
     VNC_PASSWORD_MAX_BYTES,
     VNC_PORT,
 )
-from src.sandbox.manager import SandboxConfig, SandboxManager
+from src.sandbox.manager import CODE_SERVER_PORT, TTYD_PROXY_PORT, SandboxConfig, SandboxManager
 from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
