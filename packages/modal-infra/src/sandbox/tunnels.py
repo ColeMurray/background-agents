@@ -152,7 +152,7 @@ class SandboxTunnels:
         """Validate and sanitize tunnel ports: must be int, 1-65535, max MAX_TUNNEL_PORTS."""
         ports: list[int] = []
         for p in raw:
-            if isinstance(p, int) and 1 <= p <= 65535:
+            if isinstance(p, int) and not isinstance(p, bool) and 1 <= p <= 65535:
                 ports.append(p)
             if len(ports) >= MAX_TUNNEL_PORTS:
                 break

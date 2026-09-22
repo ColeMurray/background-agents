@@ -324,3 +324,50 @@ async def test_launch_returns_handle_despite_tunnel_failures(monkeypatch, image_
             f"{TUNNEL_ENV_SANDBOX_ID_KEY}=sandbox-partial\nTUNNEL_3000=https://app.example\n",
             TUNNEL_ENV_FILE_PATH,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore", [False, True], ids=["create", "restore"])
+@pytest.mark.parametrize(
+    "ports, expected",
+    [
+        ([True, False], []),
+        ([True, False, 0, -1, 65536, "3000", 3.5, None, 1, 3000, 65535], [1, 3000, 65535]),
+        ([True] * 10 + [3000], [3000]),
+    ],
+    ids=["booleans-only", "mixed-with-boundary-ports", "booleans-do-not-consume-limit"],
+)
+async def test_launch_rejects_boolean_tunnel_ports(monkeypatch, restore, ports, expected):
+    """Invalid extras never reach Modal or the runtime's expected-port list."""
+    urls = {port: f"https://port-{port}.example" for port in expected}
+    sandbox = SimpleNamespace(
+        object_id="modal-ports",
+        tunnels=Mock(return_value={port: SimpleNamespace(url=url) for port, url in urls.items()}),
+        filesystem=SimpleNamespace(write_text=SimpleNamespace(aio=AsyncMock())),
+    )
+    create = AsyncMock(return_value=sandbox)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", SimpleNamespace(aio=create))
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _: object())
+    manager = SandboxManager()
+    settings = {"tunnelPorts": ports}
+
+    if restore:
+        handle = await manager.restore_from_snapshot(
+            snapshot_image_id="image-1",
+            session_config={"repo_owner": "acme", "repo_name": "repo"},
+            settings=settings,
+        )
+    else:
+        handle = await manager.create_sandbox(
+            SandboxConfig(repo_owner="acme", repo_name="repo", settings=settings)
+        )
+
+    kwargs = create.call_args.kwargs
+    assert kwargs.get("encrypted_ports", []) == expected
+    assert all(type(port) is int for port in kwargs.get("encrypted_ports", []))
+    assert kwargs["env"].get(EXPECTED_TUNNEL_PORTS_ENV_VAR) == (
+        ",".join(str(port) for port in expected) if expected else None
+    )
+    assert handle.tunnel_urls == (urls or None)
+    if not expected:
+        sandbox.tunnels.assert_not_called()
