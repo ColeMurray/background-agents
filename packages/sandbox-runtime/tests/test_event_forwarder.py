@@ -33,6 +33,9 @@ def open_ws() -> MagicMock:
     ws = MagicMock()
     ws.state = State.OPEN
     ws.send = AsyncMock()
+    # An AsyncMock, so `assert_not_awaited` is a real assertion rather than an
+    # auto-created attribute that passes no matter what.
+    ws.close = AsyncMock()
     return ws
 
 
@@ -50,6 +53,24 @@ def wedged_ws(fail_signal: asyncio.Event) -> MagicMock:
         raise ConnectionError("stale connection flap")
 
     ws.send = wedged_send
+    ws.close = AsyncMock()
+    return ws
+
+
+def hung_ws() -> MagicMock:
+    """A peer that stopped reading.
+
+    The socket stays OPEN and every send parks in flow control forever, so a
+    write timeout is the only thing that can reveal the connection is dead.
+    """
+    ws = MagicMock()
+    ws.state = State.OPEN
+
+    async def never_completes(data: str) -> None:
+        await asyncio.Event().wait()
+
+    ws.send = never_completes
+    ws.close = AsyncMock()
     return ws
 
 
@@ -167,14 +188,7 @@ class TestSendWhileConnected:
     @pytest.mark.asyncio
     async def test_hung_direct_send_times_out_then_replays_critical_once(self):
         forwarder = make_forwarder(send_timeout_seconds=0.01)
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-        await forwarder.bind(hung_ws)
+        await forwarder.bind(hung_ws())
 
         delivered = await asyncio.wait_for(
             forwarder.send({"type": "execution_complete", "messageId": "msg-timeout"}),
@@ -492,14 +506,7 @@ class TestStaleSendRecovery:
         await settle()
 
         forwarder.unbind()
-        hung_replacement = MagicMock()
-        hung_replacement.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_replacement.send = never_completes
-        await forwarder.bind(hung_replacement)
+        await forwarder.bind(hung_ws())
         release_failure.set()
 
         assert await asyncio.wait_for(send_task, timeout=0.2) is False
@@ -511,6 +518,175 @@ class TestStaleSendRecovery:
             "execution_complete:msg-flush"
         ]
         assert forwarder.acknowledge("execution_complete:msg-flush") is True
+
+
+class TestTimedOutConnectionRetirement:
+    """A write that times out means a peer that stopped reading (issue #1945).
+
+    Nothing else can end such a connection: it stays OPEN, and the keepalive
+    ping parks behind the same flow control as the write, so the owner's
+    receive loop never returns and never reconnects. The forwarder closes the
+    connection itself to release the owner.
+    """
+
+    @pytest.mark.asyncio
+    async def test_timed_out_send_retires_the_connection(self):
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        ws = hung_ws()
+        await forwarder.bind(ws)
+
+        assert await forwarder.send({"type": "token", "messageId": "msg-1"}) is False
+
+        assert forwarder._ws is None
+        ws.close.assert_awaited_once()
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-1"]
+
+    @pytest.mark.asyncio
+    async def test_retired_connection_stops_costing_a_budget_per_send(self):
+        """Without retirement every later send re-enters the same dead socket
+        and burns the whole budget again, so heartbeats stop being sent long
+        before the control plane's staleness deadline."""
+        forwarder = make_forwarder(send_timeout_seconds=0.1)
+        await forwarder.bind(hung_ws())
+        await forwarder.send({"type": "heartbeat"})
+
+        started = asyncio.get_running_loop().time()
+        assert await forwarder.send({"type": "token", "messageId": "msg-2"}) is False
+        assert asyncio.get_running_loop().time() - started < 0.05
+
+        assert [event.get("messageId") for event in forwarder._event_buffer] == [None, "msg-2"]
+
+    @pytest.mark.asyncio
+    async def test_close_that_also_stalls_aborts_the_transport(self):
+        """The close frame goes through the same blocked flow control as the
+        write that just timed out, so closing gracefully can stall too."""
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        ws = hung_ws()
+
+        async def hanging_close() -> None:
+            await asyncio.Event().wait()
+
+        ws.close = AsyncMock(side_effect=hanging_close)
+        await forwarder.bind(ws)
+
+        delivered = await asyncio.wait_for(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-3"}), timeout=0.5
+        )
+
+        assert delivered is False
+        ws.transport.abort.assert_called_once()
+        assert forwarder._ws is None
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-3"]
+
+    @pytest.mark.asyncio
+    async def test_close_failure_aborts_the_transport(self):
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        ws = hung_ws()
+        ws.close = AsyncMock(side_effect=OSError("broken close"))
+        await forwarder.bind(ws)
+
+        assert await forwarder.send({"type": "execution_complete", "messageId": "msg-4"}) is False
+
+        ws.transport.abort.assert_called_once()
+        assert forwarder._ws is None
+        assert [event["messageId"] for event in forwarder._event_buffer] == ["msg-4"]
+
+    @pytest.mark.asyncio
+    async def test_replacement_bound_during_the_stalled_send_survives_and_drains(self):
+        """Retire only the connection that timed out. A replacement bound
+        while the write was still parked must stay bound and receive the
+        stranded event."""
+        forwarder = make_forwarder(send_timeout_seconds=0.05)
+        old = hung_ws()
+        await forwarder.bind(old)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-5"})
+        )
+        await settle()
+
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+
+        assert await asyncio.wait_for(send_task, timeout=0.5) is False
+
+        old.close.assert_awaited_once()
+        assert forwarder._ws is replacement
+        replacement.close.assert_not_awaited()
+        replacement.transport.abort.assert_not_called()
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-5"
+        ]
+        assert forwarder._event_buffer == []
+        assert forwarder.acknowledge("execution_complete:msg-5") is True
+
+    @pytest.mark.asyncio
+    async def test_unbuffered_timeout_retires_without_replaying(self):
+        """The event is dropped, but the wedge it discovered is still real:
+        a boot phase may be the only send that ever hits it."""
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        ws = hung_ws()
+        await forwarder.bind(ws)
+
+        delivered = await asyncio.wait_for(
+            forwarder.send({"type": "boot_progress", "bootSeq": 7}, buffered=False), timeout=0.5
+        )
+
+        assert delivered is False
+        assert forwarder._ws is None
+        ws.close.assert_awaited_once()
+        assert forwarder._event_buffer == []
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert sent_events(replacement) == []
+
+    @pytest.mark.asyncio
+    async def test_ordinary_send_failure_does_not_retire(self):
+        """A connection that reports its own failure is already closing, and
+        the owner's receive loop will see it. Only the silent wedge needs
+        the forwarder to intervene."""
+        forwarder = make_forwarder()
+        ws = open_ws()
+        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
+        await forwarder.bind(ws)
+
+        assert await forwarder.send({"type": "execution_complete", "messageId": "msg-6"}) is False
+
+        assert forwarder._ws is ws
+        ws.close.assert_not_awaited()
+        ws.transport.abort.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_retirement_aborts_and_keeps_the_event(self):
+        """Cancellation must not leave the wedged connection bound: the abort
+        still ends it, so the reconnect that recovers the buffered event is
+        guaranteed to come."""
+        forwarder = make_forwarder(send_timeout_seconds=0.01)
+        ws = hung_ws()
+        close_entered = asyncio.Event()
+
+        async def hanging_close() -> None:
+            close_entered.set()
+            await asyncio.Event().wait()
+
+        ws.close = AsyncMock(side_effect=hanging_close)
+        await forwarder.bind(ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-7"})
+        )
+        await asyncio.wait_for(close_entered.wait(), timeout=0.5)
+
+        send_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await send_task
+
+        ws.transport.abort.assert_called_once()
+        assert forwarder._ws is None
+        replacement = open_ws()
+        await forwarder.bind(replacement)
+        assert [event["ackId"] for event in sent_events(replacement)] == [
+            "execution_complete:msg-7"
+        ]
+        assert forwarder.acknowledge("execution_complete:msg-7") is True
 
 
 class TestConcurrentRecovery:
@@ -793,14 +969,7 @@ class TestUnbufferedSends:
     @pytest.mark.asyncio
     async def test_hung_unbuffered_send_times_out_without_replay(self):
         forwarder = make_forwarder(send_timeout_seconds=0.01)
-        hung_ws = MagicMock()
-        hung_ws.state = State.OPEN
-
-        async def never_completes(data: str) -> None:
-            await asyncio.Event().wait()
-
-        hung_ws.send = never_completes
-        await forwarder.bind(hung_ws)
+        await forwarder.bind(hung_ws())
 
         delivered = await asyncio.wait_for(
             forwarder.send({"type": "boot_progress", "bootSeq": 3}, buffered=False),

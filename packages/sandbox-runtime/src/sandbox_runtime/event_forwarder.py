@@ -16,7 +16,9 @@ if TYPE_CHECKING:
     from .log_config import StructuredLogger
 
 # Critical events are retained until the control plane acknowledges them and
-# are re-sent on reconnect; everything else is delivered at most once.
+# are re-sent on reconnect. Everything else is delivered at most once, with
+# one exception: a write that times out may already have reached the peer, so
+# replaying it can duplicate a non-critical event across connections.
 CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         "execution_complete",
@@ -30,9 +32,11 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000
 
-# Bound on a direct send and on each recovery stage. A failed direct send may
-# spend one additional budget acquiring the recovery lock and flushing after
-# a rebind, so send() takes at most two configured budgets before returning.
+# Bound on a direct send, on retiring the connection a direct send timed out
+# on, and on each recovery stage. A timed-out direct send may spend two more
+# budgets — closing the dead connection, then acquiring the recovery lock and
+# flushing after a rebind — so send() takes at most three configured budgets
+# before returning.
 SEND_TIMEOUT_SECONDS: Final = 30.0
 
 
@@ -52,7 +56,10 @@ class BufferedEventForwarder:
       and a concurrent bind can never both walk the buffer.
 
     The owner drives the connection lifecycle explicitly via ``bind`` /
-    ``unbind``; the forwarder never reaches back into its owner.
+    ``unbind``, with one exception: a write that times out leaves a
+    connection nothing else can end, so the forwarder closes it (see
+    ``_retire_timed_out_connection``). It still never reaches back into its
+    owner — closing the socket is what lets the owner notice and reconnect.
     """
 
     def __init__(
@@ -161,16 +168,56 @@ class BufferedEventForwarder:
             replayable = ack_id is None or self._pending_acks.get(ack_id) is event
             if ack_id is not None and replayable:
                 self._pending_acks.pop(ack_id, None)
-            if not buffered or not replayable:
+            recoverable = buffered and replayable
+            if recoverable:
+                # Buffer before retiring the connection: that await can be
+                # cancelled, and the event must not be stranded if it is.
+                self._buffer_event(event)
+            else:
                 self._log.debug("bridge.event_dropped_send_failed", event_type=event_type)
-                return False
-            self._buffer_event(event)
-            await self._drain_if_rebound(failed_ws=ws)
+            if isinstance(e, TimeoutError):
+                # Retire even when the event itself was dropped: the wedge a
+                # `buffered=False` send discovered is just as real.
+                await self._retire_timed_out_connection(ws)
+            if recoverable:
+                await self._drain_if_rebound(failed_ws=ws)
             return False
         finally:
             if ack_id is not None and self._in_flight_acks.get(ack_id) is event:
                 self._in_flight_acks.pop(ack_id, None)
         return True
+
+    async def _retire_timed_out_connection(self, ws: ClientConnection) -> None:
+        """Close a connection whose write timed out, so the owner reconnects.
+
+        A peer that stops reading leaves the socket OPEN indefinitely: the
+        write parks in flow control, and the keepalive ping parks behind it
+        before its pong deadline is armed, so the connection never fails on
+        its own. The owner's receive loop only ends when the connection
+        closes, so closing it here is the single signal that starts a
+        reconnect — without it every later send re-enters the same dead
+        socket and burns another timeout.
+
+        Only this connection is retired. A replacement bound while the write
+        was parked stays bound, and the caller drains through it.
+
+        The close frame travels the same blocked path as the write that just
+        timed out, so a graceful close can stall too; abort the transport
+        when it does, including under cancellation. The abort is what makes
+        the reconnect certain, so a cancelled retirement can still leave the
+        buffered event for the next bind to recover.
+        """
+        if self._ws is ws:
+            self._ws = None
+        try:
+            async with asyncio.timeout(self._send_timeout_seconds):
+                await ws.close()
+        except asyncio.CancelledError:
+            ws.transport.abort()
+            raise
+        except Exception as e:
+            self._log.warn("bridge.retire_close_error", exc=e)
+            ws.transport.abort()
 
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.
