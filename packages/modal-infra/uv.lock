@@ -266,7 +266,7 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.2.152"
+version = "0.2.157"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -274,13 +274,12 @@ dependencies = [
     { name = "mcp" },
     { name = "sniffio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/49/61/de2194d266fcede2a737996e800e7726079730f81ef03d41117e7888be04/claude_agent_sdk-0.2.152.tar.gz", hash = "sha256:0822bbdf700ccdd1acecf8365345a56bde07833afe7f8bd1bee68cba0e2fcf9a", size = 344710, upload-time = "2026-09-02T22:47:58.633Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/e3/444df1691c864a8349067686719b43e714fc43d3853fb1b2ebc2097e2a6e/claude_agent_sdk-0.2.157.tar.gz", hash = "sha256:4ce6f41bc965fcb4a9d11bd7a3cac266975c75b632f3d74a26f55f0fffb3160a", size = 346579, upload-time = "2026-09-18T18:21:10.306Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/d3/ee2b674958e105cf26a2eb4d512c46b02fcfdc8fadbb14dde750bbfaf9b1/claude_agent_sdk-0.2.152-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6cc1e949743c7634274ae526bfd1c0a216ff9d71c6b36d94cab80f32b0d32b4c", size = 85989333, upload-time = "2026-09-02T22:48:02.484Z" },
-    { url = "https://files.pythonhosted.org/packages/92/c4/6564671e6d303012b5c0bd6650b9977317c3b5c83914cf5ac62068fa85e6/claude_agent_sdk-0.2.152-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:9c79c4ef91b15e5fae6aba62a82afb983dc360bc159902c541046227e2852c86", size = 90503485, upload-time = "2026-09-02T22:48:06.357Z" },
-    { url = "https://files.pythonhosted.org/packages/13/5d/1efd9e3332d2909e015c6571a4b5ed937e9126b9c702217813247c1c8052/claude_agent_sdk-0.2.152-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:1e5b619e6fa3c98f06ddc107652f7820c4573fb73a9a24263568d9974078bbc2", size = 95850705, upload-time = "2026-09-02T22:48:10.493Z" },
-    { url = "https://files.pythonhosted.org/packages/95/a0/f921e52fdbfd400e46fbc1e707e6004a3ef99ace6cb4555429a3a8d3f371/claude_agent_sdk-0.2.152-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:f885bd935054082a599dcf92bbdaf3c0b853117a79375cb3aae74674a8124326", size = 96039825, upload-time = "2026-09-02T22:48:14.587Z" },
-    { url = "https://files.pythonhosted.org/packages/e6/be/dd113754761c6eef6eec1f2b148c825f925d4bfaa3f946656925239c54f9/claude_agent_sdk-0.2.152-py3-none-win_amd64.whl", hash = "sha256:f422c256358997ffa3a740f9fdc8127aa8404a9d57493502dc7d2ac05ecb5486", size = 98656506, upload-time = "2026-09-02T22:48:19.109Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/e8/3e9cc23eb5a5a01a0e2ee931a17db2785f95407525d50366af06a4a5469c/claude_agent_sdk-0.2.157-py3-none-macosx_11_0_arm64.whl", hash = "sha256:dd6a2c7aa1901e43b827411d62f2327aed82f53ed8ca6b076eaa5be4a1fc681f", size = 92744001, upload-time = "2026-09-18T18:21:15.969Z" },
+    { url = "https://files.pythonhosted.org/packages/49/eb/e5095703a8efbe504ec468cab039543caabfc0ea3327c735a3d1b60e57ac/claude_agent_sdk-0.2.157-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:ebf3f514c61db9be01bbf6d1acb0d993247340583b3559d2df75e3822f618bbb", size = 97352326, upload-time = "2026-09-18T18:21:21.007Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/f4/64505beb3c757b863753d6556539554704ec9168cb96454dc6463b14df85/claude_agent_sdk-0.2.157-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:a58089e0c11364db2ec7a139e09b36a4fb9c95817a758bee7b28e0434f55c0b6", size = 102701030, upload-time = "2026-09-18T18:21:27.065Z" },
+    { url = "https://files.pythonhosted.org/packages/03/8f/2a7c121469fd16d1d6465bec180726c54f6e151b12e50835283b4285d1ce/claude_agent_sdk-0.2.157-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:bd126b2edee3a247b2c7c4cee1f5a3ea68ef748288ec0650db88dd3918e5471a", size = 102830653, upload-time = "2026-09-18T18:21:32.948Z" },
 ]
 
 [[package]]
@@ -951,7 +950,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", specifier = "==0.2.152" },
+    { name = "claude-agent-sdk", specifier = "==0.2.157" },
     { name = "cryptography", specifier = ">=44.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.0" },

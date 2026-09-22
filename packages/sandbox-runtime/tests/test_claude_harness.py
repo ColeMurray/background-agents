@@ -340,6 +340,9 @@ class TestOptions:
             "attribution": {"commit": "", "pr": "", "sessionUrl": False},
             "feedbackDrafts": "off",
             "feedbackSurveyRate": 0,
+            "modelPicker": {
+                "options": [{"model": "claude-opus-5-5", "behavesAs": "claude-opus-5"}]
+            },
         }
         assert options["setting_sources"] == ["user", "project"]
         assert options["include_partial_messages"] is True

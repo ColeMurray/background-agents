@@ -178,6 +178,9 @@ class TestDenylist:
             "attribution": {"commit": "", "pr": "", "sessionUrl": False},
             "feedbackDrafts": "off",
             "feedbackSurveyRate": 0,
+            "modelPicker": {
+                "options": [{"model": "claude-opus-5-5", "behavesAs": "claude-opus-5"}]
+            },
         }
 
 
