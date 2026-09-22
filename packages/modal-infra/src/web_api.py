@@ -511,6 +511,7 @@ async def api_create_sandbox(
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
     ) as execution:
+        execution.log_fields["launch_contract_version"] = "unsupported"
         version = _launch_contract_version(request)
         execution.log_fields["launch_contract_version"] = version or "legacy"
         v1 = _parse_request(CreateSandboxV1Request, request) if version == 1 else None
@@ -809,6 +810,7 @@ async def api_restore_sandbox(
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
     ) as execution:
+        execution.log_fields["launch_contract_version"] = "unsupported"
         version = _launch_contract_version(request)
         execution.log_fields["launch_contract_version"] = version or "legacy"
         v1 = _parse_request(RestoreSandboxV1Request, request) if version == 1 else None

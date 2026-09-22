@@ -265,14 +265,24 @@ async def test_v1_repository_extensions_and_nested_owner_reach_runtime(operation
 
 
 @pytest.mark.parametrize("operation", ["create", "restore"])
-@pytest.mark.parametrize("version", [0, 2, "1", None, True])
-async def test_unknown_version_rejected_before_side_effects(operation, version, native_calls):
+@pytest.mark.parametrize("version", [0, 2, "1", None, True, "must-not-log-version"])
+async def test_unknown_version_rejected_before_side_effects(
+    operation, version, native_calls, monkeypatch
+):
+    info = Mock()
+    monkeypatch.setattr(web_api.log, "info", info)
     case = _v1(operation)
     case["body"]["contract_version"] = version
     with pytest.raises(HTTPException) as error:
         await _invoke(case)
     assert error.value.status_code == 400
     assert native_calls == []
+    fields = info.call_args.kwargs
+    assert fields["launch_contract_version"] == "unsupported"
+    assert fields["http_status"] == 400
+    assert fields["outcome"] == "error"
+    assert "must-not-log-version" not in str(info.call_args)
+    assert "synthetic-auth" not in str(info.call_args)
 
 
 @pytest.mark.parametrize("operation", ["create", "restore"])
