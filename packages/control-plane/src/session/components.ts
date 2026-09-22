@@ -45,6 +45,7 @@ import {
   type McpServerLookup,
   type SlackAgentNotifyLookup,
   type SandboxShutdownLifecycle,
+  type SessionNoticeRecorder,
 } from "../sandbox/lifecycle/manager";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
@@ -66,6 +67,7 @@ import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
+import { createSessionNoticeRecorder } from "./session-notices";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
@@ -464,6 +466,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    notices: createSessionNoticeRecorder(eventRepository, messenger, generateId),
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
@@ -997,6 +1000,8 @@ interface LifecycleManagerDeps {
   wsManager: SessionWebSocketManager;
   alarmScheduler: RehydratableAlarmScheduler;
   sandboxDashboardSettings: SandboxDashboardSettings;
+  /** Persists lifecycle notices that must outlive the sockets open when they happen. */
+  notices: SessionNoticeRecorder;
 }
 
 /** Create the lifecycle manager with all required adapters. */
@@ -1014,6 +1019,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    notices,
   } = deps;
   // Both throw on a misconfigured deployment — deliberately at graph
   // construction, so every session request fails at initialization instead of
@@ -1094,6 +1100,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     mcpServerLookup,
     slackAgentNotifyLookup,
     sandboxDashboardUrlBuilder,
+    notices,
   };
 
   // The image lookup exists only for providers that support prebuilt images,
