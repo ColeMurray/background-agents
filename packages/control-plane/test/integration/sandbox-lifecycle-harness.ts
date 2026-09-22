@@ -19,6 +19,7 @@ import { SessionAttachmentRepository } from "../../src/session/session-attachmen
 import { MessageFailureService } from "../../src/session/message-failure-service";
 import { createLogger } from "../../src/logger";
 
+/** Real lifecycle/persistence; queue admission is observed, not dispatched, and status projection is omitted. */
 export function realLifecycleHarness(
   instance: SessionDO,
   durableState: DurableObjectState,

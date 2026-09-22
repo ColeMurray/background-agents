@@ -291,7 +291,7 @@ describe("sandbox state retention", () => {
     });
   });
 
-  it("terminalizes the interrupted prompt once and keeps pending work paused until explicit recovery", async () => {
+  it("terminalizes the interrupted prompt once and gates lifecycle admission until explicit recovery", async () => {
     const stub = await servingSession();
     const [{ id: authorId }] = await queryDO<{ id: string }>(
       stub,

@@ -87,11 +87,12 @@ session appear recovered.
 
 ## Verification before deployment
 
-Automated regressions exercise the real manager, coordinator, and SQLite repositories inside
-Workerd, with only provider operations and transport boundaries substituted. They cover legacy
-state, compatibility rejection, near-drain capture, interrupted prompts, reconstruction, late
-results, ambiguous provider responses, transactional rollback, persistent resume, and notification
-failure.
+Focused regressions exercise the real manager, coordinator, message completion service, and SQLite
+repositories inside Workerd. Provider operations and transport are substituted; queue callbacks
+record admission decisions and status reconciliation is a no-op. These are lifecycle/persistence
+tests, not an end-to-end test of the production queue and status wiring. They cover legacy state,
+compatibility rejection, near-drain capture, interrupted prompts, reconstruction, late results,
+ambiguous provider responses, transactional rollback, persistent resume, and notification failure.
 
 Run a provider-backed canary as well: create tracked/untracked/ignored and secondary- repository
 sentinels, establish harness conversation state, interrupt a serving execution, verify the recovery
