@@ -5,7 +5,22 @@ from typing import Any
 
 import modal
 
-from sandbox_runtime.constants import DEFAULT_SANDBOX_TIMEOUT_SECONDS
+from sandbox_runtime.constants import (
+    CODE_SERVER_PORT,
+    CODE_SERVER_PORT_ENV_VAR,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    NOVNC_PORT,
+    NOVNC_PORT_ENV_VAR,
+    SANDBOX_TIMEOUT_ENV_VAR,
+    TTYD_PROXY_PORT,
+    TTYD_PROXY_PORT_ENV_VAR,
+    TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
+    VNC_PASSWORD_ENV_VAR,
+    VNC_PASSWORD_MAX_BYTES,
+    VNC_PORT,
+)
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
@@ -19,12 +34,27 @@ from .launch import (
     SnapshotImageSource,
 )
 from .models import DEFAULT_VNC_ENABLED, SandboxConfig, SandboxHandle
+from .tunnels import MAX_TUNNEL_PORTS
 
 # Preserve the existing public imports after moving their implementations.
 __all__ = [
+    "CODE_SERVER_PORT",
+    "CODE_SERVER_PORT_ENV_VAR",
     "DEFAULT_SANDBOX_TIMEOUT_SECONDS",
     "DEFAULT_VNC_ENABLED",
+    "EXPECTED_TUNNEL_PORTS_ENV_VAR",
+    "MAX_TUNNEL_PORTS",
+    "NOVNC_PORT",
+    "NOVNC_PORT_ENV_VAR",
+    "SANDBOX_TIMEOUT_ENV_VAR",
     "SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS",
+    "TTYD_PROXY_PORT",
+    "TTYD_PROXY_PORT_ENV_VAR",
+    "TUNNEL_ENV_FILE_PATH",
+    "TUNNEL_ENV_SANDBOX_ID_KEY",
+    "VNC_PASSWORD_ENV_VAR",
+    "VNC_PASSWORD_MAX_BYTES",
+    "VNC_PORT",
     "RepositoryImageUnavailableError",
     "SandboxConfig",
     "SandboxHandle",
