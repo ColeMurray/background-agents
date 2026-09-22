@@ -27,6 +27,7 @@ const stateSchema = sandboxShutdownSchema
     lifecyclePolicy: z.enum(["confirmed", "legacy"]).optional(),
     restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
+    checkpointOperationId: z.string().optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
     stopByMs: z.number().optional(),

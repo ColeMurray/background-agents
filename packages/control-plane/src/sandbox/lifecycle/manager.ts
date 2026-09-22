@@ -246,14 +246,14 @@ export interface SandboxStorage {
   updateSandboxRuntimeVersion(runtimeVersion: string | null): void;
   /**
    * Record `imageId` as the snapshot of the sandbox identified by
-   * `sandboxId`, with the runtime version that produced it (null when
+   * `generation`, with the runtime version that produced it (null when
    * the sandbox never reported one). Applies only while that is still the
    * row's sandbox, and reports whether it was: a snapshot completes after a
    * provider await, and a replacement reserved meanwhile must not inherit
    * an image of the sandbox it replaced.
    */
   recordSandboxSnapshot(
-    sandboxId: string | null,
+    generation: SandboxGeneration,
     imageId: string,
     runtimeVersion: string | null
   ): boolean;

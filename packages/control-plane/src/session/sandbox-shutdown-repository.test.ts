@@ -45,6 +45,26 @@ describe("SandboxShutdownRepository", () => {
     fixture.db.close();
   });
 
+  it("round-trips a verified ordinary recovery point in a running generation", () => {
+    const fixture = repository();
+    const running = record({
+      sourceRetired: false,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "ordinary-checkpoint",
+        provider: "modal",
+        savedAtMs: 12_000,
+        runtimeVersion: null,
+      },
+      savedAtMs: 12_000,
+    });
+
+    fixture.repository.write(running);
+
+    expect(fixture.repository.read()).toEqual(running);
+    fixture.db.close();
+  });
+
   it("atomically replaces the singleton while preserving a verified receipt", () => {
     const fixture = repository();
     fixture.repository.write(record());

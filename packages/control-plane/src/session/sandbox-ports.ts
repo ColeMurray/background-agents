@@ -1,5 +1,6 @@
 import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxGeneration } from "../sandbox/lifecycle/ports";
 import type { SandboxRow } from "./types";
 
 /** Read-side state. Lifecycle mutations are not part of a session consumer's port. */
@@ -24,7 +25,7 @@ export interface SandboxRuntimeFacts {
 /** Persistence used by final graceful shutdown without exposing the repository aggregate. */
 export interface SandboxShutdownStorage extends SandboxStateReader {
   recordSandboxSnapshot(
-    sandboxId: string | null,
+    generation: SandboxGeneration,
     snapshotId: string,
     runtimeVersion: string | null
   ): boolean;

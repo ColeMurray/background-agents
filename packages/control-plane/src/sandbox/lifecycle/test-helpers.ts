@@ -14,6 +14,7 @@ import {
 } from "./manager";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
+import { SandboxRecoveryPointRepository } from "../../session/sandbox-recovery-point-repository";
 import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 import type {
   SandboxProvider,
@@ -221,9 +222,14 @@ export function createMockStorage(
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
     recordSandboxSnapshot: vi.fn(
-      (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {
+      (generation: SandboxGeneration, imageId: string, runtimeVersion: string | null) => {
         calls.push(`recordSandboxSnapshot:${imageId}:${runtimeVersion}`);
-        if (!sandbox || sandbox.modal_sandbox_id !== sandboxId) return false;
+        if (
+          !sandbox ||
+          sandbox.modal_sandbox_id !== generation.sandboxId ||
+          sandbox.created_at !== generation.createdAt
+        )
+          return false;
         sandbox.snapshot_image_id = imageId;
         sandbox.snapshot_runtime_version = runtimeVersion;
         return true;
@@ -437,18 +443,21 @@ export function createCheckpointShutdown(
   onLifecycleChange: () => Promise<void> = async () => {}
 ): SandboxShutdownLifecycle {
   let state: ShutdownRecord | null = null;
-  const coordinator = new SandboxShutdownCoordinator({
-    store: {
-      read: () => (state ? structuredClone(state) : null),
-      write: (next: ShutdownRecord) => {
-        state = structuredClone(next);
-      },
+  const store = {
+    read: () => (state ? structuredClone(state) : null),
+    write: (next: ShutdownRecord) => {
+      state = structuredClone(next);
     },
+  };
+  const transaction = <T>(operation: () => T): T => operation();
+  const coordinator = new SandboxShutdownCoordinator({
+    store,
+    recoveryPoints: new SandboxRecoveryPointRepository(transaction, store, storage),
     provider,
     sandbox: storage,
     session: {
       getSession: () => storage.getSession(),
-      transaction: <T>(operation: () => T): T => operation(),
+      transaction,
     },
     messenger,
     sockets: { getSandboxSocket: () => null },

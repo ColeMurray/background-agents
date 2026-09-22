@@ -9,6 +9,7 @@ import {
   type SandboxRow,
 } from "./types";
 import type { Logger } from "../logger";
+import type { SandboxGeneration } from "../sandbox/lifecycle/ports";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
 
@@ -346,20 +347,22 @@ export class SandboxRepository {
 
   /**
    * Record `imageId` as the snapshot of the sandbox identified by
-   * `sandboxId`, with the runtime version that produced it. Applies
-   * only while that is still the row's sandbox; reports whether it was.
+   * `generation`, with the runtime version that produced it. Applies
+   * only while that is still the row's sandbox generation; reports whether it was.
    */
   recordSandboxSnapshot(
-    sandboxId: string | null,
+    generation: SandboxGeneration,
     imageId: string,
     runtimeVersion: string | null
   ): boolean {
     const result = this.sql.exec(
       `UPDATE sandbox SET snapshot_image_id = ?, snapshot_runtime_version = ?
-       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?`,
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`,
       imageId,
       runtimeVersion,
-      sandboxId
+      generation.sandboxId,
+      generation.createdAt
     );
     // Consume the result before reading rowsWritten so the count is final.
     result.toArray();
