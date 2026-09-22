@@ -45,7 +45,7 @@ const OPENAI_MODELS = [
   "openai/gpt-5.3-codex-spark",
 ] as const;
 
-const XAI_MODELS = ["xai/grok-4.5", "xai/grok-4.6", "xai/grok-build-0.1"] as const;
+const XAI_MODELS = ["xai/grok-4.5", "xai/grok-4.6", "xai/grok-4.7", "xai/grok-build-0.1"] as const;
 
 const ZEN_MODELS = [
   "opencode/kimi-k2.5",
@@ -397,8 +397,16 @@ describe("model utilities", () => {
       efforts: ["low", "medium", "high", "xhigh"],
       default: "high",
     });
-    expect(getReasoningConfig("xai/grok-4.6")).toEqual({
+    expect(getReasoningConfig("xai/grok-4.5")).toEqual({
       efforts: ["low", "medium", "high"],
+      default: "high",
+    });
+    expect(getReasoningConfig("xai/grok-4.6")).toEqual({
+      efforts: ["low", "medium", "high", "xhigh"],
+      default: "high",
+    });
+    expect(getReasoningConfig("xai/grok-4.7")).toEqual({
+      efforts: ["low", "medium", "high", "xhigh"],
       default: "high",
     });
     expect(getReasoningConfig("xai/grok-build-0.1")).toBeUndefined();
@@ -425,7 +433,11 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("openai/gpt-5.6-luna", "max")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-4.6", "high")).toBe(true);
-    expect(isValidReasoningEffort("xai/grok-4.6", "xhigh")).toBe(false);
+    expect(isValidReasoningEffort("xai/grok-4.6", "xhigh")).toBe(true);
+    expect(isValidReasoningEffort("xai/grok-4.6", "max")).toBe(false);
+    expect(isValidReasoningEffort("xai/grok-4.7", "xhigh")).toBe(true);
+    expect(isValidReasoningEffort("xai/grok-4.7", "max")).toBe(false);
+    expect(isValidReasoningEffort("xai/grok-4.5", "xhigh")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "high")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "xhigh")).toBe(false);
     expect(isValidReasoningEffort("deepseek/deepseek-v4-pro", "high")).toBe(false);

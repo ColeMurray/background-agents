@@ -2,6 +2,13 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 21, 2026
+
+**Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from
+low through xhigh. `xai/grok-4.6` now also offers xhigh, which it supported but the catalog did not
+expose. The **xAI / SuperGrok** group stays opt-in — enable the model under **Settings > Models**.
+See [Available models](docs/AVAILABLE_MODELS.md#xai--supergrok).
+
 ## September 20, 2026
 
 **Graceful sandbox shutdown and recovery.** Sandboxes approaching their provider lifetime now stop

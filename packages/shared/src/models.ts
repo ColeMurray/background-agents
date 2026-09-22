@@ -289,8 +289,14 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.6",
         name: "Grok 4.6",
+        description: "Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+      {
+        id: "xai/grok-4.7",
+        name: "Grok 4.7",
         description: "Latest Grok for chat, coding, and agentic tools",
-        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
       },
       {
         id: "xai/grok-build-0.1",
