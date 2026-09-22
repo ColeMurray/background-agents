@@ -2723,9 +2723,12 @@ describe("SandboxLifecycleManager", () => {
       ["stop_send_failed", "Stop command send failed"],
       ["stop_confirmation_timeout", "Stop confirmation timed out"],
     ] as const)(
-      "uses the %s reason for provider stop and socket close",
+      "uses the %s reason for failed-boot provider stop and socket close",
       async (trigger, closeReason) => {
-        const storage = createMockStorage();
+        const storage = createMockStorage(
+          createMockSession(),
+          createMockSandbox({ status: "connecting" })
+        );
         const wsManager = createMockWebSocketManager(true);
         const stopSandbox = vi.fn(async () => ({ success: true }));
         const provider = createMockProvider({
@@ -2759,7 +2762,10 @@ describe("SandboxLifecycleManager", () => {
         resolveStop = resolve;
       });
       const wsManager = createMockWebSocketManager(true);
-      const mockStorage = createMockStorage();
+      const mockStorage = createMockStorage(
+        createMockSession(),
+        createMockSandbox({ status: "connecting" })
+      );
       const manager = new SandboxLifecycleManager(
         createMockProvider({
           capabilities: { supportsExplicitStop: true },
@@ -2816,7 +2822,9 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointShutdown(provider, storage, createMockBroadcaster()),
+        createCheckpointShutdown(provider, storage, createMockBroadcaster(), undefined, () =>
+          manager.retireShutdownAccess()
+        ),
         createTestConfig()
       );
 
@@ -2824,8 +2832,8 @@ describe("SandboxLifecycleManager", () => {
 
       expect(storage.calls).toContain("updateSandboxStatus:stale");
       expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(
-        1011,
-        "Fatal sandbox runtime error"
+        1000,
+        "Sandbox state preserved"
       );
       expect(manager.isSpawning()).toBe(true);
       await vi.waitFor(() =>

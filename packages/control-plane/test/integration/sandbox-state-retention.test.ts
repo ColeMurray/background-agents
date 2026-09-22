@@ -41,22 +41,54 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
-  it("does not mark a serving source replaceable when its retirement fence cannot commit", async () => {
-    const stub = await servingSession();
-    await runInSessionDO(stub, async (instance, durableState) => {
-      durableState.storage.sql.exec(
-        "CREATE TRIGGER reject_retirement BEFORE INSERT ON sandbox_preservation BEGIN SELECT RAISE(FAIL, 'retirement fence unavailable'); END"
+  it.each(["fatal", "unresponsive"] as const)(
+    "leaves access and dispatch intact when the %s retirement fence cannot commit",
+    async (trigger) => {
+      const stub = await servingSession();
+      const [{ id: authorId }] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants LIMIT 1"
       );
-      const provider = snapshotProvider();
-      const { manager, sandbox } = realLifecycleHarness(instance, durableState, provider);
-      expect(await manager.terminateFailedSandbox("runtime crashed")).toBe(false);
-      expect(sandbox.getSandbox()?.status).toBe("ready");
-      expect(sandbox.getSandbox()?.modal_object_id).toBe("legacy-source");
-      expect(provider.takeSnapshot).not.toHaveBeenCalled();
-      expect(provider.stopSandbox).not.toHaveBeenCalled();
-      expect(provider.createSandbox).not.toHaveBeenCalled();
-    });
-  });
+      await seedMessage(stub, {
+        id: "still-processing",
+        authorId,
+        content: "work",
+        source: "web",
+        status: "processing",
+        createdAt: Date.now(),
+      });
+      await runInSessionDO(stub, async (instance, durableState) => {
+        durableState.storage.sql.exec(
+          "CREATE TRIGGER reject_retirement BEFORE INSERT ON sandbox_preservation BEGIN SELECT RAISE(FAIL, 'retirement fence unavailable'); END"
+        );
+        const provider = snapshotProvider();
+        const { manager, sandbox } = realLifecycleHarness(instance, durableState, provider, {
+          socket: {} as WebSocket,
+        });
+        sandbox.setActiveSocketId("live-bridge");
+        await sandbox.updateSandboxAccess("codeServer", "https://preview.test", "preview-secret");
+        const before = sandbox.getSandbox()!;
+        if (trigger === "fatal")
+          expect(await manager.terminateFailedSandbox("runtime crashed")).toBe(false);
+        else
+          await expect(manager.terminateUnresponsiveSandbox("stop_send_failed")).rejects.toThrow(
+            "retirement fence unavailable"
+          );
+        expect(sandbox.getSandbox()?.status).toBe("ready");
+        expect(sandbox.getSandbox()?.modal_object_id).toBe("legacy-source");
+        expect(sandbox.getSandbox()?.active_socket_id).toBe("live-bridge");
+        expect(sandbox.getSandbox()?.code_server_url).toBe(before.code_server_url);
+        expect(sandbox.getSandbox()?.code_server_password).toBe(before.code_server_password);
+        await manager.spawnSandbox();
+        expect(provider.takeSnapshot).not.toHaveBeenCalled();
+        expect(provider.stopSandbox).not.toHaveBeenCalled();
+        expect(provider.createSandbox).not.toHaveBeenCalled();
+      });
+      expect(
+        await queryDO(stub, "SELECT status FROM messages WHERE id = 'still-processing'")
+      ).toEqual([{ status: "processing" }]);
+    }
+  );
 
   it("ignores a capture response belonging to a superseded generation", async () => {
     const stub = await servingSession();

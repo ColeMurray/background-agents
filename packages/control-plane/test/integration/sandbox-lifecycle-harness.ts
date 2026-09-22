@@ -27,6 +27,7 @@ export function realLifecycleHarness(
     store?: ShutdownStore;
     onQueueAdmission?: (decision: string) => void;
     onAnnouncement?: (message: object) => void;
+    socket?: WebSocket;
   } = {}
 ) {
   const sandbox = componentsOf(instance).sandboxRepository;
@@ -88,7 +89,7 @@ export function realLifecycleHarness(
     },
     onLifecycleChange: processQueue,
     reconcileStatusFromMessages: async () => undefined,
-    retireAccess: () => undefined,
+    retireAccess: () => manager.retireShutdownAccess(),
   } as never);
   const manager = new SandboxLifecycleManager(
     provider,
@@ -96,10 +97,11 @@ export function realLifecycleHarness(
     sessionContext,
     { broadcast: (message) => lifecycleAnnouncements.push(message) },
     {
-      getSandboxWebSocket: () => null,
+      getSandboxWebSocket: () =>
+        sandbox.getSandbox()?.active_socket_id === "" ? null : (options.socket ?? null),
       getConnectedClientCount: () => 0,
       sendToSandbox: () => false,
-      detachSandboxWebSocket: () => undefined,
+      detachSandboxWebSocket: () => sandbox.revokeActiveSocketId(),
     },
     {
       schedule: async () => undefined,

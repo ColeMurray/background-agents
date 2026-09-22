@@ -649,6 +649,7 @@ export class SandboxShutdownCoordinator {
       return message ? this.deps.failures.record(message.id, reason, now, "processing") : null;
     });
     this.broadcast({ type: "sandbox_status", status: "stale" });
+    this.deps.retireAccess();
     if (failure) this.deps.failures.deliver(failure);
     await this.capture(next);
     this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {

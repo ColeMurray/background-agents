@@ -1865,11 +1865,15 @@ export class SandboxLifecycleManager
     }
 
     const wasServing = sandbox.status === "ready";
+    if (wasServing) {
+      await this.shutdown.preserveBeforeTermination(trigger);
+      return;
+    }
     const canStopProvider = this.canStopProviderSandbox();
-    if (!wasServing && !canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
-    if (!wasServing) this.storage.updateSandboxStatus("stale");
+    if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+    this.storage.updateSandboxStatus("stale");
     this.clearSandboxAccessState();
-    if (!wasServing) this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
     const closeReason = {
       prompt_dispatch_send_failed: "Prompt dispatch send failed",
       stop_send_failed: "Stop command send failed",
@@ -1877,10 +1881,6 @@ export class SandboxLifecycleManager
       stop_confirmation_timeout: "Stop confirmation timed out",
     }[trigger];
     this.wsManager.detachSandboxWebSocket(1011, closeReason);
-    if (wasServing) {
-      await this.shutdown.preserveBeforeTermination(trigger);
-      return;
-    }
     if (canStopProvider) {
       await this.stopProviderSandboxSafely({
         reason: trigger,
@@ -1917,27 +1917,35 @@ export class SandboxLifecycleManager
     });
     this.isTerminatingSandbox = true;
     const wasServing = sandbox.status === "ready";
-    if (!wasServing) this.storage.updateSandboxStatus("failed");
+    if (wasServing) {
+      try {
+        await this.shutdown.preserveBeforeTermination("fatal_runtime_error");
+        this.recordSpawnFailure(Date.now(), sandbox.created_at);
+        this.reportSandboxError(reason);
+        return true;
+      } catch (error) {
+        this.log.warn("Emergency preservation failed", { error });
+        return false;
+      } finally {
+        this.isTerminatingSandbox = false;
+      }
+    }
+    this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(Date.now(), sandbox.created_at);
-    if (!wasServing) this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     this.clearSandboxAccessState();
 
     const canStopProvider = this.canStopProviderSandbox();
-    if (!wasServing && !canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+    if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
 
     try {
-      if (wasServing) {
-        await this.shutdown.preserveBeforeTermination("fatal_runtime_error");
-        return true;
-      }
       if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error", "destroy");
     } catch (error) {
       this.log.warn("Provider stop failed after fatal runtime error", {
         error: error instanceof Error ? error.message : String(error),
       });
-      if (wasServing) return false;
     } finally {
       this.isTerminatingSandbox = false;
     }

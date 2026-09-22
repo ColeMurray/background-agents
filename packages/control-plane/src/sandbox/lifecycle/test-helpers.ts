@@ -435,7 +435,8 @@ export function createCheckpointShutdown(
   provider: SandboxProvider,
   storage: SandboxStorage & SessionContextReader,
   messenger: SandboxBroadcaster,
-  onLifecycleChange: () => Promise<void> = async () => {}
+  onLifecycleChange: () => Promise<void> = async () => {},
+  retireAccess: () => void = () => {}
 ): SandboxShutdownLifecycle {
   let state: ShutdownRecord | null = null;
   const coordinator = new SandboxShutdownCoordinator({
@@ -459,7 +460,7 @@ export function createCheckpointShutdown(
     background: { submit: vi.fn((task: () => Promise<void>) => void task()) },
     onLifecycleChange: vi.fn(onLifecycleChange),
     reconcileStatusFromMessages: vi.fn(async () => {}),
-    retireAccess: vi.fn(),
+    retireAccess,
   } as never);
   return {
     ...createUnmanagedShutdown(),
