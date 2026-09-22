@@ -461,6 +461,9 @@ export function createCheckpointShutdown(
   return {
     ...createUnmanagedShutdown(),
     captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    // Delegated so a checkpoint whose provider outcome is unknown puts this
+    // fixture into the same hold the real coordinator would.
+    isHolding: () => coordinator.isHolding(),
   };
 }
 

@@ -104,6 +104,14 @@ const log = createLogger("lifecycle-manager");
 const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 
+/**
+ * Says what was lost, not what replaced it: it is recorded at the moment the
+ * old generation is given up, while the replacement spawn can still fail.
+ */
+const STATE_DISCARDED_NOTICE =
+  "The previous sandbox's state could not be restored. Uncommitted changes and earlier " +
+  "conversation context from it are not carried over.";
+
 // ==================== Dependency Interfaces ====================
 
 /** Internal shutdown collaborator; callers outside this subsystem use the manager's policies. */
@@ -358,6 +366,21 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig {
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
   /** Builds a provider dashboard URL for a persisted provider object ID. */
   sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
+  /** Records notices that must outlive the sockets open when they happen. */
+  notices?: SessionNoticeRecorder;
+}
+
+/**
+ * Records a notice on the session timeline.
+ *
+ * `broadcast` reaches only the sockets open at that instant, and the first
+ * party client makes no view-state change for a `sandbox_warning` at all, so a
+ * notice that still matters after the fact has to be a persisted timeline
+ * event. Implemented over the same warning event the budget service persists,
+ * which the timeline already renders.
+ */
+export interface SessionNoticeRecorder {
+  recordWarning(message: string): void;
 }
 
 /**
@@ -643,21 +666,23 @@ export class SandboxLifecycleManager
             snapshot_image_id: spawnState.snapshotImageId,
           });
         }
-        if (discardingState) {
-          this.log.warn("Replacing a sandbox generation without restoring its state", {
-            event: "sandbox.state_discarded",
-            reason: spawnDecision.reason ?? "no restorable snapshot",
-            sandbox_status: spawnState.status,
-            snapshot_image_id: spawnState.snapshotImageId,
-            snapshot_runtime_version: spawnState.snapshotRuntimeVersion,
-          });
-          this.broadcaster.broadcast({
-            type: "sandbox_warning",
-            message:
-              "Started a fresh sandbox: the previous sandbox's state could not be restored, so uncommitted changes and earlier conversation context are not carried over.",
-          });
-        }
-        await this.doSpawn();
+        // Reported from inside the spawn, once the old generation has actually
+        // been given up: announcing the loss beforehand would claim it for a
+        // spawn that never reached that boundary.
+        await this.doSpawn(
+          discardingState
+            ? (): void => {
+                this.log.warn("Replacing a sandbox generation without restoring its state", {
+                  event: "sandbox.state_discarded",
+                  reason: spawnDecision.reason ?? "no restorable snapshot",
+                  sandbox_status: spawnState.status,
+                  snapshot_image_id: spawnState.snapshotImageId,
+                  snapshot_runtime_version: spawnState.snapshotRuntimeVersion,
+                });
+                this.config.notices?.recordWarning(STATE_DISCARDED_NOTICE);
+              }
+            : undefined
+        );
         return;
       }
     }
@@ -714,8 +739,13 @@ export class SandboxLifecycleManager
 
   /**
    * Execute a fresh sandbox spawn.
+   *
+   * `onGenerationDiscarded` fires once the previous generation has actually
+   * been given up — its identity overwritten and its provider sandbox stopped
+   * — so a caller that wants to report the loss reports it only when it
+   * happened, not when it was merely intended.
    */
-  private async doSpawn(): Promise<void> {
+  private async doSpawn(onGenerationDiscarded?: () => void): Promise<void> {
     this.isSpawningSandbox = true;
     this.providerStartupPending = true;
     const spawnStartedAt = Date.now();
@@ -742,6 +772,7 @@ export class SandboxLifecycleManager
       });
 
       await this.stopPriorProviderSandbox();
+      onGenerationDiscarded?.();
 
       const userEnvVars = await this.sessionContext.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
@@ -1882,6 +1913,45 @@ export class SandboxLifecycleManager
     return "sandbox_terminated";
   }
 
+  /**
+   * Capture a recovery point before a termination that destroys the filesystem,
+   * and report whether the destruction may go ahead.
+   *
+   * A `destroy` stop deletes the sandbox filesystem: uncommitted work, and the
+   * vendor session id that lives in it, so the replacement answers with no
+   * conversation history. The idle and heartbeat routes already snapshot first;
+   * the stale and fatal-error routes did not, so a prompt-send failure or a
+   * fatal runtime report silently cost the session everything it had not
+   * pushed. A `preserve` stop keeps the filesystem where the provider owns it
+   * and needs nothing.
+   *
+   * Only a generation that actually served is captured. One that is still
+   * booting has nothing to lose, and its filesystem is whatever the failed boot
+   * left behind — recording that as a recovery point would make every
+   * replacement restore the same broken boot.
+   *
+   * Refusing is deliberately narrow, and matches the inactivity route: a
+   * checkpoint that simply did not run leaves the caller free to stop the
+   * sandbox, because refusing there would leak a running sandbox for no gain.
+   * Only a checkpoint whose provider outcome is *unknown* puts the coordinator
+   * into a hold, and destroying the one copy of a filesystem we may or may not
+   * have captured is exactly what the hold exists to prevent.
+   */
+  private async permitDestructiveTermination(
+    reason: string,
+    intent: StopConfig["intent"],
+    servingStatus: SandboxStatus
+  ): Promise<boolean> {
+    if (intent !== "destroy" || servingStatus !== "ready") return true;
+    await this.triggerSnapshot(reason);
+    if (!this.shutdown.isHolding()) return true;
+    this.log.warn("Holding a destructive termination with no durable recovery point", {
+      event: "sandbox.destroy_held",
+      reason,
+    });
+    return false;
+  }
+
   async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
     if (this.shutdown.isHolding()) return;
     const sandbox = this.storage.getSandbox();
@@ -1889,6 +1959,8 @@ export class SandboxLifecycleManager
       return;
     }
 
+    const servingStatus = sandbox.status;
+    const intent = this.usesProviderManagedStop() ? "preserve" : "destroy";
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.updateSandboxStatus("stale");
@@ -1901,10 +1973,11 @@ export class SandboxLifecycleManager
       stop_confirmation_timeout: "Stop confirmation timed out",
     }[trigger];
     this.wsManager.detachSandboxWebSocket(1011, closeReason);
+    if (!(await this.permitDestructiveTermination(trigger, intent, servingStatus))) return;
     if (canStopProvider) {
       await this.stopProviderSandboxSafely({
         reason: trigger,
-        intent: this.usesProviderManagedStop() ? "preserve" : "destroy",
+        intent,
         failureMessage: "Provider stop failed for unresponsive sandbox",
         data: { trigger },
       });
@@ -1933,6 +2006,7 @@ export class SandboxLifecycleManager
       sandbox_status: sandbox.status,
       error: reason,
     });
+    const servingStatus = sandbox.status;
     this.isTerminatingSandbox = true;
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(Date.now(), sandbox.created_at);
@@ -1945,6 +2019,13 @@ export class SandboxLifecycleManager
     this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
 
     try {
+      // A fatal runtime error always destroys: the report says this
+      // generation's runtime is unusable, so there is no in-place resume to
+      // preserve for, whatever the provider supports.
+      if (
+        !(await this.permitDestructiveTermination("fatal_runtime_error", "destroy", servingStatus))
+      )
+        return true;
       if (canStopProvider) await this.stopProviderSandbox("fatal_runtime_error", "destroy");
     } catch (error) {
       this.log.warn("Provider stop failed after fatal runtime error", {

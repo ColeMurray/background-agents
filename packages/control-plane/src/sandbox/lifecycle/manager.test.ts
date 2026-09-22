@@ -2822,8 +2822,12 @@ describe("SandboxLifecycleManager", () => {
         "Fatal sandbox runtime error"
       );
       expect(manager.isSpawning()).toBe(true);
-      expect(stopSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "fatal_runtime_error", intent: "destroy" })
+      // Awaited rather than asserted synchronously: the destructive stop now
+      // follows a recovery-point capture, so it is issued a few ticks later.
+      await vi.waitFor(() =>
+        expect(stopSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "fatal_runtime_error", intent: "destroy" })
+        )
       );
       await manager.spawnSandbox();
       expect(createSandbox).not.toHaveBeenCalled();
