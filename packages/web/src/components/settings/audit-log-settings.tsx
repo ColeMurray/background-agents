@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { AuditEvent, AuditOperationResult } from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuditEvents } from "@/hooks/use-audit-events";
 import { formatRelativeTime } from "@/lib/time";
+
+const subscribe = () => () => undefined;
 
 const OUTCOMES: Record<AuditOperationResult, { label: string; className: string }> = {
   applied: { label: "Applied", className: "bg-success-muted text-success" },
@@ -45,7 +47,12 @@ function resourceSummary(event: AuditEvent): string {
 
 function AuditEventCard({ event }: { event: AuditEvent }) {
   const outcome = OUTCOMES[event.operationResult];
-  const localTimestamp = new Date(event.occurredAt).toLocaleString();
+  const date = new Date(event.occurredAt);
+  const localTimestamp = useSyncExternalStore(
+    subscribe,
+    () => date.toLocaleString(),
+    () => date.toLocaleString("en-US", { timeZone: "UTC" })
+  );
 
   return (
     <li className="min-w-0 px-4 py-4 sm:px-5">
