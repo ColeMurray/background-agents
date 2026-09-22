@@ -34,6 +34,7 @@ import {
 import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -211,6 +212,7 @@ export interface SandboxStorage {
    * store its handle, and advance a fresh spawn to connecting. Returns the
    * resulting status, or null when another lifecycle event owns the row.
    */
+  rejectProviderStartup(generation: SandboxGeneration, providerObjectId: string | null): boolean;
   commitProviderStartup(
     generation: SandboxGeneration,
     providerObjectId: string | null,
@@ -703,6 +705,10 @@ export class SandboxLifecycleManager
       const now = Date.now();
       const sessionId = session.session_name || session.id;
       const hasRepository = sessionHasRepository(session);
+      const priorSandbox = this.storage.getSandbox();
+      const priorSandboxId = priorSandbox?.modal_sandbox_id ?? null;
+      // A fenced allocation must be retired before its durable identity is replaced.
+      if (priorSandbox?.fenced) await this.stopPriorProviderSandbox(true);
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
@@ -753,6 +759,7 @@ export class SandboxLifecycleManager
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
         sessionId,
+        retireSandboxId: priorSandboxId,
         sandboxId: expectedSandboxId,
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
@@ -852,6 +859,7 @@ export class SandboxLifecycleManager
         });
         return;
       }
+      await this.retainRejectedAllocation(error, generation);
       const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
       this.log.error("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -1129,6 +1137,10 @@ export class SandboxLifecycleManager
       this.storage.setLastSpawnError(null, null);
 
       const now = Date.now();
+      const priorSandbox = this.storage.getSandbox();
+      const priorSandboxId = priorSandbox?.modal_sandbox_id ?? null;
+      // A fenced allocation must be retired before its durable identity is replaced.
+      if (priorSandbox?.fenced) await this.stopPriorProviderSandbox(true);
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       const shutdownPolicy = shutdownPolicyForLaunch("existing", snapshotRuntimeVersion);
@@ -1158,6 +1170,7 @@ export class SandboxLifecycleManager
       if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
+        retireSandboxId: priorSandboxId,
         sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
@@ -1240,6 +1253,7 @@ export class SandboxLifecycleManager
         });
         return;
       }
+      await this.retainRejectedAllocation(error, generation);
       const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
       this.log.error("Sandbox restore completed", {
         event: "sandbox.restore",
@@ -1413,7 +1427,7 @@ export class SandboxLifecycleManager
   /**
    * Stop a sandbox that is about to be replaced before its provider handle is cleared.
    */
-  private async stopPriorProviderSandbox(): Promise<void> {
+  private async stopPriorProviderSandbox(requireConfirmation = false): Promise<void> {
     const providerObjectId = this.storage.getSandbox()?.modal_object_id;
     if (!providerObjectId) {
       return;
@@ -1439,6 +1453,7 @@ export class SandboxLifecycleManager
       ]);
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {
+      if (requireConfirmation) throw error;
       this.storage.updateSandboxModalObjectId(null);
       this.log.warn("Provider stop failed before sandbox replacement", {
         provider_object_id: providerObjectId,
@@ -2145,6 +2160,25 @@ export class SandboxLifecycleManager
 
     this.log.info("Storing ttyd info", { url });
     await this.storage.updateSandboxAccess("ttyd", url, token);
+  }
+
+  private async retainRejectedAllocation(
+    error: unknown,
+    generation: SandboxGeneration | null
+  ): Promise<void> {
+    if (!(error instanceof SandboxLaunchRejectedError) || !generation) return;
+    const alreadyFailed = this.storage.getSandbox()?.status === "failed";
+    // Keep the rejected handle on this generation so restart/replacement retries retirement.
+    // It is not a successful startup and receives no access credentials or readiness signal.
+    if (!this.storage.rejectProviderStartup(generation, error.providerObjectId)) {
+      await this.destroyLateProviderResult(error.providerObjectId ?? undefined);
+      return;
+    }
+    this.wsManager.detachSandboxWebSocket(1008, "Provider allocation rejected");
+    this.clearSandboxAccessState();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    this.reportSandboxError(error.message);
+    if (!alreadyFailed) this.recordSpawnFailure(Date.now(), generation.createdAt);
   }
 
   private async claimProviderStartup(

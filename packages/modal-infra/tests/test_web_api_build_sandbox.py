@@ -9,7 +9,11 @@ from modal.exception import TimeoutError as ModalTimeoutError
 
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
-from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS, MAX_BUILD_TIMEOUT_SECONDS
+from src.sandbox.build_session import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    MAX_BUILD_TIMEOUT_SECONDS,
+    BuildSessionLaunch,
+)
 from src.sandbox.manager import SandboxHandle, SandboxManager
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
@@ -23,7 +27,7 @@ def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
     monkeypatch.setattr(web_api, "validate_control_plane_url", lambda _url: True)
     service = SimpleNamespace(
-        create=AsyncMock(return_value="modal-session-1"),
+        create=AsyncMock(return_value=BuildSessionLaunch("modal-session-1", "modal")),
         start=AsyncMock(),
         terminate=AsyncMock(),
         snapshot=AsyncMock(return_value="modal-image-1"),
@@ -104,7 +108,7 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
 
     assert result == {
         "success": True,
-        "data": {"provider_session_id": "modal-session-1"},
+        "data": {"provider_session_id": "modal-session-1", "sandbox_backend": "modal"},
     }
     service.create.assert_awaited_once_with(
         build_id="imgb-1",
@@ -119,6 +123,8 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
         user_env_vars={"FOO": "bar"},
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds=2400,
+        sandbox_settings=None,
+        sandbox_backend="modal",
     )
 
 
@@ -143,6 +149,36 @@ async def test_create_build_sandbox_adds_finalization_grace_to_default_timeout(m
     assert service.create.await_args.kwargs["timeout_seconds"] == (
         DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("docker_enabled", [False, True])
+async def test_create_build_sandbox_returns_the_provider_confirmed_variant(
+    monkeypatch, docker_enabled
+):
+    service = _patch_dependencies(monkeypatch)
+    service.create.return_value = BuildSessionLaunch(
+        "modal-session-1", "modal-vm" if docker_enabled else "modal"
+    )
+    settings = {"cpuCores": 2, "memoryMib": 4096}
+
+    result = await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            "sandbox_settings": settings,
+            **CALLBACK_CONTEXT,
+        },
+    )
+
+    assert result["data"] == {
+        "provider_session_id": "modal-session-1",
+        "sandbox_backend": "modal-vm" if docker_enabled else "modal",
+    }
+    assert service.create.await_args.kwargs["sandbox_settings"] == settings
 
 
 @pytest.mark.asyncio
@@ -597,7 +633,7 @@ async def test_terminate_request_validation_runs_after_authentication(monkeypatc
 @pytest.mark.asyncio
 async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    handle = SimpleNamespace()
+    handle = SimpleNamespace(sandbox_backend="modal")
     manager = SimpleNamespace(
         get_sandbox_by_id=AsyncMock(return_value=handle),
         take_snapshot=AsyncMock(return_value="im-session-1"),
@@ -706,3 +742,29 @@ async def test_generic_snapshot_passes_ordinary_deadline_to_real_manager(
     assert result["data"]["image_id"] == "im-session-1"
     get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_vm_snapshot_retirement_shares_the_request_deadline(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    monkeypatch.setattr(web_api, "time", SimpleNamespace(time=lambda: 1000))
+
+    async def delayed_termination(**kwargs):
+        assert kwargs == {"wait": True}
+        await asyncio.sleep(10)
+
+    terminate = SimpleNamespace(aio=AsyncMock(side_effect=delayed_termination))
+    handle = SimpleNamespace(
+        sandbox_backend="modal-vm", modal_sandbox=SimpleNamespace(terminate=terminate)
+    )
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(return_value=handle),
+        take_snapshot=AsyncMock(return_value="im-vm"),
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_snapshot({"sandbox_id": "sb-vm", "deadline_at_ms": 1_000_020})
+    assert exc.value.status_code == 408
+    terminate.aio.assert_awaited_once_with(wait=True)

@@ -158,6 +158,24 @@ export class SandboxRepository {
     return (result.rowsWritten ?? 0) > 0;
   }
 
+  /** Persist cleanup responsibility while permanently revoking a rejected generation. */
+  rejectProviderStartup(
+    generation: { sandboxId: string | null; createdAt: number },
+    providerObjectId: string | null
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET modal_object_id = ?, status = 'failed', fenced = 1,
+         auth_token_hash = '', auth_token = NULL, active_socket_id = ''
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`,
+      providerObjectId,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
   commitProviderStartup(
     generation: { sandboxId: string | null; createdAt: number },
     providerObjectId: string | null,

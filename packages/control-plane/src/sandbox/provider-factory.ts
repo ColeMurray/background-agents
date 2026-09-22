@@ -21,7 +21,7 @@ import { createVercelProvider, type VercelSandboxProvider } from "./providers/ve
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
 
-function createModalProviderFromEnv(env: Env): ModalSandboxProvider {
+function createModalProviderFromEnv(env: Env, backend: "modal" | "modal-vm"): ModalSandboxProvider {
   if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
     throw new Error(
       "MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=modal"
@@ -35,7 +35,7 @@ function createModalProviderFromEnv(env: Env): ModalSandboxProvider {
     env.MODAL_API_URL
   );
 
-  return createModalProvider(client);
+  return createModalProvider(client, backend);
 }
 
 function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {
@@ -170,7 +170,10 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
 
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
-export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalSandboxProvider;
+export function createSandboxProviderFromEnv(
+  env: Env,
+  backend: "modal" | "modal-vm"
+): ModalSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
@@ -199,7 +202,8 @@ export function createSandboxProviderFromEnv(
     case "e2b":
       return createE2BProviderFromEnv(env);
     case "modal":
-      return createModalProviderFromEnv(env);
+    case "modal-vm":
+      return createModalProviderFromEnv(env, backend);
   }
 }
 

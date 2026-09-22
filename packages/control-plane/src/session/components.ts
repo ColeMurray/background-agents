@@ -1055,7 +1055,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   };
 
   const sandboxDashboardUrlBuilder =
-    sandboxBackend === "modal"
+    sandboxBackend === "modal" || sandboxBackend === "modal-vm"
       ? (providerObjectId: string) =>
           resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
       : undefined;

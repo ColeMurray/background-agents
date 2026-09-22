@@ -42,7 +42,7 @@ async def test_take_snapshot_passes_explicit_timeout():
 
 @pytest.mark.asyncio
 async def test_get_sandbox_by_id_awaits_async_lookup(monkeypatch):
-    modal_sandbox = SimpleNamespace()
+    modal_sandbox = SimpleNamespace(get_tags=_async_method({}))
     from_id = _async_method(modal_sandbox)
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
 
@@ -142,3 +142,62 @@ async def test_stop_sandbox_propagates_explicit_cancellation(monkeypatch):
 
     with pytest.raises(asyncio.CancelledError):
         await SandboxManager().stop_sandbox("sandbox-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code", [0, 1])
+async def test_vm_capture_requires_docker_preparation(exit_code):
+    process = SimpleNamespace(wait=_async_method(exit_code))
+    execute = _async_method(process)
+    snapshot = _async_method(SimpleNamespace(object_id="im-vm"))
+    handle = SandboxHandle(
+        sandbox_id="sb-vm",
+        sandbox_backend="modal-vm",
+        status=SandboxStatus.READY,
+        created_at=0,
+        modal_sandbox=SimpleNamespace(exec=execute, snapshot_filesystem=snapshot),
+    )
+    if exit_code:
+        with pytest.raises(RuntimeError, match="preparation"):
+            await SandboxManager().take_snapshot(handle)
+        snapshot.aio.assert_not_awaited()
+    else:
+        assert await SandboxManager().take_snapshot(handle) == "im-vm"
+        snapshot.aio.assert_awaited_once()
+    assert execute.aio.call_args.args == (
+        "python",
+        "-m",
+        "sandbox_runtime.docker_control",
+        "prepare",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", [9, 10])
+async def test_vm_preparation_consumes_capture_budget(monkeypatch, elapsed):
+    clock = SimpleNamespace(time=lambda: 1000, monotonic=lambda: 0)
+    monkeypatch.setattr("src.sandbox.manager.time", clock)
+
+    async def prepare():
+        clock.monotonic = lambda: elapsed
+        return 0
+
+    wait = _async_method()
+    wait.aio.side_effect = prepare
+    snapshot = _async_method(SimpleNamespace(object_id="im-vm"))
+    handle = SandboxHandle(
+        sandbox_id="sb-vm",
+        sandbox_backend="modal-vm",
+        status=SandboxStatus.READY,
+        created_at=0,
+        modal_sandbox=SimpleNamespace(
+            exec=_async_method(SimpleNamespace(wait=wait)), snapshot_filesystem=snapshot
+        ),
+    )
+    if elapsed == 10:
+        with pytest.raises(TimeoutError):
+            await SandboxManager().take_snapshot(handle, timeout_seconds=10)
+        snapshot.aio.assert_not_awaited()
+    else:
+        await SandboxManager().take_snapshot(handle, timeout_seconds=10)
+        snapshot.aio.assert_awaited_once_with(timeout=1)

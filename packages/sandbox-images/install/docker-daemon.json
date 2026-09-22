@@ -1,0 +1,19 @@
+{
+  "storage-driver": "overlay2",
+  "features": {
+    "containerd-snapshotter": false
+  },
+  "bip": "10.200.0.1/24",
+  "default-address-pools": [
+    {
+      "base": "10.201.0.0/16",
+      "size": 24
+    }
+  ],
+  "shutdown-timeout": 20,
+  "log-driver": "local",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}

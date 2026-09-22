@@ -145,6 +145,8 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
+  retireSandboxId?: string | null;
   /**
    * Ordered member list for multi-repo sessions. Only set when the session
    * has more than one member — single-repo sessions keep the scalar
@@ -235,6 +237,8 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
+  retireSandboxId?: string | null;
   /** Multi-repo member list — see CreateSandboxConfig. */
   repositories?: SessionRepositoryInfo[];
 }
@@ -486,6 +490,18 @@ export class SandboxProviderError extends Error {
       ? "transient"
       : "permanent";
     return new SandboxProviderError(message, errorType, error instanceof Error ? error : undefined);
+  }
+}
+
+/** A rejected execution; a non-null handle remains a cleanup obligation. */
+export class SandboxLaunchRejectedError extends SandboxProviderError {
+  constructor(
+    message: string,
+    readonly providerObjectId: string | null,
+    cause?: Error
+  ) {
+    super(message, "permanent", cause);
+    this.name = "SandboxLaunchRejectedError";
   }
 }
 

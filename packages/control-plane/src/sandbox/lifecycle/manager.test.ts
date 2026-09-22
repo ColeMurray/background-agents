@@ -22,6 +22,7 @@ import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -4728,27 +4729,33 @@ describe("status writes after a provider await (COL-99)", () => {
     }
   });
 
-  it("counts an attempt once when the watchdog fails it before the provider rejects it", async () => {
-    // The connect alarm is armed at reservation, before the provider call,
-    // so it can fail the attempt while createSandbox() is still pending. The
-    // provider's later rejection is the same attempt, not a second failure.
-    vi.useFakeTimers();
-    try {
-      const sandbox = createMockSandbox({ status: "failed" });
-      const h = harness(sandbox, async () => {
-        vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
-        await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
-        throw new SandboxProviderError("quota exceeded", "permanent");
-      });
+  it.each([
+    new SandboxProviderError("quota exceeded", "permanent"),
+    new SandboxLaunchRejectedError("incompatible", "sb-rejected"),
+  ])(
+    "counts an attempt once when the watchdog fails it before the provider rejects it (%s)",
+    async (error) => {
+      // The connect alarm is armed at reservation, before the provider call,
+      // so it can fail the attempt while createSandbox() is still pending. The
+      // provider's later rejection is the same attempt, not a second failure.
+      vi.useFakeTimers();
+      try {
+        const sandbox = createMockSandbox({ status: "failed" });
+        const h = harness(sandbox, async () => {
+          vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
+          await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
+          throw error;
+        });
 
-      await h.manager.spawnSandbox();
+        await h.manager.spawnSandbox();
 
-      expect(sandbox.status).toBe("failed");
-      expect(sandbox.spawn_failure_count).toBe(1);
-    } finally {
-      vi.useRealTimers();
+        expect(sandbox.status).toBe("failed");
+        expect(sandbox.spawn_failure_count).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
 
   it("leaves a sandbox whose bridge attached during the provider call booting when the call then fails", async () => {
     // The bridge now connects ahead of its boot, so a provider error that

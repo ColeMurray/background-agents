@@ -162,6 +162,21 @@ export function createMockStorage(
         return true;
       }
     ),
+    rejectProviderStartup: vi.fn((generation, providerObjectId) => {
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt
+      )
+        return false;
+      sandbox.modal_object_id = providerObjectId;
+      sandbox.status = "failed";
+      sandbox.fenced = 1;
+      sandbox.auth_token_hash = "";
+      sandbox.auth_token = null;
+      sandbox.active_socket_id = "";
+      return true;
+    }),
     commitProviderStartup: vi.fn((generation, providerObjectId, allowFailedSelfHeal) => {
       calls.push("commitProviderStartup");
       if (

@@ -17,12 +17,20 @@ import { resolveImageBuildProviderSessionTimeoutSeconds } from "./timeouts";
  * Modal provider-session image build adapter.
  */
 export class ModalImageBuildAdapter implements ImageBuildAdapter {
-  constructor(private readonly provider: ModalImageBuildProvider) {}
+  readonly recoverUnboundSource?: ImageBuildAdapter["recoverUnboundSource"];
+
+  constructor(private readonly provider: ModalImageBuildProvider) {
+    if (provider.recoverImageBuildSandbox) {
+      this.recoverUnboundSource = (input) =>
+        provider.recoverImageBuildSandbox!(input.buildId, input.correlation, input.signal);
+    }
+  }
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
+      resources: plan.resources,
       buildId: plan.buildId,
       repositories: plan.repositories,
       cloneToken: plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.token : undefined,

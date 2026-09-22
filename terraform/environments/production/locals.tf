@@ -1,6 +1,6 @@
 locals {
   name_suffix              = var.deployment_name
-  use_modal_backend        = var.sandbox_provider == "modal"
+  use_modal_backend        = contains(["modal", "modal-vm"], var.sandbox_provider)
   use_daytona_backend      = var.sandbox_provider == "daytona"
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"

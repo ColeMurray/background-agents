@@ -83,13 +83,13 @@ describe("sandbox-provider", () => {
     expect(supportsRepoImages()).toBe(true);
   });
 
-  it("supports e2b with repo images", async () => {
+  it.each(["e2b", "modal-vm"])("supports %s with repo images", async (backend) => {
     delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
-    process.env.SANDBOX_PROVIDER = "e2b";
+    process.env.SANDBOX_PROVIDER = backend;
 
     const { getPublicSandboxProvider, supportsRepoImages } = await loadProvider();
 
-    expect(getPublicSandboxProvider()).toBe("e2b");
+    expect(getPublicSandboxProvider()).toBe(backend);
     expect(supportsRepoImages()).toBe(true);
   });
 
@@ -99,7 +99,7 @@ describe("sandbox-provider", () => {
     // The message is the only copy of this sentence in the web app; the routes
     // import it rather than restating the provider list.
     expect(REPO_IMAGES_UNSUPPORTED_MESSAGE).toBe(
-      "Image builds are only available when SANDBOX_PROVIDER=modal, vercel, opencomputer, e2b, or daytona"
+      "Image builds are only available when SANDBOX_PROVIDER=modal, modal-vm, vercel, opencomputer, e2b, or daytona"
     );
     for (const provider of getRepoImageProviders()) {
       expect(REPO_IMAGES_UNSUPPORTED_MESSAGE).toContain(provider);
