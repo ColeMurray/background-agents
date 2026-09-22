@@ -259,6 +259,7 @@ describe("sandbox state retention", () => {
         expect(manager.shutdownSnapshot()).toMatchObject({
           phase: "unknown",
           hasRecoveryPoint: true,
+          availableRecoveryActions: ["restore_saved"],
         });
         resolveStartup({
           success: true,
@@ -273,6 +274,19 @@ describe("sandbox state retention", () => {
         expect(provider.stopSandbox).not.toHaveBeenCalled();
         expect(provider.takeSnapshot).not.toHaveBeenCalled();
         expect(provider.createSandbox).not.toHaveBeenCalled();
+        const restarted = realLifecycleHarness(instance, durableState, provider);
+        await restarted.manager.spawnSandbox();
+        expect(startup).toHaveBeenCalledOnce();
+        expect(restarted.manager.shutdownSnapshot()?.availableRecoveryActions).toEqual([
+          "restore_saved",
+        ]);
+        await restarted.manager.recoverShutdown("restore_saved");
+        expect(restarted.manager.shutdownSnapshot()).toMatchObject({ phase: "saved" });
+        if (kind === "snapshot") expect(provider.stopSandbox).not.toHaveBeenCalled();
+        else
+          expect(provider.stopSandbox).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ providerObjectId: "legacy-source", intent: "preserve" })
+          );
       });
     }
   );
@@ -632,6 +646,7 @@ describe("sandbox state retention", () => {
       expect(provider.restoreFromSnapshot).toHaveBeenCalledTimes(1);
       expect(provider.createSandbox).not.toHaveBeenCalled();
       expect(restarted.sandbox.getSandbox()?.snapshot_image_id).toBe("legacy-snapshot");
+      expect(restarted.manager.shutdownSnapshot()?.availableRecoveryActions).toEqual([]);
     });
   });
 

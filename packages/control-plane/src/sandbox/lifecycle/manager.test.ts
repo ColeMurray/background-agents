@@ -333,24 +333,32 @@ describe("final graceful shutdown lifecycle integration", () => {
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("keeps an ambiguous snapshot restore held when the new provider handle is unknown", async () => {
-    const restoreFromSnapshot = vi.fn(async () => {
-      throw new Error("provider response lost");
-    });
+  it("allows only explicit retry of an ambiguous snapshot restore from a retired source", async () => {
+    const restoreFromSnapshot = vi
+      .fn<NonNullable<SandboxProvider["restoreFromSnapshot"]>>()
+      .mockRejectedValueOnce(new Error("provider response lost"))
+      .mockResolvedValue({
+        success: true,
+        sandboxId: "restored-sandbox",
+        providerObjectId: "restored-source",
+        lifetime: { kind: "none", observedAtMs: Date.now() },
+      });
     const f = fixture(createMockProvider({ restoreFromSnapshot }));
     const saved = withSavedState(f, "snapshot");
 
     await f.manager.spawnSandbox();
-    expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: false });
-    await expect(saved.shutdown.recover("restore_saved")).rejects.toThrow(
-      "Shutdown recovery is unavailable"
-    );
+    expect(saved.read()).toMatchObject({ phase: "unknown", sourceRetired: true });
     await f.manager.spawnSandbox();
     expect(saved.read()).toMatchObject({
       phase: "unknown",
       receipt: { artifactId: "saved-image" },
     });
     expect(restoreFromSnapshot).toHaveBeenCalledOnce();
+    expect(saved.shutdown.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
+    await saved.shutdown.recover("restore_saved");
+    await f.manager.spawnSandbox();
+    expect(restoreFromSnapshot).toHaveBeenCalledTimes(2);
+    expect(saved.read()).toMatchObject({ phase: "running", sourceRetired: false });
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 

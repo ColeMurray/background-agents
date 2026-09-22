@@ -182,7 +182,8 @@ export class SandboxShutdownCoordinator {
     this.publish({
       ...state,
       restoreInvoked: true,
-      sourceRetired: false,
+      // Only retained resume reactivates the source described by the receipt.
+      sourceRetired: providerObjectId ? false : state.sourceRetired,
       providerObjectId: providerObjectId ?? null,
     });
   }
@@ -634,7 +635,7 @@ export class SandboxShutdownCoordinator {
     const next: ShutdownRecord = {
       ...(state ?? legacyShutdownRecord(row, this.deps.provider.name)),
       providerObjectId: emergency ? row.modal_object_id : state!.providerObjectId,
-      sourceRetired: emergency ? false : state?.sourceRetired,
+      sourceRetired: emergency && !recovering ? false : state?.sourceRetired,
       phase: emergency ? (recovering ? "unknown" : "capturing") : "draining",
       error:
         emergency && recovering
