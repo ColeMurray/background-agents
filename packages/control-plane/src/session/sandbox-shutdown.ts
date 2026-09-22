@@ -657,6 +657,7 @@ export class SandboxShutdownCoordinator {
     if (recovering) this.announce(next);
     this.deps.retireAccess();
     if (failure) this.deps.failures.deliver(failure);
+    this.broadcast({ type: "processing_status", isProcessing: false });
     if (!recovering) await this.capture(next);
     this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
       name: "sandbox.retirement_status",

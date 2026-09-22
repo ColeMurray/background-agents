@@ -272,6 +272,10 @@ describe("sandbox state retention", () => {
       });
       const initial = realLifecycleHarness(instance, durableState, provider);
       await initial.manager.terminateFailedSandbox("runtime crashed");
+      expect(initial.shutdownAnnouncements).toContainEqual({
+        type: "processing_status",
+        isProcessing: false,
+      });
       const restarted = realLifecycleHarness(instance, durableState, provider);
       await restarted.manager.handleShutdownAlarm();
       await restarted.manager.spawnSandbox();
