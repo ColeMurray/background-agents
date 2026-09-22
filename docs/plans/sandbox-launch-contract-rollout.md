@@ -126,12 +126,12 @@ must pass the combined command.
 
 Validated after rebasing onto `232bb74c5` (including PR #2014's preservation changes):
 
-- Control-plane unit suite: 321 files, 5,083 tests passed; all four type-check configurations and
-  Worker/Node builds passed.
+- Control-plane unit suite after review remediation: 321 files, 5,087 tests passed; all four
+  type-check configurations and Worker/Node builds passed.
 - Workerd lifecycle, alarm recovery, shutdown, core conformance and state-retention suites: 5 files,
   77 tests passed.
-- Combined sender/receiver/runtime contract: 3 TypeScript tests and 72 Python cases passed.
-- Modal suite: 297 passed, 2 producer-artifact cases skipped in standalone mode (covered by the
+- Combined sender/receiver/runtime contract: 5 TypeScript tests and 143 Python cases passed.
+- Modal suite: 368 passed, 2 producer-artifact cases skipped in standalone mode (covered by the
   combined runner). Targeted runtime configuration, boot, repository and service suites: 112 passed.
 - Targeted ESLint, Ruff, formatting, Terraform formatting, boundary lint tests and whitespace checks
   passed.
@@ -142,9 +142,16 @@ validation; unknown extensions remain preserved. Contract version now accompanie
 success/error outcome logs. Re-review found no remaining blockers, including after the upstream
 rebase.
 
-Two diagnostic checks are not green at the research baseline or on this branch: Python mypy reports
-the same 15 existing `web_api.py` errors; Knip reports the same 32 unused exports, 10 unused
-exported types and one duplicate export. These are not represented as passing checks.
+Review remediation additionally validates repository semantics, MCP transport requirements and
+native resources before launch; labels unsupported versions; wires the Actions rollout flag; and
+pins the receiver validator tree to the contract lock. Direct decoding now lives outside endpoint
+orchestration. The independent reviewer reran the combined contract and workflow checks and found no
+remaining blockers.
+
+Two diagnostic checks are not green: Python mypy reports 13 existing `web_api.py` errors after
+extraction (down from 15 at the research baseline); both new decoder/validation modules pass. The
+baseline Knip comparison reported 32 unused exports, 10 unused exported types and one duplicate
+export. These are not represented as passing checks.
 
 All launch tests use synthetic data and mocked native resource creation. They do not establish live
 provider behavior, retained-image compatibility, deployment completion, or permission to activate
