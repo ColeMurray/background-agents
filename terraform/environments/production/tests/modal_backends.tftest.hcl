@@ -67,4 +67,3 @@ run "vm_requires_modal_credentials" {
   }
   expect_failures = [var.modal_token_id]
 }
-
