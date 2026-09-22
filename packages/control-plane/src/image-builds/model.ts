@@ -102,7 +102,6 @@ export interface ImageBuildCallbackBuild {
  * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
  * bumps. Snapshot incompatibility holds startup; it must not discard the
  * snapshot or silently replace the session with a clean checkout.
- * See docs/SANDBOX_UPGRADES.md before changing a runtime floor.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
 
