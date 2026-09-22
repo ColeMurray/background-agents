@@ -76,8 +76,8 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
       <span className="font-medium">{PHASE_MESSAGES[shutdown.phase]}</span>
       {isContinuationPaused && (
         <span className="ml-2">
-          The previous prompt was interrupted and will not replay automatically. Partial work was
-          saved. Queued work will wait until you resume.
+          The sandbox was interrupted. Partial state was saved. Queued work will wait until you
+          resume; interrupted prompts will not replay automatically.
         </span>
       )}
       {detail && <span className="ml-2">{detail}</span>}

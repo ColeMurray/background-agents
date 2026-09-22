@@ -434,7 +434,8 @@ export function createCheckpointShutdown(
   provider: SandboxProvider,
   storage: SandboxStorage & SessionContextReader,
   messenger: SandboxBroadcaster,
-  onLifecycleChange: () => Promise<void> = async () => {}
+  onLifecycleChange: () => Promise<void> = async () => {},
+  retireAccess: () => void = () => {}
 ): SandboxShutdownLifecycle {
   let state: ShutdownRecord | null = null;
   const coordinator = new SandboxShutdownCoordinator({
@@ -450,17 +451,25 @@ export function createCheckpointShutdown(
       getSession: () => storage.getSession(),
       transaction: <T>(operation: () => T): T => operation(),
     },
+    messages: { getProcessingMessage: () => null },
+    failures: { record: vi.fn(), deliver: vi.fn() },
     messenger,
     sockets: { getSandboxSocket: () => null },
     alarm: createMockAlarmScheduler(),
     background: { submit: vi.fn((task: () => Promise<void>) => void task()) },
     onLifecycleChange: vi.fn(onLifecycleChange),
     reconcileStatusFromMessages: vi.fn(async () => {}),
-    retireAccess: vi.fn(),
+    retireAccess,
   } as never);
   return {
     ...createUnmanagedShutdown(),
     captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    requestShutdown: (reason, mode) =>
+      mode === "emergency"
+        ? coordinator.requestShutdown(reason, mode)
+        : Promise.resolve("unmanaged"),
+    isHolding: () => coordinator.isHolding(),
+    admissionDecision: () => coordinator.admissionDecision(),
   };
 }
 
