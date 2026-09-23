@@ -108,6 +108,10 @@ export class HarnessModelIncompatibleError extends Error {
   }
 }
 
+/**
+ * Web HTTP and WebSocket share this persisted fingerprint. Do not include source,
+ * callback or SCM metadata: existing WebSocket keys were stored without them.
+ */
 export async function fingerprintWebPrompt(
   participantId: string,
   data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments">
@@ -679,17 +683,30 @@ export class SessionMessageQueue {
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
-    this.assertBudgetAvailable();
-    this.assertQueueCapacity();
+    if (data.clientRequestId && (data.source !== "web" || data.callbackContext)) {
+      throw new Error("clientRequestId is only supported for web prompts without callback context");
+    }
+    if (!data.clientRequestId) {
+      this.assertBudgetAvailable();
+      this.assertQueueCapacity();
+    }
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
+      if (data.clientRequestId) {
+        // A key owned by another user conflicts even if this user has not joined.
+        if (this.messageRepository.getMessageByClientRequestId(data.clientRequestId)) {
+          throw new PromptRequestConflictError();
+        }
+        this.assertBudgetAvailable();
+        this.assertQueueCapacity();
+      }
       const name = data.scmEnrichment?.name || data.authorId;
       participant = data.canonicalUserId
         ? this.participantService.create(data.authorId, name, data.canonicalUserId)
         : this.participantService.create(data.authorId, name);
     }
 
-    if (data.canonicalUserId) {
+    if (!data.clientRequestId && data.canonicalUserId) {
       this.participantRepository.updateParticipantCoalesce(participant.id, {
         canonicalUserId: data.canonicalUserId,
       });
@@ -699,7 +716,7 @@ export class SessionMessageQueue {
       };
     }
 
-    if (data.scmEnrichment !== undefined) {
+    if (!data.clientRequestId && data.scmEnrichment !== undefined) {
       const enrichment = data.scmEnrichment;
       this.participantRepository.updateParticipantCoalesce(participant.id, {
         scmName: enrichment.name,
@@ -719,9 +736,25 @@ export class SessionMessageQueue {
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
+      clientRequestId: data.clientRequestId,
     });
 
-    await this.processMessageQueue();
+    if (data.clientRequestId && !enqueued.deduplicated) {
+      if (data.canonicalUserId) {
+        this.participantRepository.updateParticipantCoalesce(participant.id, {
+          canonicalUserId: data.canonicalUserId,
+        });
+      }
+      if (data.scmEnrichment) {
+        this.participantRepository.updateParticipantCoalesce(participant.id, {
+          scmName: data.scmEnrichment.name,
+          scmEmail: data.scmEnrichment.email,
+          scmLogin: data.scmEnrichment.login,
+          scmUserId: data.scmEnrichment.userId,
+        });
+      }
+    }
+    if (!enqueued.deduplicated) await this.processMessageQueue();
 
     return { messageId: enqueued.messageId, status: "queued" };
   }
@@ -765,6 +798,7 @@ export class SessionMessageQueue {
         return {
           messageId: existing.id,
           position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
+          deduplicated: true,
         };
       }
     }

@@ -4,6 +4,7 @@ export type PromptRequestIdentity = {
 };
 
 export function promptRequestSignature(input: {
+  sessionId?: string;
   content: string;
   model: string;
   reasoningEffort?: string;

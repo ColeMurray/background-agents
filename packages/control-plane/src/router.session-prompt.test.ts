@@ -207,4 +207,39 @@ describe("session prompt identity enrichment", () => {
     });
     expect(sessionFetch).not.toHaveBeenCalled();
   });
+
+  it("forwards a web request key but rejects keyed bot, callback and malformed requests", async () => {
+    vi.mocked(UserStore).mockImplementation(function () {
+      return { getUserById: async () => null } as never;
+    });
+    const sessionFetch = vi.fn(async (request: Request) => {
+      expect(await request.json()).toMatchObject({
+        clientRequestId: "retry-1",
+        authorId: "user-1",
+        source: "web",
+      });
+      return Response.json({ messageId: "original", status: "queued" });
+    });
+    const env = createEnv(sessionFetch) as never;
+    const accepted = await handleRequest(
+      await userPromptRequest({ content: "Hi", clientRequestId: "retry-1" }),
+      env,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+    await expect(accepted.json()).resolves.toMatchObject({ messageId: "original" });
+    for (const body of [
+      { content: "Hi", clientRequestId: "" },
+      { content: "Hi", clientRequestId: "x".repeat(129) },
+      { content: "Hi", clientRequestId: "retry-1", source: "slack" },
+      { content: "Hi", clientRequestId: "retry-1", callbackContext: {} },
+    ]) {
+      const rejected = await handleRequest(
+        await userPromptRequest(body),
+        env,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+      expect(rejected.status).toBe(400);
+    }
+    expect(sessionFetch).toHaveBeenCalledOnce();
+  });
 });

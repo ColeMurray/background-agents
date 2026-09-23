@@ -64,6 +64,11 @@ import type {
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
+import {
+  promptRequestSignature,
+  resolvePromptRequestIdentity,
+  type PromptRequestIdentity,
+} from "@/lib/prompt-request-id";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   buildInteractiveProviderRoutingIdentity,
@@ -118,6 +123,7 @@ export default function Home() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const submitInFlightRef = useRef(false);
+  const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const targetRequestFields = buildRequestFields();
@@ -249,6 +255,7 @@ export default function Home() {
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
+    retryRequestRef.current = null;
     setModelPreferenceDraft(preference);
     localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, preference.model);
     if (preference.reasoningEffort) {
@@ -287,6 +294,7 @@ export default function Home() {
   );
 
   const handlePromptChange = (value: string) => {
+    if (value !== prompt) retryRequestRef.current = null;
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
     if (
@@ -302,6 +310,7 @@ export default function Home() {
   };
 
   const handleAddFiles = (files: Iterable<File>) => {
+    retryRequestRef.current = null;
     sessionAttachments.addFiles(files);
     if (!pendingSessionId && !isCreatingSession && isLaunchable) {
       createSessionForWarming();
@@ -339,8 +348,8 @@ export default function Home() {
     setCreating(true);
     setError("");
 
+    let sessionId = pendingSessionId;
     try {
-      let sessionId = pendingSessionId;
       if (!sessionId) {
         sessionId = await createSessionForWarming();
       }
@@ -359,18 +368,31 @@ export default function Home() {
         }
       }
 
+      const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
+      const signature = promptRequestSignature({
+        sessionId,
+        content,
+        model: selectedModel,
+        reasoningEffort,
+        attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
+      });
+      const identity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
+      retryRequestRef.current = identity;
+
       const res = await browserApiFetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+          content,
           model: selectedModel,
           reasoningEffort,
+          clientRequestId: identity.clientRequestId,
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         }),
       });
 
       if (res.ok) {
+        retryRequestRef.current = null;
         consumeWarmSession(sessionId);
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
@@ -382,7 +404,11 @@ export default function Home() {
         setCreating(false);
       }
     } catch (_error) {
-      setError("Failed to create session");
+      setError(
+        sessionId
+          ? "Failed to send prompt. Retry on this page to reuse the same request."
+          : "Failed to create session"
+      );
     } finally {
       submitInFlightRef.current = false;
       setCreating(false);
@@ -407,7 +433,10 @@ export default function Home() {
         error: sessionAttachments.attachmentError,
         isUploading: sessionAttachments.isUploading,
         onAdd: handleAddFiles,
-        onRemove: sessionAttachments.removeAttachment,
+        onRemove: (id) => {
+          retryRequestRef.current = null;
+          sessionAttachments.removeAttachment(id);
+        },
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}

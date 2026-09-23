@@ -25,4 +25,5 @@ export interface EnqueuePromptCoreData {
 export interface EnqueuedPrompt {
   messageId: string;
   position: number | null;
+  deduplicated?: true;
 }

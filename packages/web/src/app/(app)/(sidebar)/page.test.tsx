@@ -764,6 +764,82 @@ describe("Home", () => {
     expect(mocks.routerPush).not.toHaveBeenCalled();
   });
 
+  it("retries a lost response with the same key and uploaded attachment, then navigates", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/attachments"))
+        return Response.json({ attachmentId: "attachment-1", mimeType: "image/png" });
+      if (url.endsWith("/prompt")) {
+        attempts++;
+        if (attempts === 1) throw new Error("response lost");
+        return Response.json({ messageId: "original", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /background-agents/i }));
+    fireEvent.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /no repository/i })
+    );
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Look at this" },
+    });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["image"], "shot.png", { type: "image/png" })] },
+    });
+    await waitFor(() => expect(screen.getByAltText("shot.png")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    expect(screen.getByPlaceholderText("What do you want to build?")).toHaveValue("Look at this");
+    expect(screen.getByAltText("shot.png")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const prompts = calls.filter(([input]) => String(input).endsWith("/prompt"));
+    expect(prompts).toHaveLength(2);
+    expect(JSON.parse(String(prompts[0][1]?.body))).toEqual(
+      JSON.parse(String(prompts[1][1]?.body))
+    );
+    expect(JSON.parse(String(prompts[0][1]?.body))).toMatchObject({
+      clientRequestId: expect.any(String),
+      attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
+    });
+    expect(calls.filter(([input]) => String(input).endsWith("/attachments"))).toHaveLength(1);
+    expect(calls.filter(([input]) => String(input) === "/api/sessions")).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByAltText("shot.png")).not.toBeInTheDocument());
+  });
+
+  it("rotates the request key after editing a failed draft", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (String(input).endsWith("/prompt")) {
+        attempts++;
+        return attempts === 1
+          ? Response.json({ error: "Try again" }, { status: 503 })
+          : Response.json({ messageId: "new", status: "queued" });
+      }
+      return Response.json({}, { status: 500 });
+    });
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("Try again");
+    fireEvent.change(input, { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const prompts = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/prompt"));
+    expect(JSON.parse(String(prompts[0][1]?.body)).clientRequestId).not.toBe(
+      JSON.parse(String(prompts[1][1]?.body)).clientRequestId
+    );
+  });
+
   it("sends the default harness with a model it can run", async () => {
     const openAiModel = "openai/gpt-5.4";
     mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];
