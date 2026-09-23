@@ -36,7 +36,6 @@ export async function stopChild(child: ChildProcess): Promise<void> {
 export interface PreviewStack extends PreviewStackHandle {
   manifestPath: string;
   backend: PreviewBackend;
-  failure: Promise<Error>;
   recordFailure(error: unknown): Promise<string>;
 }
 
@@ -301,11 +300,16 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
     const failure = new Promise<Error>((resolve) => {
       reportFailure = resolve;
     });
-    monitor = setInterval(() => {
+    // Only failures before an intentional close count; closing stops Next and the fixtures itself.
+    const checkFailures = () => {
+      if (closing) return;
       if (nextError) reportFailure(nextError);
       if (backend!.failures().length)
         reportFailure(new Error(`fixture: ${backend!.failures().join(", ")}`));
-    }, 1000);
+    };
+    monitor = setInterval(checkFailures, 1000);
+    // Next's exit is reported at once, not at the next tick, so no check can pass in between.
+    next.once("exit", checkFailures);
     lifetime = setTimeout(
       () => reportFailure(new Error("preview: four-hour run expired; start a new run")),
       PREVIEW_LIFETIME_MS - (Date.now() - startedAtMs)

@@ -8,6 +8,7 @@ import { expect, it, vi } from "vitest";
 import { startPreviewStack } from "./stack";
 import type * as BackendModule from "./backend";
 import { waitFor } from "./scenarios";
+import { PERSONAS } from "./contracts";
 
 const { startBackend } = vi.hoisted(() => ({ startBackend: vi.fn() }));
 vi.mock("./backend", async (original) => ({
@@ -195,3 +196,67 @@ it.each(["cancellation", "timeout"])(
   },
   25_000
 );
+
+it("reports Next exiting at once, and never the intentional close", async () => {
+  // The monitor never ticks here, so only the exit report itself can settle a failure.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const root = await mkdtemp(join(tmpdir(), "oi-preview-monitor-test-"));
+  try {
+    await symlink(resolve(import.meta.dirname, "../../../../.git"), join(root, ".git"));
+    await mkdir(join(root, "packages/web"), { recursive: true });
+    await mkdir(join(root, "node_modules/next/dist/bin"), { recursive: true });
+    await symlink(
+      join(import.meta.dirname, "fixtures/serving-next.mjs"),
+      join(root, "node_modules/next/dist/bin/next")
+    );
+    const identity = {
+      userId: "test-member",
+      cookieHeader: "session=private-cookie",
+      storageState: { cookies: [], origins: [] },
+      expiresAtMs: Date.now() + 60_000,
+    };
+    startBackend.mockImplementation(async () => ({
+      origin: "http://127.0.0.1:1",
+      config: { WORKER_URL: "http://127.0.0.1:1", SERVICE_AUTH_SECRET_WEB: "private-key" },
+      identities: Object.fromEntries(PERSONAS.map((persona) => [persona, identity])),
+      aliases: {},
+      signIn: async () => {
+        throw new Error("not signed in by this test");
+      },
+      failures: () => [],
+      close: async () => {},
+    }));
+
+    const closed = await startPreviewStack({ root, scenario: "empty" });
+    let closeFailure: Error | undefined;
+    void closed.failure.then((error) => {
+      closeFailure = error;
+    });
+    await closed.close();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closeFailure).toBeUndefined();
+
+    const crashed = await startPreviewStack({ root, scenario: "empty" });
+    try {
+      const pid = await waitFor("web child PID", async () => {
+        const log = await readFile(crashed.manifest.logs.web, "utf8").catch(() => "");
+        return Number(log.match(/owned-child (\d+)/)?.[1]) || false;
+      });
+      process.kill(pid, "SIGKILL");
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const failure = await Promise.race([
+        crashed.failure,
+        new Promise<Error>((resolve) => {
+          deadline = setTimeout(() => resolve(new Error("Next's exit was never reported")), 10_000);
+        }),
+      ]);
+      clearTimeout(deadline);
+      expect(failure.message).toContain("web: Next exited (SIGKILL)");
+    } finally {
+      await crashed.close();
+    }
+  } finally {
+    vi.useRealTimers();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);

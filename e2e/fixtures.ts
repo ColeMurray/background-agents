@@ -14,7 +14,13 @@ export const test = base.extend<{ preview: PreviewStackHandle }>({
           root: resolve(import.meta.dirname, ".."),
           scenario: "empty",
         });
+        let failure: Error | undefined;
+        void preview.failure.then((error) => {
+          failure = error;
+        });
         await provide(preview);
+        // Judged before the close below, which stops Next and the fixtures on purpose.
+        expect(failure).toBeUndefined();
         expect(preview.backend.failures()).toEqual([]);
       } finally {
         try {

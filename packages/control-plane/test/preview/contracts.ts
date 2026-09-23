@@ -29,6 +29,8 @@ export interface PreviewStackHandle {
       state: { promptsReceived: Array<{ messageId: string; content: string }> };
     };
   };
+  /** The first failure while the stack runs: Next exiting, a fixture failure or run expiry. */
+  failure: Promise<Error>;
   close(): Promise<void>;
 }
 export interface PreviewManifest {
