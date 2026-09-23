@@ -37,6 +37,9 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", boot_events_path)
     monkeypatch.setattr("sandbox_runtime.boot_attach.BOOT_EVENTS_FILE_PATH", boot_events_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
+    # An image-build test would otherwise run the real OpenCode, which downloads
+    # the model catalog into the live session's cache.
+    monkeypatch.setattr("sandbox_runtime.supervisor.OPENCODE_MODELS_REFRESH_COMMAND", ("true",))
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
