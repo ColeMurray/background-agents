@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -30,6 +30,26 @@ export async function stopChild(child: ChildProcess): Promise<void> {
     });
     child.kill("SIGTERM");
   });
+}
+
+/**
+ * A Next dev lock file that records a process which no longer runs. Next holds its locks with flock,
+ * which ends with the process, and takes such a file over on its next start.
+ */
+function isLeftoverDevLock(content: string): boolean {
+  let pid: unknown;
+  try {
+    pid = (JSON.parse(content) as { pid?: unknown }).pid;
+  } catch {
+    return false;
+  }
+  if (!Number.isInteger(pid) || (pid as number) <= 0) return false;
+  try {
+    process.kill(pid as number, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
 }
 
 /** The stack as the CLI drives it. Extending the handle keeps the browser suite's contract checked. */
@@ -115,17 +135,19 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
     })());
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAtMs, root }));
-    // Next owns these locks too; do not remove even a stale-looking Next lock automatically.
+    // Next owns these locks, so the preview never removes one. Only a dev lock whose recorded process
+    // has exited is passed over; a build lock records no process, so it always stops the start.
     for (const name of [".next/dev/lock", ".next/lock"]) {
-      if (
-        await stat(join(root, "packages/web", name)).then(
-          () => true,
-          () => false
-        )
-      )
-        throw new Error(
-          `preflight: Next lock exists at packages/web/${name}; stop the existing dev/build process first.`
-        );
+      const content = await readFile(join(root, "packages/web", name), "utf8").catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        }
+      );
+      if (content === undefined || isLeftoverDevLock(content)) continue;
+      throw new Error(
+        `preflight: Next lock exists at packages/web/${name}; stop the existing dev/build process first.`
+      );
     }
     runDir = await mkdtemp(join(tmpdir(), "oi-preview-"));
     await chmod(runDir, 0o700);

@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startPreviewStack } from "./stack";
 import { startFakeModalServer } from "../smoke/fake-modal-server.mjs";
@@ -21,6 +22,24 @@ describe("preview ownership", () => {
       await expect(startPreviewStack({ root })).rejects.toThrow("Next lock exists");
       await expect(readFile(lock)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await readFile(join(root, "packages/web/.next/dev/lock"), "utf8")).toBe("next owner");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("passes over a Next dev lock whose process has exited, without removing it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "oi-preview-next-lock-"));
+    try {
+      const devLock = join(root, "packages/web/.next/dev/lock");
+      await mkdir(dirname(devLock), { recursive: true });
+      // What a killed Next server leaves behind: its flock is gone, the file and its PID are not.
+      const { pid } = spawnSync(process.execPath, ["-e", ""]);
+      const leftover = JSON.stringify({ pid, port: 3000, appUrl: "http://127.0.0.1:3000" });
+      await writeFile(devLock, leftover);
+      // This bare root has no git checkout, so startup stops at the step after the lock check.
+      await expect(startPreviewStack({ root })).rejects.not.toThrow("Next lock exists");
+      expect(await readFile(devLock, "utf8")).toBe(leftover);
+      await writeFile(devLock, JSON.stringify({ pid: process.pid }));
+      await expect(startPreviewStack({ root })).rejects.toThrow("Next lock exists");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

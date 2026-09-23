@@ -153,7 +153,8 @@ diagnostic.
 - **Preflight:** run `npm ci`, use the supported Node/browser version, or select `--browser none`.
 - **Checkout/Next lock:** stop the owning process first. Inspect `.preview/lock.json` and the named
   PID. A stale lock is not permission to kill another process. Remove only a lock whose owner you
-  have verified is gone; Next owns its own `.next` locks.
+  have verified is gone; Next owns its own `.next` locks. A Next dev lock whose recorded process has
+  exited does not block a start: Next takes the file over.
 - **Port collision:** startup retries a bounded number of times with new origins and state. It never
   reuses the process that won the port.
 - **Auth/web:** check the reported stage. The BFF must resolve the expected canonical member; do not
