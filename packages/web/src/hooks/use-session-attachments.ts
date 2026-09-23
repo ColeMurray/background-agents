@@ -53,9 +53,7 @@ export function useSessionAttachments() {
   const attachmentsRef = useRef<PendingAttachment[]>([]);
   const attachmentsRevisionRef = useRef(0);
   const activeUploadRef = useRef<AbortController | null>(null);
-  const uploadedByIdRef = useRef(
-    new Map<string, { sessionId: string; attachment: SessionAttachmentReference }>()
-  );
+  const uploadedByIdRef = useRef(new Map<string, Map<string, SessionAttachmentReference>>());
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -151,12 +149,13 @@ export function useSessionAttachments() {
    * pending list is left intact so the user can retry.
    */
   const uploadAll = useCallback(
-    async (sessionId: string): Promise<SessionAttachmentReference[]> => {
+    async (sessionId: string, requestSignature = ""): Promise<SessionAttachmentReference[]> => {
       if (activeUploadRef.current) {
         throw new Error("Attachment upload is already in progress");
       }
       const pending = [...attachmentsRef.current];
       if (pending.length === 0) return [];
+      const cacheKey = JSON.stringify([sessionId, requestSignature]);
       const revision = attachmentsRevisionRef.current;
       const controller = new AbortController();
       let uploadTimedOut = false;
@@ -181,9 +180,9 @@ export function useSessionAttachments() {
         for (const pendingAttachment of pending) {
           const fileName = pendingAttachment.file.name;
           assertCurrent();
-          const cached = uploadedByIdRef.current.get(pendingAttachment.id);
-          if (cached?.sessionId === sessionId) {
-            uploaded.push(cached.attachment);
+          const cached = uploadedByIdRef.current.get(pendingAttachment.id)?.get(cacheKey);
+          if (cached) {
+            uploaded.push(cached);
             continue;
           }
 
@@ -218,7 +217,12 @@ export function useSessionAttachments() {
             name: fileName || "image-attachment",
             attachmentId: uploadResult.data.attachmentId,
           };
-          uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
+          let cache = uploadedByIdRef.current.get(pendingAttachment.id);
+          if (!cache) {
+            cache = new Map();
+            uploadedByIdRef.current.set(pendingAttachment.id, cache);
+          }
+          cache.set(cacheKey, attachment);
           uploaded.push(attachment);
         }
         assertCurrent();

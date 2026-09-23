@@ -11,10 +11,13 @@ import type { SessionAttachmentRepository } from "./session-attachment-repositor
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
 import type { MessageListCursor } from "./message-cursor";
+import type { ParticipantRepository, UpdateParticipantData } from "./participant-repository";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+const KEYED_CANCELLATION_SQL = `client_request_id IS NOT NULL AND status = 'failed'
+  AND started_at IS NULL AND error_message IS 'Cancelled before execution'`;
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -91,7 +94,8 @@ export class MessageRepository {
     private readonly sql: SqlStorage,
     private readonly transactionSync: TransactionSync,
     private readonly attachments: SessionAttachmentRepository,
-    private readonly eventRepository: EventRepository
+    private readonly eventRepository: EventRepository,
+    private readonly participants: ParticipantRepository
   ) {}
 
   getActiveDurationMs(): number {
@@ -104,7 +108,9 @@ export class MessageRepository {
   }
 
   getMessageCount(): number {
-    const result = this.sql.exec(`SELECT COUNT(*) as count FROM messages`);
+    const result = this.sql.exec(
+      `SELECT COUNT(*) as count FROM messages WHERE NOT (${KEYED_CANCELLATION_SQL})`
+    );
     return (result.one() as { count: number }).count;
   }
 
@@ -298,7 +304,7 @@ export class MessageRepository {
   cancelPendingMessage(messageId: string): boolean {
     return this.transactionSync(() => {
       const result = this.sql.exec(
-        `SELECT status, source, callback_context FROM messages WHERE id = ?`,
+        `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
         messageId
       );
       const message = (
@@ -306,6 +312,7 @@ export class MessageRepository {
           status?: unknown;
           source: string;
           callback_context: string | null;
+          client_request_id: string | null;
         }>
       )[0];
       const status = parseMessageStatus(message?.status);
@@ -318,6 +325,17 @@ export class MessageRepository {
         return false;
       }
 
+      if (message.client_request_id) {
+        const cancelled = this.sql.exec(
+          `UPDATE messages SET status = 'failed', error_message = 'Cancelled before execution', completed_at = ?
+             WHERE id = ? AND status = 'pending' RETURNING id`,
+          Date.now(),
+          messageId
+        );
+        if (cancelled.toArray().length !== 1) return false;
+        this.attachments.releaseForMessage(messageId);
+        return true;
+      }
       this.attachments.releaseForMessage(messageId);
       const deleted = this.sql.exec(
         `DELETE FROM messages WHERE id = ? AND status = 'pending'`,
@@ -367,14 +385,18 @@ export class MessageRepository {
     );
   }
 
-  /** Persist a message, its attachments, and canonical timeline event atomically. */
+  /** Persist a message, its attachments, and optional author update/event atomically. */
   createMessageWithAttachments(
     data: CreateMessageData,
     attachmentIds: string[],
-    event?: CreateEventData
+    event?: CreateEventData,
+    authorEnrichment?: UpdateParticipantData
   ): void {
     this.transactionSync(() => {
       this.attachments.claimForMessage(data.id, attachmentIds);
+      if (authorEnrichment) {
+        this.participants.updateParticipantCoalesce(data.authorId, authorEnrichment);
+      }
       this.createMessage(data);
       if (event) this.eventRepository.createEvent(event);
     });
@@ -497,8 +519,9 @@ export class MessageRepository {
   getLatestTerminalMessage(): MessageRow | null {
     const result = this.sql.exec(
       `SELECT * FROM messages
-       WHERE status IN ('completed', 'failed')
-       ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
+        WHERE status IN ('completed', 'failed')
+          AND NOT (${KEYED_CANCELLATION_SQL})
+        ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
        LIMIT 1`
     );
     const rows = parseMessageRows(result.toArray());

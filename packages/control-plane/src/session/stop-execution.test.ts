@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { MessageRepository } from "./message-repository";
+import { ParticipantRepository } from "./participant-repository";
 import { EventRepository } from "./event-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
@@ -60,7 +61,8 @@ describe("Stop execution - repository interactions", () => {
       mock.sql,
       (closure) => closure(),
       new SessionAttachmentRepository(mock.sql),
-      new EventRepository(mock.sql, (closure) => closure())
+      new EventRepository(mock.sql, (closure) => closure()),
+      new ParticipantRepository(mock.sql)
     );
   });
 

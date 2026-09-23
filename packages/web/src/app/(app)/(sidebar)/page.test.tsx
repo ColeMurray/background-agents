@@ -148,10 +148,10 @@ vi.mock("@/components/model-reasoning-selector", () => ({
       </button>
       {onHarnessChange && (
         <>
-          <button type="button" onClick={() => onHarnessChange("claude")}>
+          <button type="button" disabled={disabled} onClick={() => onHarnessChange("claude")}>
             Switch agent to claude
           </button>
-          <button type="button" onClick={() => onHarnessChange("opencode")}>
+          <button type="button" disabled={disabled} onClick={() => onHarnessChange("opencode")}>
             Switch agent to opencode
           </button>
         </>
@@ -762,6 +762,205 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+
+  it("retries a lost response with the same key and uploaded attachment, then navigates", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/attachments"))
+        return Response.json({ attachmentId: "attachment-1", mimeType: "image/png" });
+      if (url.endsWith("/prompt")) {
+        attempts++;
+        if (attempts === 1) throw new Error("response lost");
+        return Response.json({ messageId: "original", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /background-agents/i }));
+    fireEvent.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /no repository/i })
+    );
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Look at this" },
+    });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["image"], "shot.png", { type: "image/png" })] },
+    });
+    await waitFor(() => expect(screen.getByAltText("shot.png")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    expect(screen.getByPlaceholderText("What do you want to build?")).toHaveValue("Look at this");
+    expect(screen.getByAltText("shot.png")).toBeInTheDocument();
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["invalid"], "notes.txt", { type: "text/plain" })] },
+    });
+    await screen.findByText(/notes.txt is not a supported image/);
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const prompts = calls.filter(([input]) => String(input).endsWith("/prompt"));
+    expect(prompts).toHaveLength(2);
+    expect(JSON.parse(String(prompts[0][1]?.body))).toEqual(
+      JSON.parse(String(prompts[1][1]?.body))
+    );
+    expect(JSON.parse(String(prompts[0][1]?.body))).toMatchObject({
+      clientRequestId: expect.any(String),
+      attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
+    });
+    expect(calls.filter(([input]) => String(input).endsWith("/attachments"))).toHaveLength(1);
+    expect(calls.filter(([input]) => String(input) === "/api/sessions")).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByAltText("shot.png")).not.toBeInTheDocument());
+  });
+
+  it("reuploads retained attachments when an uncertain submission is edited", async () => {
+    let uploads = 0;
+    let prompts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/attachments")) {
+        uploads++;
+        return Response.json({ attachmentId: `attachment-${uploads}`, mimeType: "image/png" });
+      }
+      if (url.endsWith("/prompt")) {
+        prompts++;
+        if (prompts === 1) throw new Error("response lost");
+        return Response.json({ messageId: "edited", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /background-agents/i }));
+    fireEvent.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /no repository/i })
+    );
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Original" } });
+    fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [new File(["image"], "shot.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.change(input, { target: { value: "Edited" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const submitted = calls
+      .filter(([url]) => String(url).endsWith("/prompt"))
+      .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+    expect(submitted.map((body) => body.attachments)).toEqual([
+      [{ attachmentId: "attachment-1", name: "shot.png" }],
+      [{ attachmentId: "attachment-2", name: "shot.png" }],
+    ]);
+    expect(submitted[0].clientRequestId).not.toBe(submitted[1].clientRequestId);
+    expect(uploads).toBe(2);
+    expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
+  });
+
+  it("locks session settings for an uncertain submission without retiring its session", async () => {
+    let prompts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/prompt")) {
+        prompts++;
+        if (prompts === 1) throw new Error("response lost");
+        return Response.json({ messageId: "original", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Original" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    expect(screen.getByRole("button", { name: /background-agents/i })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Agent, model and effort: opencode" })
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Switch agent to claude" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /all skills/i })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /Anthropic authentication options/i })
+    ).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
+    expect(calls.filter(([url]) => String(url).includes("/archive"))).toHaveLength(0);
+  });
+
+  it("reuses the original request ID after uncertain A, B, then A submissions", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/prompt")) {
+        attempts++;
+        if (attempts < 3) throw new Error("response lost");
+        return Response.json({ messageId: "original", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.change(input, { target: { value: "B" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(attempts).toBe(2));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.change(input, { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+
+    const calls = vi.mocked(fetch).mock.calls;
+    const bodies = calls
+      .filter(([url]) => String(url).endsWith("/prompt"))
+      .map(
+        ([, init]) => JSON.parse(String(init?.body)) as { content: string; clientRequestId: string }
+      );
+    expect(bodies.map(({ content }) => content)).toEqual(["A", "B", "A"]);
+    expect(bodies[0].clientRequestId).toBe(bodies[2].clientRequestId);
+    expect(bodies[1].clientRequestId).not.toBe(bodies[0].clientRequestId);
+    expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
+  });
+
+  it("rotates the request key after editing a failed draft", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input) === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (String(input).endsWith("/prompt")) {
+        attempts++;
+        return attempts === 1
+          ? Response.json({ error: "Try again" }, { status: 503 })
+          : Response.json({ messageId: "new", status: "queued" });
+      }
+      return Response.json({}, { status: 500 });
+    });
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("Try again");
+    fireEvent.change(input, { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const prompts = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/prompt"));
+    expect(JSON.parse(String(prompts[0][1]?.body)).clientRequestId).not.toBe(
+      JSON.parse(String(prompts[1][1]?.body)).clientRequestId
+    );
   });
 
   it("sends the default harness with a model it can run", async () => {

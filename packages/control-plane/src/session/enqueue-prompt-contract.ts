@@ -3,6 +3,7 @@ import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/se
 import {
   BLANK_PROMPT_MESSAGE,
   isBlankPrompt,
+  clientRequestIdSchema,
   promptContentSchema,
 } from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
@@ -15,6 +16,7 @@ export const enqueuePromptRequestSchema = z
     source: messageSourceSchema,
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
     // Trusted SCM enrichment resolved by the router at prompt time.
@@ -27,6 +29,13 @@ export const enqueuePromptRequestSchema = z
       })
       .optional(),
   })
+  .refine(
+    (prompt) => !prompt.clientRequestId || (prompt.source === "web" && !prompt.callbackContext),
+    {
+      message: "clientRequestId is only supported for web prompts without callback context",
+      path: ["clientRequestId"],
+    }
+  )
   .refine((prompt) => !isBlankPrompt(prompt), {
     message: BLANK_PROMPT_MESSAGE,
     path: ["content"],

@@ -151,7 +151,7 @@ function buildQueue(mayDispatch: () => boolean = () => true) {
   };
   const repository = {
     transaction: vi.fn((closure: () => unknown) => closure()),
-    createMessageWithAttachments: vi.fn(),
+    createMessageWithAttachments: vi.fn<MessageRepository["createMessageWithAttachments"]>(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
@@ -1006,7 +1006,9 @@ describe("SessionMessageQueue", () => {
           { name: "shot.png", attachmentId: "up-1", mimeType: "image/png" },
         ]),
       }),
-      ["up-1"]
+      ["up-1"],
+      undefined,
+      undefined
     );
   });
 
@@ -2131,6 +2133,94 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it("passes keyed author enrichment to the atomic insert before status transition", async () => {
+      const h = buildQueue();
+      h.sessionStatus.transition.mockImplementation(async () => {
+        expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+        expect(h.repository.createMessageWithAttachments.mock.calls[0][3]).toEqual({
+          canonicalUserId: "canonical-1",
+          scmName: "Trusted User",
+          scmEmail: "user@example.com",
+          scmLogin: "trusted-user",
+          scmUserId: "1001",
+        });
+        expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+        return true;
+      });
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "user-1",
+        source: "web",
+        clientRequestId: "request-1",
+        canonicalUserId: "canonical-1",
+        scmEnrichment: {
+          userId: "1001",
+          login: "trusted-user",
+          name: "Trusted User",
+          email: "user@example.com",
+        },
+      });
+    });
+
+    it("does not enrich a keyed duplicate, even with different incoming SCM metadata", async () => {
+      const h = buildQueue();
+      const content = "Fix bug";
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          request_fingerprint: await fingerprintWebPrompt("part-1", { content }),
+        })
+      );
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content,
+          authorId: "user-1",
+          source: "web",
+          clientRequestId: "request-1",
+          canonicalUserId: "canonical-1",
+          scmEnrichment: {
+            userId: "1001",
+            login: "changed-login",
+            name: "Changed Name",
+            email: "changed@example.com",
+          },
+        })
+      ).resolves.toMatchObject({ messageId: "msg-1" });
+
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    });
+
+    it("redrives a persisted keyed prompt whose first dispatch never ran", async () => {
+      const h = buildQueue();
+      const content = "Recover me";
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({ request_fingerprint: await fingerprintWebPrompt("part-1", { content }) })
+      );
+      h.repository.getSession.mockReturnValue(createSession({ status: "created" }));
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage({ content }));
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.sessionStatus.transition.mockImplementation(async () => {
+        h.repository.getSession.mockReturnValue(createSession({ status: "active" }));
+        return true;
+      });
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content,
+          authorId: "user-1",
+          source: "web",
+          clientRequestId: "request-1",
+        })
+      ).resolves.toMatchObject({ messageId: "msg-1" });
+
+      expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+      expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
     it("rejects exhaustion before capacity checks or participant mutations", async () => {
       const h = buildQueue();
       h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));

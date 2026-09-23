@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
+import { ParticipantRepository } from "./participant-repository";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import {
   AttachmentClaimConflictError,
@@ -87,7 +88,8 @@ describe("MessageRepository", () => {
         return closure();
       },
       new SessionAttachmentRepository(mock.sql),
-      new EventRepository(mock.sql, (closure) => closure())
+      new EventRepository(mock.sql, (closure) => closure()),
+      new ParticipantRepository(mock.sql)
     );
   });
 
@@ -96,6 +98,58 @@ describe("MessageRepository", () => {
     expect(repository.getMessageCount()).toBe(5);
     expect(repository.getPendingOrProcessingCount()).toBe(5);
     expect(mock.calls[1].query).toContain("'pending', 'processing'");
+  });
+
+  it("excludes cancelled keyed prompts from counts without losing their request identity", () => {
+    const db = new DatabaseSync(":memory:");
+    const { sql, transactionSync } = createNodeSqlStorage(db);
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      const realRepository = new MessageRepository(
+        sql,
+        transactionSync,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transactionSync),
+        new ParticipantRepository(sql)
+      );
+      realRepository.createMessage({
+        id: "cancelled",
+        authorId: "author",
+        content: "No longer needed",
+        source: "web",
+        clientRequestId: "request-1",
+        status: "pending",
+        createdAt: 1,
+      });
+      realRepository.createMessage({
+        id: "completed",
+        authorId: "author",
+        content: "Done",
+        source: "web",
+        status: "completed",
+        createdAt: 2,
+      });
+      realRepository.createMessage({
+        id: "failed-without-cancellation",
+        authorId: "author",
+        content: "Failed",
+        source: "web",
+        clientRequestId: "request-2",
+        status: "failed",
+        createdAt: 0,
+      });
+
+      expect(realRepository.getMessageCount()).toBe(3);
+      expect(realRepository.cancelPendingMessage("cancelled")).toBe(true);
+      expect(realRepository.getMessageCount()).toBe(2);
+      expect(realRepository.getMessageByClientRequestId("request-1")?.status).toBe("failed");
+      expect(realRepository.getLatestTerminalMessage()?.id).toBe("completed");
+    } finally {
+      db.close();
+    }
   });
 
   it("rejects malformed numeric SQL aggregate rows", () => {
@@ -475,6 +529,88 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("INSERT INTO messages");
   });
 
+  it("stores typed author enrichment with the message", () => {
+    const db = new DatabaseSync(":memory:");
+    const { sql, transactionSync } = createNodeSqlStorage(db);
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      const realRepository = new MessageRepository(
+        sql,
+        transactionSync,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transactionSync),
+        new ParticipantRepository(sql)
+      );
+      realRepository.createMessageWithAttachments(
+        {
+          id: "msg-1",
+          authorId: "author",
+          content: "Hi",
+          source: "web",
+          status: "pending",
+          createdAt: 1,
+        },
+        [],
+        undefined,
+        { canonicalUserId: "canonical-1", scmLogin: "trusted" }
+      );
+      expect(
+        sql.exec("SELECT canonical_user_id, scm_login FROM participants WHERE id = 'author'").one()
+      ).toEqual({
+        canonical_user_id: "canonical-1",
+        scm_login: "trusted",
+      });
+      expect(realRepository.getMessageById("msg-1")?.author_id).toBe("author");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rolls back participant enrichment when the message insert fails", () => {
+    const db = new DatabaseSync(":memory:");
+    const { sql, transactionSync } = createNodeSqlStorage(db);
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      const realRepository = new MessageRepository(
+        sql,
+        transactionSync,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transactionSync),
+        new ParticipantRepository(sql)
+      );
+      sql.exec(
+        `CREATE TRIGGER reject_message BEFORE INSERT ON messages
+         BEGIN SELECT RAISE(ABORT, 'message rejected'); END`
+      );
+      expect(() =>
+        realRepository.createMessageWithAttachments(
+          {
+            id: "msg-1",
+            authorId: "author",
+            content: "Hi",
+            source: "web",
+            status: "pending",
+            createdAt: 1,
+          },
+          [],
+          undefined,
+          { scmLogin: "changed" }
+        )
+      ).toThrow();
+      expect(sql.exec("SELECT scm_login FROM participants WHERE id = 'author'").one()).toEqual({
+        scm_login: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not create a message when attachments cannot all be claimed", () => {
     mock.setRowsWritten(1);
     expect(() =>
@@ -494,9 +630,10 @@ describe("MessageRepository", () => {
   });
 
   it("atomically releases attachments and cancels a pending web message", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "web", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
+      [{ status: "pending", source: "web", callback_context: null }]
+    );
     mock.setRowsWritten(1);
     expect(repository.cancelPendingMessage("msg-1")).toBe(true);
     expect(transactionSyncCalls).toBe(1);
@@ -504,10 +641,23 @@ describe("MessageRepository", () => {
     expect(mock.calls[2].query).toContain("DELETE FROM messages");
   });
 
+  it("retains a keyed cancellation as a failed message and releases its attachments", () => {
+    mock.setData(
+      `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
+      [{ status: "pending", source: "web", callback_context: null, client_request_id: "key-1" }]
+    );
+    mock.setMatchingData(/UPDATE messages SET status = 'failed'.*RETURNING id/s, [{ id: "msg-1" }]);
+    expect(repository.cancelPendingMessage("msg-1")).toBe(true);
+    expect(mock.calls[1].query).toContain("RETURNING id");
+    expect(mock.calls[2].query).toContain("UPDATE attachments SET message_id = NULL");
+    expect(mock.calls.some(({ query }) => query.startsWith("DELETE FROM messages"))).toBe(false);
+  });
+
   it("rejects cancellation for messages that may need callbacks", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "linear", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
+      [{ status: "pending", source: "linear", callback_context: null }]
+    );
     expect(repository.cancelPendingMessage("msg-1")).toBe(false);
     expect(mock.calls).toHaveLength(1);
   });
@@ -644,7 +794,8 @@ describe("MessageRepository", () => {
         sql,
         transaction,
         new SessionAttachmentRepository(sql),
-        new EventRepository(sql, transaction)
+        new EventRepository(sql, transaction),
+        new ParticipantRepository(sql)
       );
 
       expect(

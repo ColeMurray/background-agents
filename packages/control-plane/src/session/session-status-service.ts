@@ -251,7 +251,8 @@ export class SessionStatusService {
    *
    * Falling back to `created` sends a session *backwards* into draft, which
    * looks like a bug and is not. It is reachable only when the session has no
-   * messages at all -- cancelling the only pending prompt deletes its row --
+   * effective messages at all -- cancelling an unkeyed pending prompt deletes
+   * its row, while a keyed cancellation leaves an ignored idempotency record --
    * and returning an empty session to draft is what lets the 8-hour
    * abandoned-draft sweep reclaim it. That behaviour was added deliberately
    * after dead sessions accumulated. Do not "fix" it to `completed`.

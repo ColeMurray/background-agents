@@ -68,6 +68,17 @@ export async function handleSessionPrompt(
   }
   const body = bodyResult.data;
 
+  // Keys are reserved for first-party web prompts. In particular, callback
+  // context is not part of the stored web fingerprint.
+  if (
+    body.clientRequestId &&
+    (ctx.principal?.kind !== "user" ||
+      (body.source ?? "web") !== "web" ||
+      body.callbackContext !== undefined)
+  ) {
+    return error("clientRequestId is only supported for web prompts without callback context", 400);
+  }
+
   const attachments = validateAttachments(body.attachments);
   if (attachments instanceof Response) return attachments;
 
@@ -130,6 +141,7 @@ export async function handleSessionPrompt(
     source: body.source || "web",
     model: body.model,
     reasoningEffort: body.reasoningEffort,
+    clientRequestId: body.clientRequestId,
     attachments,
     callbackContext,
     scmEnrichment: enrichment

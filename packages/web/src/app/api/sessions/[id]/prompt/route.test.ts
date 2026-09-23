@@ -105,4 +105,44 @@ describe("session prompt API route", () => {
       code: "BUDGET_EXHAUSTED",
     });
   });
+
+  it("forwards a valid key and preserves the original message ID and conflict code", async () => {
+    vi.mocked(controlPlaneUserFetch)
+      .mockResolvedValueOnce(Response.json({ messageId: "original", status: "queued" }))
+      .mockResolvedValueOnce(
+        Response.json({ error: "Conflict", code: "PROMPT_REQUEST_CONFLICT" }, { status: 409 })
+      );
+    const send = () =>
+      POST(
+        new Request("http://localhost/api/sessions/s/prompt", {
+          method: "POST",
+          body: JSON.stringify({ content: "Hi", clientRequestId: "request-1" }),
+        }) as never,
+        { params: Promise.resolve({ id: "s" }) }
+      );
+    await expect((await send()).json()).resolves.toEqual({
+      messageId: "original",
+      status: "queued",
+    });
+    expect(
+      JSON.parse(String(vi.mocked(controlPlaneUserFetch).mock.calls[0][1]?.body))
+    ).toMatchObject({
+      clientRequestId: "request-1",
+    });
+    const conflict = await send();
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({ code: "PROMPT_REQUEST_CONFLICT" });
+  });
+
+  it.each(["", "x".repeat(129), 42])("rejects invalid request key %s", async (clientRequestId) => {
+    const response = await POST(
+      new Request("http://localhost/api/sessions/s/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Hi", clientRequestId }),
+      }) as never,
+      { params: Promise.resolve({ id: "s" }) }
+    );
+    expect(response.status).toBe(400);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
 });

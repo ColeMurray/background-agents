@@ -27,4 +27,16 @@ describe("prompt request identity", () => {
     );
     expect(changed.clientRequestId).toBe("request-2");
   });
+
+  it("scopes home retries to the warmed session", () => {
+    const first = resolvePromptRequestIdentity(
+      promptRequestSignature({ sessionId: "one", content: "Hello", model: "m", attachmentIds: [] }),
+      null
+    );
+    const next = resolvePromptRequestIdentity(
+      promptRequestSignature({ sessionId: "two", content: "Hello", model: "m", attachmentIds: [] }),
+      first
+    );
+    expect(next.clientRequestId).not.toBe(first.clientRequestId);
+  });
 });

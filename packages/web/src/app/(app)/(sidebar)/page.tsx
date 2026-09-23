@@ -64,6 +64,11 @@ import type {
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
+import {
+  promptRequestSignature,
+  resolvePromptRequestIdentity,
+  type PromptRequestIdentity,
+} from "@/lib/prompt-request-id";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   buildInteractiveProviderRoutingIdentity,
@@ -118,6 +123,8 @@ export default function Home() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const submitInFlightRef = useRef(false);
+  const retryRequestsRef = useRef(new Map<string, PromptRequestIdentity>());
+  const submittedSessionIdRef = useRef<string | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const targetRequestFields = buildRequestFields();
@@ -293,6 +300,7 @@ export default function Home() {
       wasEmpty &&
       value.length > 0 &&
       !pendingSessionId &&
+      !submittedSessionIdRef.current &&
       !isCreatingSession &&
       !loadingEnabledModels &&
       isLaunchable
@@ -303,7 +311,7 @@ export default function Home() {
 
   const handleAddFiles = (files: Iterable<File>) => {
     sessionAttachments.addFiles(files);
-    if (!pendingSessionId && !isCreatingSession && isLaunchable) {
+    if (!pendingSessionId && !submittedSessionIdRef.current && !isCreatingSession && isLaunchable) {
       createSessionForWarming();
     }
   };
@@ -326,7 +334,7 @@ export default function Home() {
       setError(modelSelection.availability.message);
       return;
     }
-    if (!isLaunchable) {
+    if (!isLaunchable && !submittedSessionIdRef.current) {
       setError(
         sessionTarget?.kind === "repos"
           ? "Select at least one repository"
@@ -339,8 +347,8 @@ export default function Home() {
     setCreating(true);
     setError("");
 
+    let sessionId = submittedSessionIdRef.current ?? pendingSessionId;
     try {
-      let sessionId = pendingSessionId;
       if (!sessionId) {
         sessionId = await createSessionForWarming();
       }
@@ -350,28 +358,45 @@ export default function Home() {
         return;
       }
 
+      const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
+      const signature = promptRequestSignature({
+        sessionId,
+        content,
+        model: selectedModel,
+        reasoningEffort,
+        attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
+      });
       let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {
-          attachments = await sessionAttachments.uploadAll(sessionId);
+          attachments = await sessionAttachments.uploadAll(sessionId, signature);
         } catch {
           return;
         }
       }
+      const identity = resolvePromptRequestIdentity(
+        signature,
+        retryRequestsRef.current.get(signature) ?? null
+      );
+      retryRequestsRef.current.set(signature, identity);
+      submittedSessionIdRef.current = sessionId;
+      consumeWarmSession(sessionId);
 
       const res = await browserApiFetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+          content,
           model: selectedModel,
           reasoningEffort,
+          clientRequestId: identity.clientRequestId,
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         }),
       });
 
       if (res.ok) {
-        consumeWarmSession(sessionId);
+        retryRequestsRef.current.clear();
+        submittedSessionIdRef.current = null;
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         mutate(isSessionInboxKey);
@@ -382,7 +407,11 @@ export default function Home() {
         setCreating(false);
       }
     } catch (_error) {
-      setError("Failed to create session");
+      setError(
+        sessionId
+          ? "Failed to send prompt. Retry on this page to reuse the same request."
+          : "Failed to create session"
+      );
     } finally {
       submitInFlightRef.current = false;
       setCreating(false);
@@ -410,6 +439,7 @@ export default function Home() {
         onRemove: sessionAttachments.removeAttachment,
       }}
       creating={creating}
+      sessionSettingsLocked={submittedSessionIdRef.current !== null}
       isCreatingSession={isCreatingSession}
       providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
@@ -442,6 +472,7 @@ function HomeContent({
   handlePromptChange,
   attachments,
   creating,
+  sessionSettingsLocked,
   isCreatingSession,
   providerSelectionsHydrated,
   error,
@@ -476,6 +507,7 @@ function HomeContent({
     onRemove: (id: string) => void;
   };
   creating: boolean;
+  sessionSettingsLocked: boolean;
   isCreatingSession: boolean;
   providerSelectionsHydrated: boolean;
   error: string;
@@ -554,7 +586,10 @@ function HomeContent({
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
-                <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+                <SessionTargetPicker
+                  {...picker.pickerProps}
+                  disabled={creating || sessionSettingsLocked}
+                />
               </div>
 
               <div
@@ -618,7 +653,7 @@ function HomeContent({
                         attachmentsLocked ||
                         !providerSelectionsHydrated ||
                         providerAccounts.loading ||
-                        !isLaunchable
+                        (!isLaunchable && !sessionSettingsLocked)
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${labels["send-prompt"]})`}
@@ -644,7 +679,7 @@ function HomeContent({
                       onReasoningEffortChange={setReasoningEffort}
                       harness={harness}
                       onHarnessChange={setHarness}
-                      disabled={creating}
+                      disabled={creating || sessionSettingsLocked}
                     />
 
                     <SessionSkillSelector
@@ -653,7 +688,7 @@ function HomeContent({
                       target={skillPreviewTarget}
                       preview={skillPreview}
                       previewLoading={skillPreviewLoading}
-                      disabled={creating}
+                      disabled={creating || sessionSettingsLocked}
                     />
 
                     {selectedProvider && (
@@ -666,7 +701,7 @@ function HomeContent({
                           (item) => item.provider === selectedProvider
                         )}
                         value={providerSelections[selectedProvider]}
-                        disabled={creating}
+                        disabled={creating || sessionSettingsLocked}
                         onChange={(selection) =>
                           onProviderSelectionChange(selectedProvider, selection)
                         }

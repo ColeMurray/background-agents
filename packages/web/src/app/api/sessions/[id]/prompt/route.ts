@@ -4,6 +4,7 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import {
   BLANK_PROMPT_MESSAGE,
   isBlankPrompt,
+  clientRequestIdSchema,
   promptContentSchema,
 } from "@open-inspect/shared/types/prompts";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
@@ -15,6 +16,7 @@ const promptRequestSchema = z
     content: promptContentSchema,
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
   })
   .refine((prompt) => !isBlankPrompt(prompt), {
@@ -35,7 +37,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!parsed.success) {
       return NextResponse.json({ error: "Invalid prompt request" }, { status: 400 });
     }
-    const { content, model, reasoningEffort, attachments } = parsed.data;
+    const { content, model, reasoningEffort, attachments, clientRequestId } = parsed.data;
 
     // authorId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
@@ -47,6 +49,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         model,
         reasoningEffort,
         attachments,
+        clientRequestId,
       }),
     });
 
