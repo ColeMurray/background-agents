@@ -33,7 +33,7 @@ import {
 const BASE = "https://test.local";
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 const SANDBOX_TOKEN = "matrix-sandbox-token";
-const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot"] as const;
+const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot", "discord-bot"] as const;
 const PROTECTED_STATUSES = new Set([401, 403]);
 const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // Each pass issues one request per catalog route, and a fresh session per

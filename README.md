@@ -135,6 +135,7 @@ ownership, bots, and member suspension.
 | [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
 | [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
 | [linear-bot](packages/linear-bot)                 | Linear integration (issue → coding session) |
+| [discord-bot](packages/discord-bot)               | Discord integration (`/task` → session)     |
 | [shared](packages/shared)                         | Shared types and utilities                  |
 
 ## Getting Started

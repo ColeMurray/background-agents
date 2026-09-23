@@ -19,6 +19,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": "test-service-secret-slack-bot",
   "github-bot": "test-service-secret-github-bot",
   "linear-bot": "test-service-secret-linear-bot",
+  "discord-bot": "test-service-secret-discord-bot",
 };
 
 async function signedFetch(p: {

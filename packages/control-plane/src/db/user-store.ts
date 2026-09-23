@@ -7,7 +7,7 @@ import type { SqlDatabase } from "./sql-database";
 // ── Public types ────────────────────────────────────────────────────
 
 export interface ProviderIdentity {
-  provider: "github" | "slack" | "linear" | "google";
+  provider: "github" | "slack" | "linear" | "discord" | "google";
   providerUserId: string;
   providerLogin?: string;
   providerEmail?: string;
