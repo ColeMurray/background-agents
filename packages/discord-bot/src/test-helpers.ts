@@ -13,6 +13,9 @@ export function createKv(initial: Record<string, string> = {}) {
     put: vi.fn(async (key: string, value: string) => {
       store.set(key, value);
     }),
+    delete: vi.fn(async (key: string) => {
+      store.delete(key);
+    }),
   };
 }
 
