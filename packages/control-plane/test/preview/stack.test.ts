@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, it, vi } from "vitest";
@@ -69,6 +69,44 @@ it("retains sanitized startup and cleanup evidence while releasing acquired reso
     await expect(fetch(origin)).rejects.toThrow();
   } finally {
     server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("releases the checkout lock even when removing the run directory fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "oi-preview-release-test-"));
+  await symlink(resolve(import.meta.dirname, "../../../../.git"), join(root, ".git"));
+  let runDir = "";
+  startBackend.mockImplementation(async (options: { runDir: string }) => {
+    runDir = dirname(options.runDir);
+    return {
+      config: {},
+      identities: { member: { cookieHeader: "", storageState: { cookies: [] } } },
+      close: async () => {},
+    };
+  });
+  const stuck = () => join(runDir, "stuck");
+  try {
+    await expect(
+      startPreviewStack({
+        root,
+        onStage(stage) {
+          if (stage !== "web") return;
+          // An entry the owner cannot delete: removing the run directory fails with EACCES.
+          mkdirSync(stuck());
+          writeFileSync(join(stuck(), "file"), "");
+          chmodSync(stuck(), 0o500);
+          throw new Error("web: primary compile failure");
+        },
+      })
+    ).rejects.toThrow("sanitized diagnostic");
+    await expect(stat(join(root, ".preview/lock.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    const diagnostic = await readFile(join(root, ".preview/last-failure.log"), "utf8");
+    expect(diagnostic).toContain("primary compile failure");
+    expect(diagnostic).toContain("EACCES");
+  } finally {
+    if (runDir) chmodSync(stuck(), 0o700);
+    await rm(runDir, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
   }
 });

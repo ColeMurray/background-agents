@@ -67,8 +67,9 @@ export async function startPreviewStack(options: {
   const secrets = new Set<string>();
   const diagnosticPath = join(workDir, "last-failure.log");
   const recordedFailures: unknown[] = [];
-  const writeDiagnostic = async () => {
-    const webLog = runDir ? await readFile(join(runDir, "web.log"), "utf8").catch(() => "") : "";
+  const readWebLog = async () =>
+    runDir ? await readFile(join(runDir, "web.log"), "utf8").catch(() => "") : "";
+  const writeDiagnostic = async (webLog: string) => {
     await writeFile(
       diagnosticPath,
       sanitizedDiagnostic(new AggregateError(recordedFailures, "Preview failed"), webLog, secrets),
@@ -77,7 +78,7 @@ export async function startPreviewStack(options: {
   };
   const recordFailure = async (error: unknown) => {
     recordedFailures.push(error);
-    await writeDiagnostic();
+    await writeDiagnostic(await readWebLog());
     return diagnosticPath;
   };
   let closing: Promise<void> | undefined;
@@ -86,33 +87,25 @@ export async function startPreviewStack(options: {
       clearInterval(monitor);
       clearTimeout(lifetime);
       const errors: unknown[] = [];
-      try {
-        await signInLinks?.close();
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        if (next) await stopChild(next);
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        await backend?.close();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (log) await new Promise<void>((resolve) => log!.end(resolve));
-      recordedFailures.push(...errors);
-      if (recordedFailures.length) {
+      // Every release is attempted even after one fails; a skipped one can strand the lock.
+      const release = async (step: () => unknown) => {
         try {
-          await writeDiagnostic();
+          await step();
         } catch (error) {
           errors.push(error);
         }
-      }
-      if (runDir) await rm(runDir, { recursive: true, force: true });
-      await lock.close();
-      await rm(lockPath);
+      };
+      await release(() => signInLinks?.close());
+      await release(() => next && stopChild(next));
+      await release(() => backend?.close());
+      await release(() => log && new Promise<void>((resolve) => log!.end(resolve)));
+      const webLog = await readWebLog();
+      await release(() => runDir && rm(runDir, { recursive: true, force: true }));
+      await release(() => lock.close());
+      await release(() => rm(lockPath));
+      // Last, so the retained diagnostic includes failures of the final releases too.
+      recordedFailures.push(...errors);
+      if (recordedFailures.length) await release(() => writeDiagnostic(webLog));
       if (errors.length)
         throw new AggregateError(
           errors,
