@@ -14,10 +14,10 @@ import {
   webEnvironment,
 } from "./config";
 import { PERSONAS } from "./personas";
-import { waitFor, type Scenario } from "./scenarios";
+import { waitFor } from "./scenarios";
 import { sanitizedDiagnostic } from "./diagnostics";
 import { startSignInLinks, type SignInLinks } from "./sign-in-links";
-import type { PreviewManifest } from "./contracts";
+import type { PreviewManifest, PreviewStackHandle, PreviewStackOptions } from "./contracts";
 
 const exec = promisify(execFile);
 export async function stopChild(child: ChildProcess): Promise<void> {
@@ -32,13 +32,16 @@ export async function stopChild(child: ChildProcess): Promise<void> {
   });
 }
 
+/** The stack as the CLI drives it. Extending the handle keeps the browser suite's contract checked. */
+export interface PreviewStack extends PreviewStackHandle {
+  manifestPath: string;
+  backend: PreviewBackend;
+  failure: Promise<Error>;
+  recordFailure(error: unknown): Promise<string>;
+}
+
 /** One Next process per checkout. Never attaches to or kills an unrelated process. */
-export async function startPreviewStack(options: {
-  root: string;
-  scenario?: Scenario;
-  signal?: AbortSignal;
-  onStage?: (stage: string) => void;
-}) {
+export async function startPreviewStack(options: PreviewStackOptions): Promise<PreviewStack> {
   const root = resolve(options.root);
   const startedAtMs = Date.now();
   const stage = (name: string) => {
@@ -330,4 +333,3 @@ export async function startPreviewStack(options: {
     );
   }
 }
-export type PreviewStack = Awaited<ReturnType<typeof startPreviewStack>>;

@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+import { bundlePreview } from "./preview-bundle.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 if (
@@ -29,29 +27,17 @@ async function run(command, args) {
     );
   });
 }
-const directory = await mkdtemp(join(tmpdir(), "oi-preview-bundle-"));
+let bundle;
 try {
   await run(process.execPath, [
     join(root, "node_modules/typescript/bin/tsc"),
     "-p",
     "packages/shared",
   ]);
-  const bundle = join(directory, "preview.mjs");
-  await build({
-    entryPoints: [join(root, "packages/control-plane/test/preview/cli.ts")],
-    outfile: bundle,
-    bundle: true,
-    platform: "node",
-    target: "node22",
-    format: "esm",
-    external: ["node:*"],
-    banner: {
-      js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
-    },
-  });
-  await run(process.execPath, [bundle, "--root", root, ...process.argv.slice(2)]);
+  bundle = await bundlePreview("packages/control-plane/test/preview/cli.ts");
+  await run(process.execPath, [bundle.file, "--root", root, ...process.argv.slice(2)]);
 } finally {
   process.removeListener("SIGINT", onInt);
   process.removeListener("SIGTERM", onTerm);
-  await rm(directory, { recursive: true, force: true });
+  await bundle?.dispose();
 }

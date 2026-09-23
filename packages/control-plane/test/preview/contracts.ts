@@ -5,6 +5,14 @@ export const SCENARIOS = ["empty", "populated"] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 export const PREVIEW_REPLY =
   "Authenticated preview: streamed through the real control plane and saved to history.";
+export interface PreviewStackOptions {
+  root: string;
+  scenario?: Scenario;
+  signal?: AbortSignal;
+  onStage?: (stage: string) => void;
+}
+/** The one way in for callers outside this package; `stack.ts` implements it. */
+export type StartPreviewStack = (options: PreviewStackOptions) => Promise<PreviewStackHandle>;
 export interface PreviewStackHandle {
   manifest: PreviewManifest;
   /** Per-run credentials, deliberately kept out of the manifest: each signs a browser in. */

@@ -72,7 +72,7 @@ export default tseslint.config(
 
   // TypeScript files configuration
   {
-    files: ["packages/**/*.{ts,tsx}"],
+    files: ["packages/**/*.{ts,tsx}", "e2e/**/*.ts"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",

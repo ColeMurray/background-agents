@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { PREVIEW_REPLY } from "../../control-plane/test/preview/contracts";
+import { PREVIEW_REPLY } from "../packages/control-plane/test/preview/contracts";
 
 test("member creates, streams and reloads a persisted conversation", async ({ page, preview }) => {
   const failedApis: string[] = [];
