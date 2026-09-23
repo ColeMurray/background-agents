@@ -11,8 +11,9 @@ module "web_app" {
   framework    = "nextjs"
 
   # No git_repository - deploy via CLI/CI instead of auto-deploy on push.
-  # The Node.js runtime comes from `engines.node` in packages/web/package.json,
-  # which overrides the project setting; vercel/vercel 2.x cannot set 24.x.
+  # The Node.js runtime comes from `engines.node` in packages/web/package.json
+  # (the repository's own floor), which overrides the project setting and
+  # resolves to the newest supported major; vercel/vercel 2.x cannot set 24.x.
   root_directory  = "packages/web"
   install_command = "cd ../.. && npm install && npm run build -w @open-inspect/shared"
   build_command   = "next build"

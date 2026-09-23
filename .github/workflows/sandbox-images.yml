@@ -9,6 +9,7 @@ on:
       - "terraform/modules/*/scripts/**"
       - "package-lock.json"
       - ".github/workflows/sandbox-images.yml"
+      - ".nvmrc"
   workflow_dispatch:
 
 permissions:

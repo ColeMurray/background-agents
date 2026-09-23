@@ -6,7 +6,8 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 **Node.js 24 everywhere.** Every sandbox provider now ships Node.js 24; Modal, Daytona, and E2B
 images previously used Node.js 22. Prebuilt repository images rebuild onto the new toolchain
-automatically. Repositories that pin `engines.node` to 22 should widen the range. Contributing and
+automatically; until a repository's image is rebuilt, its new sessions start from the Node.js 24
+base image. Repositories that pin `engines.node` to 22 should widen the range. Contributing and
 self-hosting now require Node.js 24 or later, which the self-hosted control plane image, CI, and the
 Vercel web deployment also run.
 

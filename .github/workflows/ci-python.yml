@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-python.yml"
+      - ".nvmrc"
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
@@ -23,6 +24,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-python.yml"
+      - ".nvmrc"
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"

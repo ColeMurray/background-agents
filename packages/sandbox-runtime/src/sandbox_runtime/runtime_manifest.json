@@ -5,7 +5,7 @@
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 73,
   "harnessMinimumGeneration": {
-    "claude": 72,
-    "opencode": 72
+    "claude": 73,
+    "opencode": 73
   }
 }

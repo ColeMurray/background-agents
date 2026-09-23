@@ -6,6 +6,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
       - "eslint.config.js"
@@ -39,6 +40,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
       - "eslint.config.js"
@@ -125,6 +127,9 @@ jobs:
 
       - name: Test Terraform workflow contract
         run: npm run test:terraform-workflow-contract
+
+      - name: Test Node version workflow contract
+        run: npm run test:node-version-workflow-contract
 
       - name: Check Prettier formatting
         run: npm run format:check
