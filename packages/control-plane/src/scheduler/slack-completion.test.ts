@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildSlackAutoPauseNotification,
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
   parseSlackTriggerMetadata,
@@ -87,5 +88,31 @@ describe("buildSlackSkipNotification", () => {
     expect(
       buildSlackSkipNotification({ channelId: "C1", actorUserId: "U9", ts: "1700000000.000100" })
     ).toEqual({ channel: "C1", user: "U9", threadTs: "1700000000.000100" });
+  });
+});
+
+describe("buildSlackAutoPauseNotification", () => {
+  it("returns null when the automation watches no channels", () => {
+    expect(
+      buildSlackAutoPauseNotification({
+        automationName: "Nightly sync",
+        consecutiveFailures: 3,
+        channelIds: [],
+      })
+    ).toBeNull();
+  });
+
+  it("carries the watched channels, automation name, and failure count", () => {
+    expect(
+      buildSlackAutoPauseNotification({
+        automationName: "Nightly sync",
+        consecutiveFailures: 4,
+        channelIds: ["C1", "C2"],
+      })
+    ).toEqual({
+      channels: ["C1", "C2"],
+      automationName: "Nightly sync",
+      consecutiveFailures: 4,
+    });
   });
 });
