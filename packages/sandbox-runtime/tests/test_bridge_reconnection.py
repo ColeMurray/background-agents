@@ -98,6 +98,9 @@ class TestIsFatalConnectionError:
             "sandbox_runtime.bridge.websockets.connect",
             lambda *_args, **_kwargs: ConnectionContext(ws),
         )
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.read_health_snapshot", lambda: {"memory_available_mib": 1500}
+        )
         bridge.log = MagicMock()
         bridge._send_event = AsyncMock(side_effect=asyncio.CancelledError)
 
@@ -114,6 +117,7 @@ class TestIsFatalConnectionError:
             connection_count=1,
             reconnect_count=0,
             reconnect_attempt_count=0,
+            memory_available_mib=1500,
         )
 
     @pytest.mark.asyncio
