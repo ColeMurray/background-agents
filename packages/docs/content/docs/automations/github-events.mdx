@@ -18,6 +18,19 @@ relatedCode:
 
 A GitHub Event automation starts a session when a supported webhook event arrives for its repository and every configured condition passes.
 
+```mermaid
+flowchart TB
+    event["GitHub webhook event arrives"] --> match{"Matches the repository and Event Type?"}
+    match -->|No| ignored[Ignored]
+    match -->|Yes| enabled{"Automation enabled?"}
+    enabled -->|No| ignored
+    enabled -->|Yes| conditions{"Every condition passes?"}
+    conditions -->|No| ignored
+    conditions -->|Yes| scope{"Concurrency scope already active?"}
+    scope -->|Yes| skipped[Skipped]
+    scope -->|No| session["Session: instructions, then the event context block"]
+```
+
 ## Prerequisites
 
 - The GitHub bot must be deployed and the GitHub App subscribed to the event you want, with the repository permission that event needs. This is an operator task; see [GitHub integration](/integrations/github).

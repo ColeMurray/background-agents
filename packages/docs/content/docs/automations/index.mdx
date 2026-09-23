@@ -18,9 +18,33 @@ relatedCode:
 
 An automation stores a repository selection, a model, and a set of instructions once, then starts a new session every time its trigger fires.
 
+![The Automations page listing automations with their trigger, schedule, recent run results, and Pause, Trigger, and Delete actions](/images/automations/automations-list.webp "The Automations list: each row shows the trigger, the next run, the last runs, and Pause, Trigger, and Delete actions.")
+
 ## What an automation does
 
 Each firing creates an ordinary session. The session clones the configured repository, runs your instructions on the OpenCode or Claude Agent harness you chose, and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
+
+Every trigger type follows the same path from firing to outcome, and repeated failures pause the automation:
+
+```mermaid
+flowchart TB
+    subgraph triggers["Trigger fires"]
+        direction LR
+        schedule[Schedule]
+        webhook[Inbound Webhook]
+        sentry[Sentry Alert]
+        github[GitHub Event]
+        slack[Slack Message]
+    end
+    schedule & webhook & sentry & github & slack --> run["Run recorded in Run History"]
+    run --> session["Session titled [Auto] automation name"]
+    session --> completed[Completed]
+    session --> failed[Failed]
+    completed --> reset["Failure counter reset"]
+    failed --> count["Consecutive failures + 1"]
+    count -->|3 in a row| paused["Automation paused"]
+    paused -->|Resume| reset
+```
 
 Open **Automations** in the sidebar to see every automation in the workspace, or click **Browse templates** to start from a pre-built idea.
 

@@ -29,21 +29,10 @@ export default function OpenGraphImage() {
         }}
       >
         <div style={{ alignItems: "center", display: "flex", gap: "20px", fontSize: 30 }}>
-          <div
-            style={{
-              alignItems: "center",
-              background: "#1a1a1a",
-              color: "white",
-              display: "flex",
-              fontSize: 24,
-              fontWeight: 700,
-              height: 58,
-              justifyContent: "center",
-              width: 58,
-            }}
-          >
-            BA
-          </div>
+          <svg fill="none" height="58" viewBox="0 0 36 36" width="58">
+            <rect height="34" stroke="#1a1a1a" strokeWidth="2" width="34" x="1" y="1" />
+            <rect fill="#1a1a1a" height="20" width="20" x="8" y="8" />
+          </svg>
           OpenInspect
         </div>
         <div style={{ display: "flex", fontSize: 72, fontWeight: 600, letterSpacing: "-3px" }}>

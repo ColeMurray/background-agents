@@ -20,6 +20,8 @@ relatedCode:
 
 This page shows how to create an environment, what a session launched from one receives, and how environments interact with secrets, prebuilt images, and integrations.
 
+![Settings, Environments: two named environments with their repositories, prebuilt image status, an enable toggle, and Edit and Delete actions](/images/configure/environments.webp "Settings › Environments. Each row shows the repositories, the prebuilt image status, and the enable toggle.")
+
 ## What an environment is
 
 An environment is a named, reusable set of repositories: the thing you reach for when the same multi-repository workspace comes up again and again (a frontend plus its API, a service plus its shared library). Environments are managed under Settings › Environments and appear at the top of the new-session picker.
@@ -33,6 +35,25 @@ An environment defines:
 | Environment secrets     | Sessions launched from the environment receive global secrets plus the environment's secrets.                                                                                                                                           |
 | Prebuilt images         | Optional. The whole environment (all clones, all setup scripts) is built ahead of time so sessions boot from the image.                                                                                                                 |
 | Settings overrides      | Per-environment overrides for the code editor, VNC desktop, and sandbox settings.                                                                                                                                                       |
+
+How a session picks all of that up:
+
+```mermaid
+flowchart TB
+    subgraph env["Environment"]
+        direction TB
+        repos["Ordered<br/>repositories, each<br/>with a base branch"]
+        primary["Primary repository<br/>(first listed)<br/>supplies inherited<br/>settings"]
+        secrets["Environment<br/>secrets"]
+        prebuild["Prebuild images<br/>toggle"]
+        overrides["Overrides: editor,<br/>VNC, sandbox"]
+    end
+    picker["New-session<br/>picker"] -- "pick the environment" --> session["Session"]
+    env --> session
+    session --> ws["Every repository<br/>cloned side by<br/>side under<br/>/workspace, each<br/>on its base branch"]
+    session --> inj["Global secrets +<br/>environment<br/>secrets"]
+    session --> img["Boots from the<br/>ready image when<br/>the set matches"]
+```
 
 A name is limited to 200 characters and a description to 2,000.
 

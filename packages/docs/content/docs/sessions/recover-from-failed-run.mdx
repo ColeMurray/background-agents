@@ -41,6 +41,23 @@ A failed session is not lost. Its status is `failed`, it still accepts prompts, 
 | The session cost limit was reached                                                   | Raise or remove the limit, then follow up.                                   |
 | The change is sensitive or time-critical                                             | Take over manually and keep the branch.                                      |
 
+The same decisions as a flowchart:
+
+```mermaid
+flowchart LR
+    Start([Run failed or stalled]) --> Q1{Right repository, environment, and branch?}
+    Q1 -->|No| NewTarget[Start a new session with the right target]
+    Q1 -->|Yes| Q2{What does the error say?}
+    Q2 -->|Boot phase timed out| Boot[Send the prompt again, then shorten setup or use a prebuilt image]
+    Q2 -->|"setup.sh or image build failed"| Setup["Fix setup.sh, rebuild the image, start a new session"]
+    Q2 -->|Token refresh failed, Model not found| Auth[Reconnect the account or add the key, then follow up]
+    Q2 -->|Session cost limit reached| Budget[Raise or remove the limit, then follow up]
+    Q2 -->|Panel or diff failed to load| Retry[Retry from the panel or Sync PR status]
+    Q2 -->|Wrong approach, still running| Stop[Stop the current prompt, then send a correction]
+    Q2 -->|Stopped for lack of context| Follow[Follow up with the missing detail]
+    Q2 -->|Sensitive or time-critical| Manual[Take over manually and keep the branch]
+```
+
 ## Follow up with missing context
 
 When the agent asks a question or stops short because something was unclear, reply in the same session. The workspace, installed dependencies, and the conversation so far are all still there, and the follow-up restores from the last snapshot.

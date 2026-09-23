@@ -37,6 +37,19 @@ The agent has four tools for working with children. They are available on both h
 
 `spawn-child` returns as soon as the child is queued, so a parent can start several children in a row and then continue its own work. The tool instructions tell the agent to check status only when it needs a result rather than polling.
 
+```mermaid
+flowchart TB
+    Parent["Parent session (its own sandbox and branch)"]
+    Parent -->|spawn-child| C1["Child 1 (new sandbox, new branch)"]
+    Parent -->|spawn-child| C2["Child 2 (new sandbox, new branch)"]
+    Parent -->|spawn-child| C3["Child 3 (new sandbox, new branch)"]
+    Parent -.->|send-child-prompt: queued follow-up| C2
+    C1 -.->|get-child-status: status, response, events| Parent
+    C1 -->|spawn-child| G1["Grandchild (depth 2, cannot spawn further)"]
+    Limits["Defaults from Settings > Sandbox: 5 concurrent children, 15 total children per parent"]
+    Limits -.- Parent
+```
+
 ## What a child inherits
 
 | Property                           | Behavior                                                                                                                                                                                                |

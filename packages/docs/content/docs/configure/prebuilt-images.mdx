@@ -18,6 +18,8 @@ relatedCode:
 
 This page explains what a prebuilt image contains, how to enable one for a repository or an environment, what the statuses mean, when images are rebuilt, and what a session does with one.
 
+![Settings, Images: a list of repositories with a prebuilt image toggle and a Ready or Disabled status per row](/images/configure/prebuilt-images.webp "Settings › Images. Ready rows show the commit the image was built from and the build time.")
+
 ## Why prebuilt images
 
 Without one, every new session has to clone the repositories, install dependencies, and run `.openinspect/setup.sh`. For a large repository that takes anywhere from 30 seconds to several minutes. A prebuilt image does that work ahead of time and keeps the result as a provider artifact. A new session starts from the artifact and only pulls the commits pushed since it was built.
@@ -28,6 +30,20 @@ One image-build subsystem serves two kinds of scope:
 | -------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------- |
 | Repository                             | A one-repository set on its default branch                                    | Settings › Images                                 |
 | [Environment](/configure/environments) | The environment's ordered set of up to 10 repositories at their base branches | The **Prebuild images** toggle on the environment |
+
+From trigger to session start, an image moves through these states:
+
+```mermaid
+flowchart TB
+    trigger["Trigger:<br/>enable or save,<br/>secrets change,<br/>rebuild button, or<br/>30-min scheduler"] --> build["Build: clone at<br/>base branches,<br/>run each setup.sh,<br/>save the artifact"]
+    build -- "succeeds" --> ready["Ready image"]
+    build -- "setup.sh fails or<br/>the build times out" --> failed["Failed; retried on<br/>the scheduler's<br/>next run"]
+    failed -. "an older matching<br/>image keeps serving" .-> ready
+    ready --> match{"Repository set<br/>matches the image?"}
+    match -- "yes" --> boot["Boot from image:<br/>git sync, start.sh<br/>skills, agent"]
+    match -- "no" --> normal["Normal startup:<br/>clone, setup.sh,<br/>start.sh, skills,<br/>agent"]
+    ready -- "a branch tip moves or<br/>the runtime floor rises" --> trigger
+```
 
 ## Where the artifact lives
 

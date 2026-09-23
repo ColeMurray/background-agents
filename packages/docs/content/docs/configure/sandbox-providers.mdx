@@ -36,6 +36,27 @@ Every provider runs the same sandbox runtime: Debian Linux with Node.js 22, Pyth
 
 Saved state matters for follow-up prompts: on Modal, Vercel, and OpenComputer a resumed session restores a snapshot or checkpoint, then runs a quick git sync and `start.sh`. On Daytona and E2B the same sandbox is stopped or paused and later resumed in place, with the workspace as it was.
 
+The two saved-state models side by side:
+
+```mermaid
+flowchart TB
+    subgraph snap["Modal, Vercel Sandboxes, OpenComputer"]
+        direction TB
+        s1["Fresh sandbox from<br/>the base image,<br/>base snapshot,<br/>or template"] --> s2["Prompt runs"]
+        s2 --> s3["Snapshot or<br/>checkpoint saved<br/>after the prompt<br/>and before an<br/>inactivity stop"]
+        s3 --> s4["Sandbox stopped"]
+        s4 -- "next prompt" --> s5["New sandbox<br/>restores it, then<br/>a quick git sync<br/>and start.sh"]
+        s5 --> s2
+    end
+    subgraph persist["Daytona, E2B"]
+        direction TB
+        p1["Persistent<br/>sandbox created"] --> p2["Prompt runs"]
+        p2 --> p3["Stopped (Daytona)<br/>or paused (E2B)<br/>on inactivity or<br/>a stale heartbeat"]
+        p3 -- "next prompt" --> p4["The same sandbox<br/>resumes with its<br/>workspace intact"]
+        p4 --> p2
+    end
+```
+
 ## Modal
 
 - Sessions start from the base runtime image and restore from filesystem snapshots taken after each completed prompt and before inactivity shutdown.

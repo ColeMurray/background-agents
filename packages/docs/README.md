@@ -37,6 +37,14 @@ The schema (`src/lib/content-policy.ts`) rejects an `internal` audience, unpubli
 impossible dates, and source paths that leave the repository. Internal operational notes belong
 outside this package.
 
+Diagrams are Mermaid code fences (` ```mermaid `), rendered on the client by
+`src/components/mermaid.tsx` with the site palette in both color schemes. Prefer top-to-bottom
+layouts; the content column is about 665px wide. Screenshots live under `public/images/<section>/`
+as WebP captured at 1440x900 with a 2x device scale, and are placed with ordinary Markdown images
+whose title becomes the caption: `![alt](/images/section/name.webp "Caption")`. Capture them from a
+demo workspace or rewrite every session title, repository, user name, avatar, email, and secret name
+before capture; nothing from a real workspace may appear in a published screenshot.
+
 The content tests load the same Fumadocs source the site renders (`src/lib/source.test-support.ts`
 starts a Vite module runner for it) and check that every page is reachable from the navigation,
 every internal link resolves, every `relatedCode` path is tracked, and `llms.txt` links the Markdown
@@ -49,9 +57,11 @@ representation of every page.
    approves. Use the product's own labels (for example Settings › Models).
 3. Prefer tables for enumerations, numbered steps for procedures, fenced `text` blocks for literal
    prompts, and a Troubleshooting section wherever the source documents failure modes.
-4. Add or update `relatedCode` and `lastReviewed`.
-5. Run the package checks above.
-6. Use the page's **Give feedback** or **Edit on GitHub** links for follow-up corrections.
+4. Add a diagram where a flow or state machine is described in prose, and a screenshot where the
+   page names a screen the reader has to find.
+5. Add or update `relatedCode` and `lastReviewed`.
+6. Run the package checks above.
+7. Use the page's **Give feedback** or **Edit on GitHub** links for follow-up corrections.
 
 ## Production deployment
 

@@ -17,6 +17,20 @@ relatedCode:
 
 A Slack Message automation watches one or more channels and starts a session when a message matches its conditions, without anyone mentioning the bot.
 
+```mermaid
+flowchart TB
+    message["Message posted in a watched channel"] --> mention{"Mentions the bot?"}
+    mention -->|Yes| interactive["Interactive @mention flow"]
+    mention -->|No| conditions{"Slack Channel, Message Text, and Slack User conditions pass?"}
+    conditions -->|No| nothing["Nothing happens"]
+    conditions -->|Yes| run["Run starts, eyes reaction on the message"]
+    run --> session["Session: instructions, then the message context block"]
+    session --> reply{"Final message is NO_REPLY?"}
+    reply -->|No| posted["Response posted in the thread"]
+    reply -->|Yes| cleared["Reaction cleared, nothing posted"]
+    posted --> followup["Thread replies continue the session for 7 days"]
+```
+
 ## How this differs from @mention sessions
 
 Mentioning the bot in Slack starts an explicit, interactive session for the person who asked. A Slack Message automation fires on ordinary channel traffic that matches conditions you define, runs the automation's saved instructions, and posts its result back into the message's thread. Messages that mention the bot are handled by the interactive flow and never double-fire as triggers. See [Slack integration](/integrations/slack) for the interactive flow.

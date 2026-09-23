@@ -25,6 +25,29 @@ Prompt 1 (processing) -> Prompt 2 (queued) -> Prompt 3 (queued)
 
 Both harnesses behave the same way here: OpenCode and Claude Agent hold follow-ups until the running turn finishes. A follow-up never interrupts the agent mid-turn.
 
+```mermaid
+sequenceDiagram
+    actor You
+    participant Queue as Queued prompts
+    participant Agent
+    You->>Agent: Prompt 1
+    activate Agent
+    Note over Agent: Turn 1 running
+    You->>Queue: Prompt 2 (queued)
+    You->>Queue: Prompt 3 (queued)
+    Note over Queue: Up to 50 unfinished prompts per session
+    You->>Agent: Stop current prompt
+    deactivate Agent
+    Note over Agent: Turn 1 interrupted, work in the sandbox stays
+    Queue->>Agent: Prompt 2 starts
+    activate Agent
+    Note over Agent: Turn 2 running
+    deactivate Agent
+    Queue->>Agent: Prompt 3 starts
+```
+
+A session may hold at most 50 unfinished (pending or processing) prompts; see [Limits](/reference/limits).
+
 While a turn runs the composer placeholder changes to "Add a follow-up..." and the send button reads "Queue". Queued prompts stack above the composer under "Queued prompts", in run order. Each row has a "Remove queued prompt" button if you have the `sessions.lifecycle` permission. Removing a prompt puts its text back in the composer so you can edit it and send it again.
 
 A prompt sent while the sandbox is still booting waits until the sandbox is ready, then dispatches. The header shows the boot phase while you wait.

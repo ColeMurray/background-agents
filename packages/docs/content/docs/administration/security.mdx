@@ -47,6 +47,36 @@ The four roles (Owner, Administrator, Member, Viewer) decide which OpenInspect f
 | WebSocket token    | Authenticates a client's live connection                  | A single session                            |
 | Managed LLM token  | Short-lived OpenAI or xAI model access                    | The provider account pinned to the session  |
 
+Where each credential lives, and what crosses each boundary:
+
+```mermaid
+flowchart TB
+    subgraph clients["Clients"]
+        web["Web app"]
+        chat["Slack, GitHub, Linear"]
+    end
+    subgraph cp["Control plane"]
+        secrets["Secrets, AES-256-GCM at rest"]
+        accounts["Provider accounts, separate key"]
+        apptoken["GitHub App token"]
+        bottokens["Slack, Linear, and webhook secrets"]
+    end
+    subgraph sandbox["Sandbox, one per session"]
+        sbtoken["Sandbox auth token, single session"]
+        env["Decrypted secrets as environment variables"]
+        cred["Short-lived git credential via the helper"]
+        marker["Provider account marker only"]
+    end
+    subgraph gh["GitHub"]
+        repos["Repositories where the App is installed"]
+    end
+    web -->|WebSocket token, single session| cp
+    chat -->|Verified webhooks| cp
+    cp -->|Injected at sandbox creation| sandbox
+    sandbox -->|Brokered credential| repos
+    cp -->|User OAuth token opens pull requests| repos
+```
+
 Git credentials are brokered on demand. Fresh and prebuilt-image sandboxes fetch a short-lived credential through the control plane by way of a git credential helper rather than carrying a token embedded in the environment or the remote URL. The helper authorizes HTTPS requests for the configured source-control host, so setup and start scripts that clone other private repositories available to the installation keep working. Snapshot restores may still receive an environment-token fallback so older snapshots can boot; Modal snapshot restores mint a fresh fallback token on restore.
 
 Pull requests are opened with the prompting user's GitHub OAuth token when they signed in with GitHub, which gives correct attribution and means they can only open pull requests where they have write access. Users who signed in with Google carry no source-control token, so their pull requests fall back to the App identity.

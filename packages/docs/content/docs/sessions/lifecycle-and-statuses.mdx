@@ -35,6 +35,22 @@ They do not line up one to one. A `completed` session can still have a live sand
 | `archived`  | Archived                   | You archived the session. It is hidden from the inbox.     | No, restore it first                       |
 | `cancelled` | Cancelled                  | The session was cancelled. Unfinished prompts were closed. | No                                         |
 
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> created: session created
+    created --> active: first prompt dispatched
+    active --> completed: run succeeded, queue empty
+    active --> failed: run errored, queue empty
+    completed --> active: new prompt
+    failed --> active: new prompt
+    completed --> archived: archive
+    failed --> archived: archive
+    archived --> completed: unarchive
+    active --> cancelled: cancel
+    cancelled --> [*]
+```
+
 After every run the status settles by itself: back to `active` when more prompts are queued, otherwise `completed` or `failed` depending on the outcome. A session that was cancelled or archived in the meantime stays that way.
 
 How these statuses reach the sidebar inbox is covered in [Inbox, sessions list, and search](/sessions/inbox-and-search). In short: an unread finished turn puts the session under Needs attention, an `active` session sits under In progress, and everything else is under Recent.
@@ -54,6 +70,23 @@ The session header and right sidebar show the sandbox status with these labels:
 | `stopped`      | Stopped       | The sandbox stopped after inactivity and restarts with the next prompt. |
 | `stale`        | Unresponsive  | The sandbox runtime stopped responding.                                 |
 | `failed`       | Failed        | The sandbox could not start or recover.                                 |
+
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> pending: prompt needs compute
+    pending --> spawning: provider creates or restores
+    spawning --> connecting: runtime connects
+    connecting --> ready: boot phases finish
+    ready --> snapshotting: idle timeout or lifetime
+    snapshotting --> stopped: snapshot saved
+    stopped --> spawning: next prompt
+    ready --> stale: heartbeats stop
+    stale --> failed: no recovery
+    spawning --> failed: watchdog or boot budget trips
+    connecting --> failed: watchdog or boot budget trips
+    failed --> [*]: next prompt starts a new sandbox
+```
 
 Sandbox tools such as the terminal and code server are usable only while the sandbox is `ready`.
 

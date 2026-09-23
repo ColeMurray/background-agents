@@ -30,6 +30,31 @@ This page is for people using Linear day to day. Installing the Linear OAuth app
 5. Use **View Session** to watch the full session.
 6. Send follow-ups through the same active Linear Agent session.
 
+Linear shows the session as agent activities while the work runs elsewhere:
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Linear
+    participant OI as OpenInspect
+    participant Session
+    You->>Linear: Mention or assign the Linear Agent on an issue
+    Linear->>OI: Verified webhook
+    OI-->>Linear: Thinking activity
+    alt Repository ambiguous
+        OI-->>Linear: Clarification activity
+        You->>Linear: Reply with owner/repo
+        Linear->>OI: Next attempt
+    end
+    OI->>Session: Start the session
+    OI-->>Linear: Working activity and View Session link
+    Session-->>OI: Session finishes, pull request if opened
+    OI-->>Linear: Completion activity and Pull Request link
+    You->>Linear: Follow-up on the same issue
+    Linear->>OI: Follow-up
+    OI->>Session: Follow-up prompt on the active session
+```
+
 ## What Linear can do
 
 | Workflow                    | How it works                                                             |

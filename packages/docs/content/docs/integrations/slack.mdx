@@ -49,6 +49,29 @@ Use **View Session** to open the full web session while the agent works. Reply i
 </Step>
 </Steps>
 
+The whole exchange stays in one Slack thread:
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Slack
+    participant OI as OpenInspect
+    participant Session
+    You->>Slack: Mention the bot with a request
+    Slack->>OI: Verified event
+    alt Target unclear
+        OI-->>You: Dropdown to pick a repository, environment, or No repository
+        You->>OI: Choose a target
+    end
+    OI->>Session: Start the session
+    OI-->>Slack: Working reply with View Session
+    Session-->>OI: Final response and artifacts
+    OI-->>Slack: Completion reply in the thread
+    You->>Slack: Reply in the thread
+    Slack->>OI: Follow-up
+    OI->>Session: Follow-up prompt on the same session
+```
+
 ## What Slack can do
 
 | Workflow                       | How it works                                                              |

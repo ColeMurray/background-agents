@@ -39,6 +39,22 @@ If you want a draft, say so ("open it as a draft pull request"). Otherwise the p
 
 ## How the agent creates it
 
+```mermaid
+sequenceDiagram
+    actor You
+    participant OI as OpenInspect
+    participant Agent as Sandbox agent
+    participant GH as GitHub
+    You->>OI: Prompt: open a PR
+    OI->>Agent: Create sandbox, boot
+    Agent->>Agent: Edit, run tests
+    Agent->>OI: create-pull-request
+    OI->>GH: Push branch
+    OI->>GH: Create PR
+    GH-->>OI: PR number and URL
+    OI-->>You: Timeline card, sidebar entry
+```
+
 The agent uses a built-in `create-pull-request` tool. The sandbox's `gh` wrapper refuses `gh pr create` and points the agent back to the tool, so pull requests always go through the same path:
 
 1. The tool reads the current branch in the repository and sends the title, body, optional base branch, optional target repository (for multi-repository sessions), and the draft flag to the control plane.

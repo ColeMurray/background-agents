@@ -18,7 +18,9 @@
     "fumadocs-core": "16.15.6",
     "fumadocs-mdx": "15.4.0",
     "fumadocs-ui": "16.15.6",
+    "mermaid": "^12.0.0",
     "next": "^16.3.0",
+    "next-themes": "^0.4.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.4.3"

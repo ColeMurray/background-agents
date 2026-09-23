@@ -19,6 +19,19 @@ relatedCode:
 
 A Sentry Alert automation receives signed webhooks from a Sentry Custom Integration and starts a session for the errors or alerts you select.
 
+```mermaid
+flowchart TB
+    delivery["Sentry webhook delivery"] --> signature{"sentry-hook-signature verifies?"}
+    signature -->|No| rejected["401 rejected"]
+    signature -->|Yes| type{"Resource and action match the Event Type?"}
+    type -->|No| skipped["200 with skipped: true"]
+    type -->|Yes| conditions{"Sentry Project and Error Level conditions pass?"}
+    conditions -->|No| skipped
+    conditions -->|Yes| dedupe{"Duplicate delivery, or a run still active for this issue?"}
+    dedupe -->|Yes| skipped
+    dedupe -->|No| session["Session: instructions, then the error context block"]
+```
+
 ## Prerequisites
 
 - A Sentry Custom Integration (an internal integration in your Sentry organization) whose webhook you can point at OpenInspect. You need its **Client Secret**.

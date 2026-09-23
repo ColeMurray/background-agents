@@ -19,6 +19,8 @@ relatedCode:
 
 This page shows you how to authenticate model providers with either an API key or a connected subscription account, and how those accounts behave across sessions, automations, and their lifecycle.
 
+![Settings, Accounts: connected Claude, ChatGPT, and SuperGrok accounts, each Ready and default for automation, and the Automated sessions credential pickers](/images/models/provider-accounts.webp "Settings › Accounts: connected provider accounts and which credential automated sessions use.")
+
 ## Two ways to authenticate a provider
 
 | Mode              | How it is configured                                                                                                                                                                 | Where it applies                                                                                             |
@@ -136,6 +138,25 @@ Pins are retained when the configured model changes and apply only to future ses
 - The sandbox requests short-lived access from the control plane using its own sandbox credential. For OpenAI and xAI the control plane refreshes the stored credential and returns only a short-lived access token; for Claude it returns the setup token, which the harness keeps in process memory.
 - Refresh tokens never enter the sandbox and are never returned to the browser. Broker responses are marked `no-store`.
 - API-key mode is unchanged: the sandbox receives ordinary global, repository, or environment secrets.
+
+In account mode the credential exchange looks like this:
+
+```mermaid
+sequenceDiagram
+    participant S as Sandbox
+    participant CP as Control plane
+    participant P as Provider
+    Note over S: Provider API key removed,<br/>only a managed marker injected
+    S->>CP: Request access with the sandbox credential
+    alt OpenAI or xAI
+        CP->>P: Refresh the stored credential
+        P-->>CP: Short-lived access token
+        CP-->>S: Short-lived access token only
+    else Claude
+        CP-->>S: Setup token, kept in process memory
+    end
+    Note over CP: Refresh tokens never enter the sandbox<br/>or the browser
+```
 
 ## Lifecycle actions
 

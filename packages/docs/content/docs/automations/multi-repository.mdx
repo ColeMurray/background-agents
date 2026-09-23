@@ -30,6 +30,18 @@ Multi-target selection is available only when **Trigger Type** is **Schedule** (
 - Each session owns its branch, artifacts, and pull request. There is no combined cross-repository PR.
 - An environment target launches one session that opens that environment's full workspace instead of a single repository. See [Environments](/configure/environments).
 
+```mermaid
+flowchart TB
+    firing["Schedule comes due, or Trigger Now"] --> auto["One automation, up to 10 targets, same Instructions"]
+    auto --> s1["Session: repository A, default branch"]
+    auto --> s2["Session: repository B, default branch"]
+    auto --> s3["Session: environment workspace"]
+    s1 --> p1["Own branch and pull request"]
+    s2 --> p2["Own branch and pull request"]
+    s3 --> p3["Own branch and pull request"]
+    p1 & p2 & p3 --> row["One expandable row in Run History"]
+```
+
 If one repository cannot be resolved when the firing starts (for example the GitHub App lost access), only that repository's run fails and the others continue. If every target fails to resolve, the firing finishes immediately as Failed.
 
 ## Changing the selection mid-flight

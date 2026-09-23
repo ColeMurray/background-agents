@@ -45,6 +45,23 @@ This page covers day-to-day use and the settings a team owner manages. Installin
 
 There are no GitHub slash commands, and the bot cannot be requested through the PR reviewer picker. Use auto-review or `@mention` comments.
 
+The three entry points differ in where the session starts and what it can push:
+
+```mermaid
+flowchart TB
+    subgraph github["On GitHub"]
+        opened["Non-draft PR opened"]
+        mention["@mention in a PR comment or review thread"]
+        feedback["Review or comment on a session-created PR"]
+    end
+    opened -->|Auto-review enabled| review["Review session"]
+    review --> posted["Posts a GitHub review"]
+    mention --> fresh["New session from the default branch"]
+    fresh --> answer["Posts a PR comment or thread reply"]
+    feedback -->|PR Feedback Autofix enabled| resume["Resumes the session that created the PR, on the PR branch"]
+    resume --> push["Pushes a fix and replies on the PR"]
+```
+
 ## Automatic PR reviews
 
 **When it runs.** With **Auto-review new PRs** enabled, OpenInspect starts a review session for each newly opened, non-draft PR in an in-scope repository. The agent inspects the diff and posts a GitHub review.

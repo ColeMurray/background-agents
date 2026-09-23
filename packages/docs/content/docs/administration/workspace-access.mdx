@@ -14,6 +14,8 @@ relatedCode:
 
 This page explains who can get into your workspace, what each role permits, and how to change or suspend a member from Settings › Workspace access.
 
+![Settings, Workspace access: a members list with role dropdowns and Suspend buttons, and role cards for Administrator, Member, Owner, and Viewer](/images/administration/workspace-access.webp "Settings › Workspace access: one role per member, with the four roles described below the list.")
+
 <Callout type="info" title="One workspace, one trusted organization">
   An OpenInspect deployment is a single workspace. The source-control App installation defines which
   repositories the workspace can reach. Roles control which OpenInspect features a person can use;
@@ -29,6 +31,15 @@ Signing in has two stages:
 
 1. Your identity provider verifies your identity and email address.
 2. The deployment's admission rules decide whether you may join the workspace.
+
+```mermaid
+flowchart TB
+    signin["Sign in with GitHub or Google"] --> verify["Provider verifies identity and email"]
+    verify --> admit{"Admission rules pass?"}
+    admit -->|No| denied["Not admitted"]
+    admit -->|Yes| member["Joins the workspace as a Member"]
+    member --> role["An Owner or Administrator changes the role if needed"]
+```
 
 Admission can be limited by any of the following, depending on how the deployment is configured:
 

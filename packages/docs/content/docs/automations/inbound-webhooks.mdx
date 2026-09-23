@@ -26,6 +26,20 @@ An Inbound Webhook automation gives you a URL and API key; any system that can s
 3. Send an authenticated `POST` with a JSON body.
 4. OpenInspect checks the request against the automation's conditions and, if they pass, starts a session whose prompt is your saved instructions followed by a context block containing the payload.
 
+```mermaid
+flowchart TB
+    post["POST with a JSON body"] --> auth{"Bearer API key valid?"}
+    auth -->|No| unauthorized["401"]
+    auth -->|Yes| paused{"Automation paused?"}
+    paused -->|Yes| nothing["Accepted, nothing starts"]
+    paused -->|No| filters{"Every JSONPath filter matches?"}
+    filters -->|No| none["ok: true, triggered: 0"]
+    filters -->|Yes| dedupe{"idempotencyKey already seen?"}
+    dedupe -->|Yes| skipped["ok: true, skipped: 1"]
+    dedupe -->|No| session["Session: instructions, then the payload context block"]
+    session --> triggered["ok: true, triggered: 1"]
+```
+
 Webhook automations do not use a schedule or timezone.
 
 ## Setup notes

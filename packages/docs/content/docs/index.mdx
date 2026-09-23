@@ -13,6 +13,8 @@ relatedCode:
 
 OpenInspect is a background coding agent. You describe a piece of work, the agent runs it in an isolated cloud sandbox with a full development environment, and you come back to review the result: a response, a diff, and usually a pull request.
 
+![The OpenInspect home screen with the session inbox on the left and the new-session composer in the middle](/images/getting-started/home-composer.webp "The home screen: inbox on the left, composer with repository, branch, model, and skills pickers in the middle.")
+
 The agent does not need you to stay connected. Send a prompt from the web app, Slack, a GitHub pull request, a Linear issue, or an automation, close the tab, and check the session later. Several people can watch and prompt the same session at the same time, and every commit is attributed to the person who asked for it.
 
 ## Start here
@@ -43,6 +45,22 @@ The agent does not need you to stay connected. Send a prompt from the web app, S
 ## One lifecycle
 
 Every session, whether it starts from the web composer, a Slack message, or an automation, follows the same path.
+Every session, whether it starts from the web composer, a Slack message, or an automation, follows the same path.
+
+```mermaid
+flowchart TB
+    You([You])
+    You --> Web[Web app] & Slack[Slack] & GH[GitHub PR] & Linear[Linear] & Auto[Automation]
+    Web & Slack & GH & Linear & Auto --> CP[Control plane: session record and timeline]
+    CP -->|dispatch prompt| Boot
+    subgraph Sandbox["Isolated sandbox"]
+        Boot[Clone and boot] --> Agent[Agent edits, runs commands, validates]
+    end
+    Agent -.->|events stream back| CP
+    CP -.-> Watch([You watch the timeline and changes])
+    Agent -->|push branch, open PR| PR[Pull request on your repository]
+    PR --> Review([You review and merge])
+```
 
 1. **Choose a target.** A single repository and branch, an ad-hoc set of up to 10 repositories, a saved environment, or no repository at all.
 2. **Describe the work.** One prompt with the goal, the constraints, and how the agent should prove it is done. Images can be attached.

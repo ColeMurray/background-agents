@@ -61,6 +61,24 @@ The runtime boots a sandbox in one of four modes. The mode is exposed to both sc
 
 The order within a boot is: git sync, then `setup.sh` (fresh and build only), then `start.sh` (every non-build boot), then managed skills, then the agent harness. In the session header you see these as "Cloning repository", "Running setup.sh", "Starting services", "Installing skills", and "Starting agent".
 
+The same phases, by boot mode:
+
+```mermaid
+flowchart TB
+    runtime["Starting runtime"] --> mode{"Boot mode"}
+    mode -- "fresh or build" --> clone["Cloning repository"]
+    mode -- "repo_image" --> sync["Cloning repository<br/>incremental sync, setup already ran"]
+    mode -- "snapshot_restore" --> services
+    clone --> setup["Running setup.sh"]
+    setup -- "build: saved as the image,<br/>start.sh does not run" --> image["Prebuilt image"]
+    setup -- "fresh: a non-zero exit<br/>is a warning, boot continues" --> services["Starting services<br/>start.sh"]
+    sync --> services
+    services -- "fails in the primary repository" --> failed["Boot fails"]
+    services --> skills["Installing skills"]
+    skills --> agent["Starting agent"]
+    agent --> ready["Ready"]
+```
+
 Because `start.sh` also runs after a snapshot restore, it runs in a workspace that already contains whatever the previous run left behind: installed dependencies, built artifacts, and running-state files. Write it so that it works in that situation as well as on a fresh clone. See [Prebuilt images](/configure/prebuilt-images) for how image builds fit in.
 
 ## Multi-repository sessions

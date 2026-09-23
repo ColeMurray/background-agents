@@ -95,6 +95,19 @@ A deployment is one workspace, and the GitHub App installation defines the repos
 
 Learn more: [Workspace access](/administration/workspace-access).
 
+## How the concepts fit together
+
+A session owns a target and a series of prompts. Each prompt runs as a turn inside the session's current sandbox, and the result is a diff on the session branch and, when you ask for one, a pull request.
+
+```mermaid
+flowchart TB
+    Session[Session] -->|targets| Target[Target: repository or environment]
+    Session -->|runs in| Sandbox[Sandbox]
+    Prompt[Prompt] -->|one turn in| Sandbox
+    Sandbox -->|produces| Diff[Diff on the session branch]
+    Diff -->|on request| PR[Pull request]
+```
+
 ## Session status vs sandbox status
 
 The two are independent. Session status is the durable state of the conversation; sandbox status is the state of the current sandbox. A session can be `completed` with a live sandbox still attached, or `active` with no sandbox at all.
