@@ -93,9 +93,11 @@ server answers only its own `Host` header, and it stops with the preview. A link
 that run's throwaway database with that run's random secret, so it is worthless anywhere else.
 Still, treat the links as credentials while the run is alive.
 
-The login cookie is set for `127.0.0.1` and, like any cookie, reaches every port on that host. Two
-previews open in one browser therefore share a login, as does another app on `127.0.0.1` that uses
-the same cookie name. `localhost` keeps separate cookies.
+The login cookie is set for `127.0.0.1` and, like any cookie, reaches every port on that host. Each
+preview has its own database and secret, so two previews never share a valid login; they share one
+cookie slot, and signing in to one signs the browser out of the other. Use a separate browser
+profile or context per preview; the same applies to another app on `127.0.0.1` that uses this cookie
+name. `localhost` keeps separate cookies.
 
 ## Verify a change
 
