@@ -28,6 +28,7 @@ An Inbound Webhook automation gives you a URL and API key; any system that can s
 
 ```mermaid
 flowchart TB
+    accTitle: How an inbound webhook request is authenticated, filtered, and turned into a run
     post["POST with a JSON body"] --> auth{"Bearer API key valid?"}
     auth -->|No| unauthorized["401"]
     auth -->|Yes| paused{"Automation paused?"}

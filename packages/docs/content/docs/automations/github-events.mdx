@@ -20,6 +20,7 @@ A GitHub Event automation starts a session when a supported webhook event arrive
 
 ```mermaid
 flowchart TB
+    accTitle: How a GitHub event is matched and turned into an automation run
     event["GitHub webhook event arrives"] --> match{"Matches the repository and Event Type?"}
     match -->|No| ignored[Ignored]
     match -->|Yes| enabled{"Automation enabled?"}

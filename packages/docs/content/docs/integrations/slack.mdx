@@ -53,6 +53,7 @@ The whole exchange stays in one Slack thread:
 
 ```mermaid
 sequenceDiagram
+    accTitle: Sequence of a Slack request and its thread replies
     participant You
     participant Slack
     participant OI as OpenInspect
@@ -126,6 +127,8 @@ A running session's defaults cannot be changed. To go back to your defaults for 
 ### Image attachments
 
 Attach PNG, JPEG, WebP, or GIF images to a DM, to a channel request that mentions the bot, or to an interactive thread follow-up, with instructions or on their own (for example a screenshot with "fix the visible error"). Limits: at most six images per message, 10 MiB each. Images on earlier messages in the thread can also be forwarded as context; the current request's images take priority within the six-image limit.
+
+In a channel thread, a follow-up's images reach the agent only when that follow-up mentions the bot. A follow-up without a mention still forwards its text, but not its images. In a DM, no mention is needed.
 
 - If OpenInspect asks you to choose a target, choose normally; the images are retrieved after you pick and sent with the saved request.
 - If some images cannot be read, the rest still reach the agent and the bot posts a warning in the thread. If an image-only request loses every image, nothing is sent.

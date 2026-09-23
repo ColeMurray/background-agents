@@ -66,6 +66,7 @@ The same phases, by boot mode:
 
 ```mermaid
 flowchart TB
+    accTitle: Boot phases and which scripts run for each boot mode
     runtime["Starting runtime"] --> mode{"Boot mode"}
     mode -- "fresh or build" --> clone["Cloning repository"]
     mode -- "repo_image" --> sync["Cloning repository<br/>incremental sync, setup already ran"]

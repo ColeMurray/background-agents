@@ -101,6 +101,7 @@ A session owns a target and a series of prompts. Each prompt runs as a turn insi
 
 ```mermaid
 flowchart TB
+    accTitle: How sessions, targets, sandboxes, turns, and pull requests relate
     Session[Session] -->|targets| Target[Target: repository or environment]
     Session -->|runs in| Sandbox[Sandbox]
     Prompt[Prompt] -->|one turn in| Sandbox

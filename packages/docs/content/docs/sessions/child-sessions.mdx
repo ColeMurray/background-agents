@@ -39,6 +39,7 @@ The agent has four tools for working with children. They are available on both h
 
 ```mermaid
 flowchart TB
+    accTitle: Parent and child sessions with the tools and limits that connect them
     Parent["Parent session (its own sandbox and branch)"]
     Parent -->|spawn-child| C1["Child 1 (new sandbox, new branch)"]
     Parent -->|spawn-child| C2["Child 2 (new sandbox, new branch)"]

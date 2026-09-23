@@ -48,6 +48,7 @@ Every session, whether it starts from the web composer, a Slack message, or an a
 
 ```mermaid
 flowchart TB
+    accTitle: OpenInspect architecture from request to reviewed pull request
     You([You])
     You --> Web[Web app] & Slack[Slack] & GH[GitHub PR] & Linear[Linear] & Auto[Automation]
     Web & Slack & GH & Linear & Auto --> CP[Control plane: session record and timeline]

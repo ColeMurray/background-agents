@@ -35,6 +35,7 @@ From trigger to session start, an image moves through these states:
 
 ```mermaid
 flowchart TB
+    accTitle: How prebuilt images are built, reused, and rebuilt
     trigger["Trigger:<br/>enable or save,<br/>secrets change,<br/>rebuild button, or<br/>30-min scheduler"] --> build["Build: clone at<br/>base branches,<br/>run each setup.sh,<br/>save the artifact"]
     build -- "succeeds" --> ready["Ready image"]
     build -- "setup.sh fails or<br/>the build times out" --> failed["Failed; retried on<br/>the scheduler's<br/>next run"]

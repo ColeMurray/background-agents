@@ -32,6 +32,7 @@ Multi-target selection is available only when **Trigger Type** is **Schedule** (
 
 ```mermaid
 flowchart TB
+    accTitle: How one automation firing fans out to one session per repository
     firing["Schedule comes due, or Trigger Now"] --> auto["One automation, up to 10 targets, same Instructions"]
     auto --> s1["Session: repository A, default branch"]
     auto --> s2["Session: repository B, default branch"]

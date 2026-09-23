@@ -34,6 +34,7 @@ Signing in has two stages:
 
 ```mermaid
 flowchart TB
+    accTitle: How sign-in, admission, and role assignment work
     signin["Sign in with GitHub or Google"] --> verify["Provider verifies identity and email"]
     verify --> admit{"Admission rules pass?"}
     admit -->|No| denied["Not admitted"]

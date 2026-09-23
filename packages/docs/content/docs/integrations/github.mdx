@@ -22,43 +22,40 @@ This page covers day-to-day use and the settings a team owner manages. Installin
 
 1. Make sure the GitHub App is installed on the repository.
 2. For an automatic review, open a non-draft PR in a repository where **Auto-review new PRs** is enabled.
-3. For a review on demand, request the bot as a reviewer in the PR's **Reviewers** picker.
-4. For analysis or a reply, mention the bot in a PR comment:
+3. For analysis or a reply, mention the bot in a PR comment:
 
    ```text
    @my-app[bot] can you explain why the checkout test is failing?
    ```
 
-5. For line-specific discussion, mention the bot in an inline review comment.
-6. Watch for the eyes reaction, which means the bot accepted the request.
-7. Open the web app to watch the full session.
+4. For line-specific discussion, mention the bot in an inline review comment.
+5. Watch for the eyes reaction, which means the bot accepted the request.
+6. Open the web app to watch the full session.
 
 ## Supported workflows
 
 | Workflow                  | How it works                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------ |
 | Auto-review new PRs       | Review non-draft PRs when they are opened, if auto-review is enabled                       |
-| Request a review          | Request the bot as a reviewer on a PR to start a review session                            |
 | Respond to PR comments    | Mention the bot in a PR conversation comment                                               |
 | Respond to review threads | Mention the bot in an inline review comment                                                |
 | Act on PR feedback        | With PR Feedback Autofix, reviews and comments on a session-created PR resume that session |
 | Post back to GitHub       | Submit a PR review, reply to a review thread, or post a PR comment                         |
 | Customize behavior        | Set repository scope, trigger users, models, and custom instructions                       |
 
-There are no GitHub slash commands. Use auto-review, a review request, or `@mention` comments.
+There are no GitHub slash commands. Use auto-review or `@mention` comments. To ask for a review on demand, mention the bot with a review request, for example `@my-app[bot] review this PR`.
 
 The entry points differ in where the session starts and what it can push:
 
 ```mermaid
 flowchart TB
+    accTitle: GitHub entry points and what each one posts back
     subgraph github["On GitHub"]
         opened["Non-draft PR opened"]
-        requested["Bot requested as a reviewer"]
         mention["@mention in a PR comment or review thread"]
         feedback["Review or comment on a session-created PR"]
     end
     opened -->|Auto-review enabled| review["Review session"]
-    requested --> review
     review --> posted["Posts a GitHub review"]
     mention --> fresh["New session from the default branch"]
     fresh --> answer["Posts a PR comment or thread reply"]
@@ -70,13 +67,9 @@ flowchart TB
 
 **When it runs.** With **Auto-review new PRs** enabled, OpenInspect starts a review session for each newly opened, non-draft PR in an in-scope repository. The agent inspects the diff and posts a GitHub review.
 
-**When it skips.** Auto-review does not run when the PR is a draft, the PR was opened by the GitHub App bot itself, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. Converting a draft to ready for review does not trigger it; request the bot as a reviewer or mention it in a comment instead.
+**When it skips.** Auto-review does not run when the PR is a draft, the PR was opened by the GitHub App bot itself, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. Converting a draft to ready for review does not trigger it; mention the bot in a comment instead.
 
 **What it posts.** A general review comment, an approval, a request for changes, or inline review comments, depending on what the agent finds.
-
-## Requesting a review
-
-Add the bot in the PR's **Reviewers** picker to start a review session titled `GitHub: Review PR #<number>`. The request goes through the same checks as a mention: the repository must be in **Repository Scope** and the person who requested the review must be an allowed trigger user. It does not depend on **Auto-review new PRs**, so you can use it for repositories where auto-review is off. The bot adds the eyes reaction and the agent posts a GitHub review, as with auto-review.
 
 ## @mention actions
 
@@ -241,7 +234,7 @@ Setup, rotation, and limitations are covered in [Source control](/configure/sour
   <Accordion title="Auto-review did not run">
     Auto-review only runs for newly opened, non-draft PRs. Drafts, PRs opened by the App,
     out-of-scope repositories, and non-allowed users are skipped. For a PR converted from draft,
-    request the bot as a reviewer or mention it in a comment.
+    mention the bot in a comment.
 
 </Accordion>
   <Accordion title="A mention did not start a session">

@@ -37,6 +37,7 @@ They do not line up one to one. A `completed` session can still have a live sand
 
 ```mermaid
 stateDiagram-v2
+    accTitle: Session status transitions
     direction TB
     [*] --> created: session created
     created --> active: first prompt dispatched
@@ -73,6 +74,7 @@ The session header and right sidebar show the sandbox status with these labels:
 
 ```mermaid
 stateDiagram-v2
+    accTitle: Sandbox status transitions
     direction TB
     [*] --> pending: prompt needs compute
     pending --> spawning: provider creates or restores

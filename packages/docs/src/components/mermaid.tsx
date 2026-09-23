@@ -11,6 +11,14 @@ type MermaidProps = {
   caption?: string;
 };
 
+/** Every render attempt needs its own id: Mermaid removes an existing element with that id first. */
+let renderSequence = 0;
+
+/** The chart's `accTitle:` line, which names diagrams that come from a code fence without a caption. */
+function accessibleTitle(chart: string): string | undefined {
+  return /^\s*accTitle\s*:\s*(.+?)\s*$/m.exec(chart)?.[1];
+}
+
 const lightVariables = {
   background: "#f8f8f6",
   primaryColor: "#f2f1ed",
@@ -73,11 +81,13 @@ export function Mermaid({ chart, caption }: MermaidProps) {
   const { resolvedTheme } = useTheme();
   const [svg, setSvg] = useState<string>();
   const [error, setError] = useState<string>();
+  const label = caption ?? accessibleTitle(chart);
 
   useEffect(() => {
     let cancelled = false;
     const isDark = resolvedTheme === "dark";
-    const renderId = `mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, "")}`;
+    renderSequence += 1;
+    const renderId = `mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, "")}-${renderSequence}`;
 
     import("mermaid")
       .then(async ({ default: mermaid }) => {
@@ -108,9 +118,9 @@ export function Mermaid({ chart, caption }: MermaidProps) {
   return (
     <figure className="not-prose my-6 overflow-hidden rounded-lg border border-fd-border bg-fd-card">
       <div
-        aria-label={caption}
+        aria-label={label}
         className="w-full overflow-x-auto p-4 [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:cursor-zoom-in"
-        role="img"
+        role={label ? "img" : undefined}
       >
         {svg ? (
           // The zoom binds to the SVG element it finds on mount, so a re-render remounts it.

@@ -21,6 +21,7 @@ A Sentry Alert automation receives signed webhooks from a Sentry Custom Integrat
 
 ```mermaid
 flowchart TB
+    accTitle: How a Sentry alert is verified, matched, and turned into a session
     delivery["Sentry webhook delivery"] --> signature{"sentry-hook-signature verifies?"}
     signature -->|No| rejected["401 rejected"]
     signature -->|Yes| type{"Resource and action match the Event Type?"}
