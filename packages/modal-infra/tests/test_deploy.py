@@ -147,6 +147,7 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(
     lookup.assert_called_once_with(deploy.app.name, create_if_missing=True)
     build.assert_called_once_with(deployed_app)
     assert create.call_args.kwargs["env"] is plan["runtimeEnv"]
+    assert create.call_args.kwargs["cpu"] == 2.0
     sandbox.terminate.assert_called_once()
     expected = {
         "imageId": "im-verified",

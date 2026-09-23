@@ -457,6 +457,14 @@ variable "daytona_api_url" {
     condition     = var.sandbox_provider != "daytona" || length(var.daytona_api_url) > 0
     error_message = "daytona_api_url must be set when sandbox_provider = 'daytona'."
   }
+
+  # Daytona credentials outlive the backend that used them: the control plane
+  # keeps reclaiming sandboxes and snapshots after a provider switch, and it
+  # refuses to build a Daytona client unless both the URL and the key are set.
+  validation {
+    condition     = trimspace(var.daytona_api_key) == "" || length(trimspace(var.daytona_api_url)) > 0
+    error_message = "daytona_api_url must be set whenever daytona_api_key is set, so the control plane can still reclaim existing Daytona sandboxes after switching sandbox_provider."
+  }
 }
 
 variable "daytona_api_key" {

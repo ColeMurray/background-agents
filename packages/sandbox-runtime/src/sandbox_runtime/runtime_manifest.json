@@ -1,10 +1,10 @@
 {
-  "runtimeVersion": "v71-final-sandbox-preservation",
-  "generation": 71,
+  "runtimeVersion": "v72-claude-opus-5-5",
+  "generation": 72,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 71,
+  "minimumRebuildGeneration": 72,
   "harnessMinimumGeneration": {
-    "claude": 64
+    "claude": 72
   }
 }

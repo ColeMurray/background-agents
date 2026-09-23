@@ -1,7 +1,11 @@
 """Image-contract checks that do not require a running provider sandbox."""
 
+import contextlib
 import runpy
+import socket
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -113,3 +117,72 @@ def test_desktop_requires_websocket_rfb_exchange(monkeypatch, banner, security, 
     else:
         with pytest.raises(RuntimeError, match="RFB"):
             verification["verify_rfb_proxy"](12345)
+
+
+def _vnc_server(*, accept_delay_seconds: float, banner: bytes | None):
+    """Listen on a local port and serve connections one at a time, each after a delay."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    stopped = threading.Event()
+
+    def serve() -> None:
+        while not stopped.wait(accept_delay_seconds):
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            with connection:
+                if banner is None:
+                    stopped.wait()
+                    return
+                # A client that already gave up has closed its end.
+                with contextlib.suppress(OSError):
+                    connection.sendall(banner)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return listener, stopped
+
+
+@pytest.mark.parametrize("accept_delay_seconds", [0, 1.5])
+def test_rfb_wait_survives_a_server_slow_to_accept(accept_delay_seconds):
+    listener, stopped = _vnc_server(
+        accept_delay_seconds=accept_delay_seconds, banner=b"RFB 003.008\n"
+    )
+    with listener:
+        try:
+            verification["wait_for_rfb"](
+                listener.getsockname()[1], [], deadline=time.monotonic() + 10
+            )
+        finally:
+            stopped.set()
+
+
+def test_rfb_wait_times_out_when_no_banner_arrives():
+    listener, stopped = _vnc_server(accept_delay_seconds=0, banner=None)
+    with listener:
+        try:
+            with pytest.raises(RuntimeError, match="VNC readiness timeout"):
+                verification["wait_for_rfb"](
+                    listener.getsockname()[1], [], deadline=time.monotonic() + 0.5
+                )
+        finally:
+            stopped.set()
+
+
+def test_rfb_wait_rejects_a_server_that_does_not_speak_rfb():
+    listener, stopped = _vnc_server(accept_delay_seconds=0, banner=b"HTTP/1.1 200\r\n")
+    with listener:
+        try:
+            with pytest.raises(RuntimeError, match="did not speak RFB"):
+                verification["wait_for_rfb"](
+                    listener.getsockname()[1], [], deadline=time.monotonic() + 5
+                )
+        finally:
+            stopped.set()
+
+
+def test_rfb_wait_stops_when_a_desktop_process_exits():
+    exited = Mock()
+    exited.poll.return_value = 1
+    with pytest.raises(RuntimeError, match="Desktop process exited"):
+        verification["wait_for_rfb"](1, [exited], deadline=time.monotonic() + 5)
