@@ -15,6 +15,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/discord-bot/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/sandbox-runtime/**"
@@ -54,6 +55,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/discord-bot/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/sandbox-runtime/**"
@@ -365,3 +367,6 @@ jobs:
 
       - name: Run linear-bot tests
         run: npm test -w @open-inspect/linear-bot
+
+      - name: Run discord-bot tests
+        run: npm test -w @open-inspect/discord-bot

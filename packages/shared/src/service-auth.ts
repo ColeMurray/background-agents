@@ -25,7 +25,13 @@ export const SIG1_PREFIX = "sig1";
  */
 export const SERVICE_REQUEST_MAX_BODY_BYTES = 16 * 1024 * 1024;
 
-export const SERVICE_NAMES = ["web", "slack-bot", "github-bot", "linear-bot"] as const;
+export const SERVICE_NAMES = [
+  "web",
+  "slack-bot",
+  "github-bot",
+  "linear-bot",
+  "discord-bot",
+] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
 export function isServiceName(value: string): value is ServiceName {

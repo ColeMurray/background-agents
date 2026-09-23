@@ -98,8 +98,8 @@ describe("AnalyticsStore session origins", () => {
 describe("AnalyticsStore query boundaries", () => {
   it("uses the exact scoped populations and no predicate for all", () => {
     expect(scopePredicate("human", "s.spawn_source")).toEqual({
-      sql: "AND s.spawn_source IN (?, ?, ?, ?)",
-      binds: ["user", "slack-bot", "linear-bot", "github-bot"],
+      sql: "AND s.spawn_source IN (?, ?, ?, ?, ?)",
+      binds: ["user", "slack-bot", "linear-bot", "github-bot", "discord-bot"],
     });
     expect(scopePredicate("agent", "spawn_source")).toEqual({
       sql: "AND spawn_source IN (?)",

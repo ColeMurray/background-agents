@@ -23,6 +23,7 @@ export const ANALYTICS_SPAWN_SOURCE_SCOPE: Record<SpawnSource, Exclude<Analytics
   "slack-bot": "human",
   "linear-bot": "human",
   "github-bot": "human",
+  "discord-bot": "human",
   agent: "agent",
   automation: "automation",
 };

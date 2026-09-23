@@ -42,6 +42,9 @@
     "packages/linear-bot": {
       "project": ["src/**/*.ts"]
     },
+    "packages/discord-bot": {
+      "project": ["src/**/*.ts"]
+    },
     "packages/slack-bot": {
       "project": ["src/**/*.ts"]
     },

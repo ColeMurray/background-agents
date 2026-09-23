@@ -340,6 +340,83 @@ variable "linear_bot_default_model" {
 }
 
 # =============================================================================
+# Discord Bot
+# =============================================================================
+
+variable "enable_discord_bot" {
+  description = "Enable the Discord bot worker (/task slash command). Requires discord_application_id, discord_public_key, discord_bot_token, and discord_allowed_role_ids."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = var.enable_discord_bot == false || (
+      length(var.discord_application_id) > 0 &&
+      length(var.discord_public_key) > 0 &&
+      length(var.discord_bot_token) > 0 &&
+      length(trimspace(var.discord_allowed_role_ids)) > 0
+    )
+    error_message = "When enable_discord_bot is true, discord_application_id, discord_public_key, discord_bot_token, and discord_allowed_role_ids must be non-empty."
+  }
+}
+
+variable "discord_application_id" {
+  description = "Discord application ID (Developer Portal → General Information)"
+  type        = string
+  default     = ""
+}
+
+variable "discord_public_key" {
+  description = "Discord application public key, hex (Developer Portal → General Information)"
+  type        = string
+  default     = ""
+}
+
+variable "discord_bot_token" {
+  description = "Discord bot token (Developer Portal → Bot → Reset Token)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "discord_allowed_role_ids" {
+  description = "Comma-separated Discord role IDs allowed to submit tasks. Anyone with one of these roles can start sessions as a workspace Member."
+  type        = string
+  default     = ""
+}
+
+variable "discord_allowed_channel_ids" {
+  description = "Comma-separated Discord channel IDs where /task is accepted (threads under them included). Empty accepts any channel."
+  type        = string
+  default     = ""
+}
+
+variable "discord_bot_default_model" {
+  description = "Model for sessions started from Discord, as a canonical \"provider/model\" id. Must be an Anthropic model while discord_bot_harness is \"claude\"."
+  type        = string
+  default     = "anthropic/claude-opus-5"
+  nullable    = false
+
+  validation {
+    condition = can(regex(
+      "^(?:[^/[:space:]]+/[^/[:space:]]+|(?:claude-|gpt-)[^/[:space:]]+)$",
+      var.discord_bot_default_model
+    ))
+    error_message = "discord_bot_default_model must be a canonical \"provider/model\" id such as \"anthropic/claude-opus-5\"."
+  }
+}
+
+variable "discord_bot_harness" {
+  description = "Harness for sessions started from Discord. \"claude\" can use a connected Claude subscription (the Automated sessions default account); \"opencode\" needs an API key."
+  type        = string
+  default     = "claude"
+
+  validation {
+    condition     = contains(["claude", "opencode"], var.discord_bot_harness)
+    error_message = "discord_bot_harness must be \"claude\" or \"opencode\"."
+  }
+}
+
+# =============================================================================
 # API Keys
 # =============================================================================
 
