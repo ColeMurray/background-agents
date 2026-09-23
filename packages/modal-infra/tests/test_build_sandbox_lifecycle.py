@@ -419,7 +419,7 @@ async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
     if docker_enabled:
         assert kwargs["image"] is docker_image
         assert kwargs["experimental_options"] == {"vm_runtime": True}
-        assert (kwargs["cpu"], kwargs["memory"]) == (2.0, 4096)
+        assert (kwargs["cpu"], kwargs["memory"]) == ((2, 2), 4096)
     else:
         assert kwargs["image"] is default_image
         assert "experimental_options" not in kwargs

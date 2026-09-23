@@ -303,7 +303,7 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch
     kwargs = captured["kwargs"]
     assert kwargs["image"] is (docker_image if image_source == "base" else artifact)
     assert kwargs["experimental_options"] == {"vm_runtime": True}
-    assert kwargs["cpu"] == 2.0
+    assert kwargs["cpu"] == (2.0, 2.0)
     assert kwargs["memory"] == 4096
     assert kwargs["name"] == docker_allocation_name("session-1")
     assert kwargs["tags"] == docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")

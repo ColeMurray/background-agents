@@ -34,7 +34,7 @@ def test_launch_policy_maps_vm_backend_and_resources():
     assert launch == ModalLaunch(backend="modal-vm", cpu_cores=2.0, memory_mib=4096)
     assert launch_kwargs(launch) == {
         "experimental_options": {"vm_runtime": True},
-        "cpu": 2.0,
+        "cpu": (2.0, 2.0),
         "memory": 4096,
     }
     assert docker_runtime_env(launch) == {DOCKER_ENABLED_ENV_VAR: "true"}
@@ -92,7 +92,7 @@ def test_allocation_tags_bind_session_generation_and_backend():
 @pytest.mark.parametrize("settings", [None, {}, {"cpuCores": None, "memoryMib": None}])
 def test_vm_owns_defaults_for_absent_or_null_resources(settings):
     assert launch_kwargs(parse_launch("modal-vm", settings)) == {
-        "cpu": 2,
+        "cpu": (2, 2),
         "memory": 4096,
         "experimental_options": {"vm_runtime": True},
     }

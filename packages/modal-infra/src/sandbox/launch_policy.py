@@ -84,7 +84,8 @@ def launch_kwargs(launch: ModalLaunch) -> dict[str, Any]:
     if launch.enabled:
         result["experimental_options"] = {"vm_runtime": True}
     if launch.cpu_cores is not None:
-        result["cpu"] = launch.cpu_cores
+        # Agent-controlled VM workloads must not burst beyond their CPU request.
+        result["cpu"] = (launch.cpu_cores, launch.cpu_cores) if launch.enabled else launch.cpu_cores
     if launch.memory_mib is not None:
         result["memory"] = launch.memory_mib
     return result
