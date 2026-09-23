@@ -161,7 +161,7 @@ describe("inactivity alarm effects", () => {
     expect(sandbox.snapshot_image_id).toBe("legacy-vercel-snapshot");
   });
 
-  it("stops resumable sandboxes without snapshotting, preserving code-server and VNC secrets", async () => {
+  it("stops resumable sandboxes without snapshotting, preserving access secrets", async () => {
     const sandbox = createMockSandbox({
       last_activity: Date.now() - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
       code_server_url: "https://code.test",
@@ -194,13 +194,14 @@ describe("inactivity alarm effects", () => {
     );
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("codeServer");
     expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("vnc");
+    expect(h.storage.clearSandboxAccess).not.toHaveBeenCalledWith("ttyd");
     expect(sandbox).toMatchObject({
       code_server_url: null,
       code_server_password: "code-secret",
       vnc_url: null,
       vnc_password: "vnc-secret",
       ttyd_url: null,
-      ttyd_token: null,
+      ttyd_token: "terminal-secret",
       tunnel_urls: null,
     });
   });

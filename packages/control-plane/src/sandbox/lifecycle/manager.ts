@@ -61,7 +61,7 @@ import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
 import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
-import { mintJwt } from "../../auth/jwt";
+import { isJwtUnexpired, mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import { parsePersistedSandboxSettings } from "../settings";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
@@ -243,6 +243,17 @@ export interface SandboxStorage {
   updateSandboxAuthTokenHash(modalSandboxId: string, authTokenHash: string): boolean;
   /** Update sandbox state for in-place resume without rotating auth/token identity */
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
+  /** Atomically commit access returned for the named resume generation. */
+  completeProviderResume(
+    generation: SandboxGeneration,
+    access: {
+      providerObjectId: string;
+      codeServer: { url: string; password: string } | null;
+      vnc: { url: string; password: string } | null;
+      ttyd: { url: string | null; token: string } | null;
+      tunnelUrls: Record<string, string> | null;
+    }
+  ): Promise<boolean>;
   /** Update sandbox Modal object ID (for snapshot API) */
   updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Set the runtime version describing the sandbox's current filesystem. */
@@ -270,6 +281,8 @@ export interface SandboxStorage {
   setLastSpawnError(error: string | null, timestamp: number | null): void;
   /** Set one access artifact's URL and (encrypted) secret on the sandbox row */
   updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
+  /** Read and decrypt one access artifact's stored secret */
+  getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null>;
   /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
   clearSandboxAccess(kind: SandboxAccessKind): void;
   /** Clear one access artifact's URL while preserving its stored secret */
@@ -1367,19 +1380,66 @@ export class SandboxLifecycleManager
       }
 
       const finalProviderObjectId = result.providerObjectId ?? providerObjectId;
-      if (!(await this.claimProviderStartup(generation, finalProviderObjectId, result.lifetime)))
+      const ttydToken = sandboxSettings.terminalEnabled
+        ? await this.storage.getSandboxAccessSecret("ttyd")
+        : null;
+      const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
+      const replaceForTerminalCredential = Boolean(result.ttydUrl && !validTtydToken);
+      if (replaceForTerminalCredential && restoringSavedState) {
+        this.shutdown.holdFailedRecovery("Terminal credential is missing or expired", generation);
         return;
+      }
+      let completed: boolean;
+      try {
+        completed = await this.storage.completeProviderResume(generation, {
+          providerObjectId: finalProviderObjectId,
+          codeServer:
+            result.codeServerUrl && result.codeServerPassword
+              ? { url: result.codeServerUrl, password: result.codeServerPassword }
+              : null,
+          vnc: result.vncAccess ?? null,
+          ttyd: validTtydToken
+            ? {
+                url: replaceForTerminalCredential ? null : (result.ttydUrl ?? null),
+                token: validTtydToken,
+              }
+            : null,
+          tunnelUrls: result.tunnelUrls ?? null,
+        });
+      } catch (error) {
+        startupClaimed = await this.claimProviderStartup(
+          generation,
+          finalProviderObjectId,
+          result.lifetime,
+          false
+        );
+        throw error;
+      }
+      if (!completed) {
+        await this.claimProviderStartup(generation, finalProviderObjectId, result.lifetime, false);
+        this.log.warn("Resume attempt superseded; abandoning", {
+          event: "sandbox.resume_superseded",
+        });
+        return;
+      }
+
+      this.providerStartupPending = false;
+      await this.shutdown.recordProviderStartup(generation, result.lifetime);
       startupClaimed = true;
 
-      if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
-      }
-      if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+      if (replaceForTerminalCredential) {
+        this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
+          event: "sandbox.resume_terminal_credential_unavailable",
+          provider_object_id: finalProviderObjectId,
+          reason: ttydToken ? "invalid_or_expired" : "missing",
+        });
+        await this.doSpawn(previousGeneration);
+        return;
       }
 
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
-      this.broadcastProviderAccessIfConnected();
+      if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
+        this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      }
     } catch (error) {
       if (startupClaimed) {
         this.log.warn("Resumed sandbox access/publication failed", {
@@ -1499,20 +1559,21 @@ export class SandboxLifecycleManager
   /**
    * Clear preview URLs after a sandbox is no longer reachable.
    *
-   * Persistent resumes preserve code-server and VNC passwords, so only their
-   * URLs are cleared. Snapshot restores rotate passwords, so both values are
-   * removed.
+   * Persistent resumes preserve code-server and VNC passwords plus the ttyd
+   * token, so only their URLs are cleared. Snapshot restores rotate access
+   * secrets, so both values are removed.
    */
   private clearSandboxAccessState(): void {
     if (this.usesProviderManagedStop() && this.storage.clearSandboxAccessUrl) {
       this.storage.clearSandboxAccessUrl("codeServer");
       this.storage.clearSandboxAccessUrl("vnc");
+      this.storage.clearSandboxAccessUrl("ttyd");
     } else {
       this.storage.clearSandboxAccess("codeServer");
       this.storage.clearSandboxAccess("vnc");
+      this.storage.clearSandboxAccess("ttyd");
     }
     this.storage.clearSandboxTunnelUrls();
-    this.storage.clearSandboxAccess("ttyd");
     this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
@@ -2127,14 +2188,16 @@ export class SandboxLifecycleManager
     return this.wsManager.getConnectedClientCount();
   }
 
-  private broadcastSandboxDashboardUrl(providerObjectId: string): void {
+  private broadcastSandboxDashboardUrl(providerObjectId: string): boolean {
     const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
     if (url) {
       this.log.debug("Broadcasting sandbox dashboard URL", {
         provider_object_id: providerObjectId,
       });
       this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      return true;
     }
+    return false;
   }
 
   private broadcastProviderAccessIfConnected(): void {
@@ -2218,7 +2281,8 @@ export class SandboxLifecycleManager
   private async claimProviderStartup(
     generation: SandboxGeneration,
     providerObjectId: string | undefined,
-    lifetime: SandboxLifetime
+    lifetime: SandboxLifetime,
+    announce = true
   ): Promise<boolean> {
     this.providerStartupPending = false;
     const row = this.storage.getSandbox();
@@ -2245,16 +2309,18 @@ export class SandboxLifecycleManager
     }
 
     await this.shutdown.recordProviderStartup(generation, lifetime);
-    try {
-      if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
-      if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
-        this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+    if (announce) {
+      try {
+        if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
+        if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
+          this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+        }
+      } catch (error) {
+        this.log.warn("Provider startup announcement failed", {
+          event: "sandbox.startup_announcement_failed",
+          error,
+        });
       }
-    } catch (error) {
-      this.log.warn("Provider startup announcement failed", {
-        event: "sandbox.startup_announcement_failed",
-        error,
-      });
     }
     return true;
   }
