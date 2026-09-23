@@ -194,7 +194,10 @@ export default function SessionPage() {
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
-  const diffReturnFocusRef = useRef<DiffSelection | null>(null);
+  const diffReturnFocusRef = useRef<{
+    selection: DiffSelection;
+    element: HTMLElement | null;
+  } | null>(null);
   const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -286,21 +289,29 @@ export default function SessionPage() {
         : ["session-main"],
     storage: changesLayoutStorage,
   });
-  const openDiffSelection = useCallback((selection: DiffSelection) => {
-    diffReturnFocusRef.current = selection;
-    setSelectedDiff(selection);
-    setIsDetailsOpen(false);
-  }, []);
+  const openDiffSelection = useCallback(
+    (selection: DiffSelection, returnFocusTo: HTMLElement | null = null) => {
+      diffReturnFocusRef.current = { selection, element: returnFocusTo };
+      setSelectedDiff(selection);
+      setIsDetailsOpen(false);
+    },
+    []
+  );
   const openDiff = useCallback(
     (repository: SessionDiffRepository, file: SessionDiffFile) =>
       openDiffSelection({ repositoryPosition: repository.position, path: file.path }),
     [openDiffSelection]
   );
   const closeDiff = useCallback(() => {
-    const returnSelection = diffReturnFocusRef.current;
+    const returnFocus = diffReturnFocusRef.current;
     setSelectedDiff(null);
     requestAnimationFrame(() => {
-      if (!isBelowLg && returnSelection) {
+      if (returnFocus?.element?.isConnected) {
+        returnFocus.element.focus();
+        return;
+      }
+      if (!isBelowLg && returnFocus) {
+        const returnSelection = returnFocus.selection;
         const row = Array.from(
           document.querySelectorAll<HTMLButtonElement>("button[data-diff-path]")
         ).find(

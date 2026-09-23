@@ -60,23 +60,33 @@ describe("SafeMarkdown links", () => {
     const onOpen = renderInSession("See [parity.md](docs/plans/parity.md).");
 
     expect(screen.queryByRole("link", { name: "parity.md" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "parity.md" }));
+    const button = screen.getByRole("button", { name: "parity.md" });
+    fireEvent.click(button);
 
-    expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "docs/plans/parity.md" });
+    expect(onOpen).toHaveBeenCalledWith(
+      { repositoryPosition: 0, path: "docs/plans/parity.md" },
+      button
+    );
   });
 
   it("opens a root-level file referenced with a line number", () => {
     const onOpen = renderInSession("See [README](README.md:42).");
 
     fireEvent.click(screen.getByRole("button", { name: "README" }));
-    expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "README.md" });
+    expect(onOpen).toHaveBeenCalledWith(
+      { repositoryPosition: 0, path: "README.md" },
+      expect.any(HTMLButtonElement)
+    );
   });
 
   it("opens a root-level file from a reference-style link with a line number", () => {
     const onOpen = renderInSession("See [README][r].\n\n[r]: README.md:42");
 
     fireEvent.click(screen.getByRole("button", { name: "README" }));
-    expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "README.md" });
+    expect(onOpen).toHaveBeenCalledWith(
+      { repositoryPosition: 0, path: "README.md" },
+      expect.any(HTMLButtonElement)
+    );
   });
 
   it("renders a repository file that is not in the diff as inert text", () => {
