@@ -24,12 +24,12 @@ separate tool calls. In a conventional terminal, leave it open and use a second 
 Ctrl-C, or SIGTERM to the coordinator PID recorded in `run.json`; do not kill processes by port or
 terminate all browsers.
 
-The final JSON `ready` line contains the URL, private manifest path, named browser session and
-scenario IDs. Do not interpret an intermediate startup stage or a screenshot as successful
-verification. The default persona is **member**, not owner.
+The final JSON `ready` line contains the URL, private manifest path, named browser session, scenario
+IDs and [sign-in links](#sign-in-from-any-browser). Do not interpret an intermediate startup stage
+or a screenshot as successful verification. The default persona is **member**, not owner.
 
 ```bash
-# No interactive browser; useful for local Playwright clients.
+# No launcher-owned browser; sign in from your own browser or a Playwright client instead.
 npm run preview -- --scenario empty --browser none
 
 # Open a separate read-only context in an existing run.
@@ -42,10 +42,11 @@ agent-browser --session oi-preview-RUN-member screenshot /absolute/path/preview.
 
 The first open imports that persona's auth state once. Later opens do **not** log it back in after
 logout or expiry. A failed initial import stays explicitly unverified; stop and restart the preview
-before retrying. Do not use `--restore`, a human profile, the default agent session, or an outer
-session's CDP browser. Cookies are host-scoped, not port-scoped: each run/persona needs a distinct
-browser context. Keep the original environment for the existing screenshot/video uploader; the
-nested application's environment intentionally excludes outer-session upload credentials.
+before retrying. Do not load persona state files into `--restore`, a human profile, the default
+agent session, or an outer session's CDP browser; other browsers use a sign-in link instead. Cookies
+are host-scoped, not port-scoped: each run/persona needs a distinct browser context. Keep the
+original environment for the existing screenshot/video uploader; the nested application's
+environment intentionally excludes outer-session upload credentials.
 
 ## Scenarios and personas
 
@@ -62,6 +63,34 @@ The sandbox peer emits cumulative text updates followed by completion. It does n
 prompt. Ordinary inactivity uses the real preservation policy, stops the peer, and restores a new
 generation on the next prompt. Unsupported upstream requests fail visibly; there is no live
 GitHub/provider fallback. Model-account lists are intentionally empty.
+
+## Sign in from any browser
+
+The launcher prints one sign-in link per persona to stderr; the `ready` line carries the same links
+as `signInLinks`:
+
+```text
+Sign in from any browser on this machine until this preview stops:
+  member     http://127.0.0.1:52363/as/member?k=…
+  owner      http://127.0.0.1:52363/as/owner?k=…
+  …
+```
+
+Opening a link sets that persona's login cookie and redirects to the app, so an everyday browser,
+Playwright or any other browser tool can use the preview without state files. Open another link to
+switch persona; `expired` and `anonymous` sign the browser out. Each open mints a fresh session, so
+a link also signs a browser back in after sign-out. When a check needs sign-out to stay signed out,
+use the named session instead.
+
+The links are served by a small loopback server that the launcher owns, not by the web app or the
+control plane; production builds contain none of it. Every link carries a random per-run key, the
+server answers only its own `Host` header, and it stops with the preview. A link can only sign in to
+that run's throwaway database with that run's random secret, so it is worthless anywhere else.
+Still, treat the links as credentials while the run is alive.
+
+The login cookie is set for `127.0.0.1` and, like any cookie, reaches every port on that host. Two
+previews open in one browser therefore share a login, as does another app on `127.0.0.1` that uses
+the same cookie name. `localhost` keeps separate cookies.
 
 ## Verify a change
 
@@ -92,10 +121,10 @@ recent client-auth timeout tasks can take several seconds to finish even after s
 ## Ownership, reset and errors
 
 Only one Next/preview process may own a checkout. Use separate git worktrees for concurrent tasks.
-The launcher owns its Next child, host, fixture peers, temporary SQLite files, auth state, and named
-browser contexts. It never edits `.env.local`, resets tracked source or attaches to an existing
-server. Runtime credentials are independently generated and expire after four hours; the coordinator
-also exits at that bound. Stop and rerun to reset everything.
+The launcher owns its Next child, host, fixture peers, temporary SQLite files, auth state, named
+browser contexts and sign-in link server. It never edits `.env.local`, resets tracked source or
+attaches to an existing server. Runtime credentials are independently generated and expire after
+four hours; the coordinator also exits at that bound. Stop and rerun to reset everything.
 
 `run.json` and cookie state live in a private temporary directory (0700; state files 0600). The
 manifest contains paths, IDs and timings, not bearer tokens. Treat raw logs and state as sensitive.
@@ -169,3 +198,18 @@ Litestream replication, clean SIGTERM drain, and rejection of a missing required
 separate Compose project and ports; its containers, network and volumes were removed, the prior
 local image tag was restored, and the existing development stack remained healthy. OAuth and
 real-provider behavior remain outside this evidence.
+
+### Sign-in links verification — 2026-09-22
+
+- Preview and browser-session unit tests, including the new link server and real-backend re-sign-in
+  after sign-out; workerd integration files that seed browser sessions (**37 passed**).
+- Real-stack Playwright: **3 passed**, no retries; the new journey signs a fresh browser context in
+  as owner, signs out, signs back in, switches to viewer (real 403 on writes) and signs out as
+  anonymous (401).
+- Deliberately removing the `Host` check and reusing the seeded cookie instead of minting both
+  failed the new tests; both changes were reverted.
+- CLI with `--browser none`: links printed to stderr and `ready`, key absent from `run.json`; `curl`
+  showed a 302 with the production cookie name, `HttpOnly`, `SameSite=Lax` and no `Domain`, 404 for
+  a wrong key and 421 for a rebound `Host`. A fresh agent-browser session signed in, switched,
+  signed out through the UI and back in. After SIGTERM the link refused connections.
+- Worker and Node host production metafiles contain no `test/` modules.

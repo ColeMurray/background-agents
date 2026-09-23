@@ -11,7 +11,7 @@ import { startFakeModalServer, type FakeModalServer } from "../smoke/fake-modal-
 import { previewConfig, PREVIEW_REPLY, PREVIEW_REQUEST_TIMEOUT_MS, randomSecret } from "./config";
 import { installGitHubFixture } from "./github-fixture";
 import { createPreviewObjectStorage } from "./object-storage";
-import { seedPersonas } from "./personas";
+import { seedPersonas, signInPersona, type Persona } from "./personas";
 import { populateScenario, type PreviewRequest, type Scenario } from "./scenarios";
 
 export async function unusedPort(): Promise<number> {
@@ -89,7 +89,8 @@ export async function startPreviewBackend(options: {
     const dataDir = join(options.runDir, "data");
     await mkdir(dataDir, { mode: 0o700 });
     const migrationsDir = join(options.root, "terraform/d1/migrations");
-    const seedDb = openNodeSqlDatabase(join(dataDir, GLOBAL_STORE_FILE), { migrationsDir });
+    const globalStore = join(dataDir, GLOBAL_STORE_FILE);
+    const seedDb = openNodeSqlDatabase(globalStore, { migrationsDir });
     const identities = await (async () => {
       try {
         return await seedPersonas(seedDb, options.webOrigin, config.BROWSER_AUTH_SECRET!);
@@ -131,9 +132,34 @@ export async function startPreviewBackend(options: {
         },
       });
     };
+    // A second connection beside the running host's: the store is WAL with a busy timeout.
+    const signIn = async (persona: Persona) => {
+      const db = openNodeSqlDatabase(globalStore);
+      try {
+        return await signInPersona(
+          db,
+          options.webOrigin,
+          config.BROWSER_AUTH_SECRET!,
+          identities[persona]
+        );
+      } finally {
+        db.close();
+      }
+    };
     const aliases = await populateScenario(options.scenario, request);
     if (failures().length) throw new Error(`fixture: ${failures().join(", ")}`);
-    return { origin, config, identities, aliases, request, modal, fixture, failures, close };
+    return {
+      origin,
+      config,
+      identities,
+      aliases,
+      request,
+      signIn,
+      modal,
+      fixture,
+      failures,
+      close,
+    };
   } catch (error) {
     try {
       await close();

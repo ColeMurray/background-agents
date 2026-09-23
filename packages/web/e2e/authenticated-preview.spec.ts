@@ -83,3 +83,39 @@ test("viewer is isolated, read-only and denied by the BFF; logout stays revoked"
     await viewer.close();
   }
 });
+
+test("a person's own browser signs in, switches and signs back in with sign-in links", async ({
+  browser,
+  preview,
+}) => {
+  // No stored login: this context stands in for someone's everyday browser.
+  const person = await browser.newContext();
+  try {
+    const page = await person.newPage();
+    await page.goto(preview.signInLinks.owner);
+    await expect(page).toHaveURL(`${preview.manifest.webOrigin}/`);
+    const owner = page.getByRole("button", { name: "Signed in as Preview owner" });
+    await expect(owner).toBeVisible();
+    await owner.click();
+    await page.getByRole("menuitem", { name: /Sign out/i }).click();
+    await expect(page.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
+    await page.goto(preview.signInLinks.owner);
+    await expect(owner).toBeVisible();
+    await page.goto(preview.signInLinks.viewer);
+    await expect(page.getByRole("button", { name: "Signed in as Preview viewer" })).toBeVisible();
+    expect(
+      (
+        await person.request.post(`${preview.manifest.webOrigin}/api/sessions`, {
+          data: { name: "Forbidden" },
+        })
+      ).status()
+    ).toBe(403);
+    await page.goto(preview.signInLinks.anonymous);
+    await expect(page.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
+    expect((await person.request.get(`${preview.manifest.webOrigin}/api/sessions`)).status()).toBe(
+      401
+    );
+  } finally {
+    await person.close();
+  }
+});

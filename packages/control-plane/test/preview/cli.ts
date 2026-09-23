@@ -80,8 +80,16 @@ async function main() {
         browser: values.browser,
         session: values.browser === "none" ? null : stack.manifest.personas[persona].browserSession,
         aliases: stack.manifest.aliases,
+        signInLinks: stack.signInLinks,
         timings: stack.manifest.timings,
       })
+    );
+    const { signInLinks } = stack;
+    console.error(
+      [
+        "Sign in from any browser on this machine until this preview stops:",
+        ...PERSONAS.map((name) => `  ${name.padEnd(10)} ${signInLinks[name]}`),
+      ].join("\n")
     );
     const failure = await Promise.race([stack.failure, stopped]);
     if (failure) throw failure;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startPreviewBackend, type PreviewBackend } from "./backend";
 import { expectJson, waitFor } from "./scenarios";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
+import type { BrowserCookie } from "../support/browser-session";
 
 const root = resolve(import.meta.dirname, "../../../..");
 describe("real authenticated preview backend", () => {
@@ -68,6 +69,36 @@ describe("real authenticated preview backend", () => {
     ).toBe(401);
     expect((await b.request("/api/auth/sign-out", { method: "POST", body: {} })).status).toBe(200);
     expect((await b.request("/sessions")).status).toBe(401);
+  }, 30_000);
+  it("signs personas in again after sign-out, and never authenticates expired or anonymous", async () => {
+    const b = await start();
+    const sessionUser = async (cookie: BrowserCookie) => {
+      const url = `${b.origin}/api/auth/get-session`;
+      const response = await fetch(url, {
+        headers: {
+          ...(await buildServiceAuthHeaders({
+            service: "web",
+            secret: b.config.SERVICE_AUTH_SECRET_WEB!,
+            method: "GET",
+            url,
+          })),
+          Cookie: `${cookie.name}=${cookie.value}`,
+        },
+      });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { user: { id: string } } | null)?.user.id ?? null;
+    };
+    expect((await b.request("/api/auth/sign-out", { method: "POST", body: {} })).status).toBe(200);
+    expect((await b.request("/sessions")).status).toBe(401);
+    const member = await b.signIn("member");
+    expect(member.value).not.toBe(b.identities.member.storageState.cookies[0].value);
+    expect(await sessionUser(member)).toBe(b.identities.member.userId);
+    expect(await sessionUser(await b.signIn("owner"))).toBe(b.identities.owner.userId);
+    for (const persona of ["expired", "anonymous"] as const) {
+      const cookie = await b.signIn(persona);
+      expect(cookie.expires * 1000).toBeLessThan(Date.now());
+      expect(await sessionUser(cookie)).toBeNull();
+    }
   }, 30_000);
   it("creates persisted history, idles through preservation and restores for another turn", async () => {
     const b = await start("populated", 2000);

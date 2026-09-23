@@ -1383,8 +1383,8 @@
                 agent-browser</code
               >
               <p class="terminal-note">
-                Wait for the “ready” line. It tells you the URL, browser session name, and test
-                conversation IDs.
+                Wait for the “ready” line. It tells you the URL, browser session name, test
+                conversation IDs and a sign-in link for each test user.
               </p>
               <div class="copy-status" id="copy-status" role="status"></div>
             </div>
@@ -1400,7 +1400,10 @@
                   Install the pinned <code>agent-browser@0.37.0</code> and Chrome if they are not
                   already there. The OpenInspect image includes them.
                 </li>
-                <li>Use <code>--browser none</code> to start without an agent browser.</li>
+                <li>
+                  Use <code>--browser none</code> to start without an agent browser, then open a
+                  printed sign-in link in any browser, including your own.
+                </li>
                 <li>
                   Use <code>npm run test:preview</code> for the browser tests; first install their
                   browser with <code>npx playwright install chromium</code>.
@@ -1447,7 +1450,10 @@
               <span class="step-dot">4</span>
               <div>
                 <strong>Open a named browser session</strong>
-                <p>Load that test login once. Leave your own browser and account alone.</p>
+                <p>
+                  Load that test login once for the agent. Any other browser uses a printed sign-in
+                  link instead of your own account.
+                </p>
               </div>
             </li>
           </ol>
@@ -1629,7 +1635,7 @@
           </div>
         </div>
         <p class="check-note">
-          The code, style and build checks passed too. The new CI job runs both browser journeys
+          The code, style and build checks passed too. The new CI job runs every browser journey
           with no retries; only failure screenshots are kept, for three days.
         </p>
       </section>
@@ -1661,7 +1667,8 @@
                 <strong>Sign-out means sign-out.</strong>
                 <p>
                   The login is loaded once, not added back on every open. A failed first login load
-                  makes you restart the preview.
+                  makes you restart the preview. Only opening a sign-in link signs a browser back
+                  in.
                 </p>
               </div>
               <div>
@@ -1726,7 +1733,7 @@
             </div>
             <div>
               <code>packages/control-plane/test/preview/</code>
-              <p>Test users, starter data, stand-ins, startup and cleanup.</p>
+              <p>Test users, starter data, stand-ins, sign-in links, startup and cleanup.</p>
             </div>
             <div>
               <code>packages/control-plane/test/support/browser-session.ts</code>
@@ -1738,7 +1745,7 @@
             </div>
             <div>
               <code>packages/web/e2e/</code>
-              <p>The two browser journeys through the real local stack.</p>
+              <p>The browser journeys through the real local stack.</p>
             </div>
             <div>
               <code>.github/workflows/authenticated-preview.yml</code>
@@ -1748,7 +1755,8 @@
           <p>
             The main app change is small: the Node host now accepts a file store passed in by its
             caller. The live app still uses its normal S3 store; the preview uses a throwaway one.
-            No test login route was added.
+            No test login route was added: sign-in links come from a small server the launcher owns,
+            which production builds do not include.
           </p>
         </details>
       </section>

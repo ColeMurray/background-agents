@@ -7,6 +7,8 @@ export const PREVIEW_REPLY =
   "Authenticated preview: streamed through the real control plane and saved to history.";
 export interface PreviewStackHandle {
   manifest: PreviewManifest;
+  /** Per-run credentials, deliberately kept out of the manifest: each signs a browser in. */
+  signInLinks: Record<Persona, string>;
   backend: {
     failures(): string[];
     request(

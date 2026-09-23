@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
-import { seedBrowserSession, type BrowserStorageState } from "../support/browser-session";
+import {
+  mintBrowserSession,
+  seedBrowserSession,
+  signedOutBrowserCookie,
+  type BrowserCookie,
+  type BrowserStorageState,
+} from "../support/browser-session";
 import { PREVIEW_LIFETIME_MS, randomSecret } from "./config";
 
 import { PERSONAS, type Persona } from "./contracts";
@@ -50,4 +56,30 @@ export async function seedPersonas(
     identities[persona] = { userId, ...session, expiresAtMs };
   }
   return identities;
+}
+
+/**
+ * The cookie that makes a browser this persona from now on. Sign-out deletes sessions, so each
+ * call mints a new one for the seeded user; `anonymous` gets the login cookie cleared instead.
+ */
+export async function signInPersona(
+  database: SqlDatabase,
+  publicWebOrigin: string,
+  secret: string,
+  identity: PreviewIdentity
+): Promise<BrowserCookie> {
+  if (identity.userId === null)
+    return signedOutBrowserCookie(database, { publicWebOrigin, secret });
+  const { storageState } = await mintBrowserSession(
+    database,
+    { publicWebOrigin, secret },
+    {
+      userId: identity.userId,
+      sessionId: randomUUID(),
+      token: randomSecret(),
+      nowMs: Date.now(),
+      expiresAtMs: identity.expiresAtMs,
+    }
+  );
+  return storageState.cookies[0];
 }

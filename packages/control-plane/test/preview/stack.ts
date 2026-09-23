@@ -11,6 +11,7 @@ import { PREVIEW_LIFETIME_MS, PREVIEW_REQUEST_TIMEOUT_MS, webEnvironment } from 
 import { PERSONAS } from "./personas";
 import { waitFor, type Scenario } from "./scenarios";
 import { sanitizedDiagnostic } from "./diagnostics";
+import { startSignInLinks, type SignInLinks } from "./sign-in-links";
 import type { PreviewManifest } from "./contracts";
 
 const exec = promisify(execFile);
@@ -53,6 +54,7 @@ export async function startPreviewStack(options: {
   }
   let runDir: string | undefined;
   let backend: PreviewBackend | undefined;
+  let signInLinks: SignInLinks | undefined;
   let next: ChildProcess | undefined;
   let log: ReturnType<typeof createWriteStream> | undefined;
   let monitor: ReturnType<typeof setInterval> | undefined;
@@ -79,6 +81,11 @@ export async function startPreviewStack(options: {
       clearInterval(monitor);
       clearTimeout(lifetime);
       const errors: unknown[] = [];
+      try {
+        await signInLinks?.close();
+      } catch (error) {
+        errors.push(error);
+      }
       try {
         if (next) await stopChild(next);
       } catch (error) {
@@ -248,6 +255,8 @@ export async function startPreviewStack(options: {
       });
       if (!response.ok) throw new Error(`auth: ${path} returned ${response.status}`);
     }
+    signInLinks = await startSignInLinks(webOrigin, backend.signIn);
+    secrets.add(signInLinks.key);
     const personas = {} as PreviewManifest["personas"];
     for (const persona of PERSONAS) {
       const identity = backend.identities[persona];
@@ -299,7 +308,15 @@ export async function startPreviewStack(options: {
       () => reportFailure(new Error("preview: four-hour run expired; start a new run")),
       PREVIEW_LIFETIME_MS - (Date.now() - startedAtMs)
     );
-    return { manifest, manifestPath, backend, failure, close, recordFailure };
+    return {
+      manifest,
+      manifestPath,
+      backend,
+      signInLinks: signInLinks.urls,
+      failure,
+      close,
+      recordFailure,
+    };
   } catch (error) {
     recordedFailures.push(error);
     let failure = error;
