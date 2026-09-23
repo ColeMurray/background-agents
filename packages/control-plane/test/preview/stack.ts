@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,7 +15,7 @@ import {
 } from "./config";
 import { PERSONAS } from "./personas";
 import { waitFor } from "./scenarios";
-import { sanitizedDiagnostic } from "./diagnostics";
+import { readLogTail, sanitizedDiagnostic } from "./diagnostics";
 import { startSignInLinks, type SignInLinks } from "./sign-in-links";
 import type { PreviewManifest, PreviewStackHandle, PreviewStackOptions } from "./contracts";
 
@@ -69,8 +69,7 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
   const secrets = new Set<string>();
   const diagnosticPath = join(workDir, "last-failure.log");
   const recordedFailures: unknown[] = [];
-  const readWebLog = async () =>
-    runDir ? await readFile(join(runDir, "web.log"), "utf8").catch(() => "") : "";
+  const readWebLog = async () => (runDir ? await readLogTail(join(runDir, "web.log")) : "");
   const writeDiagnostic = async (webLog: string) => {
     await writeFile(
       diagnosticPath,
@@ -238,7 +237,7 @@ export async function startPreviewStack(options: PreviewStackOptions): Promise<P
         backend = undefined;
         if (log) await new Promise<void>((resolve) => log!.end(resolve));
         log = undefined;
-        const webLog = await readFile(join(runDir, "web.log"), "utf8").catch(() => "");
+        const webLog = await readWebLog();
         const portCollision =
           (error as NodeJS.ErrnoException).code === "EADDRINUSE" || webLog.includes("EADDRINUSE");
         if (!portCollision || attempt === 2) throw error;
