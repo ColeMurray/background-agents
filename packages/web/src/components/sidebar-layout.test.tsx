@@ -65,7 +65,7 @@ describe("CollapsedSidebarControls", () => {
     expect(buttons).toHaveLength(3);
     expect(Array.from(buttons!, (button) => button.getAttribute("aria-label"))).toEqual([
       expect.stringMatching(/^Open sidebar/),
-      expect.stringMatching(/^Search sessions/),
+      expect.stringMatching(/^Quick search recent sessions/),
       expect.stringMatching(/^New session/),
     ]);
 

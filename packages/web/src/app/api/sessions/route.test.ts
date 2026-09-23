@@ -281,3 +281,38 @@ describe("sessions API route (POST)", () => {
     expect(sent).toEqual({ environmentId: "env-1" });
   });
 });
+
+describe("sessions API route (discovery params)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("forwards search and discovery filters after the established params", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
+      Response.json({ sessions: [], hasMore: false }, { status: 200 })
+    );
+
+    const response = await GET(
+      request(
+        "/api/sessions?origin=automation&environmentId=env-1&repoName=web-app&repoOwner=acme&q=login&limit=50&offset=0&excludeStatus=archived&lifecycle=archived&debug=1"
+      )
+    );
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions?limit=50&offset=0&excludeStatus=archived&q=login&repoOwner=acme&repoName=web-app&environmentId=env-1&origin=automation"
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("propagates the control plane's rejection of an oversized search", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
+      Response.json({ error: "Invalid q" }, { status: 400 })
+    );
+
+    const response = await GET(request(`/api/sessions?q=${"x".repeat(201)}`));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid q" });
+  });
+});
