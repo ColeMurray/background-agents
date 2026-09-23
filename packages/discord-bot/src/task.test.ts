@@ -99,6 +99,29 @@ describe("handleTask", () => {
     expect(edit.body.content).toContain("https://web.example.com/session/s1");
     expect(thread.url).toContain("/channels/chan-tasks/messages/msg-1/threads");
     expect(JSON.parse(kv.store.get("thread:thread-1")!)).toMatchObject({ sessionId: "s1" });
+    expect(discordCalls()[2].url).toContain("/channels/thread-1/messages");
+    expect(kv.store.has("status:s1:thread-1")).toBe(true);
+  });
+
+  it("closes the status message when the prompt cannot be sent", async () => {
+    const kv = createKv();
+    const env = createEnv({ DISCORD_KV: kv as unknown as KVNamespace });
+    const base = cpFetch.getMockImplementation()!;
+    cpFetch.mockImplementation(async (e, request, init) =>
+      request.url.endsWith("/prompt")
+        ? new Response("nope", { status: 500 })
+        : base(e, request, init)
+    );
+
+    await handleTask(env, {
+      interaction: createInteraction(),
+      prompt: "Make the icon black",
+      repo: "agustind/andromeda-website",
+    });
+
+    expect(kv.store.has("status:s1:thread-1")).toBe(false);
+    const edits = discordCalls().filter((call) => call.method === "PATCH");
+    expect(edits.some((call) => String(call.body.content).startsWith("⚠️ **Stopped**"))).toBe(true);
   });
 
   it("sends a follow-up when run inside a task thread", async () => {
@@ -119,7 +142,11 @@ describe("handleTask", () => {
     });
 
     expect(cpCalls().map((call) => call.url)).toEqual(["https://internal/sessions/s1/prompt"]);
-    expect(discordCalls()[0].body.content).toContain("Follow-up");
+    const reply = discordCalls().find((call) => call.url.includes("/webhooks/"));
+    expect(reply?.body.content).toContain("Follow-up");
+    const status = discordCalls().find((call) => call.url.endsWith("/channels/thread-1/messages"));
+    expect(status?.body.content).toContain("Working");
+    expect(kv.store.has("status:s1:thread-1")).toBe(true);
   });
 
   it("rejects repositories the GitHub App cannot access", async () => {

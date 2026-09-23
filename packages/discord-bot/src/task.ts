@@ -14,6 +14,7 @@ import {
 import { editOriginalResponse, startThreadFromMessage } from "./discord-api";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
+import { finishProgress, startProgress } from "./progress";
 import { findRepo, listRepos } from "./repos";
 import { threadSessionSchema, type Env, type Interaction, type ThreadSession } from "./types";
 
@@ -138,9 +139,13 @@ export async function handleTask(env: Env, request: TaskRequest): Promise<void> 
       mentionUserIds: [userId],
     });
 
+  // Set once a status message may exist, so a failure can close it.
+  let progress: { sessionId: string; channelId: string } | undefined;
   try {
     const existing = await lookupThreadSession(env, channelId);
     if (existing) {
+      progress = { sessionId: existing.sessionId, channelId };
+      await startProgress(env, existing.sessionId, channelId);
       await sendPrompt(
         env,
         {
@@ -200,6 +205,9 @@ export async function handleTask(env: Env, request: TaskRequest): Promise<void> 
       log.warn("task.thread_failed", { trace_id: traceId, session_id: sessionId, error });
     }
 
+    // Posted before the prompt so the first tool call finds its status message.
+    progress = { sessionId, channelId: threadId ?? channelId };
+    await startProgress(env, sessionId, progress.channelId);
     await sendPrompt(
       env,
       {
@@ -218,6 +226,7 @@ export async function handleTask(env: Env, request: TaskRequest): Promise<void> 
     });
   } catch (error) {
     log.error("task.failed", { trace_id: traceId, error });
+    if (progress) await finishProgress(env, { ...progress, success: false });
     const message = error instanceof Error ? error.message : "Unexpected error";
     await reply(`⚠️ Couldn't start the task: ${message}`).catch(() => undefined);
   }

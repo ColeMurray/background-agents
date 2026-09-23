@@ -87,14 +87,34 @@ export async function startThreadFromMessage(
   return idSchema.parse(result).id;
 }
 
+/** Returns the new message's id. */
 export async function postChannelMessage(
   botToken: string,
   channelId: string,
   payload: MessagePayload
-): Promise<void> {
-  await discordFetch(`/channels/${channelId}/messages`, {
+): Promise<string> {
+  const result = await discordFetch(`/channels/${channelId}/messages`, {
     method: "POST",
     botToken,
     body: messageBody(payload),
   });
+  return idSchema.parse(result).id;
+}
+
+export async function editChannelMessage(
+  botToken: string,
+  channelId: string,
+  messageId: string,
+  payload: MessagePayload
+): Promise<void> {
+  await discordFetch(`/channels/${channelId}/messages/${messageId}`, {
+    method: "PATCH",
+    botToken,
+    body: messageBody(payload),
+  });
+}
+
+/** Shows "<bot> is typing…" in the channel for about ten seconds. */
+export async function sendTypingIndicator(botToken: string, channelId: string): Promise<void> {
+  await discordFetch(`/channels/${channelId}/typing`, { method: "POST", botToken });
 }

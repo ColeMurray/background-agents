@@ -1,7 +1,6 @@
 /**
- * Control-plane callbacks. `/complete` posts the result to the task thread;
- * `/tool_call` progress is acknowledged and dropped, since the thread only
- * reports the outcome.
+ * Control-plane callbacks. `/tool_call` refreshes the live status message in
+ * the task thread; `/complete` marks it finished and posts the result.
  */
 
 import { Hono } from "hono";
@@ -14,6 +13,7 @@ import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import { postChannelMessage } from "./discord-api";
 import { formatCompletion } from "./format";
 import { createLogger } from "./logger";
+import { finishProgress, recordStep } from "./progress";
 import { sessionUrl } from "./task";
 import type { Env } from "./types";
 
@@ -28,6 +28,22 @@ const completionCallbackSchema = z.object({
   context: discordCallbackContextSchema,
   signature: z.string().min(1),
 });
+
+const toolCallCallbackSchema = z.object({
+  sessionId: z.string().min(1),
+  tool: z.string().min(1),
+  args: z.record(z.string(), z.unknown()),
+  callId: z.string().min(1),
+  status: z.string().optional(),
+  timestamp: z.number(),
+  context: discordCallbackContextSchema,
+  signature: z.string().min(1),
+});
+
+/** Where replies for a callback context go: the task thread, else its channel. */
+function replyChannel(context: z.infer<typeof discordCallbackContextSchema>): string {
+  return context.threadId ?? context.channelId;
+}
 
 async function isAuthentic(env: Env, payload: unknown): Promise<boolean> {
   return isSignedCallbackPayload(payload) && (await verifyCallbackFromControlPlane(payload, env));
@@ -49,6 +65,18 @@ callbacksRouter.post("/complete", async (c) => {
 callbacksRouter.post("/tool_call", async (c) => {
   const payload: unknown = await c.req.json().catch(() => null);
   if (!(await isAuthentic(c.env, payload))) return c.json({ error: "unauthorized" }, 401);
+
+  const parsed = toolCallCallbackSchema.safeParse(payload);
+  if (!parsed.success) return c.json({ error: "invalid payload" }, 400);
+
+  c.executionCtx.waitUntil(
+    recordStep(c.env, {
+      sessionId: parsed.data.sessionId,
+      channelId: replyChannel(parsed.data.context),
+      tool: parsed.data.tool,
+      args: parsed.data.args,
+    })
+  );
   return c.json({ ok: true });
 });
 
@@ -73,8 +101,11 @@ async function postCompletion(
     log.warn("callback.extract_failed", { session_id: sessionId, error });
   }
 
+  const channelId = replyChannel(context);
+  await finishProgress(env, { sessionId, channelId, success: callback.success });
+
   try {
-    await postChannelMessage(env.DISCORD_BOT_TOKEN, context.threadId ?? context.channelId, {
+    await postChannelMessage(env.DISCORD_BOT_TOKEN, channelId, {
       content: formatCompletion({
         userId: context.userId,
         success: callback.success,
