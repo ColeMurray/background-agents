@@ -13,6 +13,21 @@ import type { Env } from "./types";
 // the production values so the tests below read what the hosts really use.
 vi.mock("./autofix/handler", () => ({ handleAutofixJob: vi.fn() }));
 vi.mock("./image-builds/finalization-consumer", () => ({ handleImageBuildFinalization: vi.fn() }));
+vi.mock("@open-inspect/slack-bot/completion/delivery", () => ({
+  processSlackCompletion: vi.fn(async () => true),
+}));
+vi.mock("@open-inspect/linear-bot/callbacks", () => ({
+  processLinearCompletion: vi.fn(async () => true),
+}));
+vi.mock("./integrations/http", () => ({
+  buildSlackEnv: vi.fn(() => ({})),
+  buildLinearEnv: vi.fn(() => ({
+    LINEAR_KV: {
+      get: vi.fn(async () => null),
+      put: vi.fn(async () => undefined),
+    },
+  })),
+}));
 
 const FINALIZE_PAYLOAD = {
   version: 1 as const,
@@ -31,11 +46,39 @@ const AUTOFIX_PAYLOAD: GitHubAutofixEnvelope = {
   receivedAt: "2026-07-30T05:00:00.000Z",
 };
 
+const SLACK_COMPLETION_PAYLOAD = {
+  version: 1 as const,
+  deliveryId: "slack:session-1:message-1",
+  source: "session" as const,
+  sessionId: "session-1",
+  messageId: "message-1",
+  success: true,
+  channel: "C123",
+  threadTs: "123.456",
+  context: { repoFullName: "acme/widgets", model: "anthropic/claude-haiku-4-5" },
+};
+
+const LINEAR_COMPLETION_PAYLOAD = {
+  deliveryId: "linear:session-1:message-1",
+  sessionId: "session-1",
+  messageId: "message-1",
+  success: true,
+  timestamp: 1,
+  context: {
+    source: "linear" as const,
+    issueId: "issue-1",
+    issueIdentifier: "ENG-1",
+    issueUrl: "https://linear.app/acme/issue/ENG-1",
+    model: "anthropic/claude-haiku-4-5",
+  },
+};
+
 function fakeDeps(): JobDeps & { log: { error: ReturnType<typeof vi.fn> } } {
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   return {
     env: { LOG_LEVEL: "error", DEPLOYMENT_NAME: "test" } as unknown as Env,
     db: {} as SqlDatabase,
+    controlPlane: { fetch: vi.fn() },
     log: log as unknown as Logger & typeof log,
     correlation: { trace_id: "trace-1", request_id: "request-1" },
   };
@@ -68,7 +111,7 @@ describe("JOB_KINDS", () => {
 
 describe("deliverJob", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
   });
 
   it("hands a parsed payload to the kind's handler with the delivery and returns its outcome", async () => {
@@ -186,6 +229,8 @@ describe("deliverJob", () => {
     const payloads: Record<JobKind, unknown> = {
       "image_build.finalize": FINALIZE_PAYLOAD,
       "github.autofix": AUTOFIX_PAYLOAD,
+      "slack.completion": SLACK_COMPLETION_PAYLOAD,
+      "linear.completion": LINEAR_COMPLETION_PAYLOAD,
     };
 
     for (const kind of Object.keys(JOB_KINDS) as JobKind[]) {

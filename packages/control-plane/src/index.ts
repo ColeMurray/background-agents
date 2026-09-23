@@ -18,6 +18,7 @@ import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
 import { createCloudflareEnv, type WorkerBindings } from "./cloudflare/platform";
 import { findScheduledJob } from "./scheduled-jobs";
+import { attachIntegrationClients, handleIntegrationHttp } from "./integrations/http";
 
 const logger = createLogger("worker");
 
@@ -41,9 +42,16 @@ export default {
       return handleWebSocket(request, bindings, url, db, metrics);
     }
 
+    const env = createCloudflareEnv(bindings);
+    const controlPlane = {
+      fetch: (input: string | URL | Request, init?: RequestInit) =>
+        handleControlPlaneHttp(new Request(input, init), env, ctx),
+    };
+    attachIntegrationClients(env, ctx, controlPlane);
+    const integration = await handleIntegrationHttp(request, env, ctx, controlPlane);
     // Regular API request — Hono owns HTTP route selection while the neutral
     // admission/dispatch pipeline retains authentication and authorization.
-    return handleControlPlaneHttp(request, createCloudflareEnv(bindings), ctx);
+    return integration ?? handleControlPlaneHttp(request, env, ctx);
   },
 
   /**
@@ -60,6 +68,11 @@ export default {
       return;
     }
     const env = createCloudflareEnv(bindings);
+    const controlPlane = {
+      fetch: (input: string | URL | Request, init?: RequestInit) =>
+        handleControlPlaneHttp(new Request(input, init), env, ctx),
+    };
+    attachIntegrationClients(env, ctx, controlPlane);
     const runId = crypto.randomUUID();
     const correlation = { trace_id: runId, request_id: runId };
     await job.run(
@@ -80,13 +93,24 @@ export default {
    * Queue consumer: delivers each message to the handler of the job kind
    * the queue carries (see `jobs.ts`).
    */
-  async queue(batch: MessageBatch<unknown>, bindings: WorkerBindings): Promise<void> {
+  async queue(
+    batch: MessageBatch<unknown>,
+    bindings: WorkerBindings,
+    ctx?: ExecutionContext
+  ): Promise<void> {
     const env = createCloudflareEnv(bindings);
+    const controlPlane = {
+      fetch: (input: string | URL | Request, init?: RequestInit) => {
+        if (!ctx) return Promise.reject(new Error("Queue execution context is unavailable"));
+        return handleControlPlaneHttp(new Request(input, init), env, ctx);
+      },
+    };
     await consumeJobBatch(batch, {
       env,
       // eslint-disable-next-line no-restricted-syntax -- queue composition root: the one consumer env.DB read
       db: env.DB,
       log: logger,
+      controlPlane,
     });
   },
 };

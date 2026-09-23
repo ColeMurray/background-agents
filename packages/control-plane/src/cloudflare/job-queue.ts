@@ -21,18 +21,24 @@ import { deliverJob, type JobDeps, type JobKind, type Jobs } from "../jobs";
 export const JOB_QUEUE_PREFIXES: Record<JobKind, string> = {
   "image_build.finalize": "open-inspect-image-build-finalization",
   "github.autofix": "open-inspect-github-autofix",
+  "slack.completion": "open-inspect-slack-completion",
+  "linear.completion": "open-inspect-linear-completion",
 };
 
 /** The Worker's producer bindings, one per job kind; a kind whose queue the deployment omits is absent. */
 export interface JobQueueBindings {
   IMAGE_BUILD_FINALIZATION_QUEUE: Queue<unknown>;
   AUTOFIX_QUEUE?: Queue<unknown>;
+  SLACK_COMPLETION_QUEUE?: Queue<unknown>;
+  LINEAR_COMPLETION_QUEUE?: Queue<unknown>;
 }
 
 /** The producer binding Terraform gives the control-plane Worker for each kind's queue. */
 export const JOB_QUEUE_BINDINGS: Record<JobKind, keyof JobQueueBindings> = {
   "image_build.finalize": "IMAGE_BUILD_FINALIZATION_QUEUE",
   "github.autofix": "AUTOFIX_QUEUE",
+  "slack.completion": "SLACK_COMPLETION_QUEUE",
+  "linear.completion": "LINEAR_COMPLETION_QUEUE",
 };
 
 /** The queue Terraform names for `kind` on the deployment called `deploymentName`. */

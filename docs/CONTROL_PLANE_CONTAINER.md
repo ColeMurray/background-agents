@@ -12,7 +12,7 @@ providers behave the same; only the platform adapters differ.
 
 | Service      | Image                   | Role                                                                                  |
 | ------------ | ----------------------- | ------------------------------------------------------------------------------------- |
-| `app`        | built from this repo    | The control plane: HTTP API, session WebSockets, cron jobs. Port 8787.                |
+| `app`        | built from this repo    | The control plane: HTTP API, integrations, session WebSockets, cron. Port 8787.       |
 | `minio`      | `quay.io/minio/minio`   | S3-compatible object storage for media and backups. Console on port 9001.             |
 | `minio-init` | `quay.io/minio/mc`      | Creates the `media` and `backups` buckets, then exits.                                |
 | `litestream` | `litestream/litestream` | Replicates the global store (`/data/global.db`) to the `backups` bucket every second. |
@@ -69,6 +69,19 @@ Compose gives the app 40 seconds to drain before killing it, which covers the ho
 shutdown budget and the 5 seconds it keeps before forcing its own exit; both values are pinned in
 `docker-compose.yml` so a `.env` edit cannot separate them.
 
+## Connecting integrations
+
+Slack, Linear, and GitHub webhooks are served by the same process. Configure only the providers you
+use in `.env`, then point each provider at the matching public path:
+
+- Slack events: `/integrations/slack/events`; interactions: `/integrations/slack/interactions`
+- Linear webhook: `/integrations/linear/webhook`; OAuth callback:
+  `/integrations/linear/oauth/callback`
+- GitHub webhook: `/integrations/github/webhooks/github`
+
+An unconfigured provider path returns `503`; it does not affect the control-plane API or another
+provider. Provider state is stored in `global.db`, so the existing Litestream replica includes it.
+
 ## Connecting the web app
 
 In `packages/web/.env.local`:
@@ -95,7 +108,8 @@ not serving a production control plane.
 
 Everything the host persists is under `/data` on the `control-plane-data` volume:
 
-- `global.db`: the global store (the tables D1 holds on Cloudflare).
+- `global.db`: the global store and co-located integration state (the tables D1 holds on
+  Cloudflare).
 - `sessions/<id>.db`: one file per session (the Durable Object storage on Cloudflare).
 - `host-alarms.db`: the index of every session's next scheduled deadline, and the claim each
   deadline being delivered is leased under.
@@ -118,12 +132,14 @@ It does not bring back the session files, the alarm index or the jobs table: the
 lists sessions whose files are gone, and the host opens each of those as an empty session when it is
 next touched, with no pending deadlines. The entrypoint logs a warning to that effect after every
 restore. Treat the replica as protection for the global store, not as recovery of a deployment.
+Integration state can include OAuth access tokens, so protect the replica as credential-bearing
+data.
 
-`jobs.db` is left out of the replica for the same reason the alarm index is: what it holds is
-reconstructible from what _is_ replicated. Every job the control plane produces today is an
-image-build finalization, and the image-build scheduler republishes those from `global.db` on its
-cron slot — a build still `building` with an accepted completion and no live lease. A future job
-kind that cannot be rebuilt that way, such as a session callback, would have to revisit this.
+`jobs.db` is not part of the Litestream replica. Image-build finalization jobs can be republished
+from `global.db`, while terminal integration jobs are recoverable from their session database until
+the local job queue accepts them. Because the session databases are not in this replica either, a
+global-store-only restore can lose pending terminal deliveries. Use a full volume snapshot when the
+deployment needs recovery of sessions, alarms, and jobs.
 
 `cache.db` is deliberately excluded from that replication: it holds the repositories listing and a
 live GitHub installation token, neither of which belongs in a backup bucket, and a cache refills by

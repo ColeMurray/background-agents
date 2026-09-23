@@ -262,6 +262,7 @@ export function postMessage(
     thread_ts?: string;
     blocks?: unknown[];
     reply_broadcast?: boolean;
+    client_msg_id?: string;
   }
 ): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
   return slackPost(token, "chat.postMessage", postedMessagePayloadSchema, {
@@ -270,6 +271,7 @@ export function postMessage(
     thread_ts: options?.thread_ts,
     blocks: options?.blocks,
     reply_broadcast: options?.reply_broadcast,
+    client_msg_id: options?.client_msg_id,
   });
 }
 
@@ -281,6 +283,7 @@ export function postBlocks(
     thread_ts?: string;
     reply_broadcast?: boolean;
     signal?: AbortSignal;
+    client_msg_id?: string;
   }
 ): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
   return slackPost(
@@ -292,6 +295,7 @@ export function postBlocks(
       blocks,
       thread_ts: options?.thread_ts,
       reply_broadcast: options?.reply_broadcast,
+      client_msg_id: options?.client_msg_id,
     },
     options?.signal
   );

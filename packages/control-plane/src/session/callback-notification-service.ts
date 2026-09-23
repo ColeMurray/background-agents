@@ -21,6 +21,7 @@ import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
+import type { AlarmScheduler } from "../platform-ports";
 import type { AutomationRunCompletion } from "../scheduler/scheduler";
 
 /**
@@ -55,7 +56,9 @@ export interface CallbackServiceDeps {
   log: Logger;
   getSessionId: () => string;
   completeAutomationRun?: AutomationRunCompletionHandler;
+  alarmScheduler: AlarmScheduler;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 /**
@@ -95,6 +98,10 @@ export const SLACK_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
  * under an in-flight refresh; the next heartbeat is the better retry.
  */
 const ACTIVITY_REFRESH_TIMEOUT_MS = 10_000;
+const TERMINAL_CALLBACK_LEASE_MS = 30_000;
+const TERMINAL_CALLBACK_RETRY_BASE_MS = 5_000;
+const TERMINAL_CALLBACK_RETRY_MAX_MS = 5 * 60_000;
+const TERMINAL_CALLBACK_BATCH_SIZE = 10;
 
 interface CallbackDeliveryResult {
   delivered: boolean;
@@ -110,6 +117,8 @@ export class CallbackNotificationService {
   private readonly log: Logger;
   private readonly getSessionId: () => string;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
+  private readonly alarmScheduler: AlarmScheduler;
   private readonly completeAutomationRun: AutomationRunCompletionHandler | undefined;
   private _lastToolCallCallbackTs = 0;
   /**
@@ -128,7 +137,9 @@ export class CallbackNotificationService {
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
     this.completeAutomationRun = deps.completeAutomationRun;
+    this.alarmScheduler = deps.alarmScheduler;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = deps.now ?? Date.now;
   }
 
   private markCallIdNotified(callId: string): void {
@@ -208,10 +219,10 @@ export class CallbackNotificationService {
 
   /**
    * Best-effort notification of the originating client with retry.
-   * Routes to the correct service binding based on the message source.
+   * Routes to the correct co-located integration based on the message source.
    */
   async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
-    const startedAt = Date.now();
+    const startedAt = this.now();
     let sessionId: string | null = null;
     let source: string | null = null;
     let result: CallbackDeliveryResult = {
@@ -220,6 +231,8 @@ export class CallbackNotificationService {
       rejectReason: "unexpected_error",
     };
     let thrownError: unknown;
+    let claimedAttempts: number | undefined;
+    let permanentFailure = false;
 
     try {
       sessionId = this.getSessionId();
@@ -229,7 +242,25 @@ export class CallbackNotificationService {
         return;
       }
 
-      const rawContext: unknown = JSON.parse(message.callback_context);
+      const claim = this.messageRepository.claimTerminalCallback(
+        messageId,
+        startedAt,
+        startedAt + TERMINAL_CALLBACK_LEASE_MS
+      );
+      if (!claim) {
+        result.rejectReason = "already_claimed";
+        return;
+      }
+      claimedAttempts = claim.attempts;
+      await this.armTerminalCallback(startedAt + TERMINAL_CALLBACK_LEASE_MS, messageId);
+
+      let rawContext: unknown;
+      try {
+        rawContext = JSON.parse(message.callback_context);
+      } catch (error) {
+        permanentFailure = true;
+        throw error;
+      }
       source =
         isRecord(rawContext) && rawContext.source === "automation"
           ? "automation"
@@ -240,6 +271,7 @@ export class CallbackNotificationService {
         const automationContext = automationCallbackContextSchema.safeParse(rawContext);
         if (!automationContext.success) {
           result.rejectReason = "invalid_callback_context";
+          permanentFailure = true;
           return;
         }
         result = await this.notifyAutomationComplete(
@@ -276,6 +308,7 @@ export class CallbackNotificationService {
           : undefined;
       if (parsedCallback && !parsedCallback.success) {
         result.rejectReason = "invalid_payload";
+        permanentFailure = true;
         return;
       }
       const payloadData = parsedCallback?.data ?? callbackData;
@@ -306,6 +339,21 @@ export class CallbackNotificationService {
     } catch (caught) {
       thrownError = caught;
     } finally {
+      if (claimedAttempts !== undefined) {
+        if (result.delivered || permanentFailure) {
+          this.messageRepository.completeTerminalCallback(messageId, this.now());
+        } else {
+          const attempts = claimedAttempts + 1;
+          const nextAttemptAt =
+            this.now() +
+            Math.min(
+              TERMINAL_CALLBACK_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 16),
+              TERMINAL_CALLBACK_RETRY_MAX_MS
+            );
+          this.messageRepository.retryTerminalCallback(messageId, attempts, nextAttemptAt);
+          await this.armTerminalCallback(nextAttemptAt, messageId);
+        }
+      }
       const outcome =
         thrownError !== undefined
           ? "error"
@@ -319,7 +367,7 @@ export class CallbackNotificationService {
         message_id: messageId,
         source,
         outcome,
-        duration_ms: Date.now() - startedAt,
+        duration_ms: this.now() - startedAt,
         attempts: result.attempts,
         retries: Math.max(0, result.attempts - 1),
         ...(result.httpStatus !== undefined ? { http_status: result.httpStatus } : {}),
@@ -332,6 +380,32 @@ export class CallbackNotificationService {
       };
       if (outcome === "error") this.log.error("callback.complete_delivery", fields);
       else this.log.info("callback.complete_delivery", fields);
+    }
+  }
+
+  /** Retry terminal callbacks whose local completion commit has not reached a durable receiver. */
+  async flushPending(): Promise<void> {
+    const now = this.now();
+    const pending = this.messageRepository.listDueTerminalCallbacks(
+      now,
+      TERMINAL_CALLBACK_BATCH_SIZE
+    );
+    for (const callback of pending) {
+      await this.notifyComplete(callback.messageId, callback.success, callback.error);
+    }
+    const nextAttemptAt = this.messageRepository.nextTerminalCallbackAt();
+    if (nextAttemptAt !== null) await this.armTerminalCallback(nextAttemptAt, "pending");
+  }
+
+  private async armTerminalCallback(at: number, messageId: string): Promise<void> {
+    try {
+      await this.alarmScheduler.schedule(at);
+    } catch (error) {
+      this.log.warn("callback.complete_retry_arm_failed", {
+        message_id: messageId,
+        next_attempt_at: at,
+        error,
+      });
     }
   }
 

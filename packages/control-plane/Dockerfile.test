@@ -3,9 +3,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends libc++1 && rm -
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
+COPY packages/slack-bot/package.json packages/slack-bot/
+COPY packages/linear-bot/package.json packages/linear-bot/
+COPY packages/github-bot/package.json packages/github-bot/
 COPY packages/control-plane/package.json packages/control-plane/
-RUN npm ci --workspace=@open-inspect/shared --workspace=@open-inspect/control-plane
+RUN npm ci \
+    --workspace=@open-inspect/shared \
+    --workspace=@open-inspect/slack-bot \
+    --workspace=@open-inspect/linear-bot \
+    --workspace=@open-inspect/github-bot \
+    --workspace=@open-inspect/control-plane
 COPY packages/shared/ packages/shared/
+COPY packages/slack-bot/ packages/slack-bot/
+COPY packages/linear-bot/ packages/linear-bot/
+COPY packages/github-bot/ packages/github-bot/
 COPY packages/control-plane/ packages/control-plane/
 COPY terraform/d1/migrations/ terraform/d1/migrations/
 RUN npm run build -w @open-inspect/shared

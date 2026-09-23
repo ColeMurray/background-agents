@@ -8,8 +8,11 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import type { ExecutionContext } from "hono";
 import { initSchema } from "../session/schema";
 import type { Env } from "../types";
+import { handleControlPlaneHttp } from "./http-host";
+import { attachIntegrationClients } from "../integrations/http";
 import { createDurableObjectSessionPlatform } from "./session-platform";
 import { createCloudflareEnv, type WorkerBindings } from "./platform";
 import { upgradeWebSocket } from "./websocket-upgrade";
@@ -40,6 +43,16 @@ export class SessionDO extends DurableObject<WorkerBindings> {
     }
     this.platform = createDurableObjectSessionPlatform(ctx, db);
     this.appEnv = createCloudflareEnv(env);
+    const executionCtx: ExecutionContext = {
+      waitUntil: (promise) => ctx.waitUntil(promise),
+      passThroughOnException() {},
+      props: {},
+    };
+    const controlPlane = {
+      fetch: (input: string | URL | Request, init?: RequestInit) =>
+        handleControlPlaneHttp(new Request(input, init), this.appEnv, executionCtx),
+    };
+    attachIntegrationClients(this.appEnv, executionCtx, controlPlane);
   }
 
   /** The runtime, (re)built on first touch after construction or eviction. */

@@ -4,6 +4,7 @@
 
 import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import type { KeyValueStore } from "@open-inspect/shared/cache-store";
 import type { SlackCompletionJob } from "./completion/job";
 // targets.ts is a pure leaf (types + policy functions, no I/O), so the types
 // barrel can depend on it without a cycle.
@@ -18,7 +19,7 @@ interface SlackCompletionQueue {
  */
 export interface Env {
   // KV namespace
-  SLACK_KV: KVNamespace;
+  SLACK_KV: KeyValueStore;
 
   // Service binding to control plane
   CONTROL_PLANE: ControlPlaneFetcher;

@@ -556,9 +556,10 @@ describe("MessageRepository", () => {
   });
 
   it("atomically records message completion and its canonical event", () => {
-    mock.setData(`SELECT status, created_at, started_at FROM messages WHERE id = ?`, [
-      { status: "processing", created_at: 1000, started_at: 1200 },
-    ]);
+    mock.setData(
+      `SELECT status, created_at, started_at, callback_context FROM messages WHERE id = ?`,
+      [{ status: "processing", created_at: 1000, started_at: 1200, callback_context: null }]
+    );
     const event = {
       type: "execution_complete" as const,
       messageId: "msg-1",
@@ -577,10 +578,54 @@ describe("MessageRepository", () => {
     expect(mock.calls[2].params[0]).toBe("execution_complete:msg-1");
   });
 
+  it("records and schedules a terminal callback in the completion transaction", () => {
+    const setPendingEarliest = vi.fn();
+    repository = new MessageRepository(
+      mock.sql,
+      (closure) => closure(),
+      new SessionAttachmentRepository(mock.sql),
+      new EventRepository(mock.sql, (closure) => closure()),
+      { setPendingEarliest }
+    );
+    mock.setData(
+      `SELECT status, created_at, started_at, callback_context FROM messages WHERE id = ?`,
+      [
+        {
+          status: "processing",
+          created_at: 1000,
+          started_at: 1200,
+          callback_context: '{"source":"slack"}',
+        },
+      ]
+    );
+
+    repository.recordMessageCompletion(
+      {
+        type: "execution_complete",
+        messageId: "msg-1",
+        success: true,
+        sandboxId: "sb-1",
+        timestamp: 3,
+      },
+      3000,
+      "processing"
+    );
+
+    expect(mock.calls[1].query).toContain("callback_delivery_next_at");
+    expect(setPendingEarliest).toHaveBeenCalledWith(3000);
+  });
+
+  it("reads the next terminal callback deadline", () => {
+    mock.setOne({ next_at: 3000 });
+
+    expect(repository.nextTerminalCallbackAt()).toBe(3000);
+  });
+
   it("does not complete a message in another state", () => {
-    mock.setData(`SELECT status, created_at, started_at FROM messages WHERE id = ?`, [
-      { status: "completed", created_at: 1000, started_at: 1200 },
-    ]);
+    mock.setData(
+      `SELECT status, created_at, started_at, callback_context FROM messages WHERE id = ?`,
+      [{ status: "completed", created_at: 1000, started_at: 1200, callback_context: null }]
+    );
     expect(
       repository.recordMessageCompletion(
         {

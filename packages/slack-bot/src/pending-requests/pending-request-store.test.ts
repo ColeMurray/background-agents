@@ -41,7 +41,7 @@ function makeEnv() {
   const put = vi.fn();
   const deleteValue = vi.fn();
   const env = {
-    SLACK_KV: { get, put, delete: deleteValue } as unknown as KVNamespace,
+    SLACK_KV: { get, put, delete: deleteValue } as unknown as Env["SLACK_KV"],
   } as Env;
   return { env, get, put, deleteValue };
 }

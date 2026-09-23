@@ -40,6 +40,11 @@ locals {
     # through var.config.
     GITHUB_BOT_USERNAME = "open-inspect[bot]"
 
+    SLACK_BOT_DEFAULT_MODEL  = "anthropic/claude-haiku-4-5"
+    LINEAR_BOT_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
+    GITHUB_BOT_DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
+    CLASSIFICATION_MODEL     = "anthropic/claude-haiku-4-5"
+
     WORKER_URL          = "https://${var.hostname}"
     CADDY_DOMAIN        = var.hostname
     OBJECT_STORE_BUCKET = aws_s3_bucket.media.bucket

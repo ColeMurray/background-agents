@@ -2,7 +2,7 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type { CacheStore } from "@open-inspect/shared/cache-store";
+import type { CacheStore, KeyValueStore } from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "./db/sql-database";
 import type { Jobs } from "./jobs";
 import type { FetchClient, QueueMetricsSource } from "./platform-ports";
@@ -39,6 +39,13 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
+  SLACK_SIGNING_SECRET?: string;
+  GITHUB_WEBHOOK_SECRET?: string;
+  LINEAR_CLIENT_ID?: string;
+  LINEAR_CLIENT_SECRET?: string;
+  LINEAR_WEBHOOK_SECRET?: string;
+  LINEAR_API_KEY?: string;
+  OPENAI_API_KEY?: string;
 
   // GitHub App secrets (for git operations)
   GITHUB_APP_ID?: string;
@@ -53,6 +60,10 @@ export interface EnvConfig {
   DEPLOYMENT_NAME: string;
   APP_NAME?: string; // Display name for user-visible UI, PR footers, and HTTP User-Agent headers
   GITHUB_BOT_USERNAME: string; // GitHub App bot login used for self-origin checks
+  SLACK_BOT_DEFAULT_MODEL?: string;
+  LINEAR_BOT_DEFAULT_MODEL?: string;
+  GITHUB_BOT_DEFAULT_MODEL?: string;
+  CLASSIFICATION_MODEL?: string;
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
@@ -116,11 +127,15 @@ export interface Platform {
   SESSION: SessionRuntimeDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
+  /** Provider-owned state, present when that integration is hosted here. */
+  SLACK_KV?: KeyValueStore;
+  LINEAR_KV?: KeyValueStore;
+  GITHUB_KV?: KeyValueStore;
   /** Media artifacts: screenshots, uploads, session media. */
   MEDIA_BUCKET: ObjectStorage;
-  /** The slack-bot service, when deployed. */
+  /** In-process Slack integration client, attached by the host. */
   SLACK_BOT?: FetchClient;
-  /** The linear-bot service, when deployed. */
+  /** In-process Linear integration client, attached by the host. */
   LINEAR_BOT?: FetchClient;
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;

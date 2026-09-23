@@ -2,6 +2,20 @@
 # Linear Bot Worker
 # =============================================================================
 
+resource "cloudflare_queue" "linear_completion_delivery" {
+  count = var.enable_linear_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-linear-completion-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "linear_completion_delivery_dlq" {
+  count = var.enable_linear_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-linear-completion-dlq-${local.name_suffix}"
+}
+
 # Build linear-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "linear_bot_build" {
   count = var.enable_linear_bot ? 1 : 0
@@ -37,6 +51,12 @@ module "linear_bot_worker" {
     }
   }
 
+  queue_bindings = {
+    LINEAR_COMPLETION_QUEUE = {
+      queue_name = cloudflare_queue.linear_completion_delivery[0].queue_name
+    }
+  }
+
   enable_service_bindings = var.enable_service_bindings
 
   plain_text_bindings = {
@@ -64,4 +84,23 @@ module "linear_bot_worker" {
   compatibility_flags = ["nodejs_compat"]
 
   depends_on = [null_resource.linear_bot_build[0], module.linear_kv[0]]
+}
+
+resource "cloudflare_queue_consumer" "linear_completion_delivery" {
+  count = var.enable_linear_bot ? 1 : 0
+
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.linear_completion_delivery[0].queue_id
+  type              = "worker"
+  script_name       = module.control_plane_worker.worker_name
+  dead_letter_queue = cloudflare_queue.linear_completion_delivery_dlq[0].queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 4
+    retry_delay      = 30
+  }
+
+  depends_on = [module.control_plane_worker]
 }

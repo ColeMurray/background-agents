@@ -11,6 +11,7 @@ import type { SessionAttachmentRepository } from "./session-attachment-repositor
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
 import type { MessageListCursor } from "./message-cursor";
+import type { AlarmDeadlineStore } from "./alarm/scheduler";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
@@ -91,7 +92,8 @@ export class MessageRepository {
     private readonly sql: SqlStorage,
     private readonly transactionSync: TransactionSync,
     private readonly attachments: SessionAttachmentRepository,
-    private readonly eventRepository: EventRepository
+    private readonly eventRepository: EventRepository,
+    private readonly alarmDeadlines?: Pick<AlarmDeadlineStore, "setPendingEarliest">
   ) {}
 
   getActiveDurationMs(): number {
@@ -428,7 +430,7 @@ export class MessageRepository {
   ): RecordedMessageCompletion | null {
     return this.transactionSync(() => {
       const result = this.sql.exec(
-        `SELECT status, created_at, started_at FROM messages WHERE id = ?`,
+        `SELECT status, created_at, started_at, callback_context FROM messages WHERE id = ?`,
         event.messageId
       );
       const message = (
@@ -436,6 +438,7 @@ export class MessageRepository {
           status?: unknown;
           created_at: number;
           started_at: number | null;
+          callback_context: string | null;
         }>
       )[0];
       const messageStatus = parseMessageStatus(message?.status);
@@ -443,13 +446,19 @@ export class MessageRepository {
 
       const status = event.success ? "completed" : "failed";
       this.sql.exec(
-        `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
+        `UPDATE messages SET status = ?, completed_at = ?, error_message = ?,
+           callback_delivery_attempts = 0,
+           callback_delivery_next_at = CASE WHEN callback_context IS NULL THEN NULL ELSE ? END,
+           callback_delivered_at = NULL
+         WHERE id = ?`,
         status,
         completedAt,
         event.success ? null : (event.error ?? null),
+        completedAt,
         event.messageId
       );
       this.eventRepository.upsertExecutionCompleteEvent(event.messageId, event, completedAt);
+      if (message.callback_context !== null) this.alarmDeadlines?.setPendingEarliest(completedAt);
 
       return {
         messageId: event.messageId,
@@ -458,6 +467,99 @@ export class MessageRepository {
         completedAt,
         status,
       };
+    });
+  }
+
+  /** Reserve one pending terminal callback until `leaseUntil`. */
+  claimTerminalCallback(
+    messageId: string,
+    now: number,
+    leaseUntil: number
+  ): { attempts: number } | null {
+    return this.transactionSync(() => {
+      const rows = this.sql
+        .exec(
+          `UPDATE messages
+           SET callback_delivery_next_at = ?
+           WHERE id = ?
+             AND callback_context IS NOT NULL
+             AND callback_delivered_at IS NULL
+             AND callback_delivery_next_at <= ?
+           RETURNING callback_delivery_attempts AS attempts`,
+          leaseUntil,
+          messageId,
+          now
+        )
+        .toArray() as Array<{ attempts: number }>;
+      if (!rows[0]) return null;
+      this.alarmDeadlines?.setPendingEarliest(leaseUntil);
+      return rows[0];
+    });
+  }
+
+  listDueTerminalCallbacks(
+    now: number,
+    limit: number
+  ): Array<{
+    messageId: string;
+    success: boolean;
+    error?: string;
+  }> {
+    return (
+      this.sql
+        .exec(
+          `SELECT id, status, error_message FROM messages
+           WHERE callback_context IS NOT NULL
+             AND callback_delivered_at IS NULL
+             AND callback_delivery_next_at <= ?
+           ORDER BY callback_delivery_next_at, created_at, id
+           LIMIT ?`,
+          now,
+          limit
+        )
+        .toArray() as Array<{
+        id: string;
+        status: "completed" | "failed";
+        error_message: string | null;
+      }>
+    ).map((row) => ({
+      messageId: row.id,
+      success: row.status === "completed",
+      ...(row.error_message !== null ? { error: row.error_message } : {}),
+    }));
+  }
+
+  nextTerminalCallbackAt(): number | null {
+    const row = this.sql
+      .exec(
+        `SELECT MIN(callback_delivery_next_at) AS next_at FROM messages
+         WHERE callback_delivered_at IS NULL AND callback_delivery_next_at IS NOT NULL`
+      )
+      .one() as { next_at: number | null };
+    return row.next_at;
+  }
+
+  completeTerminalCallback(messageId: string, deliveredAt: number): void {
+    this.sql.exec(
+      `UPDATE messages
+       SET callback_delivered_at = ?, callback_delivery_next_at = NULL
+       WHERE id = ? AND callback_delivered_at IS NULL`,
+      deliveredAt,
+      messageId
+    );
+  }
+
+  retryTerminalCallback(messageId: string, attempts: number, nextAttemptAt: number): void {
+    this.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE messages
+         SET callback_delivery_attempts = ?, callback_delivery_next_at = ?
+         WHERE id = ? AND callback_delivered_at IS NULL`,
+        attempts,
+        nextAttemptAt,
+        messageId
+      );
+      this.alarmDeadlines?.setPendingEarliest(nextAttemptAt);
     });
   }
 

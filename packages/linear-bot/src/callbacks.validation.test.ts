@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
@@ -105,5 +105,33 @@ describe("POST /complete callback validation", () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  it("durably enqueues a valid completion when a queue is configured", async () => {
+    const { kv } = createFakeKV();
+    const send = vi.fn(async () => undefined);
+    const ctx = makeExecutionContext();
+    const response = await callbacksRouter.fetch(
+      new Request("http://localhost/complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(await sign(validCompletion)),
+      }),
+      makeLinearBotEnv(kv, {
+        LINEAR_COMPLETION_QUEUE: { send },
+        SERVICE_AUTH_SECRET: SECRET,
+      }),
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryId: "linear:session-1:message-1",
+        sessionId: "session-1",
+        messageId: "message-1",
+      })
+    );
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 });

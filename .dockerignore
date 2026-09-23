@@ -4,6 +4,9 @@
 !package.json
 !package-lock.json
 !packages/shared/
+!packages/slack-bot/
+!packages/linear-bot/
+!packages/github-bot/
 !packages/control-plane/
 !packages/sandbox-runtime/src/sandbox_runtime/*.json
 !terraform/d1/migrations/

@@ -16,8 +16,9 @@ import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dis
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
   REPOS_CACHE: KVNamespace;
-  SLACK_BOT?: Fetcher;
-  LINEAR_BOT?: Fetcher;
+  SLACK_KV?: KVNamespace;
+  LINEAR_KV?: KVNamespace;
+  GITHUB_KV?: KVNamespace;
   AUTOFIX_DLQ?: Queue<unknown>;
   DB: D1Database;
   MEDIA_BUCKET: R2Bucket;
@@ -34,10 +35,13 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     DB,
     SESSION,
     REPOS_CACHE,
+    SLACK_KV,
+    LINEAR_KV,
+    GITHUB_KV,
     MEDIA_BUCKET,
-    SLACK_BOT,
-    LINEAR_BOT,
     AUTOFIX_QUEUE,
+    SLACK_COMPLETION_QUEUE,
+    LINEAR_COMPLETION_QUEUE,
     AUTOFIX_DLQ,
     IMAGE_BUILD_FINALIZATION_QUEUE,
     ...config
@@ -46,12 +50,18 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
+    ...(SLACK_KV ? { SLACK_KV: createKvCacheStore(SLACK_KV) } : {}),
+    ...(LINEAR_KV ? { LINEAR_KV: createKvCacheStore(LINEAR_KV) } : {}),
+    ...(GITHUB_KV ? { GITHUB_KV: createKvCacheStore(GITHUB_KV) } : {}),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
-    SLACK_BOT,
-    LINEAR_BOT,
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
-    JOBS: createQueueJobs({ IMAGE_BUILD_FINALIZATION_QUEUE, AUTOFIX_QUEUE }),
+    JOBS: createQueueJobs({
+      IMAGE_BUILD_FINALIZATION_QUEUE,
+      AUTOFIX_QUEUE,
+      SLACK_COMPLETION_QUEUE,
+      LINEAR_COMPLETION_QUEUE,
+    }),
   };
   return { ...config, ...platform };
 }

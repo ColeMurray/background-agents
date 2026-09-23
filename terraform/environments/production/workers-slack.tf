@@ -91,15 +91,15 @@ resource "cloudflare_queue_consumer" "slack_completion_delivery" {
   account_id        = var.cloudflare_account_id
   queue_id          = cloudflare_queue.slack_completion_delivery[0].queue_id
   type              = "worker"
-  script_name       = module.slack_bot_worker[0].worker_name
+  script_name       = module.control_plane_worker.worker_name
   dead_letter_queue = cloudflare_queue.slack_completion_delivery_dlq[0].queue_name
   settings = {
     batch_size       = 1
     max_wait_time_ms = 1000
     max_concurrency  = 5
-    max_retries      = 1
-    retry_delay      = 15
+    max_retries      = 2
+    retry_delay      = 30
   }
 
-  depends_on = [module.slack_bot_worker]
+  depends_on = [module.control_plane_worker]
 }

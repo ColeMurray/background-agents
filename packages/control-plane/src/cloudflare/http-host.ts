@@ -1,6 +1,7 @@
 /** The Cloudflare Worker's ordinary HTTP entrypoint over the control-plane app. */
 
 import { catalog } from "../routes/catalog";
+import type { ExecutionContext } from "hono";
 import {
   createControlPlaneApp,
   type ControlPlaneHost,

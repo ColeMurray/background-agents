@@ -179,6 +179,9 @@ async function enqueueCompletion(
   path: string,
   startTime: number
 ): Promise<Response> {
+  if (!c.env.SLACK_COMPLETION_QUEUE) {
+    return c.json({ error: "completion delivery is not configured" }, 503);
+  }
   try {
     await c.env.SLACK_COMPLETION_QUEUE.send(job, { contentType: "json" });
   } catch (error) {
