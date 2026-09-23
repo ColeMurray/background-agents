@@ -112,19 +112,7 @@ class Probe:
                             **self.options,
                         )
                     )
-                deadline = time.monotonic() + 20
-                while True:
-                    if any(process.poll() is not None for process in processes):
-                        raise RuntimeError("Desktop process exited during verification")
-                    try:
-                        with socket.create_connection(("127.0.0.1", port), timeout=1) as connection:
-                            if not connection.recv(12).startswith(b"RFB "):
-                                raise RuntimeError("VNC server did not speak RFB")
-                            break
-                    except OSError:
-                        if time.monotonic() > deadline:
-                            raise RuntimeError("VNC readiness timeout") from None
-                        time.sleep(0.1)
+                wait_for_rfb(port, processes, deadline=time.monotonic() + 20)
                 self.service(
                     [
                         "websockify",
@@ -173,6 +161,35 @@ class Probe:
                 raise RuntimeError(f"Image service readiness timeout: {command[0]}")
             finally:
                 stop_process(process)
+
+
+def wait_for_rfb(port: int, processes: list[subprocess.Popen], *, deadline: float) -> None:
+    """Wait for the VNC server on ``port`` to send its RFB banner.
+
+    Reconnects only while nothing is listening. Once connected, one connection
+    waits out the deadline: the kernel accepts connections before x11vnc does,
+    and abandoning a connection x11vnc has not yet picked up only queues it
+    ahead of the next attempt.
+    """
+    while True:
+        if any(process.poll() is not None for process in processes):
+            raise RuntimeError("Desktop process exited during verification")
+        try:
+            connection = socket.create_connection(("127.0.0.1", port), timeout=1)
+        except OSError:
+            if time.monotonic() > deadline:
+                raise RuntimeError("VNC readiness timeout") from None
+            time.sleep(0.1)
+            continue
+        with connection:
+            connection.settimeout(max(deadline - time.monotonic(), 1))
+            try:
+                banner = connection.recv(12)
+            except TimeoutError:
+                raise RuntimeError("VNC readiness timeout") from None
+        if not banner.startswith(b"RFB "):
+            raise RuntimeError("VNC server did not speak RFB")
+        return
 
 
 def verify_rfb_proxy(port: int) -> None:
