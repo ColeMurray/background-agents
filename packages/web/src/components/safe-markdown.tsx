@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { ComponentPropsWithoutRef } from "react";
+import type { Root, RootContent } from "mdast";
 import { isRepositoryFileHref } from "@/lib/diff-file-links";
 import { useSessionFileLinks } from "@/lib/session-file-links";
 
@@ -62,6 +63,19 @@ const sanitizeSchema = {
 };
 const DEFAULT_IMAGE_MODE = "omit";
 
+function preserveFileLineReferences() {
+  return (tree: Root) => {
+    const visit = (node: Root | RootContent) => {
+      if (node.type === "link" && /^[^:/?#]+:\d+(?::\d+)?(?:[?#]|$)/.test(node.url)) {
+        // A root-level path with :line looks like a URL scheme to rehype-sanitize.
+        node.url = `./${node.url}`;
+      }
+      if ("children" in node) node.children.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
 interface SafeMarkdownProps {
   content: string;
   className?: string;
@@ -91,7 +105,7 @@ function MarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a"
 function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentPropsWithoutRef<"a">) {
   const fileLinks = useSessionFileLinks();
 
-  if (!fileLinks || !isRepositoryFileHref(href)) {
+  if (!fileLinks) {
     return (
       <MarkdownLink href={href} {...props}>
         {children}
@@ -135,7 +149,7 @@ export function SafeMarkdown({
       className={`prose prose-sm dark:prose-invert min-w-0 max-w-none break-words [overflow-wrap:anywhere] ${className}`}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={linkRepositoryFiles ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
         components={{
           a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {

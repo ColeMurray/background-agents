@@ -31,6 +31,14 @@ const manifest: SessionDiffManifest = {
           deletions: 0,
           renderState: "renderable",
         },
+        {
+          id: "file-2",
+          path: "README.md",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          renderState: "renderable",
+        },
       ],
     },
   ],
@@ -55,6 +63,13 @@ describe("SafeMarkdown links", () => {
     fireEvent.click(screen.getByRole("button", { name: "parity.md" }));
 
     expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "docs/plans/parity.md" });
+  });
+
+  it("opens a root-level file referenced with a line number", () => {
+    const onOpen = renderInSession("See [README](README.md:42).");
+
+    fireEvent.click(screen.getByRole("button", { name: "README" }));
+    expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "README.md" });
   });
 
   it("renders a repository file that is not in the diff as inert text", () => {
@@ -82,6 +97,13 @@ describe("SafeMarkdown links", () => {
     renderInSession("[jump](#details)");
 
     expect(screen.getByRole("link", { name: "jump" })).toHaveAttribute("href", "#details");
+  });
+
+  it("keeps sanitized mailto links as plain text inside a session", () => {
+    renderInSession("Contact [support](mailto:support@example.com).");
+
+    expect(screen.queryByRole("link", { name: "support" })).not.toBeInTheDocument();
+    expect(screen.getByText("support")).toHaveProperty("tagName", "SPAN");
   });
 
   it("keeps plain links when a session markdown block does not opt in", () => {
