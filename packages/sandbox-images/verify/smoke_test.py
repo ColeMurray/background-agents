@@ -169,11 +169,16 @@ def wait_for_rfb(port: int, processes: list[subprocess.Popen], *, deadline: floa
     Reconnects only while nothing is listening. Once connected, one connection
     waits out the deadline: the kernel accepts connections before x11vnc does,
     and abandoning a connection x11vnc has not yet picked up only queues it
-    ahead of the next attempt.
+    ahead of the next attempt. The desktop processes are checked throughout the
+    wait and again once the banner arrives.
     """
-    while True:
+
+    def require_processes_running() -> None:
         if any(process.poll() is not None for process in processes):
             raise RuntimeError("Desktop process exited during verification")
+
+    while True:
+        require_processes_running()
         try:
             connection = socket.create_connection(("127.0.0.1", port), timeout=1)
         except OSError:
@@ -182,11 +187,17 @@ def wait_for_rfb(port: int, processes: list[subprocess.Popen], *, deadline: floa
             time.sleep(0.1)
             continue
         with connection:
-            connection.settimeout(max(deadline - time.monotonic(), 1))
-            try:
-                banner = connection.recv(12)
-            except TimeoutError:
-                raise RuntimeError("VNC readiness timeout") from None
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("VNC readiness timeout")
+                connection.settimeout(min(remaining, 0.5))
+                try:
+                    banner = connection.recv(12)
+                    break
+                except TimeoutError:
+                    require_processes_running()
+        require_processes_running()
         if not banner.startswith(b"RFB "):
             raise RuntimeError("VNC server did not speak RFB")
         return
