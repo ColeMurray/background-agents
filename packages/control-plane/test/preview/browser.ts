@@ -111,10 +111,11 @@ export async function closeBrowsers(manifestPath: string): Promise<void> {
   for (const persona of PERSONAS) {
     const filename = `browser-${persona}.json`;
     if (!entries.includes(filename)) continue;
-    const { session } = JSON.parse(await readFile(join(directory, filename), "utf8")) as {
-      session: string;
-    };
+    // One unreadable marker must not leave the remaining personas' contexts open.
     try {
+      const { session } = JSON.parse(await readFile(join(directory, filename), "utf8")) as {
+        session: string;
+      };
       await command(manifestPath, session, ["close"]);
     } catch (error) {
       errors.push(error);

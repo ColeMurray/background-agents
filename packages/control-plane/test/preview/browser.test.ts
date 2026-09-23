@@ -100,3 +100,16 @@ it("imports once, leaves logout intact on reopen, and closes only owned contexts
     expect.arrayContaining(["--session", "oi-preview-test-member", "close"])
   );
 });
+
+it("still closes every other owned context when one marker is unreadable", async () => {
+  await writeFile(join(directory, "browser-member.json"), "{ truncated");
+  await writeFile(
+    join(directory, "browser-viewer.json"),
+    JSON.stringify({ session: "oi-preview-test-viewer", status: "verified" })
+  );
+  await expect(closeBrowsers(manifestPath)).rejects.toThrow("failed to close owned contexts");
+  expect(exec.mock.calls).toHaveLength(1);
+  expect(exec.mock.calls[0][1]).toEqual(
+    expect.arrayContaining(["--session", "oi-preview-test-viewer", "close"])
+  );
+});
