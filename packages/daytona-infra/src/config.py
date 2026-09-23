@@ -15,6 +15,7 @@ class DaytonaBootstrapConfig:
     api_url: str | None
     target: str | None
     base_snapshot: str
+    base_snapshot_memory_gib: int
     repo_root: Path
 
 
@@ -28,6 +29,14 @@ def load_config() -> DaytonaBootstrapConfig:
     if not base_snapshot:
         raise RuntimeError("DAYTONA_BASE_SNAPSHOT is required")
 
+    memory_gib_value = os.environ.get("DAYTONA_BASE_SNAPSHOT_MEMORY_GIB")
+    try:
+        base_snapshot_memory_gib = int(memory_gib_value or "")
+    except ValueError as error:
+        raise RuntimeError("DAYTONA_BASE_SNAPSHOT_MEMORY_GIB must be a positive integer") from error
+    if base_snapshot_memory_gib <= 0:
+        raise RuntimeError("DAYTONA_BASE_SNAPSHOT_MEMORY_GIB must be a positive integer")
+
     repo_root = Path(os.environ.get("OPEN_INSPECT_REPO_ROOT", Path(__file__).resolve().parents[3]))
 
     return DaytonaBootstrapConfig(
@@ -35,5 +44,6 @@ def load_config() -> DaytonaBootstrapConfig:
         api_url=os.environ.get("DAYTONA_API_URL") or None,
         target=os.environ.get("DAYTONA_TARGET") or None,
         base_snapshot=base_snapshot,
+        base_snapshot_memory_gib=base_snapshot_memory_gib,
         repo_root=repo_root,
     )

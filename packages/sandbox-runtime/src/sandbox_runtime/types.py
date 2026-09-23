@@ -67,7 +67,14 @@ class SessionConfig(BaseModel):
     repo_name: str | None = None
     branch: str | None = None
     base_sha: str | None = None
+    # The agent's own conversation id as the control plane last knew it, and
+    # its pre-rename spelling. Carried so the spawn payload round-trips; the
+    # runtime resumes from the session-id file the bridge persists, not from
+    # these fields.
+    agent_session_id: str | None = None
     opencode_session_id: str | None = None
+    # Which agent runs the session; absent means the built-in OpenCode harness.
+    harness: str = "opencode"
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     mcp_servers: list[McpServerConfig] | None = None
@@ -77,3 +84,7 @@ class SessionConfig(BaseModel):
     # Shared working-branch name, computed control-plane-side
     # (generateBranchName) — the runtime never derives branch names itself.
     working_branch_name: str | None = None
+    # The control plane asks the bridge to connect before the repository boots
+    # and to report boot phases; absent (an older control plane) means the
+    # classic order, bridge last.
+    bridge_early_connect: bool = False

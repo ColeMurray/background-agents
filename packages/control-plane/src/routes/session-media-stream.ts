@@ -4,7 +4,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
 import type { NormalizedArtifactResponse } from "../session/artifacts";
-import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
+import type { ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
 import {
@@ -60,7 +60,7 @@ export async function handleMediaGet(
   if (!sessionId || !artifactId) {
     return error("Session ID and artifact ID are required", 400);
   }
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
   if (!/^[A-Za-z0-9-]+$/.test(artifactId)) {
     return error("Invalid artifact ID", 400);
   }

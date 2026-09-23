@@ -35,10 +35,13 @@ import {
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
-import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
+import type { ModelPreference } from "@/lib/model-selection";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
+import { SessionFileLinksProvider } from "@/lib/session-file-links";
 import type {
   SessionDiffFile,
   SessionDiffRepository,
@@ -56,11 +59,13 @@ import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
 import { findLatestTerminalMessageId } from "@/lib/session-read-state";
 import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
+import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
+import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -76,22 +81,25 @@ export default function SessionPage() {
   const {
     connected,
     connecting,
+    reconnecting,
     ready,
     presenceSynced,
     authError,
     connectionError,
     sessionState,
     sandboxError,
+    boot,
     events,
     participants,
     artifacts,
     currentParticipantId,
+    canManageBudget,
     isProcessing,
     promptQueue,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,
+    recoverShutdown,
     sendTyping,
     reconnect,
     loadOlderEvents,
@@ -118,6 +126,8 @@ export default function SessionPage() {
     authoritativeTitle: sessionState?.title,
     awaitAuthoritativeTitle: true,
   });
+  // Fixed at create; per-message model overrides must stay within it.
+  const sessionHarness = sessionState?.harness ?? initialSnapshot.session.harness;
   const {
     selectedModel,
     reasoningEffort,
@@ -125,7 +135,8 @@ export default function SessionPage() {
     handleModelChange,
     enabledModelOptions,
     loadingEnabledModels,
-  } = useModelSelection(sessionState);
+    modelAvailability,
+  } = useModelSelection(sessionState, sessionHarness);
   const {
     prompt,
     sessionAttachments,
@@ -145,7 +156,7 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? DEFAULT_SESSION_STATUS,
-    ready && capabilities.collaborate,
+    ready && capabilities.collaborate && !sessionState?.budgetExhausted,
     shortcuts["send-prompt"]
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
@@ -275,12 +286,16 @@ export default function SessionPage() {
         : ["session-main"],
     storage: changesLayoutStorage,
   });
-  const openDiff = useCallback((repository: SessionDiffRepository, file: SessionDiffFile) => {
-    const selection = { repositoryPosition: repository.position, path: file.path };
+  const openDiffSelection = useCallback((selection: DiffSelection) => {
     diffReturnFocusRef.current = selection;
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
+  const openDiff = useCallback(
+    (repository: SessionDiffRepository, file: SessionDiffFile) =>
+      openDiffSelection({ repositoryPosition: repository.position, path: file.path }),
+    [openDiffSelection]
+  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -312,18 +327,22 @@ export default function SessionPage() {
             minSize="30%"
             style={{ minHeight: 0, overflow: "clip" }}
           >
-            <SessionTimeline
-              events={events}
-              sessionId={sessionId}
-              currentParticipantId={currentParticipantId}
-              participantProfiles={profiles}
-              isProcessing={isProcessing}
-              promptQueue={promptQueue}
-              loadingHistory={loadingHistory}
-              showSkeleton={false}
-              onLoadOlder={loadOlderEvents}
-              onOpenMedia={setSelectedMediaArtifactId}
-            />
+            <SessionFileLinksProvider
+              manifest={diffState?.current ?? null}
+              onOpen={openDiffSelection}
+            >
+              <SessionTimeline
+                events={events}
+                sessionId={sessionId}
+                currentParticipantId={currentParticipantId}
+                participantProfiles={profiles}
+                isProcessing={isProcessing}
+                promptQueue={promptQueue}
+                showSkeleton={false}
+                onLoadOlder={loadOlderEvents}
+                onOpenMedia={setSelectedMediaArtifactId}
+              />
+            </SessionFileLinksProvider>
           </Panel>
           {showTerminal && (
             <>
@@ -351,12 +370,23 @@ export default function SessionPage() {
             onArchive: handleArchive,
             onUnarchive: handleUnarchive,
             capabilities,
+            harness: sessionHarness,
           }}
           prompt={{
             value: prompt,
             isProcessing: ready && isProcessing,
             draftLocked: isSubmitting || sessionAttachments.isUploading,
-            sendBlocked: !ready,
+            sendBlocked:
+              !ready ||
+              Boolean(sessionState?.budgetExhausted) ||
+              modelAvailability.status === "unavailable",
+            blockedReason: sessionState?.budgetExhausted
+              ? canManageBudget
+                ? `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. Raise or remove the limit to continue.`
+                : `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. The session owner must raise or remove the limit to continue.`
+              : modelAvailability.status === "unavailable"
+                ? modelAvailability.message
+                : undefined,
             submitError,
             inputRef,
             onSubmit: handleSubmit,
@@ -389,9 +419,11 @@ export default function SessionPage() {
       <SessionHeader
         sessionState={sessionState}
         sandboxError={sandboxError}
+        bootPhase={boot?.phase ?? null}
         fallbackSessionInfo={fallbackSessionInfo}
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}
+        reconnecting={reconnecting}
         isDetailsOpen={isDetailsOpen}
         isDesktopDetailsOpen={isDesktopDetailsOpen}
         showDesktopDetailsToggle={!resolvedDiff}
@@ -428,6 +460,13 @@ export default function SessionPage() {
         </div>
       )}
 
+      {capabilities.read && (
+        <SandboxShutdownBanner
+          shutdown={sessionState?.sandboxPreservation}
+          onRecover={capabilities.lifecycle && ready ? recoverShutdown : undefined}
+        />
+      )}
+
       {/* Main content */}
       <main className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!isBelowLg ? (
@@ -449,6 +488,7 @@ export default function SessionPage() {
                 diffLoading={diffLoading}
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
+                canManageBudget={canManageBudget}
                 capabilities={capabilities}
               />
             }
@@ -484,6 +524,7 @@ export default function SessionPage() {
               diffLoading={diffLoading}
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
+              canManageBudget={canManageBudget}
               capabilities={capabilities}
             />
           </>
@@ -509,6 +550,7 @@ export default function SessionPage() {
           diffLoading={diffLoading}
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
+          canManageBudget={canManageBudget}
           capabilities={capabilities}
         />
       )}
@@ -596,20 +638,42 @@ function useSessionListActions(sessionId: string) {
 
 /**
  * Model and reasoning-effort selection derived from session state until the
- * user takes ownership of an explicit draft.
+ * user takes ownership of an explicit draft. Only models the session's harness
+ * can run are offered, and `modelAvailability` says when none can be sent.
  */
-function useModelSelection(sessionState: SessionState) {
+function useModelSelection(sessionState: SessionState, harness: HarnessId) {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
 
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
-  const { model: selectedModel, reasoningEffort } = resolveModelPreference(
-    modelPreferenceDraft ?? {
-      model: sessionState?.model ?? DEFAULT_MODEL,
-      reasoningEffort:
-        sessionState?.reasoningEffort ??
-        getDefaultReasoningEffort(sessionState?.model ?? DEFAULT_MODEL),
-    },
-    loadingEnabledModels ? undefined : enabledModels
+  const sessionModel = sessionState?.model ?? DEFAULT_MODEL;
+  const sessionReasoningEffort =
+    sessionState?.reasoningEffort ?? getDefaultReasoningEffort(sessionModel);
+  const {
+    model: selectedModel,
+    reasoningEffort,
+    options,
+    availability: modelAvailability,
+  } = useMemo(
+    () =>
+      resolveHarnessModelSelection({
+        harness,
+        preference: modelPreferenceDraft ?? {
+          model: sessionModel,
+          reasoningEffort: sessionReasoningEffort,
+        },
+        enabledModels,
+        enabledModelOptions,
+        loading: loadingEnabledModels,
+      }),
+    [
+      enabledModelOptions,
+      enabledModels,
+      harness,
+      loadingEnabledModels,
+      modelPreferenceDraft,
+      sessionModel,
+      sessionReasoningEffort,
+    ]
   );
   const handleModelChange = useCallback((model: ValidModel) => {
     setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
@@ -627,7 +691,8 @@ function useModelSelection(sessionState: SessionState) {
     reasoningEffort,
     setReasoningEffort,
     handleModelChange,
-    enabledModelOptions,
+    enabledModelOptions: options,
     loadingEnabledModels,
+    modelAvailability,
   };
 }

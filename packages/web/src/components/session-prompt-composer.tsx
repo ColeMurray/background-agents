@@ -16,6 +16,7 @@ import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 import type { ModelCategory, ReasoningEffort, ValidModel } from "@open-inspect/shared/models";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 
 type SessionPromptComposerProps = {
   session: {
@@ -26,12 +27,15 @@ type SessionPromptComposerProps = {
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
     capabilities: SessionCapabilities;
+    /** Agent harness the session runs on; fixed at create. */
+    harness: HarnessId;
   };
   prompt: {
     value: string;
     isProcessing: boolean;
     draftLocked: boolean;
     sendBlocked: boolean;
+    blockedReason?: string;
     submitError: string | null;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
@@ -200,7 +204,7 @@ export function SessionPromptComposer({
             </div>
           </div>
 
-          {/* Footer row with model controls and agent label */}
+          {/* Footer row with the agent/model control */}
           <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:justify-between sm:gap-0">
             {/* Left side - Model controls */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
@@ -210,6 +214,7 @@ export function SessionPromptComposer({
                 items={model.items}
                 onModelChange={model.onModelChange}
                 onReasoningEffortChange={model.onReasoningEffortChange}
+                harness={session.harness}
                 disabled={prompt.draftLocked || !sessionPromptable}
               />
             </div>
@@ -223,6 +228,11 @@ export function SessionPromptComposer({
               className="border-t border-destructive-border px-4 py-2 text-sm text-destructive"
             >
               {prompt.submitError}
+            </p>
+          )}
+          {prompt.blockedReason && (
+            <p className="border-t border-warning/30 bg-warning/5 px-4 py-2 text-sm text-warning">
+              {prompt.blockedReason}
             </p>
           )}
         </div>

@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
@@ -7,6 +9,34 @@ import {
   SessionAttachmentRepository,
 } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError, type MessageRow } from "./types";
+import { initSchema } from "./schema";
+
+function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
+  return {
+    id: "msg-1",
+    author_id: "p-1",
+    content: "Hello",
+    source: "web",
+    model: null,
+    reasoning_effort: null,
+    attachments: null,
+    callback_context: null,
+    client_request_id: null,
+    request_fingerprint: null,
+    autofix_feedback_key: null,
+    autofix_pr_key: null,
+    origin_context: null,
+    status: "pending",
+    error_message: null,
+    stop_confirmation_deadline: null,
+    reported_cost_usd: 0,
+    created_at: 1000,
+    started_at: null,
+    completed_at: null,
+    ...overrides,
+  };
+}
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -68,6 +98,13 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("'pending', 'processing'");
   });
 
+  it("rejects malformed numeric SQL aggregate rows", () => {
+    mock.setOne({ count: "5" });
+    expect(() => repository.getPendingOrProcessingCount()).toThrow(
+      "Malformed numeric SQL result for count"
+    );
+  });
+
   it("calculates active duration", () => {
     mock.setOne({ duration_ms: 4500 });
     expect(repository.getActiveDurationMs()).toBe(4500);
@@ -77,9 +114,24 @@ describe("MessageRepository", () => {
     const processingQuery = `SELECT id FROM messages WHERE status = 'processing' LIMIT 1`;
     const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
     mock.setData(processingQuery, [{ id: "msg-processing" }]);
-    mock.setData(pendingQuery, [{ id: "msg-pending", created_at: 1 }]);
+    const pending = messageRow({ id: "msg-pending", created_at: 1 });
+    mock.setData(pendingQuery, [pending]);
     expect(repository.getProcessingMessage()).toEqual({ id: "msg-processing" });
-    expect(repository.getNextPendingMessage()).toEqual({ id: "msg-pending", created_at: 1 });
+    expect(repository.getNextPendingMessage()).toEqual(pending);
+  });
+
+  it("throws on malformed persisted message rows", () => {
+    const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
+    mock.setData(pendingQuery, [{ ...messageRow(), source: "unknown" }]);
+
+    expect(() => repository.getNextPendingMessage()).toThrow(SessionStorageIntegrityError);
+  });
+
+  it("reads a message by id", () => {
+    const row = messageRow();
+    mock.setData(`SELECT * FROM messages WHERE id = ? LIMIT 1`, [row]);
+    expect(repository.getMessageById("msg-1")).toEqual(row);
+    expect(mock.calls.at(-1)?.params).toEqual(["msg-1"]);
   });
 
   it("reads processing message timestamps", () => {
@@ -116,11 +168,25 @@ describe("MessageRepository", () => {
     const lookup = `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`;
     const positions = `SELECT id FROM messages WHERE status IN ('pending', 'processing')
        ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`;
-    mock.setData(lookup, [{ id: "msg-2" }]);
+    mock.setData(lookup, [messageRow({ id: "msg-2", client_request_id: "request-1" })]);
     mock.setData(positions, [{ id: "msg-1" }, { id: "msg-2" }]);
-    expect(repository.getMessageByClientRequestId("request-1")).toEqual({ id: "msg-2" });
+    expect(repository.getMessageByClientRequestId("request-1")).toEqual(
+      messageRow({ id: "msg-2", client_request_id: "request-1" })
+    );
     expect(repository.getUnfinishedMessagePosition("msg-2")).toBe(2);
     expect(repository.getUnfinishedMessagePosition("finished")).toBeNull();
+  });
+
+  it("decodes persisted message statuses", () => {
+    const query = `SELECT status FROM messages WHERE id = ? LIMIT 1`;
+    mock.setData(query, [{ status: "pending" }]);
+    expect(repository.getMessageStatus("msg-1")).toBe("pending");
+
+    mock.setData(query, [{ status: "queued" }]);
+    expect(repository.getMessageStatus("msg-1")).toBeNull();
+
+    mock.setData(query, [{}]);
+    expect(repository.getMessageStatus("msg-1")).toBeNull();
   });
 
   it("projects unfinished messages into the prompt queue", () => {
@@ -130,6 +196,13 @@ describe("MessageRepository", () => {
     expect(repository.listPromptQueue()).toEqual([
       { messageId: "msg-1", content: "Continue", status: "pending" },
     ]);
+  });
+
+  it("omits malformed persisted statuses from the prompt queue", () => {
+    vi.spyOn(repository, "listUnfinishedMessages").mockReturnValue([
+      { id: "msg-1", content: "Continue", status: "queued" } as never,
+    ]);
+    expect(repository.listPromptQueue()).toEqual([]);
   });
 
   it("creates a message with all fields", () => {
@@ -210,6 +283,39 @@ describe("MessageRepository", () => {
         sessionClosed: true,
       })
     ).toEqual({ kind: "rejected", reason: "session_closed" });
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  it("rejects new Autofix feedback when the session budget is exhausted", () => {
+    mock.setData(`SELECT budget_exhausted FROM session LIMIT 1`, [{ budget_exhausted: 1 }]);
+
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toEqual({ kind: "rejected", reason: "budget_exhausted" });
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  it("fails closed when cancel sees a malformed persisted status", () => {
+    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
+      { status: "queued", source: "web", callback_context: null },
+    ]);
+
+    expect(repository.cancelPendingMessage("msg-1")).toBe(false);
     expect(mock.calls).toHaveLength(1);
   });
 
@@ -234,7 +340,40 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "attempt_limit" });
-    expect(mock.calls).toHaveLength(3);
+    expect(mock.calls).toHaveLength(4);
+  });
+
+  it("does not admit Autofix feedback when the rolling count is malformed", () => {
+    mock.setOne({ count: 0 });
+    const exec = mock.sql.exec.bind(mock.sql);
+    vi.spyOn(mock.sql, "exec").mockImplementation((query, ...params) => {
+      const result = exec(query, ...params);
+      return query.includes("WHERE autofix_pr_key = ?")
+        ? { ...result, one: () => ({ count: "invalid-count" }) }
+        : result;
+    });
+    const authorId = vi.fn(() => "p-1");
+
+    expect(() =>
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId,
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toThrow("Malformed numeric SQL result for count");
+    expect(authorId).not.toHaveBeenCalled();
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO messages"))).toBe(false);
   });
 
   it("admits Autofix feedback without checking the rolling count when there is no limit", () => {
@@ -282,7 +421,7 @@ describe("MessageRepository", () => {
         sessionClosed: false,
       })
     ).toEqual({ kind: "rejected", reason: "queue_full" });
-    expect(mock.calls).toHaveLength(2);
+    expect(mock.calls).toHaveLength(3);
   });
 
   it("admits Autofix metadata without creating an admission-time event", () => {
@@ -467,10 +606,64 @@ describe("MessageRepository", () => {
   });
 
   it("builds message list pagination filters", () => {
-    repository.listMessages({ limit: 10, status: "pending", cursor: "5000" });
+    repository.listMessages({
+      limit: 10,
+      status: "pending",
+      cursor: { createdAt: 5000, id: "msg-5" },
+    });
     expect(mock.calls[0].query).toContain("status = ?");
+    expect(mock.calls[0].query).toContain("created_at = ? AND id < ?");
+    expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+    expect(mock.calls[0].params).toEqual(["pending", 5000, 5000, "msg-5", 11]);
+  });
+
+  it("retains timestamp-only filtering for legacy message cursors", () => {
+    repository.listMessages({ limit: 10, cursor: { createdAt: 5000 } });
     expect(mock.calls[0].query).toContain("created_at < ?");
-    expect(mock.calls[0].params).toEqual(["pending", 5000, 11]);
+    expect(mock.calls[0].params).toEqual([5000, 11]);
+  });
+
+  it("paginates tied message timestamps without gaps against SQLite", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createNodeSqlStorage(db).sql;
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      for (const id of ["msg-a", "msg-b", "msg-c"]) {
+        sql.exec(
+          `INSERT INTO messages (id, author_id, content, source, status, created_at)
+           VALUES (?, 'author', ?, 'web', 'completed', 5000)`,
+          id,
+          id
+        );
+      }
+      const transaction = <T>(closure: () => T) => closure();
+      const realRepository = new MessageRepository(
+        sql,
+        transaction,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transaction)
+      );
+
+      expect(
+        realRepository
+          .listMessages({ limit: 1, cursor: null, status: null })
+          .map((message) => message.id)
+      ).toEqual(["msg-c", "msg-b"]);
+      expect(
+        realRepository
+          .listMessages({
+            limit: 1,
+            cursor: { createdAt: 5000, id: "msg-c" },
+            status: null,
+          })
+          .map((message) => message.id)
+      ).toEqual(["msg-b", "msg-a"]);
+    } finally {
+      db.close();
+    }
   });
 
   it("selects the latest terminal message", () => {
@@ -491,5 +684,30 @@ describe("MessageRepository", () => {
       source: "slack",
     });
     expect(repository.getProcessingMessageAuthor()).toEqual({ author_id: "p-1" });
+  });
+
+  describe("raiseReportedCost", () => {
+    it("returns the increase over the stored report", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 1 }]);
+
+      expect(repository.raiseReportedCost("msg-1", 2.5)).toBe(1.5);
+
+      const call = mock.calls.find((c) => c.query.includes("SET reported_cost_usd"));
+      expect(call?.params).toEqual([2.5, "msg-1"]);
+    });
+
+    it("returns 0 without writing for a resend, an unknown message, or a non-positive report", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: 2.5 }]);
+      expect(repository.raiseReportedCost("msg-1", 2.5)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", 2)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", 0)).toBe(0);
+      expect(repository.raiseReportedCost("msg-1", Number.NaN)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
+
+    it("returns 0 for an unknown message", () => {
+      expect(repository.raiseReportedCost("missing", 2.5)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
   });
 });

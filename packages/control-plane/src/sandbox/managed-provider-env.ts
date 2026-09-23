@@ -14,6 +14,8 @@ const CONTROL_PLANE_OAUTH_KEYS = new Set([
   "XAI_OAUTH_ACCESS_TOKEN",
   "XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT",
   "XAI_OAUTH_MANAGED",
+  "ANTHROPIC_OAUTH_MANAGED",
+  "CLAUDE_CODE_OAUTH_TOKEN",
 ]);
 
 interface ManagedProviderEnvOptions {
@@ -24,27 +26,60 @@ interface ManagedProviderEnvOptions {
 
 type LegacyManagedProviderEnvOptions = Omit<ManagedProviderEnvOptions, "providerAuthModes">;
 
+interface ProviderEnvConfig {
+  apiKey: string;
+  marker: string;
+  /** Legacy scoped-OAuth refresh token key; absent for providers that never had one. */
+  legacyRefreshToken: string | null;
+  /**
+   * User-secret keys stripped in provider_account mode so a stale user key or
+   * gateway setting cannot shadow the managed credential. Defence in depth:
+   * the platform's own key never passes through this fold.
+   */
+  strip: readonly string[];
+  /**
+   * Whether an api_key session can be validated from the assembled env. The
+   * Anthropic platform key arrives out of band on Modal (a Secret), so its
+   * absence here proves nothing.
+   */
+  apiKeyVisibleInEnv: boolean;
+}
+
 const PROVIDER_ENV = {
   openai: {
     apiKey: "OPENAI_API_KEY",
     marker: "OPENAI_OAUTH_MANAGED",
     legacyRefreshToken: "OPENAI_OAUTH_REFRESH_TOKEN",
+    strip: [],
+    apiKeyVisibleInEnv: true,
   },
   xai: {
     apiKey: "XAI_API_KEY",
     marker: "XAI_OAUTH_MANAGED",
     legacyRefreshToken: "XAI_OAUTH_REFRESH_TOKEN",
+    strip: [],
+    apiKeyVisibleInEnv: true,
   },
-} as const satisfies Record<
-  SubscriptionProviderId,
-  { apiKey: string; marker: string; legacyRefreshToken: string }
->;
+  anthropic: {
+    apiKey: "ANTHROPIC_API_KEY",
+    marker: "ANTHROPIC_OAUTH_MANAGED",
+    legacyRefreshToken: null,
+    strip: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
+    apiKeyVisibleInEnv: false,
+  },
+} as const satisfies Record<SubscriptionProviderId, ProviderEnvConfig>;
 
 const PROVIDER_AUTH_ERROR = {
   openai:
     "No OpenAI authentication is configured for this session. Select a connected ChatGPT account, configure an OpenAI default, or provide OPENAI_API_KEY, then create a new session.",
   xai: "No xAI authentication is configured for this session. Select a connected SuperGrok account, configure an xAI default, or provide XAI_API_KEY, then create a new session.",
+  anthropic:
+    "No Anthropic authentication is configured for this session. Select a connected Claude account, configure an Anthropic default, or provide ANTHROPIC_API_KEY, then create a new session.",
 } as const satisfies Record<SubscriptionProviderId, string>;
+
+function isSubscriptionProvider(provider: string): provider is SubscriptionProviderId {
+  return (SUBSCRIPTION_PROVIDER_IDS as readonly string[]).includes(provider);
+}
 
 export function getProviderAuthenticationError(
   model: string,
@@ -52,10 +87,11 @@ export function getProviderAuthenticationError(
   providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>
 ): { provider: SubscriptionProviderId; message: string } | null {
   const provider = model.split("/", 1)[0];
-  if (provider !== "openai" && provider !== "xai") return null;
+  if (!isSubscriptionProvider(provider)) return null;
 
   const config = PROVIDER_ENV[provider];
   const mode = providerAuthModes[provider];
+  if (mode !== "provider_account" && !config.apiKeyVisibleInEnv) return null;
   const available =
     mode === "provider_account"
       ? Boolean(sandboxEnv[config.marker])
@@ -79,9 +115,15 @@ export function prepareManagedProviderEnv({
     const mode = providerAuthModes[provider];
     const managed =
       mode === "provider_account" ||
-      (mode === "legacy_scoped_oauth" && Boolean(brokerSecrets[config.legacyRefreshToken]));
+      (mode === "legacy_scoped_oauth" &&
+        config.legacyRefreshToken !== null &&
+        Boolean(brokerSecrets[config.legacyRefreshToken]));
     if (managed) {
       delete env[config.apiKey];
+      for (const key of config.strip) delete env[key];
+      for (const key of Object.keys(env)) {
+        if (key.startsWith("CLAUDE_CODE_OAUTH_") && provider === "anthropic") delete env[key];
+      }
       env[config.marker] = "1";
     }
   }
@@ -101,12 +143,13 @@ export function prepareLegacyManagedProviderEnv({
     exposedSecrets,
     brokerSecrets,
     providerAuthModes: Object.fromEntries(
-      SUBSCRIPTION_PROVIDER_IDS.map((provider) => [
-        provider,
-        brokerSecrets[PROVIDER_ENV[provider].legacyRefreshToken]
-          ? "legacy_scoped_oauth"
-          : "api_key",
-      ])
+      SUBSCRIPTION_PROVIDER_IDS.map((provider) => {
+        const legacyKey = PROVIDER_ENV[provider].legacyRefreshToken;
+        return [
+          provider,
+          legacyKey !== null && brokerSecrets[legacyKey] ? "legacy_scoped_oauth" : "api_key",
+        ];
+      })
     ) as Record<SubscriptionProviderId, SessionProviderAuthMode>,
   });
 }

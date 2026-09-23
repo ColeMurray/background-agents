@@ -2,6 +2,10 @@ import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
+import {
+  checkHarnessCompatibility,
+  getValidHarnessOrDefault,
+} from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
@@ -163,44 +167,32 @@ export async function handleCreateSession(
   let scmLogin = body.scmLogin;
   let scmName = body.scmName;
   let scmEmail = body.scmEmail;
-  // SCM credentials never arrive in the body; enrichment below fills them
-  // from the token store via the canonical user.
-  let scmTokenExpiresAt: number | undefined;
+  // SCM credentials never arrive in the body; enrichment below resolves them
+  // through Better Auth using the canonical user.
   let scmUserId: string | undefined;
-  let scmTokenEncrypted: string | null = null;
-  let scmRefreshTokenEncrypted: string | null = null;
 
-  // Browser sessions resolve a linked GitHub identity/token through Better
-  // Auth only when SCM enrichment is needed. Transitional callers retain the
-  // legacy D1 lookup. A user without a linked GitHub account uses the GitHub
-  // App bot fallback; account linking is intentionally deferred.
+  // Resolve linked GitHub identity and credentials through Better Auth only
+  // when SCM enrichment is needed. A user without a linked GitHub account uses
+  // the GitHub App fallback; account linking is intentionally deferred.
   if (githubDeployment) {
-    try {
-      const enrichment = await resolveGitHubEnrichmentForRequest(
-        env,
-        ctx.db,
-        userStore,
-        resolvedUserId,
-        await resolveGitHubCredentialAuthority(ctx, request.headers)
-      );
-      if (enrichment) {
-        scmUserId = enrichment.scmUserId;
-        scmLogin ??= enrichment.scmLogin;
-        scmName ??= enrichment.displayName;
-        scmEmail ??= enrichment.email;
-        scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
-        scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
-        scmTokenExpiresAt = enrichment.tokenExpiresAt;
-      }
-    } catch (e) {
-      logger.warn("Failed to enrich session with GitHub identity", {
-        error: e instanceof Error ? e : String(e),
-      });
+    const enrichment = await resolveGitHubEnrichmentForRequest(
+      userStore,
+      resolvedUserId,
+      await resolveGitHubCredentialAuthority(ctx, request.headers)
+    );
+    if (enrichment) {
+      scmUserId = enrichment.scmUserId;
+      scmLogin ??= enrichment.scmLogin;
+      scmName ??= enrichment.displayName;
+      scmEmail ??= enrichment.email;
     }
   }
 
-  // Validate model and reasoning effort once for both DO init and D1 index
+  // Validate harness, model and reasoning effort once for both DO init and D1 index
+  const harness = getValidHarnessOrDefault(body.harness);
   const model = getValidModelOrDefault(body.model);
+  const harnessModelIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessModelIncompatibility) return error(harnessModelIncompatibility.message, 400);
   const reasoningEffort =
     body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
       ? body.reasoningEffort
@@ -223,11 +215,18 @@ export async function handleCreateSession(
     providerAuth = await resolveSessionProviderAuth(ctx.db, {
       explicit: body.providerSelections,
       unattended: spawnSource !== undefined && spawnSource !== "user",
+      harness,
     });
   } catch (e) {
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);
     throw e;
   }
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   let managedSkillsManifest;
   try {
@@ -255,6 +254,7 @@ export async function handleCreateSession(
     repositories,
     environmentId,
     title: body.title,
+    harness,
     model,
     reasoningEffort,
     participantUserId,
@@ -263,9 +263,6 @@ export async function handleCreateSession(
     scmName,
     scmEmail,
     scmUserId,
-    scmTokenEncrypted,
-    scmRefreshTokenEncrypted,
-    scmTokenExpiresAt,
     codeServerEnabled,
     vncEnabled,
     sandboxSettings,

@@ -69,9 +69,10 @@ Slack sessions can target an environment three ways: a routing rule (Settings �
 Slack) launches it from a keyword; a channel association (`channelAssociations` on the environments
 API, like repository metadata) routes messages in that channel to it automatically; and the LLM
 classifier considers environments alongside repositories, using their names and descriptions as
-signals — its clarification picker lists both kinds when it has to ask. Linear sessions can target
-an environment through the team and project mappings (`{"environmentId": "env_…"}` entries alongside
-repository entries).
+signals. The classifier can also select no repository when the task does not require a codebase. Its
+clarification picker always includes **No repository** alongside accessible repositories and
+environments. Linear sessions can target an environment through the team and project mappings
+(`{"environmentId": "env_…"}` entries alongside repository entries).
 
 ### Session Lifecycle
 
@@ -202,7 +203,7 @@ development environment.
 - Node.js 22, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode (the coding agent)
+- OpenCode and the Claude Agent SDK (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -247,43 +248,101 @@ cloud.
 When you create a session for a repo without an existing snapshot:
 
 ```
-┌─────────┐    ┌──────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌───────┐
-│ Sandbox │───▶│ Git Sync │───▶│ Setup Script│───▶│ Start Script│───▶│ Agent Start │───▶│ Ready │
-│ Created │    │ (clone)  │    │ (optional)  │    │ (optional)  │    │ (OpenCode)  │    │       │
-└─────────┘    └──────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └───────┘
-                                     │                    │
-                                     ▼                    ▼
-                            .openinspect/setup.sh   .openinspect/start.sh
+┌─────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────────┐
+│ Sandbox │──▶│  Bridge  │──▶│ Git Sync │──▶│ Setup Script │──▶│ Start Script │──┐
+│ Created │   │  Starts  │   │ (clone)  │   │  (optional)  │   │  (optional)  │  │
+└─────────┘   └──────────┘   └──────────┘   └──────────────┘   └──────────────┘  │
+               "starting"      "sync"           "setup"            "start"        │
+                                          .openinspect/setup.sh  .openinspect/start.sh
+  ┌───────────────────────────────────────────────────────────────────────────────┘
+  │   ┌────────────────┐   ┌─────────────┐   ┌───────┐
+  └──▶│ Managed Skills │──▶│ Agent Start │──▶│ Ready │
+      └────────────────┘   └─────────────┘   └───────┘
+            "skills"          "harness"
 ```
 
 1. **Sandbox created**: The selected backend creates a fresh sandbox from its base runtime
-2. **Git sync**: Clones your repository using brokered SCM credentials from the git credential
-   helper
-3. **Setup script**: Runs `.openinspect/setup.sh` for provisioning (if present)
-4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-5. **Agent start**: OpenCode server starts and connects back to the control plane
-6. **Ready**: Sandbox accepts prompts
+2. **Bridge starts**: The runtime starts its bridge process ahead of the repository boot, and the
+   bridge opens its WebSocket to the control plane and reports the `starting` phase. The supervisor
+   does not wait for that handshake, so the first boot steps can begin a moment before the socket is
+   up; in practice it connects a second or two into the boot. Once connected the sandbox is
+   `connecting`: it sends a heartbeat every 30 seconds and reports every later phase as it starts
+   and completes, so the control plane can tell a long boot from a dead one. A prompt sent during
+   boot waits here.
+3. **Git sync** (`sync`): Clones your repository using brokered SCM credentials from the git
+   credential helper
+4. **Setup script** (`setup`): Runs `.openinspect/setup.sh` for provisioning (if present). A
+   non-zero exit is reported as a warning and the boot continues
+5. **Start script** (`start`): Runs `.openinspect/start.sh` for runtime startup (if present)
+6. **Managed skills** (`skills`): Installs the session's managed skills into the workspace
+7. **Agent start** (`harness`): The agent harness starts (the OpenCode server, or the Claude Agent
+   staging). The bridge attaches to it and sends `ready`
+8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
+   were waiting dispatch now
 
-For multi-repository sessions, steps 2–4 run per repository in position order: every repository is
-cloned into its own `/workspace` directory and each repository's setup and start scripts run in
-sequence.
+For multi-repository sessions the three steps have different shapes. Git sync is a single phase
+covering the whole set — the repositories are cloned concurrently into `/workspace/<repo-name>` — so
+it names no individual repository. Setup then runs for every repository in position order, and start
+runs as a second pass in the same order. Each `setup` and `start` phase names the repository it is
+running for.
+
+#### Watching a boot
+
+The session header names the phase while it runs: "Cloning repository", "Running setup.sh",
+"Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the
+repository, as in "Running setup.sh for acme/api". Between phases, its status popover can say what
+just finished, but it does not display a list of completed phases or their durations. When a script
+fails, the header's status popover says which phase failed and names its repository when available.
+Failure reports retain phase, repository, and error or warning metadata, but hook stdout and stderr
+are discarded rather than collected or shown. A fatal `start.sh` failure in the session's first
+repository ends the boot. A `setup.sh` failure, and a `start.sh` failure in a later repository, are
+tolerated instead: the boot continues and the phase completes carrying a warning.
+
+#### How long a boot may take
+
+There is no fixed limit on `setup.sh` or `start.sh`. Two bounds apply instead:
+
+- **Connect watchdog (4 minutes)**: measured from sandbox creation until the bridge first connects.
+  It covers the provider launching the container, not your scripts.
+- **Boot budget (30 minutes by default)**: measured from sandbox creation until `ready`. Set
+  `SANDBOX_BOOT_TIMEOUT_MS` to change it (see [Getting Started](./GETTING_STARTED.md)). When the
+  budget runs out the sandbox is failed and its credentials are revoked, the prompt that was waiting
+  fails with the phase that was running, and the next prompt starts a new sandbox.
+
+A bridge that stops sending heartbeats for 90 seconds during boot is treated as dead the same way.
+No snapshot is taken in any of these cases, so a half-provisioned workspace never becomes the
+restore point. The sandbox itself is stopped only on providers that can stop one explicitly; on the
+others the row is marked stale and its socket detached, and the sandbox ages out on the provider's
+own timeout.
 
 ### Restore (From Snapshot)
 
 When restoring from a previous snapshot:
 
 ```
-┌─────────────┐    ┌────────────┐    ┌─────────────┐    ┌───────┐
-│  Restore    │───▶│ Quick Sync │───▶│ Start Script│───▶│ Ready │
-│  Snapshot   │    │ (git pull) │    │ (optional)  │    │       │
-└─────────────┘    └────────────┘    └─────────────┘    └───────┘
+┌─────────────┐   ┌──────────┐   ┌────────────┐   ┌──────────────┐   ┌─────────────┐   ┌───────┐
+│  Restore    │──▶│  Bridge  │──▶│ Quick Sync │──▶│ Start Script │──▶│ Agent Start │──▶│ Ready │
+│  Snapshot   │   │  Starts  │   │(git fetch) │   │  (optional)  │   │             │   │       │
+└─────────────┘   └──────────┘   └────────────┘   └──────────────┘   └─────────────┘   └───────┘
 ```
 
 1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
    snapshot or checkpoint
-2. **Quick sync**: Pulls latest changes (usually just a few commits)
-3. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
-4. **Ready**: Sandbox is ready almost instantly
+2. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
+3. **Quick sync**: Fetches the session's branch from origin. The restored checkout is left as it is,
+   so the snapshot's commit and any uncommitted work survive the restore
+4. **Start script**: Runs `.openinspect/start.sh` for runtime startup (if present)
+5. **Agent start**: Managed skills are installed and the agent harness starts
+6. **Ready**: Sandbox is ready almost instantly
+
+A restore reports the same phases as a fresh start minus `setup`, so the header shows the same
+labels.
+
+A snapshot taken by an older runtime still restores: the control plane accepts any runtime from
+generation 62 up, and connecting before the boot arrived in generation 68. A session restored from a
+generation 62–67 snapshot therefore boots the old way — its bridge connects only once the repository
+boot has finished — so it reports no phases while it boots and the whole boot still has to fit
+inside the four-minute connect watchdog.
 
 Snapshots include installed dependencies, built artifacts, and workspace state. This is why
 follow-up prompts in an existing session are much faster than the first prompt.
@@ -293,19 +352,57 @@ follow-up prompts in an existing session are much faster than the first prompt.
 When starting from a pre-built image (built for the session's repository or, for sessions launched
 from a prebuild-enabled environment, the environment's whole repository set):
 
-1. **Incremental git sync**: Fast fetch + hard reset to latest branch head (per repository for
+1. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
+2. **Incremental git sync**: Fast fetch + hard reset to latest branch head (per repository for
    multi-repository sets)
-2. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built
-3. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
-4. **Ready**: Agent starts once runtime hook succeeds
+3. **Setup skipped**: `.openinspect/setup.sh` already ran when the image was built, so no `setup`
+   phase is reported
+4. **Start script runs**: `.openinspect/start.sh` executes for per-session runtime startup
+5. **Managed skills** (`skills`): The session's managed skills are installed
+6. **Agent start** (`harness`): The agent harness starts and the bridge attaches to it
+7. **Ready**: The runtime sends `ready` once the harness is up
 
 If `start.sh` exists and fails, startup fails fast instead of continuing with a broken runtime.
+
+#### Preinstalling local MCP dependencies
+
+OpenInspect checks the global npm installation before preparing local `npx` MCP servers. An exact
+package version already installed with intact executable links is reused, including after a snapshot
+restore. Only missing or mismatched packages are installed. Failed or interrupted installs are
+marked for retry rather than treated as cache hits.
+
+To remove the installation from first-session startup, pin the same package version in the MCP
+command and the repository's `.openinspect/setup.sh` (or the setup hook used by its environment):
+
+```bash
+# .openinspect/setup.sh — replace this example package/version with your MCP dependency
+npm install --global @example/mcp-server@1.2.3
+```
+
+Configure the matching MCP command as `["npx", "-y", "@example/mcp-server@1.2.3"]` and rebuild the
+prebuilt image. This uses the existing setup/prebuild lifecycle; MCP settings are not automatically
+baked into images. Changing a pinned version causes an install until the image is rebuilt with it.
+
+Unversioned packages and tags such as `latest` are refreshed once per sandbox boot. Successful
+installs are reused across OpenCode process restarts within that boot, but not across snapshot
+restores. Remote MCP servers are unaffected, and server commands, arguments, and credentials are
+passed through unchanged. Unsupported `npx` option forms are left to `npx` without eager
+installation.
+
+The `mcp.package_cache` event reports hit/miss counts and lookup time; `mcp.packages_installed`
+reports preparation time on misses. This optimization removes redundant **global installation**, not
+all MCP startup work: `npx` may still resolve registry metadata or populate its own execution cache,
+particularly with explicit `--package` commands.
 
 ### When Snapshots Are Taken
 
 - **After successful prompt completion**: Preserves the workspace state
 - **Before sandbox timeout**: Saves state before the sandbox shuts down due to inactivity
 - **On explicit save**: Can be triggered by the control plane
+- **Not on a failed boot**: None of the automatic boot-failure paths — connect watchdog, boot
+  budget, stale heartbeat, fatal runtime error — takes a snapshot, so a half-provisioned workspace
+  does not become the restore point that way. The runtime also refuses a `snapshot` command while it
+  is still booting
 
 ### Sandbox Warming
 
@@ -428,8 +525,20 @@ will not see `send-child-prompt` until it starts in a fresh sandbox built from t
 
 ## The Agent
 
-Open-Inspect uses [OpenCode](https://opencode.ai) as its coding agent. OpenCode is an open-source
-agent designed to run as a server, making it ideal for background execution.
+The sandbox runtime speaks to its coding agent through one seam, the **agent harness**. A session
+runs on exactly one harness, chosen at create:
+
+- **OpenCode** (built-in): [OpenCode](https://opencode.ai) runs as a server inside the sandbox; the
+  supervisor owns the `opencode serve` process and the bridge talks to it over HTTP/SSE.
+- **Claude Agent**: the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk) runs inside
+  the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
+  carries exactly one Anthropic credential. This is the harness that can use a connected Claude
+  subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+
+Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
+above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
+of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
+the running turn ends on both harnesses.
 
 ### What the Agent Can Do
 
@@ -476,14 +585,14 @@ Sessions stream events to all connected clients via WebSocket.
 
 ### Event Types
 
-| Event              | Description                                   |
-| ------------------ | --------------------------------------------- |
-| `sandbox_spawning` | Sandbox is being created                      |
-| `sandbox_ready`    | Sandbox is ready to accept prompts            |
-| `sandbox_event`    | Tool call, token stream, or other agent event |
-| `artifact_created` | PR created, screenshot captured               |
-| `presence_update`  | User joined or left the session               |
-| `session_status`   | Session state changed                         |
+| Event              | Description                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `sandbox_spawning` | Sandbox is being created                                                                                                        |
+| `sandbox_status`   | Sandbox moved between `pending`, `spawning`, `connecting`, `warming`, `ready`, `snapshotting`, `stale`, `stopped`, and `failed` |
+| `sandbox_event`    | Tool call, token stream, boot phase (`boot_progress`), or other agent event                                                     |
+| `artifact_created` | PR created, screenshot captured                                                                                                 |
+| `presence_update`  | User joined or left the session                                                                                                 |
+| `session_status`   | Session state changed                                                                                                           |
 
 ### Multiplayer
 
@@ -511,7 +620,9 @@ Without optimization, starting a session would require:
 3. Installing dependencies (~30s-5min)
 4. Starting the agent (~5s)
 
-That's potentially minutes before the agent can start working.
+That's potentially minutes before the agent can start working. Because the runtime connects before
+it clones, you watch those steps happen phase by phase instead of waiting on a silent "Connecting"
+indicator.
 
 ### How Snapshots Solve This
 
@@ -591,7 +702,7 @@ You can configure environment variables (API keys, credentials) at global, per-r
 per-environment scope. A session receives global secrets plus its **session target's** secrets:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
-  `ZHIPU_API_KEY`)
+  `ZHIPU_API_KEY`, `OPENCODE_API_KEY`)
 - **Repository secrets** apply to sessions launched from that repo (including all bot-created
   sessions) and override global secrets with the same key; ad-hoc multi-repository sessions receive
   each selected repository's secrets, with the primary winning collisions
@@ -633,13 +744,16 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 [Using OpenAI Models](./OPENAI_MODELS.md) and
 [Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
 
-> **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
-> added as global secrets. Modal injects these automatically via its own secrets mechanism.
+> **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
+> deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide key
+> into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
+> precedence over it, and the other providers read only the secret store.
 >
-> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
-> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
-> require an xAI provider account or `XAI_API_KEY` mode and must be enabled under **Settings >
-> Models**.
+> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
+> require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go
+> also needs an active Go subscription on that key), as a global secret with any sandbox provider.
+> SuperGrok models require an xAI provider account or `XAI_API_KEY` mode and must be enabled under
+> **Settings > Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

@@ -7,7 +7,7 @@ import type { RequestContext } from "../http/request-context";
 import { HttpError } from "../http/responses";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
-import type { PermissionId, ScopedPermissionStem } from "@open-inspect/shared/rbac";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import {
   createSourceControlProviderFromEnv,
@@ -39,7 +39,6 @@ export type ServiceActorClaimsResult =
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
-  | { kind: "scoped-permission"; stem: ScopedPermissionStem }
   | {
       kind: "automation";
       operation: "manage" | "trigger";
@@ -126,6 +125,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "repositories.secrets.manage",
   "repositories.settings.manage",
   "scm_settings.manage",
+  "sessions.bulk_archive",
   "sessions.collaborate",
   "sessions.create",
   "sessions.delete",
@@ -162,19 +162,6 @@ export function requirePermission(
       options?.service === "deny"
         ? { kind: "deny" }
         : { kind: "actor", actorlessGrants: options?.actorlessGrants },
-  };
-}
-
-/** Require an active user with at least one permission under a scoped stem. */
-export function requireScopedPermission(
-  stem: ScopedPermissionStem,
-  options?: { service?: "actor" }
-): RouteAuthorization {
-  return {
-    kind: "active-user",
-    allOf: [{ kind: "scoped-permission", stem }],
-    auditAllowed: true,
-    service: options?.service === "actor" ? { kind: "actor" } : { kind: "deny" },
   };
 }
 

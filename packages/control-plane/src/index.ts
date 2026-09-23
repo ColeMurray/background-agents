@@ -4,34 +4,32 @@
  * Cloudflare Workers entry point with Durable Objects for session management.
  */
 
-import { handleControlPlaneHttp } from "./routing/hono-app";
+import { handleControlPlaneHttp } from "./cloudflare/http-host";
 import { createLogger } from "./logger";
-import type { Env } from "./types";
-import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
-import { handleAutofixQueue } from "./autofix/handler";
-import { checkAutofixQueueHealth } from "./autofix/queue-health";
-import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
-import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
-import {
-  ABANDONED_DRAFT_SWEEP_CRON,
-  AbandonedDraftSweep,
-  SessionDraftExpiryClient,
-} from "./session/abandoned-draft-sweep";
+import { consumeJobBatch } from "./cloudflare/job-queue";
 import { createSessionRuntimeClient } from "./session/runtime-client";
-import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
+import {
+  createRequestMetrics,
+  instrumentSqlDatabase,
+  type RequestMetrics,
+} from "./db/instrumented-sql-database";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
-import { Scheduler } from "./scheduler/scheduler";
-import { isAutofixQueue } from "./queue-routing";
+import { createCloudflareEnv, type WorkerBindings } from "./cloudflare/platform";
+import { findScheduledJob } from "./scheduled-jobs";
 
 const logger = createLogger("worker");
 
 // Re-export Durable Objects for Cloudflare to discover
-export { SessionDO } from "./session/durable-object";
+export { SessionDO } from "./cloudflare/durable-object";
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(
+    request: Request,
+    bindings: WorkerBindings,
+    ctx: ExecutionContext
+  ): Promise<Response> {
     const url = new URL(request.url);
 
     // WebSocket upgrade for session
@@ -39,57 +37,57 @@ export default {
     if (upgradeHeader?.toLowerCase() === "websocket") {
       const metrics = createRequestMetrics();
       // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
-      const db = instrumentD1(env.DB, metrics);
-      return handleWebSocket(request, env, url, db, metrics);
+      const db = instrumentSqlDatabase(bindings.DB, metrics);
+      return handleWebSocket(request, bindings, url, db, metrics);
     }
 
     // Regular API request — Hono owns HTTP route selection while the neutral
     // admission/dispatch pipeline retains authentication and authorization.
-    return handleControlPlaneHttp(request, env, ctx);
+    return handleControlPlaneHttp(request, createCloudflareEnv(bindings), ctx);
   },
 
   /**
-   * Cron trigger handler — processes overdue automations.
+   * Cron trigger handler: runs the job bound to the trigger's expression.
    */
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
-      const requestId = crypto.randomUUID();
-      // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
-      await runImageBuildScheduler(env, env.DB, {
-        request_id: requestId,
-        trace_id: requestId,
-      });
-      return;
-    }
-    if (event.cron === ABANDONED_DRAFT_SWEEP_CRON) {
-      const sweepId = crypto.randomUUID();
-      const sweepContext = { trace_id: sweepId, request_id: sweepId };
-      await new AbandonedDraftSweep(
-        // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
-        new SessionIndexStore(env.DB),
-        new SessionDraftExpiryClient(createSessionRuntimeClient(env, sweepContext)),
-        logger
-      ).run(Date.now());
-      return;
-    }
-    if (event.cron !== "* * * * *") {
+  async scheduled(
+    event: ScheduledEvent,
+    bindings: WorkerBindings,
+    ctx: ExecutionContext
+  ): Promise<void> {
+    const job = findScheduledJob(event.cron);
+    if (!job) {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
-    ctx.waitUntil(checkAutofixQueueHealth(env, logger));
-    // The tick runs both the recovery sweep (orphaned/timed-out runs) and
-    // processes overdue automations.
-    // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: construct the scheduler's database dependency
-    await new Scheduler(env.DB, env, createCloudflareBackgroundTasks(ctx)).tick();
+    const env = createCloudflareEnv(bindings);
+    const runId = crypto.randomUUID();
+    const correlation = { trace_id: runId, request_id: runId };
+    await job.run(
+      {
+        env,
+        // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
+        db: env.DB,
+        sessions: createSessionRuntimeClient(env, correlation),
+        backgroundTasks: createCloudflareBackgroundTasks(ctx),
+        log: logger,
+        correlation,
+      },
+      Date.now()
+    );
   },
 
-  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    if (!isAutofixQueue(batch.queue)) {
-      await consumeImageBuildFinalizations(batch, env);
-      return;
-    }
-    // eslint-disable-next-line no-restricted-syntax -- worker composition root: inject D1 once
-    await handleAutofixQueue(batch as MessageBatch<GitHubAutofixEnvelope>, env, env.DB);
+  /**
+   * Queue consumer: delivers each message to the handler of the job kind
+   * the queue carries (see `jobs.ts`).
+   */
+  async queue(batch: MessageBatch<unknown>, bindings: WorkerBindings): Promise<void> {
+    const env = createCloudflareEnv(bindings);
+    await consumeJobBatch(batch, {
+      env,
+      // eslint-disable-next-line no-restricted-syntax -- queue composition root: the one consumer env.DB read
+      db: env.DB,
+      log: logger,
+    });
   },
 };
 
@@ -98,7 +96,7 @@ export default {
  */
 async function handleWebSocket(
   request: Request,
-  env: Env,
+  env: WorkerBindings,
   url: URL,
   db: SqlDatabase,
   metrics: RequestMetrics

@@ -8,9 +8,11 @@ describe("spawnContextSchema", () => {
       repoName: "background-agents",
       repoId: null,
       model: "anthropic/claude-sonnet-4-6",
+      harness: "opencode",
       reasoningEffort: null,
       baseBranch: null,
       sandboxTimeoutMs: 14_400_000,
+      finalSnapshotBufferMs: 600_000,
       promptAuthor: {
         userId: "user-1",
         scmUserId: null,
@@ -26,6 +28,7 @@ describe("spawnContextSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.sandboxTimeoutMs).toBe(14_400_000);
+      expect(result.data.finalSnapshotBufferMs).toBe(600_000);
     }
   });
 
@@ -35,6 +38,7 @@ describe("spawnContextSchema", () => {
       repoName: null,
       repoId: null,
       model: "anthropic/claude-sonnet-4-6",
+      harness: "opencode",
       reasoningEffort: null,
       baseBranch: null,
       promptAuthor: {
@@ -60,6 +64,7 @@ describe("spawnContextSchema", () => {
         repoName: null,
         repoId: null,
         model: "anthropic/claude-sonnet-4-6",
+        harness: "opencode",
         reasoningEffort: null,
         baseBranch: null,
         sandboxTimeoutMs,

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
+import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -308,6 +309,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                   </dd>
                 </div>
               )}
+              <div>
+                <dt className="text-muted-foreground">Agent</dt>
+                <dd className="text-foreground">{getHarnessLabel(automation.harness)}</dd>
+              </div>
               <div>
                 <dt className="text-muted-foreground">Model</dt>
                 <dd className="text-foreground">{formatModelNameLower(automation.model)}</dd>

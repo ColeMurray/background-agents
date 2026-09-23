@@ -2,7 +2,7 @@
  * Slack integration settings read by the slack-bot and the automation form.
  */
 
-import { listChannels } from "@open-inspect/shared/slack";
+import { listChannels, type ControlPlaneSlackChannelsResponse } from "@open-inspect/shared/slack";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
@@ -60,14 +60,17 @@ async function handleGetSlackChannels(
   _ctx: RequestContext
 ): Promise<Response> {
   if (!env.SLACK_BOT_TOKEN) {
-    return json({ channels: [], error: "not_configured" });
+    return json({
+      channels: [],
+      error: "not_configured",
+    } satisfies ControlPlaneSlackChannelsResponse);
   }
   const result = await listChannels(env.SLACK_BOT_TOKEN, { signal: request.signal });
   if (!result.ok) {
     logger.warn("slack.channels.list_failed", { slack_error: result.error });
-    return json({ channels: [], error: result.error });
+    return json({ channels: [], error: result.error } satisfies ControlPlaneSlackChannelsResponse);
   }
-  return json({ channels: result.channels });
+  return json({ channels: result.channels } satisfies ControlPlaneSlackChannelsResponse);
 }
 
 export const automationSlackSettingsRoutes = new Hono<ControlPlaneHonoEnv>();

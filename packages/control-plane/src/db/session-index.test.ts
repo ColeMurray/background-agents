@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
@@ -8,6 +9,7 @@ type SessionRow = {
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
+  harness: HarnessId;
   model: string;
   reasoning_effort: string | null;
   base_branch: string | null;
@@ -47,12 +49,11 @@ const QUERY_PATTERNS = {
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
   SELECT_EXISTS: /^SELECT 1 AS ok FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
-  SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
+  SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC, id DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
-  UPDATE_TITLE: /^UPDATE sessions SET title = \?/,
-  UPDATE_TITLE_IF_NEWER:
-    /^UPDATE sessions SET title = \?, updated_at = \? WHERE id = \? AND updated_at <= \?$/,
+  UPDATE_TITLE:
+    /^UPDATE sessions SET title = \?, updated_at = MAX\(updated_at, \?\) WHERE id = \?$/,
   UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
@@ -74,6 +75,12 @@ class FakeD1Database {
   prepare(query: string) {
     this.preparedQueries.push(normalizeQuery(query));
     return new FakePreparedStatement(this, query);
+  }
+
+  updateRawSessionRow(id: string, updates: Record<string, unknown>) {
+    const row = this.rows.get(id);
+    if (!row) throw new Error(`Missing session row: ${id}`);
+    Object.assign(row as Record<string, unknown>, updates);
   }
 
   async batch(statements: FakePreparedStatement[]) {
@@ -195,6 +202,7 @@ class FakeD1Database {
         title,
         repoOwner,
         repoName,
+        harness,
         model,
         reasoningEffort,
         baseBranch,
@@ -217,6 +225,7 @@ class FakeD1Database {
         string | null,
         string | null,
         string | null,
+        HarnessId,
         string,
         string | null,
         string | null,
@@ -235,7 +244,7 @@ class FakeD1Database {
         number,
         number,
       ];
-      // INSERT OR IGNORE — skip if exists
+      // ON CONFLICT DO NOTHING — skip if exists
       const inserted = !this.rows.has(id);
       if (inserted) {
         const rootSessionId = rootParentId
@@ -246,6 +255,7 @@ class FakeD1Database {
           title,
           repo_owner: repoOwner,
           repo_name: repoName,
+          harness,
           model,
           reasoning_effort: reasoningEffort,
           base_branch: baseBranch,
@@ -281,23 +291,12 @@ class FakeD1Database {
       return { meta: { changes: 0 } };
     }
 
-    if (QUERY_PATTERNS.UPDATE_TITLE_IF_NEWER.test(normalized)) {
-      const [title, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
-      const row = this.rows.get(id);
-      if (row && row.updated_at <= maxUpdatedAt) {
-        row.title = title;
-        row.updated_at = updatedAt;
-        return { meta: { changes: 1 } };
-      }
-      return { meta: { changes: 0 } };
-    }
-
     if (QUERY_PATTERNS.UPDATE_TITLE.test(normalized)) {
       const [title, updatedAt, id] = args as [string, number, string];
       const row = this.rows.get(id);
       if (row) {
         row.title = title;
-        row.updated_at = updatedAt;
+        row.updated_at = Math.max(row.updated_at, updatedAt);
         return { meta: { changes: 1 } };
       }
       return { meta: { changes: 0 } };
@@ -504,6 +503,7 @@ describe("SessionIndexStore", () => {
       expect(result).toEqual({
         ...session,
         // Defaults applied for missing optional fields
+        harness: "opencode",
         parentSessionId: null,
         spawnSource: "user",
         spawnDepth: 0,
@@ -631,6 +631,23 @@ describe("SessionIndexStore", () => {
       const result = await store.get("test-id");
       expect(result).not.toBeNull();
       expect(result?.id).toBe("test-id");
+    });
+
+    it.each([
+      ["status", { status: "unknown" }],
+      ["spawn source", { spawn_source: "cron" }],
+    ])("rejects a persisted session row with invalid %s", async (_field, updates) => {
+      await store.create(makeSession());
+      db.updateRawSessionRow("test-id", updates);
+
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
+    });
+
+    it("rejects a partial persisted session row", async () => {
+      await store.create(makeSession());
+      db.updateRawSessionRow("test-id", { model: undefined });
+
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
     });
 
     it("returns null when not found", async () => {
@@ -825,26 +842,10 @@ describe("SessionIndexStore", () => {
   });
 
   describe("updateTitle", () => {
-    it("updates the title of an existing session", async () => {
-      await store.create(makeSession());
-      const updated = await store.updateTitle("test-id", "New Title");
-      expect(updated).toBe(true);
-
-      const session = await store.get("test-id");
-      expect(session?.title).toBe("New Title");
-    });
-
-    it("returns false when session not found", async () => {
-      const updated = await store.updateTitle("nonexistent", "New Title");
-      expect(updated).toBe(false);
-    });
-  });
-
-  describe("updateTitleIfNewer", () => {
     it("updates the title when the write is current", async () => {
       await store.create(makeSession({ updatedAt: 1000 }));
 
-      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 2000);
+      const updated = await store.updateTitle("test-id", "Generated Title", 2000);
       expect(updated).toBe(true);
 
       const session = await store.get("test-id");
@@ -852,14 +853,14 @@ describe("SessionIndexStore", () => {
       expect(session?.updatedAt).toBe(2000);
     });
 
-    it("ignores stale title writes when a newer update already exists", async () => {
+    it("updates the title without lowering newer activity recency", async () => {
       await store.create(makeSession({ title: "Manual Title", updatedAt: 2000 }));
 
-      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 1500);
-      expect(updated).toBe(false);
+      const updated = await store.updateTitle("test-id", "Generated Title", 1500);
+      expect(updated).toBe(true);
 
       const session = await store.get("test-id");
-      expect(session?.title).toBe("Manual Title");
+      expect(session?.title).toBe("Generated Title");
       expect(session?.updatedAt).toBe(2000);
     });
   });

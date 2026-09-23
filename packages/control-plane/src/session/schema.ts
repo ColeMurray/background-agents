@@ -57,6 +57,10 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
 );`;
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS sandbox_preservation (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  state TEXT NOT NULL
+);
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
@@ -69,10 +73,12 @@ CREATE TABLE IF NOT EXISTS session (
   branch_name TEXT,                                 -- Working branch (set after first commit)
   base_sha TEXT,                                    -- SHA of base branch at session start
   current_sha TEXT,                                 -- Current HEAD SHA
-  opencode_session_id TEXT,                         -- OpenCode session ID (for 1:1 mapping)
+  agent_session_id TEXT,                            -- The agent's own conversation id (1:1 mapping)
+  harness TEXT NOT NULL DEFAULT 'opencode',         -- Agent harness: 'opencode' | 'claude'; fixed at create
   model TEXT DEFAULT 'anthropic/claude-haiku-4-5',   -- LLM model to use
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
+  status_revision INTEGER NOT NULL DEFAULT 1,
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
@@ -80,6 +86,8 @@ CREATE TABLE IF NOT EXISTS session (
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
+  max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
+  budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -131,6 +139,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -190,6 +199,9 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
+  boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
+  boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
+  fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
   created_at INTEGER NOT NULL
 );
 
@@ -228,6 +240,7 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
 const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at_id ON messages(created_at DESC, id DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
 ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_one_processing
@@ -654,7 +667,78 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Add active_socket_id to sandbox",
     run: `ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT`,
   },
+  {
+    id: 49,
+    description: "Add session budget state and message reported cost",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN max_cost_usd REAL`);
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN budget_exhausted INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+    },
+  },
+  {
+    id: 50,
+    description: "Add session harness and rename opencode_session_id to agent_session_id",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN harness TEXT NOT NULL DEFAULT 'opencode'`);
+      // A fresh DO already created agent_session_id through SCHEMA_SQL, so the
+      // legacy column is absent there; only an existing DO has it to rename.
+      try {
+        sql.exec(`ALTER TABLE session RENAME COLUMN opencode_session_id TO agent_session_id`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes("no such column") && !msg.includes("duplicate column")) throw e;
+      }
+    },
+  },
+  {
+    id: 51,
+    description: "Fence session status projections independently of activity",
+    run: `ALTER TABLE session ADD COLUMN status_revision INTEGER NOT NULL DEFAULT 1`,
+  },
+  {
+    id: 52,
+    description: "Add sandbox boot phase, boot sequence and generation fence",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN boot_phase TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN boot_seq INTEGER`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN fenced INTEGER NOT NULL DEFAULT 0`);
+    },
+  },
+  {
+    id: 53,
+    description: "Remove persisted boot hook output tails",
+    run: removePersistedHookOutputTails,
+  },
+  {
+    id: 54,
+    description: "Persist final sandbox preservation and expiry fence",
+    run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
+    )`,
+  },
 ];
+
+function removePersistedHookOutputTails(sql: SqlStorage): void {
+  sql.exec(`UPDATE events
+    SET data = CASE
+      WHEN json_valid(data) THEN json_remove(data, '$.outputTail')
+      ELSE data
+    END
+    WHERE type = 'boot_progress' AND instr(data, '"outputTail"') > 0`);
+  sql.exec(`UPDATE sandbox
+    SET boot_phase = CASE
+      WHEN json_valid(boot_phase) THEN json_remove(boot_phase, '$.outputTail')
+      ELSE boot_phase
+    END
+    WHERE boot_phase IS NOT NULL AND instr(boot_phase, '"outputTail"') > 0`);
+}
 
 /**
  * Run a migration statement, only ignoring "column already exists" errors.
@@ -695,7 +779,7 @@ export function applyMigrations(sql: SqlStorage): void {
     }
 
     sql.exec(
-      `INSERT OR IGNORE INTO _schema_migrations (id, applied_at) VALUES (?, ?)`,
+      `INSERT INTO _schema_migrations (id, applied_at) VALUES (?, ?) ON CONFLICT DO NOTHING`,
       migration.id,
       Date.now()
     );
@@ -708,5 +792,7 @@ export function applyMigrations(sql: SqlStorage): void {
 export function initSchema(sql: SqlStorage): void {
   sql.exec(SCHEMA_SQL);
   applyMigrations(sql);
+  // Reapply the idempotent scrub so rollback-era writes cannot survive a redeploy.
+  removePersistedHookOutputTails(sql);
   sql.exec(INDEXES_SQL);
 }

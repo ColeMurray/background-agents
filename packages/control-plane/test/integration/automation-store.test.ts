@@ -13,6 +13,9 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { seedRun, fetchRuns } from "./run-helpers";
 
+/** Default deadline the sweep holds a run to when the row carries none of its own. */
+const DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
+
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
@@ -22,6 +25,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
@@ -51,6 +55,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     failure_reason: null,
     scheduled_at: now,
     started_at: null,
+    execution_deadline_at: null,
     completed_at: null,
     created_at: now,
     invocation_id: `inv-${id}`,
@@ -667,31 +672,97 @@ describe("AutomationStore (D1 integration)", () => {
           session_id: "sess-t1",
           scheduled_at: twoHoursAgo,
           started_at: twoHoursAgo,
+          execution_deadline_at: now - 1000,
           created_at: twoHoursAgo,
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
+      const timedOut = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 50);
       expect(timedOut).toHaveLength(1);
       expect(timedOut[0].id).toBe("run-timeout-1");
     });
 
-    it("does not find recent running runs", async () => {
+    it("leaves a long-running run alone while its own deadline is in the future", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-rec4" }));
 
+      // Three hours in, but launched with an eight-hour budget: still working.
+      const threeHoursAgo = now - 3 * 60 * 60 * 1000;
       await seedRun(
         makeRun("auto-rec4", {
-          id: "run-recent-running",
+          id: "run-long-running",
           status: "running",
-          started_at: now,
-          created_at: now,
+          session_id: "sess-t4",
+          started_at: threeHoursAgo,
+          execution_deadline_at: threeHoursAgo + 8 * 60 * 60 * 1000,
+          created_at: threeHoursAgo,
         })
       );
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
+      const timedOut = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 50);
       expect(timedOut).toHaveLength(0);
+    });
+
+    it("widens a claimed deadline to the session's own budget", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-rec6" }));
+      await seedRun(makeRun("auto-rec6", { id: "run-widen", status: "starting", created_at: now }));
+
+      await store.claimRunSession("run-widen", "sess-widen", now, now + 60_000);
+      expect(await store.setRunExecutionDeadline("run-widen", now + 600_000)).toBe(true);
+
+      expect(
+        await store.getRunsPastExecutionDeadline(now + 120_000, DEFAULT_DEADLINE_MS, 50)
+      ).toHaveLength(0);
+      const [swept] = await store.getRunsPastExecutionDeadline(
+        now + 700_000,
+        DEFAULT_DEADLINE_MS,
+        50
+      );
+      expect(swept?.id).toBe("run-widen");
+    });
+
+    it("refuses to widen the deadline of a run that already finished", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-rec7" }));
+      await seedRun(
+        makeRun("auto-rec7", {
+          id: "run-done",
+          status: "completed",
+          started_at: now,
+          completed_at: now,
+        })
+      );
+
+      expect(await store.setRunExecutionDeadline("run-done", now + 600_000)).toBe(false);
+    });
+
+    // A pre-0079 worker can claim a run after the migration's backfill and
+    // before it is replaced; that row has no deadline of its own.
+    it("holds a run that never claimed a deadline to the default deadline from its start", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-rec5" }));
+
+      const seedUndeadlined = (id: string, startedAt: number) =>
+        seedRun(
+          makeRun("auto-rec5", {
+            id,
+            status: "running",
+            session_id: `sess-${id}`,
+            started_at: startedAt,
+            execution_deadline_at: null,
+            created_at: startedAt,
+          })
+        );
+      await seedUndeadlined("run-no-deadline-old", now - DEFAULT_DEADLINE_MS - 1);
+      await seedUndeadlined("run-no-deadline-fresh", now - DEFAULT_DEADLINE_MS + 60_000);
+
+      const swept = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 50);
+      expect(swept.map((r) => r.id)).toEqual(["run-no-deadline-old"]);
     });
 
     it("drains oldest orphaned runs first when LIMIT is hit", async () => {
@@ -730,12 +801,13 @@ describe("AutomationStore (D1 integration)", () => {
             session_id: `sess-${i}`,
             scheduled_at: base + i * 1000,
             started_at: base + i * 1000,
+            execution_deadline_at: base + i * 1000,
             created_at: base + i * 1000,
           })
         );
       }
 
-      const timedOut = await store.getTimedOutRunningRuns(90 * 60 * 1000, 3);
+      const timedOut = await store.getRunsPastExecutionDeadline(now, DEFAULT_DEADLINE_MS, 3);
       expect(timedOut).toHaveLength(3);
       expect(timedOut.map((r) => r.id)).toEqual(["run-to-0", "run-to-1", "run-to-2"]);
     });
@@ -755,12 +827,64 @@ describe("AutomationStore (D1 integration)", () => {
 
     it("timeout sweep is served by idx_runs_timeout_sweep, not a full scan", async () => {
       const plan = await env.DB.prepare(
-        `EXPLAIN QUERY PLAN ${AutomationStore.TIMED_OUT_RUNNING_RUNS_SQL}`
+        `EXPLAIN QUERY PLAN ${AutomationStore.RUNS_PAST_EXECUTION_DEADLINE_SQL}`
       )
-        .bind(Date.now())
+        .bind(Date.now(), Date.now())
         .all<{ detail: string }>();
       const detail = plan.results.map((r) => r.detail).join("\n");
       expect(detail).toContain("USING INDEX idx_runs_timeout_sweep");
+      // The OR over the deadline column walks the partial index rather than
+      // range-searching it. That index holds only 'running' rows, so the walk
+      // is bounded by the active set, never by the append-only table.
+      expect(detail).not.toMatch(/SCAN automation_runs(?! USING INDEX)/);
+    });
+  });
+
+  describe("completeTimedOutRun", () => {
+    it("overturns a sweep-declared timeout", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-ct1" }));
+      await seedRun(
+        makeRun("auto-ct1", {
+          id: "run-ct1",
+          status: "failed",
+          failure_reason: "execution_timeout",
+          started_at: now - 1000,
+          completed_at: now - 500,
+        })
+      );
+
+      expect(await store.completeTimedOutRun("run-ct1", now)).toBe(true);
+
+      const run = await store.getRunById("auto-ct1", "run-ct1");
+      expect(run!.status).toBe("completed");
+      expect(run!.failure_reason).toBeNull();
+      expect(run!.completed_at).toBe(now);
+    });
+
+    it("leaves every other terminal state final", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-ct2" }));
+      await seedRun(
+        makeRun("auto-ct2", {
+          id: "run-ct2",
+          status: "failed",
+          failure_reason: "Sandbox crashed",
+          started_at: now - 1000,
+          completed_at: now - 500,
+        })
+      );
+      await seedRun(
+        makeRun("auto-ct2", { id: "run-ct3", status: "completed", completed_at: now - 500 })
+      );
+
+      expect(await store.completeTimedOutRun("run-ct2", now)).toBe(false);
+      expect(await store.completeTimedOutRun("run-ct3", now)).toBe(false);
+      expect((await store.getRunById("auto-ct2", "run-ct2"))!.failure_reason).toBe(
+        "Sandbox crashed"
+      );
     });
   });
 

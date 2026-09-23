@@ -7,28 +7,7 @@
 data "external" "vercel_source_hash" {
   count = local.use_vercel_backend ? 1 : 0
 
-  program = ["bash", "-c", <<-EOF
-    cd "${var.project_root}"
-    paths=(
-      packages/sandbox-runtime/pyproject.toml
-      packages/sandbox-runtime/src
-      packages/control-plane/scripts/build-vercel-base-snapshot.ts
-      packages/control-plane/src/sandbox/providers/vercel/base-snapshot.ts
-      packages/control-plane/src/sandbox/providers/vercel/bootstrap.ts
-      packages/control-plane/src/sandbox/providers/vercel/client.ts
-    )
-    if command -v sha256sum &> /dev/null; then
-      hash=$(find "$${paths[@]}" -type f \
-        \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "pyproject.toml" \) \
-        -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
-    else
-      hash=$(find "$${paths[@]}" -type f \
-        \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "pyproject.toml" \) \
-        -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
-    fi
-    echo "{\"hash\": \"$hash\"}"
-  EOF
-  ]
+  program = ["python3", "${var.project_root}/packages/sandbox-images/cli.py", "hash", "--root", var.project_root, "--provider", "vercel"]
 }
 
 module "vercel_sandbox_infra" {

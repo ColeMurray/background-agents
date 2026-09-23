@@ -17,7 +17,8 @@ import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
 import type { MessageRepository } from "../message-repository";
 import type { SessionStatusService } from "../session-status-service";
-import type { SessionWebSocketManager } from "../websocket-manager";
+import type { SandboxCommandTarget, SessionWebSocketManager } from "../websocket-manager";
+import type { SessionBudgetService } from "../budget-service";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -31,13 +32,19 @@ function createPushSpec(repoOwner: string, repoName: string, targetBranch: strin
   };
 }
 
-function createProcessor() {
+function createProcessor(shutdown?: {
+  generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
+  prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+}) {
   const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     recordReportedSandboxRuntimeVersion: vi.fn(),
+    recordBootProgress: vi.fn(() => true),
+    getSession: vi.fn(() => null),
     getProcessingMessage,
-    addSessionCost: vi.fn(),
+    getMessageContent: vi.fn(() => null as string | null),
+    addSessionCost: vi.fn(() => 1.25),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
       getProcessingMessage.mockReturnValue(null);
       return {
@@ -67,6 +74,11 @@ function createProcessor() {
 
   const wsManager = {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxCommandTarget: vi.fn(
+      (): SandboxCommandTarget => ({
+        kind: "unavailable",
+      })
+    ),
     send: vi.fn(() => true),
   };
 
@@ -80,7 +92,9 @@ function createProcessor() {
   const processMessageQueue = vi.fn(async () => {});
   const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
+  const refreshSlackActivity = vi.fn();
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
+  const offerFallbackTitle = vi.fn((_title: string) => {});
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -89,6 +103,15 @@ function createProcessor() {
     child: vi.fn(),
   };
   const backgroundTasks = createTestBackgroundTasks();
+  const budgetService = {
+    ingestStepFinish: vi.fn(async () => {}),
+    observeExecutionCost: vi.fn((_event: unknown, _now: number) => ({
+      warningEvent: null,
+      stopPreparation: null,
+      statusChanged: false,
+    })),
+    deliverTransition: vi.fn(async () => {}),
+  };
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
@@ -99,11 +122,11 @@ function createProcessor() {
     wsManager as unknown as SessionWebSocketManager,
     new SandboxStreamingEventHandler(
       backgroundTasks,
-      repository as unknown as SessionCoreRepository,
       eventRepository,
       callbackService as unknown as CallbackNotificationService,
       messenger,
-      updateLastActivity
+      updateLastActivity,
+      budgetService as unknown as SessionBudgetService
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
@@ -123,7 +146,10 @@ function createProcessor() {
       updateLastActivity,
       scheduleInactivityCheck,
       processMessageQueue,
-      broadcastPromptQueue
+      broadcastPromptQueue,
+      budgetService,
+      (closure) => closure(),
+      offerFallbackTitle
     ),
     new SandboxRuntimeEventHandler(
       repository as unknown as SessionCoreRepository,
@@ -132,14 +158,22 @@ function createProcessor() {
       messenger,
       diffService as unknown as SessionDiffService,
       applySessionTitleUpdate,
-      updateLastActivity
+      updateLastActivity,
+      refreshSlackActivity,
+      scheduleInactivityCheck,
+      backgroundTasks,
+      { processMessageQueue },
+      log,
+      { onRuntimeReady: vi.fn(() => false) }
     ),
-    pushService
+    pushService,
+    shutdown
   );
 
   return {
     processor,
     pushService,
+    offerFallbackTitle,
     artifactRepository,
     repository,
     eventRepository,
@@ -154,9 +188,11 @@ function createProcessor() {
     processMessageQueue,
     broadcastPromptQueue,
     updateLastActivity,
+    refreshSlackActivity,
     applySessionTitleUpdate,
     backgroundTasks,
     log,
+    budgetService,
   };
 }
 
@@ -200,7 +236,6 @@ describe("SessionSandboxEventProcessor", () => {
     const event: SandboxEvent = {
       type: "heartbeat",
       sandboxId: "sb-1",
-      status: "ready",
       timestamp: 1000,
     };
 
@@ -391,7 +426,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
   });
 
-  it("adds step_finish cost to session aggregate and broadcasts event", async () => {
+  it("routes step_finish through atomic budget ingestion", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
       type: "step_finish",
@@ -403,9 +438,31 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123, expect.any(Number));
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("records unavailable cost tracking for positive-token steps without cost", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "step_finish",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      tokens: { input: 10 },
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with NaN cost", async () => {
@@ -420,9 +477,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with negative cost", async () => {
@@ -437,8 +496,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("does not add session cost for step_finish with Infinity cost", async () => {
@@ -453,9 +515,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+    expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("completes processing message and schedules post-completion work", async () => {
@@ -497,6 +561,57 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
     expect(h.backgroundTasks.submissions).not.toHaveLength(0);
+  });
+
+  it("offers the prompt's first line as the title once the turn settles", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageContent.mockReturnValue("Fix the flaky checkout test\nIt times out.");
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    // Always offered: whether the title is still unset is decided by the
+    // atomic write behind the callback, never by a second read here.
+    expect(h.repository.getMessageContent).toHaveBeenCalledWith("msg-1");
+    expect(h.offerFallbackTitle).toHaveBeenCalledWith("Fix the flaky checkout test");
+  });
+
+  it("offers no title when the prompt has no usable text", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageContent.mockReturnValue("  \n\t ");
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    expect(h.offerFallbackTitle).not.toHaveBeenCalled();
+  });
+
+  it("offers no title for a completion with no processing owner", async () => {
+    const h = createProcessor();
+    h.repository.getMessageContent.mockReturnValue("A late prompt");
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-late",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    expect(h.repository.getMessageContent).not.toHaveBeenCalled();
+    expect(h.offerFallbackTitle).not.toHaveBeenCalled();
   });
 
   it("waits for terminal projection before snapshot, queue drain, and acknowledgement", async () => {
@@ -572,6 +687,7 @@ describe("SessionSandboxEventProcessor", () => {
     const h = createProcessor();
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "dispatch", socket: sandboxWs });
 
     const pushPromise = h.pushService.pushBranchToRemote(
       createPushSpec("acme", "web", "feature/test")
@@ -667,7 +783,6 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
@@ -681,11 +796,35 @@ describe("SessionSandboxEventProcessor", () => {
       await h.processor.processSandboxEvent({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "ready",
         timestamp: 1000,
       });
 
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+    });
+
+    it("refreshes the slack activity indicator on heartbeat while a message is processing", async () => {
+      const h = createProcessor();
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+      });
+
+      expect(h.refreshSlackActivity).toHaveBeenCalledWith("msg-1", expect.any(Number));
+    });
+
+    it("does not refresh the slack activity indicator on heartbeat while idle", async () => {
+      const h = createProcessor();
+
+      await h.processor.processSandboxEvent({
+        type: "heartbeat",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+      });
+
+      expect(h.refreshSlackActivity).not.toHaveBeenCalled();
     });
 
     it("does not reset activity timer on token", async () => {
@@ -703,6 +842,87 @@ describe("SessionSandboxEventProcessor", () => {
   });
 
   describe("ACK mechanism", () => {
+    it.each([
+      {
+        event: {
+          type: "sandbox_generation_ready",
+          sandboxId: "sb-1",
+          generation: { sandboxId: "sb-1", createdAt: 4000 },
+          timestamp: 1000,
+          ackId: "sandbox_generation_ready:2",
+        } satisfies SandboxEvent,
+      },
+      {
+        event: {
+          type: "preservation_prepared",
+          sandboxId: "sb-1",
+          operationId: "operation-1",
+          generation: { sandboxId: "sb-1", createdAt: 4000 },
+          executionStopped: true,
+          timestamp: 1000,
+          ackId: "preservation_prepared:2",
+        } satisfies SandboxEvent,
+      },
+    ])("rejects $event.type without shutdown handlers and does not ACK", async ({ event }) => {
+      const h = createProcessor();
+      const sandboxWs = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toThrow(
+        "Sandbox graceful shutdown event handlers are not configured"
+      );
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    });
+
+    it("ACKs a shutdown event only after its configured handler succeeds", async () => {
+      const prepared = vi.fn();
+      const h = createProcessor({ generationReady: vi.fn(), prepared });
+      const sandboxWs = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      const event = {
+        type: "preservation_prepared",
+        sandboxId: "sb-1",
+        operationId: "operation-1",
+        generation: { sandboxId: "sb-1", createdAt: 4000 },
+        executionStopped: true,
+        timestamp: 1000,
+        ackId: "preservation_prepared:2",
+      } satisfies SandboxEvent;
+
+      await h.processor.processSandboxEvent(event);
+
+      expect(prepared).toHaveBeenCalledWith(event);
+      expect(prepared.mock.invocationCallOrder[0]).toBeLessThan(
+        h.wsManager.send.mock.invocationCallOrder[0]
+      );
+      expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+        type: "ack",
+        ackId: "preservation_prepared:2",
+      });
+    });
+
+    it("does not ACK when a configured shutdown handler throws", async () => {
+      const h = createProcessor({
+        generationReady: vi.fn(() => {
+          throw new Error("generation rejected");
+        }),
+        prepared: vi.fn(),
+      });
+      const sandboxWs = {} as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+      const event = {
+        type: "sandbox_generation_ready",
+        sandboxId: "sb-1",
+        generation: { sandboxId: "sb-1", createdAt: 4000 },
+        timestamp: 1000,
+        ackId: "sandbox_generation_ready:2",
+      } satisfies SandboxEvent;
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toThrow("generation rejected");
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    });
+
     it("sends ACK after execution_complete when ackId is present", async () => {
       const h = createProcessor();
       const sandboxWs = {} as WebSocket;

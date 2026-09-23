@@ -6,13 +6,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
+import { WS_CLOSE_SERVICE_RESTART } from "@open-inspect/shared/types/websocket";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
 import type { SessionRuntime } from "../session/components";
 import type { SessionPlatform, SessionStorage } from "../session/platform";
 import type { BackgroundTasks } from "../platform-ports";
 import {
-  SERVICE_RESTART_CLOSE_CODE,
   SessionRuntimeRegistry,
   type ManagedSessionRuntime,
   type SessionRuntimeRegistryOptions,
@@ -21,6 +21,9 @@ import { createFileSessionStoreProvider, type SessionStoreProvider } from "./ses
 
 const GC_CHILD = "SESSION_REGISTRY_GC_CHILD";
 const GC_CHILD_TIMEOUT_MS = 60_000;
+/** The one test the child is spawned to run; everything else in this file would
+ *  otherwise run a second time inside it. */
+const GC_CHILD_TEST = "opens, reads, retires, and lets the collector run afterwards";
 const isGcChild = process.env[GC_CHILD] === "1";
 
 interface Deferred<T = void> {
@@ -88,6 +91,7 @@ function fakeStores() {
   const opened: Array<{ id: string; storage: SessionStorage; closes: number }> = [];
   const state = { gate: null as Deferred | null, failNext: null as Error | null };
   const provider: SessionStoreProvider = {
+    exists: async (id) => opened.some((record) => record.id === id),
     open: async (id) => {
       if (state.gate) await state.gate.promise;
       if (state.failNext) {
@@ -133,6 +137,10 @@ describe("SessionRuntimeRegistry", () => {
   let now: number;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let stores: ReturnType<typeof fakeStores>;
+  let index: {
+    known: Set<string>;
+    exists: ReturnType<typeof vi.fn<(id: string) => Promise<boolean>>>;
+  };
   let alarms: ReturnType<typeof fakeAlarms>;
   let log: ReturnType<typeof spyLogger>;
   let built: FakeRuntime[];
@@ -145,6 +153,7 @@ describe("SessionRuntimeRegistry", () => {
     const registry = new SessionRuntimeRegistry<FakeRuntime>({
       db: {} as SqlDatabase,
       storeProvider: stores.provider,
+      sessionIndex: index,
       alarmStoreFor: alarms.alarmStoreFor,
       buildRuntime,
       log: log as never,
@@ -160,6 +169,8 @@ describe("SessionRuntimeRegistry", () => {
   beforeEach(() => {
     now = 1_000_000;
     stores = fakeStores();
+    const known = new Set<string>();
+    index = { known, exists: vi.fn(async (id: string) => known.has(id)) };
     alarms = fakeAlarms();
     log = spyLogger();
     built = [];
@@ -207,6 +218,75 @@ describe("SessionRuntimeRegistry", () => {
     expect(await a).toBe(await b);
     expect(buildRuntime).toHaveBeenCalledTimes(1);
     expect(stores.opened).toHaveLength(1);
+  });
+
+  describe("withRuntimeIfPresent", () => {
+    it("opens nothing for an id with neither a store nor an index row", async () => {
+      const registry = makeRegistry();
+
+      const outcome = await registry.withRuntimeIfPresent("ghost", async () => "used");
+
+      expect(outcome).toBeUndefined();
+      expect(buildRuntime).not.toHaveBeenCalled();
+      expect(stores.opened).toEqual([]);
+      expect(registry.residentSessionIds()).toEqual([]);
+    });
+
+    it("opens a session known to the index but without a store yet: the one being created", async () => {
+      const registry = makeRegistry();
+      index.known.add("s1");
+
+      const outcome = await registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+
+      expect(outcome).toBeDefined();
+      expect(stores.opened.map((s) => s.id)).toEqual(["s1"]);
+      expect(registry.residentSessionIds()).toEqual(["s1"]);
+    });
+
+    it("opens a session whose store exists after its index row is gone, without asking the index", async () => {
+      const registry = makeRegistry();
+      await registry.withRuntime("s1", async () => {});
+      clock.advance(IDLE_AFTER_MS);
+      expect(await registry.sweep()).toEqual(["s1"]);
+      index.exists.mockClear();
+
+      const outcome = await registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+
+      expect(outcome).toBeDefined();
+      expect(index.exists).not.toHaveBeenCalled();
+      expect(buildRuntime).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares one presence check and one build between concurrent conditional opens", async () => {
+      const registry = makeRegistry();
+      index.known.add("s1");
+      stores.state.gate = deferred();
+
+      const a = registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+      const b = registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+      await flush();
+      stores.state.gate.resolve();
+
+      expect(await a).toBe(await b);
+      expect(index.exists).toHaveBeenCalledTimes(1);
+      expect(buildRuntime).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets an unconditional open that joined an absent outcome build on its own turn", async () => {
+      const registry = makeRegistry();
+      const lookup = deferred<boolean>();
+      index.exists.mockImplementationOnce(() => lookup.promise);
+
+      const conditional = registry.withRuntimeIfPresent("s1", async (runtime) => runtime);
+      await flush();
+      const unconditional = registry.withRuntime("s1", async (runtime) => runtime);
+      lookup.resolve(false);
+
+      expect(await conditional).toBeUndefined();
+      expect(await unconditional).toBeDefined();
+      expect(buildRuntime).toHaveBeenCalledTimes(1);
+      expect(registry.residentSessionIds()).toEqual(["s1"]);
+    });
   });
 
   it("does not cache a failed build: the store is closed and the next event retries", async () => {
@@ -488,8 +568,14 @@ describe("SessionRuntimeRegistry", () => {
       try {
         const registry = makeRegistry({ storeProvider: createFileSessionStoreProvider(dataDir) });
         const { server, client } = await connect();
-        const closed = new Promise<{ code: number; reason: string }>((done) =>
-          client.once("close", (code, reason) => done({ code, reason: reason.toString() }))
+        // The standards-style close event carries `wasClean`, which is what
+        // the browser decides on: a proper close frame makes this a clean
+        // close, so the web transport has to retry on the code rather than
+        // treat it as a deliberate teardown (`use-session-transport.ts`).
+        const closed = new Promise<{ code: number; reason: string; wasClean: boolean }>((done) =>
+          client.addEventListener("close", (event) =>
+            done({ code: event.code, reason: event.reason, wasClean: event.wasClean })
+          )
         );
         const runtime = await registry.withRuntime("s1", async (runtime) => {
           runtime.platform.sockets.adopt(server, ["wsid:c1"]);
@@ -507,8 +593,9 @@ describe("SessionRuntimeRegistry", () => {
         await registry.shutdown();
 
         expect(await closed).toEqual({
-          code: SERVICE_RESTART_CLOSE_CODE,
+          code: WS_CLOSE_SERVICE_RESTART,
           reason: "Service restart",
+          wasClean: true,
         });
         expect(runtime.server.onClose).toHaveBeenCalledWith(server, 1012, "Service restart", true);
         expect(deliveredAgainstOpenStore).toBe(true);
@@ -530,6 +617,41 @@ describe("SessionRuntimeRegistry", () => {
     });
   });
 
+  it("shutdown closes a socket adopted under a lease that predates it", async () => {
+    // The upgrade path authorizes under a lease and adopts afterwards; a
+    // shutdown that began during the authorization still closes the socket.
+    const wss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((done) => wss.once("listening", done));
+    const client = new NodeWebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+    try {
+      const serverSide = new Promise<NodeWebSocket>((done) => wss.once("connection", done));
+      await new Promise<void>((done) => client.once("open", done));
+      const server = await serverSide;
+      const closed = new Promise<number>((done) => client.once("close", (code) => done(code)));
+
+      const registry = makeRegistry();
+      const authorizing = deferred();
+      const attached = registry.withRuntime("s1", async (runtime) => {
+        await authorizing.promise;
+        runtime.platform.sockets.adopt(server, ["wsid:late"]);
+      });
+      await flush();
+
+      const shutdown = registry.shutdown({ timeoutMs: 2_000 });
+      await flush();
+      authorizing.resolve();
+      await attached;
+
+      await shutdown;
+      expect(await closed).toBe(WS_CLOSE_SERVICE_RESTART);
+      expect(registry.residentSessionIds()).toEqual([]);
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      client.terminate();
+      await new Promise<void>((done) => wss.close(() => done()));
+    }
+  });
+
   it("shutdown refuses new leases on resident runtimes and waits for held ones", async () => {
     const registry = makeRegistry();
     const held = deferred();
@@ -545,7 +667,7 @@ describe("SessionRuntimeRegistry", () => {
 
     held.resolve();
     await pending;
-    await shutdown;
+    expect(await shutdown).toEqual({ forced: [] });
     expect(stores.opened[0]!.closes).toBe(1);
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -556,8 +678,11 @@ describe("SessionRuntimeRegistry", () => {
     const pending = registry.withRuntime("s1", () => never.promise);
     await flush();
 
-    await registry.shutdown({ timeoutMs: 20 });
+    const report = await registry.shutdown({ timeoutMs: 20 });
 
+    // Reported, not only logged: the host writes a clean-stop marker from
+    // this, and forced work can have persisted a deadline without arming it.
+    expect(report).toEqual({ forced: ["s1"] });
     expect(stores.opened[0]!.closes).toBe(1);
     expect(log.warn).toHaveBeenCalledWith("session_registry.retired_busy", {
       session_id: "s1",
@@ -696,36 +821,51 @@ describe("SessionRuntimeRegistry", () => {
     expect(stores.opened.map((s) => s.closes)).toEqual([0, 1]);
   });
 
-  it("survives late garbage collection of a retired session's store", () => {
-    if (isGcChild) return;
-    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-    const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
-    const child = spawnSync(
-      process.execPath,
-      ["--expose-gc", "--no-warnings", join(vitestRoot, "vitest.mjs"), "run", import.meta.filename],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        env: { ...process.env, [GC_CHILD]: "1" },
-        timeout: GC_CHILD_TIMEOUT_MS,
-      }
-    );
+  it(
+    "survives late garbage collection of a retired session's store",
+    () => {
+      if (isGcChild) return;
+      const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+      const vitestRoot = dirname(dirname(fileURLToPath(import.meta.resolve("vitest"))));
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--expose-gc",
+          "--no-warnings",
+          join(vitestRoot, "vitest.mjs"),
+          "run",
+          import.meta.filename,
+          "-t",
+          GC_CHILD_TEST,
+        ],
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          env: { ...process.env, [GC_CHILD]: "1" },
+          timeout: GC_CHILD_TIMEOUT_MS,
+        }
+      );
 
-    expect(
-      { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
-      "the isolated registry eviction probe must exit normally"
-    ).toMatchObject({ status: 0, signal: null });
-  });
+      expect(
+        { status: child.status, signal: child.signal, stdout: child.stdout, stderr: child.stderr },
+        "the isolated registry eviction probe must exit normally"
+      ).toMatchObject({ status: 0, signal: null });
+    },
+    // Spawning a vitest run costs more than the default 5s per-test budget on a
+    // loaded machine; hold this test to the same bound as the child itself.
+    GC_CHILD_TIMEOUT_MS
+  );
 });
 
 if (isGcChild) {
   describe("session registry eviction under late garbage collection", () => {
-    it("opens, reads, retires, and lets the collector run afterwards", async () => {
+    it(GC_CHILD_TEST, async () => {
       const dataDir = mkdtempSync(join(tmpdir(), "session-registry-gc-"));
       const alarms = fakeAlarms();
       const registry = new SessionRuntimeRegistry<FakeRuntime>({
         db: {} as SqlDatabase,
         storeProvider: createFileSessionStoreProvider(dataDir),
+        sessionIndex: { exists: async () => false },
         alarmStoreFor: alarms.alarmStoreFor,
         buildRuntime: (platform) => fakeRuntime(platform),
         log: spyLogger() as never,

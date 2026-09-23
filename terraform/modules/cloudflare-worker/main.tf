@@ -2,55 +2,56 @@
 # Uses the recommended 3-resource pattern: cloudflare_worker + cloudflare_worker_version + cloudflare_workers_deployment
 
 locals {
-  # Build bindings list from all binding types
+  # The provider takes every binding as one list; map iteration is key-ordered,
+  # so the projection is stable across plans.
   bindings = concat(
     # KV namespace bindings
-    [for kv in var.kv_namespaces : {
+    [for binding_name, binding in var.kv_namespaces : {
       type         = "kv_namespace"
-      name         = kv.binding_name
-      namespace_id = kv.namespace_id
+      name         = binding_name
+      namespace_id = binding.namespace_id
     }],
     # Service bindings (only when enabled - disable if target workers don't exist yet)
-    var.enable_service_bindings ? [for svc in var.service_bindings : {
+    var.enable_service_bindings ? [for binding_name, binding in var.service_bindings : {
       type    = "service"
-      name    = svc.binding_name
-      service = svc.service_name
+      name    = binding_name
+      service = binding.service_name
     }] : [],
     # D1 database bindings
-    [for db in var.d1_databases : {
+    [for binding_name, binding in var.d1_databases : {
       type = "d1"
-      name = db.binding_name
-      id   = db.database_id
+      name = binding_name
+      id   = binding.database_id
     }],
     # R2 bucket bindings
-    [for r2 in var.r2_buckets : {
+    [for binding_name, binding in var.r2_buckets : {
       type        = "r2_bucket"
-      name        = r2.binding_name
-      bucket_name = r2.bucket_name
+      name        = binding_name
+      bucket_name = binding.bucket_name
     }],
     # Queue producer bindings
-    [for queue in var.queue_bindings : {
+    [for binding_name, binding in var.queue_bindings : {
       type       = "queue"
-      name       = queue.binding_name
-      queue_name = queue.queue_name
+      name       = binding_name
+      queue_name = binding.queue_name
     }],
     # Plain text bindings (environment variables)
-    [for pt in var.plain_text_bindings : {
+    [for binding_name, binding in var.plain_text_bindings : {
       type = "plain_text"
-      name = pt.name
-      text = pt.value
+      name = binding_name
+      text = binding.value
     }],
     # Secret text bindings
-    [for sec in var.secrets : {
+    [for binding_name, binding in var.secrets : {
       type = "secret_text"
-      name = sec.name
-      text = sec.value
+      name = binding_name
+      text = binding.value
     }],
     # Durable Object bindings (disabled only for initial class creation)
-    var.enable_durable_object_bindings ? [for do in var.durable_objects : {
+    var.enable_durable_object_bindings ? [for binding_name, binding in var.durable_objects : {
       type       = "durable_object_namespace"
-      name       = do.binding_name
-      class_name = do.class_name
+      name       = binding_name
+      class_name = binding.class_name
     }] : []
   )
 }
@@ -110,7 +111,7 @@ resource "cloudflare_worker_version" "this" {
   migrations = (length(var.durable_objects) > 0 || length(var.deleted_classes) > 0) && (!var.enable_durable_object_bindings || length(var.deleted_classes) > 0) ? {
     old_tag            = var.migration_old_tag
     new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for do in var.durable_objects : do.class_name])
+    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for binding in var.durable_objects : binding.class_name])
     deleted_classes    = var.deleted_classes
   } : null
 

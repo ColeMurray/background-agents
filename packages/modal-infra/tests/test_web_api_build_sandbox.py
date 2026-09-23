@@ -4,9 +4,13 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
+from modal.exception import NotFoundError as ModalNotFoundError
+from modal.exception import TimeoutError as ModalTimeoutError
 
+from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS, MAX_BUILD_TIMEOUT_SECONDS
+from src.sandbox.manager import SandboxHandle, SandboxManager
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 CALLBACK_CONTEXT = {
@@ -49,6 +53,32 @@ async def _call_generic_snapshot(request: dict) -> dict:
         x_session_id=None,
         x_sandbox_id=None,
     )
+
+
+async def _call_generic_stop(request: dict) -> dict:
+    return await web_api.api_stop_sandbox.get_raw_f()(
+        request,
+        authorization="Bearer test",
+        x_trace_id=None,
+        x_request_id=None,
+        x_session_id=None,
+        x_sandbox_id=None,
+    )
+
+
+def _patch_real_snapshot_manager(monkeypatch: pytest.MonkeyPatch):
+    snapshot_filesystem = MagicMock()
+    snapshot_filesystem.aio = AsyncMock(return_value=SimpleNamespace(object_id="im-session-1"))
+    handle = SandboxHandle(
+        sandbox_id="modal-session-1",
+        modal_sandbox=SimpleNamespace(snapshot_filesystem=snapshot_filesystem),
+        status=SandboxStatus.READY,
+        created_at=0,
+    )
+    get_sandbox_by_id = AsyncMock(return_value=handle)
+    monkeypatch.setattr(SandboxManager, "get_sandbox_by_id", get_sandbox_by_id)
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    return snapshot_filesystem, get_sandbox_by_id
 
 
 @pytest.mark.asyncio
@@ -585,3 +615,94 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
     assert result["data"]["image_id"] == "im-session-1"
     manager.get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
     manager.take_snapshot.assert_awaited_once_with(handle)
+
+
+@pytest.mark.asyncio
+async def test_generic_snapshot_maps_real_manager_subsecond_guard_to_deadline_expired(monkeypatch):
+    snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
+    monkeypatch.setattr(web_api.time, "time", lambda: 1000.0)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_snapshot({"sandbox_id": "modal-session-1", "deadline_at_ms": 1_000_500})
+
+    assert exc.value.status_code == 408
+    assert exc.value.detail == "snapshot deadline expired"
+    get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    snapshot_filesystem.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generic_snapshot_maps_modal_provider_timeout_to_deadline_expired(monkeypatch):
+    snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
+    snapshot_filesystem.aio.side_effect = ModalTimeoutError("snapshot timed out")
+    monkeypatch.setattr(web_api.time, "time", lambda: 1000.0)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_snapshot({"sandbox_id": "modal-session-1", "deadline_at_ms": 1_010_000})
+
+    assert exc.value.status_code == 408
+    assert exc.value.detail == "snapshot deadline expired"
+    get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_generic_stop_succeeds_when_provider_object_is_already_absent(monkeypatch):
+    from_id = MagicMock()
+    from_id.aio = AsyncMock(side_effect=ModalNotFoundError("sandbox not found"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    result = await _call_generic_stop({"sandbox_id": "modal-session-1"})
+
+    assert result == {"success": True, "data": {"terminated": True}}
+    from_id.aio.assert_awaited_once_with("modal-session-1")
+
+
+@pytest.mark.asyncio
+async def test_generic_snapshot_rejects_expired_deadline_without_provider_call(monkeypatch):
+    snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
+    monkeypatch.setattr(web_api.time, "time", lambda: 1000.0)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_snapshot({"sandbox_id": "modal-session-1", "deadline_at_ms": 999_999})
+
+    assert exc.value.status_code == 408
+    assert exc.value.detail == "snapshot deadline expired"
+    get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    snapshot_filesystem.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deadline_at_ms", [True, False])
+async def test_generic_snapshot_rejects_boolean_deadline_without_provider_call(
+    monkeypatch, deadline_at_ms
+):
+    snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_snapshot(
+            {"sandbox_id": "modal-session-1", "deadline_at_ms": deadline_at_ms}
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "deadline_at_ms must be a number"
+    get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    snapshot_filesystem.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deadline_at_ms", [1_010_000, 1_010_000.0])
+async def test_generic_snapshot_passes_ordinary_deadline_to_real_manager(
+    monkeypatch, deadline_at_ms
+):
+    snapshot_filesystem, get_sandbox_by_id = _patch_real_snapshot_manager(monkeypatch)
+    monkeypatch.setattr(web_api.time, "time", lambda: 1000.0)
+
+    result = await _call_generic_snapshot(
+        {"sandbox_id": "modal-session-1", "deadline_at_ms": deadline_at_ms}
+    )
+
+    assert result["data"]["image_id"] == "im-session-1"
+    get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)

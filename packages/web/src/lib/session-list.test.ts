@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyTitleUpdate,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -8,30 +7,37 @@ import {
   isArchivedSessionListKey,
   isSessionListKey,
   isUnarchivedSessionListKey,
-  type SessionListResponse,
 } from "./session-list";
-import type { Session } from "@open-inspect/shared/types/sessions";
+import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-function session(id: string, overrides: Partial<Session> = {}): Session {
+function session(id: string, overrides: Partial<SessionListSummary> = {}): SessionListSummary {
   return {
     id,
     title: id.toUpperCase(),
     repoOwner: "open-inspect",
     repoName: "background-agents",
+    harness: "opencode",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
     baseBranch: "main",
-    branchName: null,
-    baseSha: null,
-    currentSha: null,
-    opencodeSessionId: null,
     status: "active",
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
+    automationId: null,
+    automationRunId: null,
+    scmLogin: null,
+    userId: null,
+    totalCost: 0,
+    activeDurationMs: 0,
+    messageCount: 0,
+    prCount: 0,
+    environmentId: null,
     createdAt: 1000,
     updatedAt: 2000,
     ...overrides,
@@ -69,15 +75,25 @@ describe("fetchSessionListPage", () => {
       "fetch",
       vi.fn(async () =>
         Response.json({
-          sessions: [session("session-1")],
+          sessions: [
+            {
+              ...session("session-1"),
+              readState: { latestMessageId: "message-1", unread: true },
+            },
+          ],
           hasMore: false,
         })
       )
     );
 
-    await expect(fetchSessionListPage(buildSessionsPageKey())).resolves.toMatchObject({
+    const page = await fetchSessionListPage(buildSessionsPageKey());
+
+    expect(page).toMatchObject({
       sessions: [{ id: "session-1", status: "active" }],
       hasMore: false,
+    });
+    expect(page).toMatchObject({
+      sessions: [{ readState: { version: 0 } }],
     });
   });
 
@@ -152,60 +168,5 @@ describe("isArchivedSessionListKey", () => {
     expect(isArchivedSessionListKey("/api/sessions")).toBe(false);
     expect(isArchivedSessionListKey("/api/sessions?excludeStatus=archived")).toBe(false);
     expect(isArchivedSessionListKey("/api/sessions?status=active")).toBe(false);
-  });
-});
-
-describe("applyTitleUpdate", () => {
-  it("replaces only the title of the matching session", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a"), session("b"), session("c")],
-      hasMore: false,
-    };
-
-    const after = applyTitleUpdate(before, "b", "Renamed");
-
-    expect(after?.sessions).toEqual([
-      session("a"),
-      session("b", { title: "Renamed" }),
-      session("c"),
-    ]);
-  });
-
-  it("preserves hasMore and other top-level fields", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a")],
-      hasMore: true,
-    };
-
-    const after = applyTitleUpdate(before, "a", "New");
-
-    expect(after?.hasMore).toBe(true);
-  });
-
-  it("returns undefined when data is undefined (cache miss)", () => {
-    expect(applyTitleUpdate(undefined, "a", "New")).toBeUndefined();
-  });
-
-  it("leaves the list unchanged when sessionId does not match", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a"), session("b")],
-      hasMore: false,
-    };
-
-    const after = applyTitleUpdate(before, "missing", "New");
-
-    expect(after?.sessions).toEqual(before.sessions);
-  });
-
-  it("does not mutate the input object", () => {
-    const before: SessionListResponse = {
-      sessions: [session("a")],
-      hasMore: false,
-    };
-    const beforeSnapshot = structuredClone(before);
-
-    applyTitleUpdate(before, "a", "Mutated");
-
-    expect(before).toEqual(beforeSnapshot);
   });
 });

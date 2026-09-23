@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ModelProviderAccountAdapterRegistry,
+  ProviderCredentialError,
   ProviderIdentityError,
   ProviderRefreshError,
   type ModelProviderAccountAdapter,
@@ -339,6 +340,66 @@ describe("ModelProviderAccountService", () => {
     await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({ status: 409 });
     expect(providerAdapter.refresh).not.toHaveBeenCalled();
   });
+
+  it("refuses verification for a provider whose credential cannot be verified", async () => {
+    // A static credential has no refresh: running the exchange would bump the
+    // credential version and revoke every sandbox holding the same token.
+    const store = stores();
+    const providerAdapter = { ...adapter(), supportsVerification: false };
+    const service = createService(
+      store,
+      new ModelProviderAccountAdapterRegistry([providerAdapter]),
+      { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+    );
+
+    await expect(service.verify(ACCOUNT_ID, "user-1")).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("cannot be verified"),
+    });
+    expect(store.credentials.readCredentialState).not.toHaveBeenCalled();
+    expect(store.credentials.tryBeginExchange).not.toHaveBeenCalled();
+    expect(providerAdapter.refresh).not.toHaveBeenCalled();
+    expect(store.atomicWriter.completeVerificationCredentialAndAccount).not.toHaveBeenCalled();
+  });
+
+  it.each(["create", "reconnect"] as const)(
+    "reports a credential the adapter cannot read as a 400 on %s",
+    async (operation) => {
+      const store = stores();
+      const providerAdapter = adapter();
+      vi.mocked(providerAdapter.connect).mockRejectedValue(
+        new ProviderCredentialError("That does not look like a setup token")
+      );
+      const service = createService(
+        store,
+        new ModelProviderAccountAdapterRegistry([providerAdapter]),
+        { generateId: () => ACCOUNT_ID, now: () => 1_000 }
+      );
+
+      const call =
+        operation === "create"
+          ? service.create(
+              {
+                provider: "openai",
+                displayName: "Team ChatGPT",
+                refreshToken: "garbage",
+                accountId: "acct-1",
+              },
+              "user-1"
+            )
+          : service.reconnect(
+              ACCOUNT_ID,
+              { provider: "openai", refreshToken: "garbage", accountId: "acct-1" },
+              "user-1"
+            );
+      await expect(call).rejects.toMatchObject({
+        status: 400,
+        message: "That does not look like a setup token",
+      });
+      expect(store.atomicWriter.createAccountWithCredential).not.toHaveBeenCalled();
+      expect(store.atomicWriter.reconnectCredentialAndAccount).not.toHaveBeenCalled();
+    }
+  );
 
   it("does not dispatch verification for an account that requires reconnect", async () => {
     const store = stores(providerAccount({ status: "reconnect_required" }));

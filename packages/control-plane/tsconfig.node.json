@@ -1,14 +1,15 @@
 {
   // The Node host's program: src/node/** is the only production code that
   // imports Node built-ins (node:sqlite, node:fs), so it is excluded from the
-  // workerd-typed tsconfig.json and checked here with Node types instead.
-  // Workers types remain until the two globals the session core still names
-  // (D1Database in db/sql-database.ts, Fetcher in platform-ports.ts) move
-  // behind their ports; then this program drops them.
+  // workerd-typed tsconfig.json and checked here with Node types only. From
+  // src/node/host.ts the program reaches the whole application, which names
+  // no Cloudflare global; a Cloudflare type leaking into it fails here.
+  // types/node-web.d.ts names the few web-standard types Node implements
+  // but @types/node does not declare globally.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["node", "@cloudflare/workers-types"]
+    "types": ["node"]
   },
-  "include": ["src/node/**/*.ts"],
+  "include": ["src/node/**/*.ts", "types/node-web.d.ts"],
   "exclude": ["node_modules", "src/**/*.test.ts"]
 }

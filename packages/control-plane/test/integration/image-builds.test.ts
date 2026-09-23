@@ -24,7 +24,7 @@ import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { DeleteImageInput, ImageBuildAdapter } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import {
@@ -406,6 +406,9 @@ describe("Image builds", () => {
             repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
           },
         ],
+        // The settings surfaces read this to stop offering builds a paused
+        // deployment would refuse.
+        admission: { open: true },
       });
     });
 
@@ -718,18 +721,77 @@ describe("Image builds", () => {
   });
 
   describe("build callbacks", () => {
-    async function registerBuild(environmentId: string, buildId: string): Promise<void> {
+    async function registerBuild(
+      environmentId: string,
+      buildId: string,
+      provider: "modal" | "daytona" = "modal"
+    ): Promise<void> {
       const store = new ImageBuildStore(env.DB);
       await store.registerBuild({
         id: buildId,
         scope: environmentScope(environmentId),
-        provider: "modal",
+        provider,
         repositoriesFingerprint: "fp-cb",
-        callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
+        callbackTokenHash: await hashImageBuildCallbackToken(
+          MODAL_BUILD_TOKEN,
+          createCloudflareEnv(env)
+        ),
         callbackTokenExpiresAt: Date.now() + 60_000,
       });
-      await store.bindProviderSession(buildId, "modal", `session-${buildId}`);
+      await store.bindProviderSession(buildId, provider, `session-${buildId}`);
     }
+
+    it("accepts a recorded-provider callback whatever the deployment now runs on", async () => {
+      const environmentId = await seedEnvironment();
+      await registerBuild(environmentId, "cb-daytona", "daytona");
+
+      const accepted = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-daytona",
+          provider_session_id: "session-cb-daytona",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 42.5,
+        }),
+      });
+
+      // Callbacks authenticate against the row's own recorded provider, so a
+      // build accepted before a provider switch — or while its provider's
+      // admission is closed — can still report and finalize.
+      expect(accepted.status).toBe(202);
+      const row = await getRow("cb-daytona");
+      expect(row?.provider).toBe("daytona");
+      expect(row?.callback_token_used_at).not.toBeNull();
+
+      // The same payload replays idempotently; a conflicting one does not.
+      const replay = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-daytona",
+          provider_session_id: "session-cb-daytona",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 42.5,
+        }),
+      });
+      expect(replay.status).toBe(202);
+
+      const conflicting = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-daytona",
+          provider_session_id: "session-cb-daytona",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 99,
+        }),
+      });
+      expect(conflicting.status).toBe(409);
+    });
 
     it("POST /image-builds/build-complete durably accepts provider-session finalization", async () => {
       const environmentId = await seedEnvironment();
@@ -820,7 +882,10 @@ describe("Image builds", () => {
         scope: environmentScope(environmentId),
         provider: "modal",
         repositoriesFingerprint: "fp-cb",
-        callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
+        callbackTokenHash: await hashImageBuildCallbackToken(
+          MODAL_BUILD_TOKEN,
+          createCloudflareEnv(env)
+        ),
         callbackTokenExpiresAt: Date.now() - 1,
       });
       await store.bindProviderSession("cb-expired", "modal", "session-cb-expired");
@@ -963,7 +1028,7 @@ describe("Image builds", () => {
         scope: TOKEN_SCOPE,
         provider: "vercel",
         repositoriesFingerprint: "fp-token",
-        callbackTokenHash: await hashImageBuildCallbackToken(token, env as Env),
+        callbackTokenHash: await hashImageBuildCallbackToken(token, createCloudflareEnv(env)),
         callbackTokenExpiresAt: Date.now() + 60_000,
       });
       await store.bindProviderSession("tok-malformed", "vercel", "vercel-session-1");

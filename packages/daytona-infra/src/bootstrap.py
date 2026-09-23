@@ -1,70 +1,57 @@
-"""CLI entrypoint for seeding the repo-local Daytona base snapshot."""
+"""Construct an immutable Daytona candidate and verify a fresh restore."""
 
 from __future__ import annotations
 
-import argparse
+import os
+import shutil
+import sys
 import time
 
-from daytona import Daytona, DaytonaConfig, DaytonaNotFoundError
+from daytona import CreateSandboxFromSnapshotParams, Daytona, DaytonaConfig, DaytonaNotFoundError
 
 from .config import load_config
 from .toolchain import create_base_snapshot
 
-# Daytona's snapshot.delete() returns before the backend has finished removing
-# the snapshot. Recreating with the same name inside that window fails with
-# "Snapshot already exists", so we poll until the delete is fully visible
-# before rebuilding.
-_SNAPSHOT_DELETE_TIMEOUT_SECONDS = 300
-_SNAPSHOT_DELETE_POLL_SECONDS = 5
 
+def main() -> None:
+    config = load_config()
+    sys.path.insert(0, str(config.repo_root / "packages/sandbox-images/src"))
+    from sandbox_images.bundle import pack_bundle
+    from sandbox_images.native import write_build_result
 
-def _wait_for_snapshot_deletion(client: Daytona, name: str) -> None:
-    """Block until the named snapshot is no longer returned by the API."""
-    deadline = time.monotonic() + _SNAPSHOT_DELETE_TIMEOUT_SECONDS
-    while True:
+    bundle = pack_bundle(config.repo_root, "daytona", config.repo_root / ".cache/sandbox-images")
+    try:
+        plan = bundle.plan
+        name = (
+            os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
+            or f"{config.base_snapshot}-{plan['buildHash'][:12]}-{time.time_ns()}"
+        )
+        client = Daytona(
+            DaytonaConfig(api_key=config.api_key, api_url=config.api_url, target=config.target)
+        )
+        # No delete/recreate of the selected snapshot, even on a failed build.
         try:
             client.snapshot.get(name)
         except DaytonaNotFoundError:
-            return
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"Daytona snapshot {name!r} still present "
-                f"{_SNAPSHOT_DELETE_TIMEOUT_SECONDS}s after delete()"
-            )
-        print(f"Waiting for snapshot {name!r} deletion to complete...")
-        time.sleep(_SNAPSHOT_DELETE_POLL_SECONDS)
+            create_base_snapshot(client, bundle, name, config.base_snapshot_memory_gib)
+    finally:
+        shutil.rmtree(bundle.directory)
+    # Retry a retained build by restoring it and checking required services.
 
-
-def main() -> None:
-    """Create or recreate the configured Daytona base snapshot."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Delete the existing named snapshot before rebuilding it.",
+    sandbox = client.create(
+        CreateSandboxFromSnapshotParams(snapshot=name, env_vars=plan["runtimeEnv"], ephemeral=True),
+        timeout=180,
     )
-    args = parser.parse_args()
-
-    config = load_config()
-    client = Daytona(
-        DaytonaConfig(
-            api_key=config.api_key,
-            api_url=config.api_url,
-            target=config.target,
+    try:
+        result = sandbox.process.exec(
+            "/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify",
+            timeout=240,
         )
-    )
-
-    if args.force:
-        try:
-            existing = client.snapshot.get(config.base_snapshot)
-        except DaytonaNotFoundError:
-            existing = None
-
-        if existing is not None:
-            client.snapshot.delete(existing)
-            _wait_for_snapshot_deletion(client, config.base_snapshot)
-
-    create_base_snapshot(client, config.repo_root, config.base_snapshot)
+        if result.exit_code != 0:
+            raise RuntimeError(f"Daytona image verification failed: {result.result}")
+        write_build_result(name)
+    finally:
+        sandbox.delete()
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   AutomationStore,
   isDuplicateKeyError,
+  parseAutomationTriggerFields,
   toAutomation,
   toAutomationRun,
   type AutomationRow,
@@ -86,6 +87,7 @@ const sampleRow: AutomationRow = {
   schedule_cron: "0 9 * * *",
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
+  harness: "opencode" as const,
   reasoning_effort: null,
   enabled: 1,
   next_run_at: now + 86400000,
@@ -109,6 +111,7 @@ const sampleRunRow: AutomationRunRow = {
   failure_reason: null,
   scheduled_at: now,
   started_at: null,
+  execution_deadline_at: null,
   completed_at: null,
   created_at: now,
   invocation_id: "inv-test1",
@@ -184,6 +187,52 @@ describe("toAutomation", () => {
     expect(automation.enabled).toBe(false);
   });
 
+  it("parses stored trigger_config through the trigger schema", () => {
+    const triggerConfig = {
+      conditions: [
+        {
+          type: "text_match",
+          operator: "contains",
+          value: { pattern: "urgent" },
+        },
+      ],
+    };
+
+    const automation = toAutomation(
+      {
+        ...sampleRow,
+        trigger_type: "webhook",
+        event_type: "webhook.received",
+        trigger_config: JSON.stringify(triggerConfig),
+      },
+      [],
+      [],
+      []
+    );
+
+    expect(automation.triggerType).toBe("webhook");
+    expect(automation.triggerConfig).toEqual(triggerConfig);
+  });
+
+  it("rejects malformed stored trigger_config instead of asserting it", () => {
+    expect(() =>
+      toAutomation(
+        {
+          ...sampleRow,
+          trigger_type: "webhook",
+          trigger_config: JSON.stringify({ conditions: [{ type: "unknown" }] }),
+        },
+        [],
+        [],
+        []
+      )
+    ).toThrow();
+  });
+
+  it("rejects unknown stored trigger_type instead of asserting it", () => {
+    expect(() => toAutomation({ ...sampleRow, trigger_type: "unknown" }, [], [], [])).toThrow();
+  });
+
   it("maps repo-less automations to an empty repository list", () => {
     const automation = toAutomation(sampleRow, [], [], []);
     expect(automation.repositories).toEqual([]);
@@ -221,6 +270,36 @@ describe("toAutomation", () => {
       },
       xai: { mode: "api_key" },
     });
+  });
+});
+
+describe("parseAutomationTriggerFields", () => {
+  it("decodes persisted trigger fields at the storage boundary", () => {
+    const triggerConfig = {
+      conditions: [{ type: "text_match", operator: "contains", value: { pattern: "urgent" } }],
+    };
+
+    expect(
+      parseAutomationTriggerFields({
+        ...sampleRow,
+        trigger_type: "webhook",
+        trigger_config: JSON.stringify(triggerConfig),
+      })
+    ).toEqual({ triggerType: "webhook", triggerConfig });
+  });
+
+  it("rejects an unknown persisted trigger type", () => {
+    expect(() => parseAutomationTriggerFields({ ...sampleRow, trigger_type: "made_up" })).toThrow();
+  });
+
+  it("rejects a malformed persisted trigger config", () => {
+    expect(() =>
+      parseAutomationTriggerFields({
+        ...sampleRow,
+        trigger_type: "webhook",
+        trigger_config: JSON.stringify({ conditions: [{ type: "made_up" }] }),
+      })
+    ).toThrow();
   });
 });
 
@@ -423,15 +502,20 @@ describe("AutomationStore", () => {
     });
   });
 
-  describe("getTimedOutRunningRuns", () => {
-    it("returns runs stuck in running state", async () => {
+  describe("getRunsPastExecutionDeadline", () => {
+    it("returns running runs whose own deadline has passed", async () => {
       const { db, statements } = createFakeD1({
-        allResults: [{ ...sampleRunRow, status: "running", started_at: now }],
+        allResults: [
+          { ...sampleRunRow, status: "running", started_at: now, execution_deadline_at: now },
+        ],
       });
       const store = new AutomationStore(db);
-      const result = await store.getTimedOutRunningRuns(90 * 60 * 1000, 50);
+      const result = await store.getRunsPastExecutionDeadline(now, 10_800_000, 50);
       expect(result).toHaveLength(1);
       expect(statements[0].sql).toContain("status = 'running'");
+      expect(statements[0].sql).toContain("execution_deadline_at < ?");
+      expect(statements[0].sql).toContain("execution_deadline_at IS NULL AND started_at < ?");
+      expect(statements[0].params).toEqual([now, now - 10_800_000, 50]);
     });
   });
 
@@ -464,11 +548,20 @@ describe("AutomationStore", () => {
       const { db, statements } = createFakeD1();
       const store = new AutomationStore(db);
 
-      await store.claimRunSession("run_test1", "session-1", now);
+      await store.claimRunSession("run_test1", "session-1", now, now + 1000);
 
       expect(statements[0].sql).toContain("SET status = 'running'");
       expect(statements[0].sql).toContain("WHERE id = ? AND status = 'starting'");
-      expect(statements[0].params).toEqual(["session-1", now, "run_test1"]);
+      expect(statements[0].params).toEqual(["session-1", now, now + 1000, "run_test1"]);
+    });
+
+    it("stamps the execution deadline in the statement that makes the run sweepable", async () => {
+      const { db, statements } = createFakeD1();
+      const store = new AutomationStore(db);
+
+      await store.claimRunSession("run_test1", "session-1", now, now + 1000);
+
+      expect(statements[0].sql).toContain("execution_deadline_at = ?");
     });
   });
 

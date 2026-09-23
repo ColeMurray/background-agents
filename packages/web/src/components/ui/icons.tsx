@@ -254,6 +254,43 @@ export function GrokIcon({ className, ...props }: IconProps) {
   );
 }
 
+export function AnthropicIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      role="img"
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      {...props}
+    >
+      <title>Anthropic</title>
+      <path d="M17.304 3.541h-3.672l6.696 16.918H24Zm-10.608 0L0 20.459h3.744l1.37-3.553h7.005l1.369 3.553h3.744L10.536 3.541Zm-.371 10.223L8.616 7.82l2.291 5.945Z" />
+    </svg>
+  );
+}
+
+export function OpenCodeIcon({ className, ...props }: IconProps) {
+  return (
+    <svg
+      role="img"
+      className={className}
+      viewBox="0 0 512 512"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      {...props}
+    >
+      <title>OpenCode</title>
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"
+      />
+      <path d="M320 224V352H192V224H320Z" opacity="0.45" />
+    </svg>
+  );
+}
+
 export function SlackIcon({ className }: IconProps) {
   return (
     <svg
@@ -754,6 +791,25 @@ export function DataControlsIcon({ className }: IconProps) {
       <ellipse cx="12" cy="5" rx="9" ry="3" />
       <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
       <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+    </svg>
+  );
+}
+
+export function SessionsIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M7 8h10" />
+      <path d="M7 12h10" />
+      <path d="M7 16h6" />
     </svg>
   );
 }

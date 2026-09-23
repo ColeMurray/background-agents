@@ -2,7 +2,7 @@ import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/
 import { createExecutionContext, env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../src/index";
-import type { Env } from "../../src/types";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import {
   getSetCookies,
@@ -25,7 +25,7 @@ const SERVICE_SECRETS: Record<ServiceName, string> = {
   "linear-bot": "test-service-secret-linear-bot",
 };
 
-function fetchWorker(request: Request, requestEnv: Env = env): Promise<Response> {
+function fetchWorker(request: Request, requestEnv: WorkerBindings = env): Promise<Response> {
   return worker.fetch(request, requestEnv, createExecutionContext());
 }
 
@@ -121,7 +121,7 @@ describe("ordinary HTTP response compatibility", () => {
       new Request("https://test.local/health", {
         headers: { "x-trace-id": "missing-db-trace" },
       }),
-      { ...env, DB: undefined } as unknown as Env
+      { ...env, DB: undefined } as unknown as WorkerBindings
     );
 
     expect(response.status).toBe(503);
@@ -141,7 +141,10 @@ describe("ordinary HTTP response compatibility", () => {
       headers: { "x-trace-id": traceId },
     });
 
-    const response = await fetchWorker(request, { ...env, SCM_PROVIDER: "gitlab" } as Env);
+    const response = await fetchWorker(request, {
+      ...env,
+      SCM_PROVIDER: "gitlab",
+    } as WorkerBindings);
 
     expect(response.status).toBe(501);
     await expect(response.json()).resolves.toEqual({
@@ -160,7 +163,10 @@ describe("ordinary HTTP response compatibility", () => {
       body: JSON.stringify({ title: "Never created", model: "anthropic/claude-haiku-4-5" }),
     });
 
-    const response = await fetchWorker(request, { ...env, SCM_PROVIDER: "gitlab" } as Env);
+    const response = await fetchWorker(request, {
+      ...env,
+      SCM_PROVIDER: "gitlab",
+    } as WorkerBindings);
 
     expect(response.status).toBe(501);
     await expect(
@@ -326,7 +332,10 @@ describe("ordinary HTTP response compatibility", () => {
       }),
     } as unknown as R2Bucket;
 
-    const response = await fetchWorker(request, { ...env, MEDIA_BUCKET: unavailableBucket } as Env);
+    const response = await fetchWorker(request, {
+      ...env,
+      MEDIA_BUCKET: unavailableBucket,
+    } as WorkerBindings);
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: "Internal server error" });

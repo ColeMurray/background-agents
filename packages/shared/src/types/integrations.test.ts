@@ -12,13 +12,55 @@ import {
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   normalizeRoutingRules,
+  omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
+  supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
+  validateSandboxChildSessionLimits,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("sandbox provider settings capabilities", () => {
+  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+    expect(supportsConfigurableSandboxResources(provider)).toBe(true);
+  });
+
+  it.each(["daytona", "opencomputer", "e2b"])(
+    "does not expose resource overrides for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResources(provider)).toBe(false);
+    }
+  );
+
+  it("does not expose session timeout overrides for Daytona", () => {
+    expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
+    expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
+  });
+
+  it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
+  });
+
+  it("drops unsupported Daytona settings while preserving supported settings", () => {
+    expect(
+      omitUnsupportedSandboxSettings(
+        {
+          cpuCores: 2,
+          memoryMib: 4096,
+          sandboxTimeoutMs: 14_400_000,
+          buildTimeoutSeconds: 2400,
+          terminalEnabled: true,
+        },
+        "daytona"
+      )
+    ).toEqual({ buildTimeoutSeconds: 2400, terminalEnabled: true });
+  });
+});
 
 describe("findSandboxPortConflict", () => {
   it.each([INTERNAL_TTYD_PORT, INTERNAL_VNC_PORT])("rejects reserved internal port %i", (port) => {
@@ -42,6 +84,36 @@ describe("isValidSandboxTimeoutMs", () => {
       expect(isValidSandboxTimeoutMs(value)).toBe(false);
     }
   );
+});
+
+describe("validateSandboxChildSessionLimits", () => {
+  it.each([4, 5])("accepts concurrent limit %i at or below the total", (concurrent) => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: concurrent,
+        maxTotalChildSessions: 5,
+      })
+    ).toBeUndefined();
+  });
+
+  it("rejects a concurrent limit above the total with the existing message", () => {
+    expect(
+      validateSandboxChildSessionLimits({
+        maxConcurrentChildSessions: 6,
+        maxTotalChildSessions: 5,
+      })
+    ).toBe("maxConcurrentChildSessions must be less than or equal to maxTotalChildSessions");
+  });
+
+  it.each([
+    {},
+    { maxConcurrentChildSessions: 100 },
+    { maxTotalChildSessions: 1 },
+    { maxConcurrentChildSessions: 100, maxTotalChildSessions: undefined },
+    { maxConcurrentChildSessions: undefined, maxTotalChildSessions: 1 },
+  ])("accepts sparse limits %j without applying defaults", (settings) => {
+    expect(validateSandboxChildSessionLimits(settings)).toBeUndefined();
+  });
 });
 
 describe("resolveBuildTimeoutSeconds", () => {
@@ -282,6 +354,22 @@ describe("integration settings schemas", () => {
     expect(
       integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
     ).toBe(true);
+  });
+
+  it("parses valid session cost limits", () => {
+    expect(
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        maxSessionCostUsd: 12.5,
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxSessionCostUsd: 0 },
+    { maxSessionCostUsd: -1 },
+    { maxSessionCostUsd: Number.POSITIVE_INFINITY },
+  ])("rejects invalid session cost settings %#", (settings) => {
+    expect(integrationSettingsSchemas.sandbox.repo.safeParse(settings).success).toBe(false);
   });
 });
 

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import type { SessionIndexStore } from "../db/session-index";
 import { SessionTitleService } from "./title-service";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionRow } from "./types";
@@ -18,7 +17,7 @@ function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
   } as SessionRow;
 }
 
-function makeHarness(options: { session?: SessionRow | null; withoutIndexStore?: boolean } = {}) {
+function makeHarness(options: { session?: SessionRow | null } = {}) {
   const session = options.session === undefined ? sessionRow() : options.session;
   const repository = {
     getSession: vi.fn(() => session),
@@ -28,19 +27,17 @@ function makeHarness(options: { session?: SessionRow | null; withoutIndexStore?:
   const messenger = { broadcast: vi.fn(), sendToSandbox: vi.fn(async () => {}) };
   const statusService = { notifyParentOfChildUpdate: vi.fn() };
   const backgroundTasks = createTestBackgroundTasks();
-  const updateTitleIfNewer = vi.fn(async () => {});
+  const updateTitle = vi.fn(async () => true);
   const service = new SessionTitleService({
     sessionCoreRepository: repository as unknown as SessionCoreRepository,
     messenger,
     statusService,
     backgroundTasks,
-    sessionIndexStore: options.withoutIndexStore
-      ? null
-      : ({ updateTitleIfNewer } as unknown as SessionIndexStore),
+    sessionIndexStore: { updateTitle },
     durableObjectId: "do-hex-id",
     now: () => NOW,
   });
-  return { service, repository, messenger, statusService, backgroundTasks, updateTitleIfNewer };
+  return { service, repository, messenger, statusService, backgroundTasks, updateTitle };
 }
 
 describe("SessionTitleService", () => {
@@ -94,7 +91,7 @@ describe("SessionTitleService", () => {
     ]);
     await h.backgroundTasks.settle();
     expect(h.backgroundTasks.failures).toEqual([]);
-    expect(h.updateTitleIfNewer).toHaveBeenCalledWith("public-name", "New title", NOW);
+    expect(h.updateTitle).toHaveBeenCalledWith("public-name", "New title", NOW);
     expect(h.statusService.notifyParentOfChildUpdate).not.toHaveBeenCalled();
   });
 
@@ -110,6 +107,31 @@ describe("SessionTitleService", () => {
     );
   });
 
+  it("serializes index title projections and continues after a failure", async () => {
+    const h = makeHarness();
+    let rejectFirst!: (error: unknown) => void;
+    const firstProjection = new Promise<boolean>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    h.updateTitle.mockImplementationOnce(() => firstProjection).mockResolvedValueOnce(true);
+
+    h.service.applySessionTitleUpdate("First title");
+    h.service.applySessionTitleUpdate("Second title");
+
+    await vi.waitFor(() => expect(h.updateTitle).toHaveBeenCalledTimes(1));
+    expect(h.updateTitle).toHaveBeenLastCalledWith("public-name", "First title", NOW);
+
+    const projectionError = new Error("D1 unavailable");
+    rejectFirst(projectionError);
+    await h.backgroundTasks.settle();
+
+    expect(h.updateTitle.mock.calls).toEqual([
+      ["public-name", "First title", NOW],
+      ["public-name", "Second title", NOW],
+    ]);
+    expect(h.backgroundTasks.failures).toEqual([projectionError]);
+  });
+
   it("notifies the parent session for child sessions", () => {
     const h = makeHarness({ session: sessionRow({ parent_session_id: "parent-1" }) });
 
@@ -120,14 +142,5 @@ describe("SessionTitleService", () => {
       "public-name",
       { status: "active", title: "Child title" }
     );
-  });
-
-  it("skips the index sync when no D1 store is bound", () => {
-    const h = makeHarness({ withoutIndexStore: true });
-
-    const result = h.service.applySessionTitleUpdate("A title");
-
-    expect(result).toEqual({ ok: true, title: "A title" });
-    expect(h.backgroundTasks.submissions).toEqual([]);
   });
 });

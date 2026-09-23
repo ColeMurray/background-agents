@@ -1,14 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { CollapsibleSection } from "./collapsible-section";
 import { Badge } from "@/components/ui/badge";
 import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { pullRequestSummaryDisplay } from "@/lib/pr-summary";
 import { formatRelativeTime } from "@/lib/time";
 import { formatRepoLabel } from "@/lib/repo-label";
-import type { Session, SessionStatus } from "@open-inspect/shared/types/sessions";
+import {
+  childSessionListResponseSchema,
+  type ChildSessionListResponse,
+  type SessionStatus,
+} from "@open-inspect/shared/types/sessions";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
 interface ChildSessionsSectionProps {
@@ -36,15 +40,23 @@ function statusBadgeVariant(status: SessionStatus) {
 }
 
 export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
-  const { data } = useSWR<{ children: Session[] }>(`/api/sessions/${sessionId}/children`, {
-    // Primary refresh is event-driven via WebSocket child_session_update → SWR mutate().
-    // This is a safety-net fallback for missed WS messages during reconnections.
-    refreshInterval: (latestData) => {
-      if (!latestData?.children?.length) return 0;
-      const hasActiveChild = latestData.children.some((c) => !isSessionInactive(c.status));
-      return hasActiveChild ? 30_000 : 0;
-    },
-  });
+  const { fetcher } = useSWRConfig();
+  const { data } = useSWR<ChildSessionListResponse>(
+    `/api/sessions/${sessionId}/children`,
+    fetcher
+      ? (key) =>
+          Promise.resolve(fetcher(key)).then((data) => childSessionListResponseSchema.parse(data))
+      : null,
+    {
+      // Primary refresh is event-driven via WebSocket child_session_update → SWR mutate().
+      // This is a safety-net fallback for missed WS messages during reconnections.
+      refreshInterval: (latestData) => {
+        if (!latestData?.children?.length) return 0;
+        const hasActiveChild = latestData.children.some((c) => !isSessionInactive(c.status));
+        return hasActiveChild ? 30_000 : 0;
+      },
+    }
+  );
 
   const children = data?.children;
   if (!children?.length) return null;

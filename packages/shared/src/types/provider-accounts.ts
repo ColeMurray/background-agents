@@ -1,16 +1,43 @@
 import { z } from "zod";
 
-export const SUBSCRIPTION_PROVIDER_IDS = ["openai", "xai"] as const;
+export const SUBSCRIPTION_PROVIDER_IDS = ["openai", "xai", "anthropic"] as const;
 export type SubscriptionProviderId = (typeof SUBSCRIPTION_PROVIDER_IDS)[number];
 
 export const SUBSCRIPTION_PROVIDER_DISPLAY_METADATA = {
   openai: { displayName: "OpenAI", subscriptionName: "ChatGPT" },
   xai: { displayName: "xAI", subscriptionName: "SuperGrok" },
+  anthropic: { displayName: "Anthropic", subscriptionName: "Claude" },
 } as const satisfies Readonly<
   Record<SubscriptionProviderId, { displayName: string; subscriptionName: string }>
 >;
 
 export const subscriptionProviderIdSchema = z.enum(SUBSCRIPTION_PROVIDER_IDS);
+
+/**
+ * How a provider account is connected from Settings. Device authorization
+ * polls the provider for a user-code approval; authorization code sends the
+ * user to the provider's consent page and takes the code it shows back
+ * (Anthropic's hosted callback displays the code for the user to paste).
+ */
+export type ModelProviderAccountConnectionMethod = "device_authorization" | "authorization_code";
+export const MODEL_PROVIDER_ACCOUNT_CONNECTION_METHOD = {
+  openai: "device_authorization",
+  xai: "device_authorization",
+  anthropic: "authorization_code",
+} as const satisfies Readonly<Record<SubscriptionProviderId, ModelProviderAccountConnectionMethod>>;
+
+export function modelProviderAccountConnectionMethod(
+  provider: SubscriptionProviderId
+): ModelProviderAccountConnectionMethod {
+  return MODEL_PROVIDER_ACCOUNT_CONNECTION_METHOD[provider];
+}
+
+/**
+ * Providers whose stored credential never refreshes: the token is what the
+ * runtime receives (a Claude setup token). Verification against the provider
+ * is not offered for them.
+ */
+export const STATIC_CREDENTIAL_PROVIDER_IDS: readonly SubscriptionProviderId[] = ["anthropic"];
 
 /** Provider account IDs use the installation's canonical 16-byte hex ID format. */
 export const MODEL_PROVIDER_ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
@@ -40,6 +67,7 @@ export type SessionProviderAuthMode = ProviderAuthMode | "legacy_scoped_oauth";
 export const modelProviderSelectionsSchema = z.strictObject({
   openai: providerAuthSelectionSchema.optional(),
   xai: providerAuthSelectionSchema.optional(),
+  anthropic: providerAuthSelectionSchema.optional(),
 });
 export type ModelProviderSelections = z.infer<typeof modelProviderSelectionsSchema>;
 
@@ -66,21 +94,25 @@ export const modelProviderAccountSchema = z.strictObject({
 });
 export type ModelProviderAccount = z.infer<typeof modelProviderAccountSchema>;
 
-export type ModelProviderAccountReconnectMethod = "device_authorization" | "refresh_token";
+export type ModelProviderAccountReconnectMethod =
+  | "device_authorization"
+  | "authorization_code"
+  | "refresh_token";
 
 /**
  * Canonical reconnect capability for provider accounts.
  *
- * xAI accounts created before device authorization do not have a bound external identity and
- * retain the one-time refresh-token reconnect path. Keep that compatibility rule here rather
- * than making clients infer a workflow from account metadata independently.
+ * The provider declares its connection method; the one compatibility rule is
+ * that xAI accounts created before device authorization have no bound
+ * external identity and keep the one-time refresh-token reconnect path.
+ * Anthropic accounts are identity-less by design (the inference scope carries
+ * no account id) and always reconnect through the authorization-code flow.
  */
 export function modelProviderAccountReconnectMethod(
   account: Pick<ModelProviderAccount, "provider" | "externalAccountId">
 ): ModelProviderAccountReconnectMethod {
-  return account.provider === "xai" && account.externalAccountId === null
-    ? "refresh_token"
-    : "device_authorization";
+  if (account.provider === "xai" && account.externalAccountId === null) return "refresh_token";
+  return modelProviderAccountConnectionMethod(account.provider);
 }
 
 export const modelProviderAccountResponseSchema = z.strictObject({
@@ -196,9 +228,16 @@ export const connectXaiModelProviderAccountRequestSchema = z.strictObject({
   displayName: modelProviderAccountDisplayNameSchema,
   refreshToken: credentialStringSchema,
 });
+/** Direct connect with a token minted elsewhere (`claude setup-token` on a workstation). */
+export const connectAnthropicModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("anthropic"),
+  displayName: modelProviderAccountDisplayNameSchema,
+  setupToken: credentialStringSchema,
+});
 export const connectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
   connectOpenAIModelProviderAccountRequestSchema,
   connectXaiModelProviderAccountRequestSchema,
+  connectAnthropicModelProviderAccountRequestSchema,
 ]);
 export type ConnectModelProviderAccountRequest = z.infer<
   typeof connectModelProviderAccountRequestSchema
@@ -213,9 +252,14 @@ export const reconnectXaiModelProviderAccountRequestSchema = z.strictObject({
   provider: z.literal("xai"),
   refreshToken: credentialStringSchema,
 });
+export const reconnectAnthropicModelProviderAccountRequestSchema = z.strictObject({
+  provider: z.literal("anthropic"),
+  setupToken: credentialStringSchema,
+});
 export const reconnectModelProviderAccountRequestSchema = z.discriminatedUnion("provider", [
   reconnectOpenAIModelProviderAccountRequestSchema,
   reconnectXaiModelProviderAccountRequestSchema,
+  reconnectAnthropicModelProviderAccountRequestSchema,
 ]);
 export type ReconnectModelProviderAccountRequest = z.infer<
   typeof reconnectModelProviderAccountRequestSchema
@@ -282,4 +326,49 @@ export const providerDeviceAuthorizationStatusResponseSchema = z.discriminatedUn
 ]);
 export type ProviderDeviceAuthorizationStatusResponse = z.infer<
   typeof providerDeviceAuthorizationStatusResponseSchema
+>;
+
+// --- Authorization-code connections (Anthropic) ---------------------------
+
+/** Same targets as device authorization: create a named slot, or reconnect one. */
+export const startProviderAuthorizationCodeRequestSchema =
+  startProviderDeviceAuthorizationRequestSchema;
+export type StartProviderAuthorizationCodeRequest = StartProviderDeviceAuthorizationRequest;
+
+export const startProviderAuthorizationCodeResponseSchema = z.strictObject({
+  transactionId: providerDeviceAuthorizationIdSchema,
+  provider: subscriptionProviderIdSchema,
+  operation: z.enum(["create", "reconnect"]),
+  /** Where the user grants access; the provider then shows a code to paste back. */
+  authorizationUrl: z.url(),
+  expiresAt: z.number().int().positive(),
+  expiresInMs: z.number().int().positive(),
+});
+export type StartProviderAuthorizationCodeResponse = z.infer<
+  typeof startProviderAuthorizationCodeResponseSchema
+>;
+
+/** The code the provider displayed, exactly as the user pasted it (`code` or `code#state`). */
+export const completeProviderAuthorizationCodeRequestSchema = z.strictObject({
+  code: z.string().trim().min(1).max(4096),
+});
+export type CompleteProviderAuthorizationCodeRequest = z.infer<
+  typeof completeProviderAuthorizationCodeRequestSchema
+>;
+
+export const providerAuthorizationCodeStatusResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("pending"),
+    expiresAt: z.number().int().positive(),
+  }),
+  z.strictObject({
+    status: z.literal("connected"),
+    account: modelProviderAccountSchema,
+    reconnectedExisting: z.boolean(),
+    completedAt: z.number().int().positive(),
+  }),
+  terminalProviderDeviceAuthorizationErrorSchema,
+]);
+export type ProviderAuthorizationCodeStatusResponse = z.infer<
+  typeof providerAuthorizationCodeStatusResponseSchema
 >;

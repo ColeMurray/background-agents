@@ -9,6 +9,7 @@ Run the eager image build before deploying:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -17,18 +18,61 @@ import modal
 # Add src to path so imports work
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-# Import the app
-# Import modules to register functions with the app
-# This makes all web endpoints and functions available
-from src.app import app
-from src.images.base import base_image
+if __name__ == "__main__":
+    # The eager builder must run before a verified image reference exists. Import
+    # only build modules, without src.__init__ registering deployable functions.
+    from app_config import APP_NAME
+    from images.base import base_image, base_image_plan, image_reference_path
+else:
+    # Modal imports this module to discover the fully registered application.
+    from src.app import app
+    from src.app_config import APP_NAME
+    from src.images.base import base_image, base_image_plan, image_reference_path
 
 
 def build_sandbox_image() -> None:
     """Build the image used by dynamic sandboxes before requests can create them."""
-    deployed_app = modal.App.lookup(app.name, create_if_missing=True)
+    if base_image_plan is None:
+        raise RuntimeError("Modal sandbox image build requires a local packed image plan")
+    deployed_app = modal.App.lookup(APP_NAME, create_if_missing=True)
     with modal.enable_output():
         base_image.build(deployed_app)
+    from sandbox_images.native import write_build_result
+
+    # Verify the concrete baked artifact, without local source mounts.
+    sandbox = modal.Sandbox.create(
+        "sleep",
+        "infinity",
+        app=deployed_app,
+        image=modal.Image.from_id(base_image.object_id),
+        env=base_image_plan["runtimeEnv"],
+        # The desktop check starts Xvfb, fluxbox and x11vnc at once; without a
+        # CPU request they run on Modal's small default share.
+        cpu=2.0,
+        timeout=300,
+    )
+    try:
+        process = sandbox.exec(
+            "/opt/openinspect/python/bin/python",
+            "/app/verify/smoke_test.py",
+            "verify",
+            timeout=240,
+        )
+        process.stdout.read()
+        process.wait()
+        if process.returncode != 0:
+            raise RuntimeError(f"Modal image verification failed: {process.stderr.read()}")
+        write_build_result(base_image.object_id)
+    finally:
+        sandbox.terminate()
+    # Publish the function image reference only after fresh-artifact verification.
+    record = {
+        "imageId": base_image.object_id,
+        "buildHash": base_image_plan["buildHash"],
+    }
+    path = image_reference_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record) + "\n")
 
 
 def main() -> None:

@@ -25,6 +25,7 @@ import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import { BudgetSection } from "./sidebar/budget-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 interface SessionRightSidebarProps {
@@ -43,9 +44,12 @@ interface SessionRightSidebarProps {
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
   capabilities: SessionCapabilities;
+  canManageBudget?: boolean;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
+
+const DEFAULT_CAN_MANAGE_BUDGET = false;
 
 export function SessionRightSidebarContent({
   sessionId,
@@ -61,6 +65,7 @@ export function SessionRightSidebarContent({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
 }: SessionRightSidebarContentProps) {
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
@@ -110,7 +115,7 @@ export function SessionRightSidebarContent({
       </div>
 
       {/* Metadata */}
-      <div className="px-4 py-4 border-b border-border-muted">
+      <div className="space-y-4 px-4 py-4 border-b border-border-muted">
         <MetadataSection
           sessionId={sessionId}
           createdAt={sessionState.createdAt}
@@ -126,8 +131,13 @@ export function SessionRightSidebarContent({
           environmentName={sessionState.environmentName}
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
-          totalCost={sessionState.totalCost}
           canManageLifecycle={capabilities.lifecycle}
+        />
+        <BudgetSection
+          sessionId={sessionId}
+          totalCost={sessionState.totalCost ?? 0}
+          maxSessionCostUsd={sessionState.maxSessionCostUsd}
+          canManageBudget={canManageBudget}
         />
       </div>
 
@@ -294,6 +304,7 @@ export function SessionRightSidebar({
   diffLoading,
   selectedDiff,
   onOpenDiff,
+  canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
 }: SessionRightSidebarProps) {
   return (
@@ -320,6 +331,7 @@ export function SessionRightSidebar({
         diffLoading={diffLoading}
         selectedDiff={selectedDiff}
         onOpenDiff={onOpenDiff}
+        canManageBudget={canManageBudget}
         capabilities={capabilities}
       />
     </aside>

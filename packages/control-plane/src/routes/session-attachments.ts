@@ -39,7 +39,7 @@ import {
   SessionAttachmentStorageError,
   SessionAttachmentStorageService,
 } from "../session/services/session-attachment-storage";
-import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
+import type { ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
 import {
@@ -137,7 +137,7 @@ export async function handleAttachmentPost(
 
   const attachmentId = generateId();
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
   const attachmentStorage = new SessionAttachmentStorageService(
     ctx.sessionRuntime,
     storage,
@@ -194,7 +194,7 @@ export async function handleAttachmentGet(
     return error("Invalid attachment ID", 400);
   }
 
-  const storage = createMediaObjectStorage(env);
+  const storage = env.MEDIA_BUCKET;
   const objectKey = buildSessionAttachmentObjectKey(sessionId, attachmentId);
   const rangeHeader = request.headers.get("Range");
   let body: ReadableStream;

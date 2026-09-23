@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createTestEnv } from "../router.test-support";
 import type { Env } from "../types";
 import { createSandboxProviderFromEnv } from "./provider-factory";
 
 function createEnv(overrides: Partial<Env>): Env {
-  return {
-    DB: {} as D1Database,
-    SESSION: {} as DurableObjectNamespace,
-    MEDIA_BUCKET: {} as R2Bucket,
-    TOKEN_ENCRYPTION_KEY: "test-token-key",
-    DEPLOYMENT_NAME: "test",
-    ...overrides,
-  } as Env;
+  return createTestEnv({ TOKEN_ENCRYPTION_KEY: "test-token-key", ...overrides });
 }
 
 describe("createSandboxProviderFromEnv", () => {
@@ -51,6 +45,26 @@ describe("createSandboxProviderFromEnv", () => {
     expect(() => createSandboxProviderFromEnv(env, "daytona")).toThrow(
       "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES must be a valid number"
     );
+  });
+
+  it("needs a base snapshot to create Daytona sandboxes", () => {
+    const env = createEnv({
+      DAYTONA_API_URL: "https://daytona.test",
+      DAYTONA_API_KEY: "daytona-key",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "daytona")).toThrow(
+      "DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes"
+    );
+  });
+
+  it("still requires Daytona credentials", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({ DAYTONA_API_URL: "https://daytona.test" }),
+        "daytona"
+      )
+    ).toThrow("DAYTONA_API_URL and DAYTONA_API_KEY are required");
   });
 
   it("rejects malformed E2B auto-pause configuration", () => {

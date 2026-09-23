@@ -13,12 +13,18 @@
  * Closing a replaced socket is cleanup — the persisted identity is the fence.
  */
 
+import type { SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../logger";
+import {
+  evaluateSandboxCommandAvailability,
+  isDeadSandboxStatus,
+} from "../sandbox/lifecycle/decisions";
+import { parseStoredSandboxBootPhase } from "../sandbox/boot-phase";
 import { isSocketOpen, type AlarmScheduler, type SessionWebSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
 import type { SessionWebSocketHost } from "./platform";
 import type { ConnectionClassification } from "./ports";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxSocketStore } from "./sandbox-ports";
 import type { SandboxRow } from "./types";
 import type {
   WsClientMappingRepository,
@@ -33,6 +39,12 @@ import {
 export interface WebSocketManagerConfig {
   authTimeoutMs: number;
 }
+
+/** Ephemeral classification, not a dispatch permit that can survive an await. */
+export type SandboxCommandTarget =
+  | { kind: "dispatch"; socket: SessionWebSocket }
+  | { kind: "booting"; phase: SandboxBootPhase | null }
+  | { kind: "unavailable" };
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -58,8 +70,19 @@ export interface SessionWebSocketManager {
   /**
    * Get the active sandbox socket, recovering from hibernation if needed.
    * Validates sandbox ID against the repository during hibernation recovery.
+   *
+   * This is the lifecycle socket: it exists from the moment the bridge
+   * attaches, which may be well before the runtime can act on a command.
+   * Ordinary commands use `getSandboxCommandTarget` instead.
    */
   getSandboxSocket(): SessionWebSocket | null;
+
+  /**
+   * Select a target using lifecycle policy. Distinguishes an attached booting
+   * bridge from unavailable compute so callers do not reconstruct readiness
+   * from two different socket getters. Control commands keep the raw getter.
+   */
+  getSandboxCommandTarget(): SandboxCommandTarget;
 
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
@@ -136,7 +159,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   /** Create a WebSocket manager over the host's sockets and persisted client mappings. */
   constructor(
     private readonly host: SessionWebSocketHost,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxSocketStore,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly log: Logger,
@@ -213,25 +236,26 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    */
   private isAuthoritative(parsed: ConnectionClassification, sandbox: SandboxRow | null): boolean {
     if (parsed.kind !== "sandbox" || !sandbox) return false;
+    if (sandbox.modal_sandbox_id && parsed.sandboxId !== sandbox.modal_sandbox_id) return false;
     if (sandbox.active_socket_id === null) {
-      return (
-        parsed.socketId === undefined &&
-        (!sandbox.modal_sandbox_id || parsed.sandboxId === sandbox.modal_sandbox_id)
-      );
+      return parsed.socketId === undefined;
     }
     return parsed.socketId !== undefined && parsed.socketId === sandbox.active_socket_id;
   }
 
   getSandboxSocket(): SessionWebSocket | null {
     const sandbox = this.sandboxRepository.getSandbox();
+    return this.getSandboxSocketForRow(sandbox);
+  }
+
+  private getSandboxSocketForRow(sandbox: SandboxRow | null): SessionWebSocket | null {
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
     // If the sandbox is in a terminal state, don't re-adopt stale WebSockets.
     // After inactivity timeout or heartbeat stale, the DO closes the WS and sets
     // status to stopped/stale, but the close handshake may not complete before
     // hibernation. On wake, the zombie WS still appears OPEN — skip it.
-    const terminalStatuses = ["stopped", "failed", "stale"];
-    if (sandbox && terminalStatuses.includes(sandbox.status)) {
+    if (sandbox && isDeadSandboxStatus(sandbox.status)) {
       this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
       for (const ws of this.host.sockets()) {
@@ -275,6 +299,18 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
 
     return null;
+  }
+
+  getSandboxCommandTarget(): SandboxCommandTarget {
+    const sandbox = this.sandboxRepository.getSandbox();
+    const ws = this.getSandboxSocketForRow(sandbox);
+    if (!ws || !sandbox) return { kind: "unavailable" };
+    const kind = evaluateSandboxCommandAvailability(sandbox.status);
+    if (kind === "dispatch") return { kind, socket: ws };
+    if (kind === "booting") {
+      return { kind, phase: parseStoredSandboxBootPhase(sandbox.boot_phase) };
+    }
+    return { kind };
   }
 
   clearSandboxSocket(): void {

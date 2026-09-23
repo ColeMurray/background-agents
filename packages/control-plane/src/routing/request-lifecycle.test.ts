@@ -14,7 +14,7 @@ function requestContext(metrics: Record<string, unknown> = {}): RequestContext {
     request_id: "request-123",
     trace_id: "trace-456",
     metrics: {
-      d1Queries: [],
+      sqlQueries: [],
       spans: {},
       time: async <T>(_name: string, operation: () => Promise<T>): Promise<T> => operation(),
       summarize: () => metrics,
@@ -139,7 +139,7 @@ describe("request lifecycle logging", () => {
 
     logRequest(
       new Response(null, { status }),
-      requestContext({ d1_query_count: 2, d1_total_ms: 7 }),
+      requestContext({ sql_query_count: 2, sql_total_ms: 7 }),
       "POST",
       "/sessions",
       1_000
@@ -155,8 +155,8 @@ describe("request lifecycle logging", () => {
         http_status: status,
         duration_ms: 250,
         outcome,
-        d1_query_count: 2,
-        d1_total_ms: 7,
+        sql_query_count: 2,
+        sql_total_ms: 7,
       })
     );
   });

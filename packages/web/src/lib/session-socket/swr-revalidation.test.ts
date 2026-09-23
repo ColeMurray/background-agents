@@ -49,6 +49,7 @@ describe("swrKeysToRevalidate", () => {
           sandboxStatus: "ready" as const,
           messageCount: 0,
           createdAt: 1,
+          harness: "opencode" as const,
         },
         artifacts: [],
         participantId: "participant-1",
@@ -163,6 +164,7 @@ describe("swrKeysToRevalidate", () => {
             branchName: null,
             status: "active",
             sandboxStatus: "ready",
+            harness: "opencode" as const,
             messageCount: 0,
             createdAt: 1,
           },
@@ -187,6 +189,6 @@ describe("swrKeysToRevalidate", () => {
     expect(
       swrKeysToRevalidate({ type: "session_branch", branchName: "feature/x" }, SESSION_ID)
     ).toEqual([]);
-    expect(swrKeysToRevalidate({ type: "sandbox_ready" }, SESSION_ID)).toEqual([]);
+    expect(swrKeysToRevalidate({ type: "sandbox_warming" }, SESSION_ID)).toEqual([]);
   });
 });

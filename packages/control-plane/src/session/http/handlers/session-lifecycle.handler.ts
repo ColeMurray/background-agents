@@ -1,7 +1,11 @@
-import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
+import type { SandboxCancellation } from "../../../sandbox/lifecycle/ports";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import {
+  SESSION_ARCHIVE_HTTP_STATUS,
+  type SessionArchiveOutcome,
+} from "@open-inspect/shared/types/session-archive";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxRepository } from "../../sandbox-repository";
+import type { SandboxStateReader } from "../../sandbox-ports";
 import type { MessageRepository } from "../../message-repository";
 import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
@@ -21,6 +25,14 @@ import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
  */
 function isCancellable(status: SessionStatus): boolean {
   return !isSessionInactive(status);
+}
+
+/** Preserve the legacy response fields while deriving status from the shared decision. */
+function archiveResponse(
+  outcome: SessionArchiveOutcome,
+  fields: { error: string } | { status: "archived" }
+): Response {
+  return Response.json({ ...fields, outcome }, { status: SESSION_ARCHIVE_HTTP_STATUS[outcome] });
 }
 
 function sessionTitleUpdateStatus(
@@ -50,11 +62,11 @@ export class SessionLifecycleHandler {
   /** Create the session lifecycle HTTP handler with its persistence and lifecycle services. */
   constructor(
     private readonly sessionCoreRepository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxStateReader,
     private readonly messageRepository: MessageRepository,
     private readonly statusService: SessionStatusService,
     private readonly titleService: SessionTitleService,
-    private readonly sockets: WebSocketManager,
+    private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>
   ) {}
@@ -76,7 +88,8 @@ export class SessionLifecycleHandler {
       branchName: session.branch_name,
       baseSha: session.base_sha,
       currentSha: session.current_sha,
-      opencodeSessionId: session.opencode_session_id,
+      agentSessionId: session.agent_session_id,
+      harness: session.harness,
       status: session.status,
       model: session.model,
       reasoningEffort: session.reasoning_effort ?? undefined,
@@ -138,16 +151,27 @@ export class SessionLifecycleHandler {
     }
 
     if (session.status === "cancelled") {
-      return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
+      return archiveResponse("skipped_cancelled", {
+        error: "Cancelled sessions cannot be archived",
+      });
     }
 
     if (this.messageRepository.getPendingOrProcessingCount() > 0) {
-      return Response.json({ error: "Cannot archive a session with queued work" }, { status: 409 });
+      return archiveResponse("skipped_queued_work", {
+        error: "Cannot archive a session with queued work",
+      });
     }
 
     await this.statusService.transition("archived");
+    try {
+      await this.statusService.confirmIndexStatus("archived");
+    } catch {
+      return Response.json({ error: "Session archive projection unavailable" }, { status: 503 });
+    }
 
-    return Response.json({ status: "archived" });
+    return archiveResponse(session.status === "archived" ? "already_archived" : "archived", {
+      status: "archived",
+    });
   }
 
   /**
@@ -235,13 +259,7 @@ export class SessionLifecycleHandler {
 
     await this.cancelSession();
 
-    const sandbox = this.sandboxRepository.getSandbox();
-    if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {
-      if (this.sockets.getSandboxWebSocket()) {
-        this.sockets.sendToSandbox({ type: "shutdown" });
-      }
-      this.sandboxRepository.updateSandboxStatus("stopped");
-    }
+    this.sandboxLifecycle.cancelSandbox();
 
     return Response.json({ status: "cancelled" });
   }

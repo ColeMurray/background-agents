@@ -1,6 +1,11 @@
 {
-  "runtimeVersion": "v61-sandbox-sbin-path",
-  "generation": 61,
-  "minimumCompatibleGeneration": 60,
-  "minimumRebuildGeneration": 60
+  "runtimeVersion": "v72-claude-opus-5-5",
+  "generation": 72,
+  "minimumCompatibleGeneration": 62,
+  "minimumPreservationGeneration": 71,
+  "minimumRebuildGeneration": 72,
+  "harnessMinimumGeneration": {
+    "claude": 72,
+    "opencode": 72
+  }
 }

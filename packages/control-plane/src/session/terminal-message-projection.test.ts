@@ -61,7 +61,10 @@ function createProjection(
     current: vi.fn<() => Promise<number | null>>().mockResolvedValue(null),
   };
   const projection = new SessionTerminalMessageProjection({
-    sessionIndex: { recordLatestTerminalMessage } as unknown as SessionIndexStore,
+    sessionIndex: { recordLatestTerminalMessage } as Pick<
+      SessionIndexStore,
+      "recordLatestTerminalMessage"
+    >,
     getSessionId: () => "session-1",
     store: memory.store,
     alarmScheduler,

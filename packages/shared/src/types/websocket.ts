@@ -1,10 +1,20 @@
 import { z } from "zod";
 import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
+import { shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 
 export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 
+/** Standard close code for a peer that is shutting down or navigating away. */
+export const WS_CLOSE_GOING_AWAY = 1001;
+
 /** Standard close code for a transient server-side failure. */
 export const WS_CLOSE_INTERNAL_ERROR = 1011;
+
+/** Standard close code for a host that is restarting; the peer should reconnect. */
+export const WS_CLOSE_SERVICE_RESTART = 1012;
+
+/** Standard close code for a host that is temporarily overloaded; the peer should reconnect. */
+export const WS_CLOSE_TRY_AGAIN_LATER = 1013;
 
 /** Signals that the browser must discard its credential and reconnect fresh. */
 export const WS_CLOSE_AUTHORIZATION_REVOKED = 4010;
@@ -28,6 +38,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     clientRequestId: clientRequestIdSchema,
   }),
   z.object({ type: z.literal("stop") }),
+  z.object({
+    type: z.literal("recover_preservation"),
+    action: shutdownRecoveryActionSchema,
+    clientRequestId: clientRequestIdSchema.optional(),
+  }),
   z.object({ type: z.literal("typing") }),
   z.object({
     type: z.literal("presence"),

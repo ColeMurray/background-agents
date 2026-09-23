@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".env.example"
       - ".github/workflows/ci.yml"
       - ".prettierignore"
       - ".prettierrc"
@@ -16,18 +17,29 @@ on:
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
       - "packages/shared/**"
       - "packages/slack-bot/**"
       - "packages/web/**"
       - "scripts/**"
       - "terraform/d1/migrations/**"
+      # Unit tests hold the Worker's cron triggers and queue consumers equal
+      # to what Terraform declares, so a Terraform-only change must run them.
+      - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
       # Re-include docs content and its package README after the Markdown exclusion.
       - "packages/docs/**"
   pull_request:
     branches: [main]
     paths:
+      - ".env.example"
       - ".github/workflows/ci.yml"
       - ".prettierignore"
       - ".prettierrc"
@@ -40,18 +52,32 @@ on:
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
+      - "packages/sandbox-images/**"
+      - "packages/vercel-infra/**"
       - "packages/shared/**"
       - "packages/slack-bot/**"
       - "packages/web/**"
       - "scripts/**"
       - "terraform/d1/migrations/**"
+      # Unit tests hold the Worker's cron triggers and queue consumers equal
+      # to what Terraform declares, so a Terraform-only change must run them.
+      - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "packages/sandbox-runtime/src/**"
+      - "packages/sandbox-images/**"
+      # Re-included after the exclusion above, which later patterns override: a
+      # unit test holds this document's quick start to the required variables.
+      - "docs/CONTROL_PLANE_CONTAINER.md"
       # Re-include docs content and its package README after the Markdown exclusion.
       - "packages/docs/**"
 
 permissions:
   contents: read
+
+env:
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_PREFER_OFFLINE: "true"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -83,11 +109,26 @@ jobs:
       - name: Test complexity reporter
         run: npm run test:lint-complexity
 
+      - name: Check SQL portability
+        run: npm run lint:sql-portability
+
+      - name: Test SQL portability check
+        run: npm run test:lint-sql-portability
+
+      - name: Test AWS deploy rollback
+        run: npm run test:deploy-aws
+
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 
       - name: Test user merge CLI
         run: npm run test:user-merge-cli
+
+      - name: Test Cloudflare logs CLI
+        run: npm run test:cf-logs-cli
+
+      - name: Test Terraform workflow contract
+        run: npm run test:terraform-workflow-contract
 
       - name: Check Prettier formatting
         run: npm run format:check
@@ -186,6 +227,9 @@ jobs:
       - name: Run shared tests
         run: npm test -w @open-inspect/shared
 
+      # Runs the node:sqlite lane of the session-core conformance suite
+      # (test/conformance). The Durable Object lane of the same suite runs in
+      # test-cp-integration; a session repository or migration has to pass both.
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
 
@@ -213,6 +257,8 @@ jobs:
       - name: Build shared package
         run: npm run build -w @open-inspect/shared
 
+      # Runs the Durable Object lane of the session-core conformance suite.
+      # The node:sqlite lane of the same suite runs in test-cp-unit.
       - name: Run control-plane integration tests
         run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 

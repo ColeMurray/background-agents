@@ -25,10 +25,11 @@ const TRANSACTION_ID = "01".repeat(32);
 
 describe("subscription provider registry", () => {
   it("exposes stable provider IDs and display metadata", () => {
-    expect(SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai"]);
+    expect(SUBSCRIPTION_PROVIDER_IDS).toEqual(["openai", "xai", "anthropic"]);
     expect(SUBSCRIPTION_PROVIDER_DISPLAY_METADATA).toEqual({
       openai: { displayName: "OpenAI", subscriptionName: "ChatGPT" },
       xai: { displayName: "xAI", subscriptionName: "SuperGrok" },
+      anthropic: { displayName: "Anthropic", subscriptionName: "Claude" },
     });
   });
 
@@ -60,7 +61,7 @@ describe("modelProviderSelectionsSchema", () => {
 
   it("rejects unknown provider keys and fields forbidden by each mode", () => {
     for (const selections of [
-      { anthropic: { mode: "api_key" } },
+      { gemini: { mode: "api_key" } },
       { OpenAI: { mode: "api_key" } },
       { openai: { mode: "api_key", accountId: ACCOUNT_ID } },
       { xai: { mode: "provider_account" } },

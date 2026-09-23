@@ -5,6 +5,7 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
@@ -28,83 +29,59 @@ export const MODAL_SANDBOX_START_REQUEST_DEADLINE_MS = 60_000;
 export const MODAL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
 export const MODAL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
 
-const modalErrorResponseSchema = z.object({
-  success: z.literal(false),
-  error: z.string().optional(),
-});
-
 const modalTunnelUrlsSchema = z.record(z.string(), z.string());
 
-const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z.object({
-      sandbox_id: z.string(),
-      modal_object_id: z.string().nullable().optional(),
-      created_at: z.number(),
-      code_server_url: z.string().nullable().optional(),
-      code_server_password: z.string().nullable().optional(),
-      vnc_url: z.string().nullable().optional(),
-      vnc_password: z.string().nullable().optional(),
-      ttyd_url: z.string().nullable().optional(),
-      tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
-    }),
+const createSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    sandbox_id: z.string(),
+    modal_object_id: z.string().nullable().optional(),
+    created_at: z.number(),
+    code_server_url: z.string().nullable().optional(),
+    code_server_password: z.string().nullable().optional(),
+    vnc_url: z.string().nullable().optional(),
+    vnc_password: z.string().nullable().optional(),
+    ttyd_url: z.string().nullable().optional(),
+    tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
   }),
-  modalErrorResponseSchema,
-]);
+});
 
-const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z
-      .object({
-        sandbox_id: z.string().optional(),
-        modal_object_id: z.string().nullable().optional(),
-        code_server_url: z.string().nullable().optional(),
-        code_server_password: z.string().nullable().optional(),
-        vnc_url: z.string().nullable().optional(),
-        vnc_password: z.string().nullable().optional(),
-        ttyd_url: z.string().nullable().optional(),
-        tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
-      })
-      .optional(),
+const restoreSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    sandbox_id: z.string().min(1),
+    modal_object_id: z.string().nullable().optional(),
+    code_server_url: z.string().nullable().optional(),
+    code_server_password: z.string().nullable().optional(),
+    vnc_url: z.string().nullable().optional(),
+    vnc_password: z.string().nullable().optional(),
+    ttyd_url: z.string().nullable().optional(),
+    tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
   }),
-  modalErrorResponseSchema,
-]);
+});
 
-const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z
-      .object({
-        image_id: z.string(),
-      })
-      .optional(),
+const snapshotSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    image_id: z.string().min(1),
   }),
-  modalErrorResponseSchema,
-]);
+});
 
-const createImageBuildSandboxModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-    data: z.object({
-      // Non-empty: the previous hand-rolled check rejected a blank id.
-      provider_session_id: z.string().min(1),
-    }),
+const createImageBuildSandboxModalResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    // Non-empty: the previous hand-rolled check rejected a blank id.
+    provider_session_id: z.string().min(1),
   }),
-  modalErrorResponseSchema,
-]);
+});
 
 /**
- * Image-build operations (start/terminate) only signal success or failure; their
+ * Image-build operation 2xx responses only expose a success marker here. Their
  * `data` payload is never read, so it is deliberately left unvalidated.
  */
-const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
-  z.object({
-    success: z.literal(true),
-  }),
-  modalErrorResponseSchema,
-]);
+const imageBuildOperationModalResponseSchema = z.object({
+  success: z.literal(true),
+});
 
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -126,6 +103,24 @@ export function buildModalWorkspaceSlug(workspace: string, environmentWebSuffix 
  */
 function getModalBaseUrl(workspace: string, environmentWebSuffix?: string): string {
   return `https://${buildModalWorkspaceSlug(workspace, environmentWebSuffix)}--${MODAL_APP_NAME}`;
+}
+
+/**
+ * Resolve one deployed function's URL by its Modal function name.
+ *
+ * Modal publishes each function at its own `*.modal.run` host derived from the
+ * workspace slug. `apiUrl` replaces that derivation with a single origin whose
+ * path carries the same function names, which is how the other providers'
+ * `*_API_URL` settings work and what a proxy or a stand-in server needs.
+ */
+function modalEndpointUrl(
+  functionName: string,
+  workspace: string,
+  environmentWebSuffix: string | undefined,
+  apiUrl: string | undefined
+): string {
+  if (apiUrl) return `${apiUrl.replace(/\/+$/, "")}/${functionName}`;
+  return `${getModalBaseUrl(workspace, environmentWebSuffix)}-${functionName}.modal.run`;
 }
 
 /**
@@ -152,7 +147,8 @@ export interface CreateSandboxRequest {
   repoName: string | null;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  opencodeSessionId?: string;
+  agentSessionId?: string;
+  harness: HarnessId;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
@@ -189,6 +185,7 @@ export interface RestoreSandboxRequest {
   controlPlaneUrl: string;
   repoOwner: string | null;
   repoName: string | null;
+  harness: HarnessId;
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
@@ -204,10 +201,8 @@ export interface RestoreSandboxRequest {
 }
 
 export interface RestoreSandboxResponse {
-  success: boolean;
-  sandboxId?: string;
+  sandboxId: string;
   modalObjectId?: string;
-  error?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
   vncUrl?: string;
@@ -220,12 +215,17 @@ export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
+}
+
+export interface StopSandboxRequest {
+  providerObjectId: string;
+  sessionId: string;
+  signal?: AbortSignal;
 }
 
 export interface SnapshotSandboxResponse {
-  success: boolean;
-  imageId?: string;
-  error?: string;
+  imageId: string;
 }
 
 export interface SnapshotBuildSandboxRequest {
@@ -296,6 +296,7 @@ export class ModalClient {
   private snapshotSandboxUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
+  private stopSandboxUrl: string;
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
@@ -328,7 +329,7 @@ export class ModalClient {
     });
   }
 
-  constructor(secret: string, workspace: string, environmentWebSuffix?: string) {
+  constructor(secret: string, workspace: string, environmentWebSuffix?: string, apiUrl?: string) {
     if (!secret) {
       throw new Error("ModalClient requires MODAL_API_SECRET for authentication");
     }
@@ -336,14 +337,16 @@ export class ModalClient {
       throw new Error("ModalClient requires MODAL_WORKSPACE for URL construction");
     }
     this.secret = secret;
-    const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
-    this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
-    this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
-    this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
-    this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
-    this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
-    this.startImageBuildSandboxUrl = `${baseUrl}-api-start-build-sandbox.modal.run`;
-    this.terminateImageBuildSandboxUrl = `${baseUrl}-api-terminate-build-sandbox.modal.run`;
+    const url = (functionName: string) =>
+      modalEndpointUrl(functionName, workspace, environmentWebSuffix, apiUrl);
+    this.createSandboxUrl = url("api-create-sandbox");
+    this.snapshotSandboxUrl = url("api-snapshot-sandbox");
+    this.snapshotBuildSandboxUrl = url("api-snapshot-build-sandbox");
+    this.restoreSandboxUrl = url("api-restore-sandbox");
+    this.stopSandboxUrl = url("api-stop-sandbox");
+    this.createImageBuildSandboxUrl = url("api-create-build-sandbox");
+    this.startImageBuildSandboxUrl = url("api-start-build-sandbox");
+    this.terminateImageBuildSandboxUrl = url("api-terminate-build-sandbox");
   }
 
   /**
@@ -386,7 +389,8 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          opencode_session_id: request.opencodeSessionId || null,
+          agent_session_id: request.agentSessionId || null,
+          harness: request.harness,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
@@ -405,16 +409,13 @@ export class ModalClient {
           repositories: request.repositories?.length
             ? request.repositories.map(toRepositoryConfigPayload)
             : null,
+          bridge_early_connect: true,
         },
         createSandboxModalResponseSchema,
         correlation,
         request.signal,
         (status) => (httpStatus = status)
       );
-
-      if (!result.success) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
 
       outcome = "success";
       return {
@@ -479,21 +480,16 @@ export class ModalClient {
         (status) => (httpStatus = status)
       );
 
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown restore error" };
-      }
-
       outcome = "success";
       return {
-        success: true,
-        sandboxId: result.data?.sandbox_id,
-        modalObjectId: result.data?.modal_object_id ?? undefined,
-        codeServerUrl: result.data?.code_server_url ?? undefined,
-        codeServerPassword: result.data?.code_server_password ?? undefined,
-        vncUrl: result.data?.vnc_url ?? undefined,
-        vncPassword: result.data?.vnc_password ?? undefined,
-        ttydUrl: result.data?.ttyd_url ?? undefined,
-        tunnelUrls: result.data?.tunnel_urls ?? undefined,
+        sandboxId: result.data.sandbox_id,
+        modalObjectId: result.data.modal_object_id ?? undefined,
+        codeServerUrl: result.data.code_server_url ?? undefined,
+        codeServerPassword: result.data.code_server_password ?? undefined,
+        vncUrl: result.data.vnc_url ?? undefined,
+        vncPassword: result.data.vnc_password ?? undefined,
+        ttydUrl: result.data.ttyd_url ?? undefined,
+        tunnelUrls: result.data.tunnel_urls ?? undefined,
       };
     } finally {
       log.info("modal.request", {
@@ -526,25 +522,23 @@ export class ModalClient {
       const result = await this.postJson(
         this.snapshotSandboxUrl,
         endpoint,
-        MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+        request.deadlineAtMs === undefined
+          ? MODAL_SNAPSHOT_REQUEST_DEADLINE_MS
+          : Math.max(
+              1,
+              Math.min(MODAL_SNAPSHOT_REQUEST_DEADLINE_MS, request.deadlineAtMs - Date.now())
+            ),
         {
           sandbox_id: request.providerObjectId,
+          deadline_at_ms: request.deadlineAtMs ?? null,
         },
         snapshotSandboxModalResponseSchema,
         correlation,
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown snapshot error" };
-      }
-
-      if (!result.data?.image_id) {
-        return { success: false, error: "Snapshot response missing image_id" };
-      }
-
       outcome = "success";
-      return { success: true, imageId: result.data.image_id };
+      return { imageId: result.data.image_id };
     } finally {
       log.info("modal.request", {
         event: "modal.request",
@@ -558,6 +552,19 @@ export class ModalClient {
         outcome,
       });
     }
+  }
+
+  async stopSandbox(request: StopSandboxRequest, correlation?: CorrelationContext): Promise<void> {
+    await this.postJson(
+      this.stopSandboxUrl,
+      "stopSandbox",
+      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
+      { sandbox_id: request.providerObjectId },
+      imageBuildOperationModalResponseSchema,
+      correlation,
+      request.signal,
+      () => {}
+    );
   }
 
   /**
@@ -586,15 +593,8 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (!result.success) {
-        return { success: false, error: result.error || "Unknown snapshot error" };
-      }
-      if (!result.data?.image_id) {
-        return { success: false, error: "Snapshot response missing image_id" };
-      }
-
       outcome = "success";
-      return { success: true, imageId: result.data.image_id };
+      return { imageId: result.data.image_id };
     } finally {
       log.info("modal.request", {
         event: "modal.request",
@@ -643,10 +643,6 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-
-      if (result.success === false) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
 
       outcome = "success";
       return {
@@ -716,7 +712,7 @@ export class ModalClient {
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
     try {
-      const result = await this.postJson(
+      await this.postJson(
         url,
         endpoint,
         deadlineMs,
@@ -726,9 +722,6 @@ export class ModalClient {
         request.signal,
         (status) => (httpStatus = status)
       );
-      if (result.success === false) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
       outcome = "success";
     } finally {
       log.info("modal.request", {
@@ -755,13 +748,15 @@ export class ModalClient {
  * @param secret - The MODAL_API_SECRET for authentication
  * @param workspace - The Modal workspace name
  * @param environmentWebSuffix - The Modal environment web suffix used in endpoint URLs
+ * @param apiUrl - Origin serving the Modal functions by path, in place of their derived hosts
  * @returns A new ModalClient instance
  * @throws Error if secret or workspace is not provided
  */
 export function createModalClient(
   secret: string,
   workspace: string,
-  environmentWebSuffix?: string
+  environmentWebSuffix?: string,
+  apiUrl?: string
 ): ModalClient {
   if (!secret) {
     throw new Error("MODAL_API_SECRET is required to create ModalClient");
@@ -769,5 +764,5 @@ export function createModalClient(
   if (!workspace) {
     throw new Error("MODAL_WORKSPACE is required to create ModalClient");
   }
-  return new ModalClient(secret, workspace, environmentWebSuffix);
+  return new ModalClient(secret, workspace, environmentWebSuffix, apiUrl);
 }

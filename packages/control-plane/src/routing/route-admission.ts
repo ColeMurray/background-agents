@@ -155,6 +155,13 @@ function enforceImplementedScmProvider(
   }
 }
 
+export function parseVerifiedSandboxId(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!("sandboxId" in value)) return null;
+  const sandboxId = value.sandboxId;
+  return typeof sandboxId === "string" && sandboxId ? sandboxId : null;
+}
+
 async function verifySandboxAuth(
   request: Request,
   env: Env,
@@ -190,7 +197,13 @@ async function verifySandboxAuth(
     return error("Unauthorized: Invalid sandbox token", 401);
   }
 
-  ctx.principal = { kind: "sandbox", sessionId };
+  let sandboxId: string | null = null;
+  try {
+    sandboxId = parseVerifiedSandboxId(await verifyResponse.json());
+  } catch {
+    sandboxId = null;
+  }
+  ctx.principal = { kind: "sandbox", sessionId, sandboxId };
   return null;
 }
 
@@ -327,12 +340,7 @@ function enforceStaticServicePermissionCeiling(
   if (policy.authorization.kind !== "active-user") return null;
 
   for (const requirement of policy.authorization.allOf) {
-    const permission =
-      requirement.kind === "permission"
-        ? requirement.permission
-        : requirement.kind === "scoped-permission"
-          ? SCOPED_PERMISSION_PAIRS[requirement.stem].own
-          : null;
+    const permission = requirement.kind === "permission" ? requirement.permission : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -520,48 +528,6 @@ async function enforcePermissionRequirement(
   );
 }
 
-async function enforceScopedPermissionRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "scoped-permission" }>,
-  ctx: RequestContext,
-  evidence: AuthorizationEvidence
-): Promise<AuthorizationFailure | null> {
-  const pair = SCOPED_PERMISSION_PAIRS[requirement.stem];
-  if (
-    ctx.principal?.kind === "service" &&
-    !serviceAllowsPermission(ctx.principal.service, pair.own)
-  ) {
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden",
-      pair.own
-    );
-  }
-  const userId = authorizationUserId(ctx);
-  if (!userId) {
-    evidence.requirements.push(requirement);
-    return null;
-  }
-  const scope = ctx.authorization
-    ? resolveScopedPermission(requirement.stem, ctx.authorization.permissions)
-    : null;
-  if (scope) {
-    evidence.requirements.push(requirement);
-    evidence.effectivePermissions.push(pair[scope]);
-    return null;
-  }
-  return authorizationDenial(
-    json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403),
-    evidence,
-    requirement,
-    "permission_required",
-    "Forbidden",
-    pair.own
-  );
-}
-
 async function enforceAutomationRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
   params: RouteParams,
@@ -683,9 +649,6 @@ async function enforceRouteAuthorization(
       switch (requirement.kind) {
         case "permission":
           failure = await enforcePermissionRequirement(requirement, ctx, evidence);
-          break;
-        case "scoped-permission":
-          failure = await enforceScopedPermissionRequirement(requirement, ctx, evidence);
           break;
         case "automation":
           failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);

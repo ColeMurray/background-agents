@@ -238,6 +238,34 @@ export class ModelProviderAccountStore {
     return result.meta.changes > 0;
   }
 
+  /**
+   * Fence an active account to reconnect_required because its credential
+   * expired, only while the credential is still the version that was
+   * inspected. A reconnect that rotated the credential in between leaves the
+   * account alone, so a stale reader never fences a fresh credential.
+   */
+  async requireReconnectForExpiredCredential(
+    id: string,
+    expectedCredentialVersion: number,
+    now = Date.now()
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE model_provider_accounts
+         SET status = 'reconnect_required', updated_by = NULL, updated_at = ?,
+             lifecycle_version = lifecycle_version + 1
+         WHERE id = ? AND archived_at IS NULL AND status = 'active'
+           AND EXISTS (
+             SELECT 1 FROM model_provider_account_credentials
+             WHERE provider_account_id = model_provider_accounts.id
+               AND credential_version = ?
+           )`
+      )
+      .bind(now, id, expectedCredentialVersion)
+      .run();
+    return result.meta.changes > 0;
+  }
+
   async archive(id: string, actorId: string | null, now = Date.now()): Promise<boolean> {
     const result = await this.db
       .prepare(

@@ -109,7 +109,16 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-opus-5",
         name: "Claude Opus 5",
-        description: "Latest Opus, adaptive thinking",
+        description: "Most capable, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        description: "Latest Opus, long-running agentic coding",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",
@@ -119,6 +128,15 @@ export const MODEL_CATALOG = [
         id: "anthropic/claude-fable-5",
         name: "Claude Fable 5",
         description: "Most powerful, new tier above Opus",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-fable-5-1",
+        name: "Claude Fable 5.1",
+        description: "Demanding reasoning and long-horizon agentic work",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",
@@ -176,6 +194,33 @@ export const MODEL_CATALOG = [
         },
       },
       {
+        id: "openai/gpt-6-astra",
+        name: "GPT-6 Astra",
+        description: "Most capable model for complex, demanding work",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
+        id: "openai/gpt-6-sol",
+        name: "GPT-6 Sol",
+        description: "Complex coding and agentic workflows",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
+        id: "openai/gpt-6-luna",
+        name: "GPT-6 Luna",
+        description: "Efficient model for focused, high-volume tasks",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
         id: "openai/gpt-5.3-codex",
         name: "GPT 5.3 Codex",
         description: "Latest codex",
@@ -204,6 +249,61 @@ export const MODEL_CATALOG = [
     ],
   },
   {
+    // OpenCode Go is a flat-rate subscription over the same Zen credential:
+    // one OPENCODE_API_KEY, a separate gateway (zen/go/v1) and its own
+    // curated model list.
+    category: "OpenCode Go",
+    enabledByDefault: false,
+    models: [
+      { id: "opencode-go/grok-4.6", name: "Grok 4.6", description: "xAI" },
+      { id: "opencode-go/gpt-5.6-luna", name: "GPT 5.6 Luna", description: "OpenAI" },
+      { id: "opencode-go/glm-5.3-flash", name: "GLM 5.3 Flash", description: "Z.ai" },
+      { id: "opencode-go/glm-5.3", name: "GLM 5.3", description: "Z.ai" },
+      { id: "opencode-go/glm-5.2", name: "GLM 5.2", description: "Z.ai" },
+      { id: "opencode-go/glm-5.1", name: "GLM 5.1", description: "Z.ai" },
+      { id: "opencode-go/kimi-k3", name: "Kimi K3", description: "Moonshot AI" },
+      { id: "opencode-go/kimi-k2.7-code", name: "Kimi K2.7 Code", description: "Moonshot AI" },
+      { id: "opencode-go/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
+      { id: "opencode-go/longcat-2.0", name: "LongCat 2.0", description: "Meituan" },
+      {
+        id: "opencode-go/deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        description: "DeepSeek",
+      },
+      { id: "opencode-go/deepseek-v4-pro", name: "DeepSeek V4 Pro", description: "DeepSeek" },
+      { id: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash", description: "DeepSeek" },
+      {
+        id: "opencode-go/deepseek-v4-flash-vision-exp",
+        name: "DeepSeek V4 Flash Vision Exp",
+        description: "DeepSeek, experimental vision",
+      },
+      { id: "opencode-go/mimo-v2.5", name: "MiMo V2.5", description: "Xiaomi" },
+      { id: "opencode-go/mimo-v2.5-pro", name: "MiMo V2.5 Pro", description: "Xiaomi" },
+      { id: "opencode-go/minimax-m3", name: "MiniMax M3", description: "MiniMax" },
+      // Go's docs list minimax-m2.5 too, but opencode does not resolve
+      // opencode-go/minimax-m2.5 at the pinned version — it is reachable as
+      // opencode/minimax-m2.5 on Zen. Re-add when the harness exposes it.
+      { id: "opencode-go/minimax-m2.7", name: "MiniMax M2.7", description: "MiniMax" },
+      {
+        id: "opencode-go/muse-spark-1.3-contributor",
+        name: "Muse Spark 1.3 Contributor",
+        description: "Multimodal contributor tier",
+      },
+      {
+        id: "opencode-go/muse-spark-1.2-contributor",
+        name: "Muse Spark 1.2 Contributor",
+        description: "Multimodal contributor tier",
+      },
+      { id: "opencode-go/qwen3.8-max", name: "Qwen3.8 Max", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.8-flash", name: "Qwen3.8 Flash", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.7-plus", name: "Qwen3.7 Plus", description: "Alibaba Cloud" },
+      { id: "opencode-go/qwen3.6-plus", name: "Qwen3.6 Plus", description: "Alibaba Cloud" },
+      { id: "opencode-go/hy4-preview", name: "Hy4 Preview", description: "Tencent Hunyuan" },
+      { id: "opencode-go/hy3", name: "Hy3", description: "Tencent Hunyuan" },
+    ],
+  },
+  {
     category: "xAI / SuperGrok",
     enabledByDefault: false,
     models: [
@@ -216,8 +316,14 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.6",
         name: "Grok 4.6",
+        description: "Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+      {
+        id: "xai/grok-4.7",
+        name: "Grok 4.7",
         description: "Latest Grok for chat, coding, and agentic tools",
-        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
       },
       {
         id: "xai/grok-build-0.1",
@@ -299,6 +405,21 @@ export const MODEL_OPTIONS: ModelCategory[] = [
   })),
 ];
 
+const MODEL_DISPLAY_NAMES = new Map<string, string>(
+  MODEL_CATALOG.flatMap((group) => group.models.map((model) => [model.id, model.name]))
+);
+
+/**
+ * Catalog display name for a model ID, falling back to the ID itself for
+ * models that are no longer in the catalog.
+ *
+ * @example
+ * getModelDisplayName("anthropic/claude-sonnet-4-5") // "Claude Sonnet 4.5"
+ */
+export function getModelDisplayName(modelId: string): string {
+  return MODEL_DISPLAY_NAMES.get(normalizeModelId(modelId)) ?? modelId;
+}
+
 /**
  * Models enabled by default when no preferences are stored.
  * Excludes opt-in providers which must be enabled via settings.
@@ -340,6 +461,27 @@ export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] 
     if (isValidModel(normalized)) validModels.add(normalized);
   }
   return [...validModels];
+}
+
+export interface ModelPreferenceChange {
+  modelId: ValidModel;
+  enabled: boolean;
+}
+
+/** Apply ordered set-membership changes while preserving the order of existing models. */
+export function applyModelPreferenceChanges(
+  enabledModels: readonly ValidModel[],
+  changes: readonly ModelPreferenceChange[]
+): ValidModel[] {
+  const next = new Set(enabledModels);
+  for (const { modelId, enabled } of changes) {
+    if (enabled) {
+      next.add(modelId);
+    } else {
+      next.delete(modelId);
+    }
+  }
+  return [...next];
 }
 
 /** Resolve a desired model against the enabled catalog using a canonical fallback policy. */

@@ -1,22 +1,21 @@
 import type { Logger } from "../../../logger";
 import { eventTypeSchema } from "@open-inspect/shared/types/sandbox-events";
+import { messageStatusSchema } from "@open-inspect/shared/types/sessions";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
 } from "../../enqueue-prompt-contract";
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
+import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import {
+  BudgetExhaustedError,
   PromptQueueFullError,
+  HarnessModelIncompatibleError,
   PromptRequestConflictError,
   SessionNotPromptableError,
 } from "../../message-queue";
-
-/**
- * Valid message statuses for filtering.
- */
-const VALID_MESSAGE_STATUSES = ["pending", "processing", "completed", "failed"] as const;
 
 /**
  * HTTP boundary for the prompt/event/artifact/message endpoints: parses
@@ -43,8 +42,17 @@ export class MessagesHandler {
       if (error instanceof SessionNotPromptableError) {
         return Response.json({ error: error.message }, { status: 409 });
       }
+      if (error instanceof BudgetExhaustedError) {
+        return Response.json({ error: error.message, code: "BUDGET_EXHAUSTED" }, { status: 409 });
+      }
       if (error instanceof PromptQueueFullError) {
         return Response.json({ error: error.message, code: "PROMPT_QUEUE_FULL" }, { status: 429 });
+      }
+      if (error instanceof HarnessModelIncompatibleError) {
+        return Response.json(
+          { error: error.message, code: "HARNESS_MODEL_INCOMPATIBLE" },
+          { status: 400 }
+        );
       }
       if (error instanceof PromptRequestConflictError) {
         return Response.json(
@@ -97,18 +105,26 @@ export class MessagesHandler {
   }
 
   listMessages(url: URL): Response {
-    const cursor = url.searchParams.get("cursor");
-    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 100);
+    const cursorResult = parseMessageListCursor(url.searchParams.get("cursor"));
+    const rawLimit = url.searchParams.get("limit") ?? "50";
+    if (!/^[1-9]\d*$/.test(rawLimit)) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
+    const limit = Number(rawLimit);
+    if (!Number.isSafeInteger(limit) || limit > 100) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
     const status = url.searchParams.get("status");
 
-    if (
-      status &&
-      !VALID_MESSAGE_STATUSES.includes(status as (typeof VALID_MESSAGE_STATUSES)[number])
-    ) {
+    if (status && !messageStatusSchema.safeParse(status).success) {
       return Response.json({ error: `Invalid message status: ${status}` }, { status: 400 });
     }
 
-    const result = this.messageService.listMessages({ cursor, limit, status });
+    if (!cursorResult.ok) {
+      return Response.json({ error: cursorResult.error }, { status: 400 });
+    }
+
+    const result = this.messageService.listMessages({ cursor: cursorResult.cursor, limit, status });
 
     return Response.json(result);
   }

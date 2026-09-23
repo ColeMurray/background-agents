@@ -11,13 +11,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
-from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
-from sandbox_runtime.prompt_stream import (
+from sandbox_runtime.harness.opencode_stream import (
     OpenCodePromptStream,
     _Disposition,
     _message_created_epoch_ms,
     _PromptState,
 )
+from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from tests.conftest import oc_message_id
 
 PARENT_SESSION_ID = "oc-session-123"

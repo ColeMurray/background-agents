@@ -26,7 +26,7 @@ def _fake_process(returncode: int | None) -> MagicMock:
 class TestCodeServerMonitorRestart:
     async def test_code_server_crash_does_not_set_shutdown(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.code_server._process = _fake_process(1)
 
@@ -45,7 +45,7 @@ class TestCodeServerMonitorRestart:
 
     async def test_code_server_restart_exception_is_caught(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.code_server._process = _fake_process(1)
         supervisor.code_server.start = AsyncMock(
@@ -59,7 +59,7 @@ class TestCodeServerMonitorRestart:
 
     async def test_code_server_max_restarts_gives_up(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.code_server._process = _fake_process(1)
         supervisor.code_server.start = AsyncMock()
@@ -79,7 +79,7 @@ class TestCodeServerMonitorRestart:
 class TestTerminalMonitorRestart:
     async def test_either_component_crash_restarts_whole_stack_nonfatally(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.web_terminal._proxy_process = _fake_process(1)
         supervisor.web_terminal._ttyd_process = _fake_process(None)
@@ -101,7 +101,7 @@ class TestTerminalMonitorRestart:
 
     async def test_restart_exception_stops_whole_stack(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.web_terminal._ttyd_process = _fake_process(1)
         supervisor.web_terminal.stop = AsyncMock(
@@ -116,7 +116,7 @@ class TestTerminalMonitorRestart:
 
     async def test_max_restarts_abandons_stack_nonfatally(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.web_terminal._ttyd_process = _fake_process(1)
         supervisor.web_terminal.start = AsyncMock()
@@ -137,7 +137,7 @@ class TestTerminalMonitorRestart:
 
     async def test_code_server_shutdown_during_backoff_does_not_restart(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.code_server._process = _fake_process(1)
         supervisor.code_server.start = AsyncMock()
@@ -149,7 +149,7 @@ class TestTerminalMonitorRestart:
 
     async def test_terminal_shutdown_during_backoff_does_not_restart(self):
         supervisor = _make_supervisor()
-        supervisor.opencode_server._opencode_process = _fake_process(None)
+        supervisor.harness_process._opencode_process = _fake_process(None)
         supervisor.agent_bridge._process = _fake_process(None)
         supervisor.web_terminal._ttyd_process = _fake_process(1)
         supervisor.web_terminal.stop = AsyncMock()

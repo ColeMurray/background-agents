@@ -1,0 +1,19 @@
+[project]
+name = "open-inspect-sandbox-images"
+version = "0.1.0"
+description = "Shared OpenInspect sandbox image planning and packaging"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.9.0"]
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sandbox_images"]
+
+[tool.ruff]
+extend = "../../ruff.toml"

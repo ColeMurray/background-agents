@@ -14,7 +14,7 @@ import { createLogger } from "../logger";
 import type { RequestContext } from "../routes/shared";
 import type { Env } from "../types";
 import type { ImageBuildScope } from "./model";
-import { resolveImageBuildProvider } from "./provider-policy";
+import { resolveImageBuildAdmission } from "./provider-policy";
 import { createImageBuildWorkflowFromEnv } from "./workflow";
 
 const logger = createLogger("image-builds:save-hooks");
@@ -30,7 +30,20 @@ export function scheduleImageBuildOnSave(
   scope: ImageBuildScope,
   ctx: RequestContext
 ): void {
-  if (!resolveImageBuildProvider(env.SANDBOX_PROVIDER)) return;
+  const admission = resolveImageBuildAdmission(env);
+  if (!admission.admitted) {
+    if (admission.provider) {
+      logger.info("image_build.save_hook_admission_closed", {
+        scope_kind: scope.kind,
+        scope_id: scope.id,
+        provider: admission.provider,
+        reason: admission.reason,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+    }
+    return;
+  }
 
   ctx.executionCtx.submit(
     () =>

@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { SandboxRow, SessionRow } from "../../types";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionTitleService } from "../../title-service";
-import type { WebSocketManager } from "../../../sandbox/lifecycle/manager";
 import type { SessionStatusService } from "../../session-status-service";
 import type { MessageRepository } from "../../message-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
@@ -20,16 +19,20 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     branch_name: "feature/test",
     base_sha: "base-sha",
     current_sha: "head-sha",
-    opencode_session_id: "oc-1",
+    agent_session_id: "oc-1",
+    harness: "opencode",
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: "high",
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
+    max_cost_usd: null,
+    budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
     created_at: 1000,
@@ -63,6 +66,9 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    boot_phase: null,
+    boot_seq: null,
+    fenced: 0,
     created_at: 1,
     ...overrides,
   };
@@ -76,23 +82,22 @@ function createHandler() {
     getSession,
   };
   const getSandbox = vi.fn<() => SandboxRow | null>();
-  const updateSandboxStatus = vi.fn();
   const sandboxRepository = {
     getSandbox,
-    updateSandboxStatus,
   } as unknown as SandboxRepository;
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const confirmIndexStatus = vi.fn<() => Promise<void>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
   const statusService = {
     transition,
     repairIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
   } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const cancelSession = vi.fn();
-  const getSandboxSocket = vi.fn<() => WebSocket | null>();
-  const sendToSandbox = vi.fn();
+  const cancelSandbox = vi.fn();
 
   const lifecycleHandler = new SessionLifecycleHandler(
     repository as unknown as SessionCoreRepository,
@@ -100,12 +105,7 @@ function createHandler() {
     repository as unknown as MessageRepository,
     statusService,
     { applySessionTitleUpdate } as unknown as SessionTitleService,
-    {
-      getSandboxWebSocket: getSandboxSocket,
-      detachSandboxWebSocket: vi.fn(),
-      sendToSandbox,
-      getConnectedClientCount: vi.fn(() => 0),
-    } as unknown as WebSocketManager,
+    { cancelSandbox },
     "session-do-id",
     cancelSession
   );
@@ -127,12 +127,11 @@ function createHandler() {
     getSandbox,
     transition,
     repairIndexStatus,
+    confirmIndexStatus,
     settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
-    getSandboxSocket,
-    sendToSandbox,
-    updateSandboxStatus,
+    cancelSandbox,
   };
 }
 
@@ -164,7 +163,8 @@ describe("SessionLifecycleHandler", () => {
       branchName: "feature/test",
       baseSha: "base-sha",
       currentSha: "head-sha",
-      opencodeSessionId: "oc-1",
+      harness: "opencode",
+      agentSessionId: "oc-1",
       status: "active",
       model: "anthropic/claude-haiku-4-5",
       reasoningEffort: "high",
@@ -290,7 +290,7 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "archived" });
+    expect(await response.json()).toEqual({ status: "archived", outcome: "archived" });
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
@@ -482,27 +482,49 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("cancels and shuts down running sandbox", async () => {
-    const {
-      handler,
-      getSession,
-      getSandbox,
-      cancelSession,
-      getSandboxSocket,
-      sendToSandbox,
-      updateSandboxStatus,
-    } = createHandler();
-    const ws = {} as WebSocket;
+    const { handler, getSession, getSandbox, cancelSession, cancelSandbox } = createHandler();
     getSession.mockReturnValue(createSession({ status: "active" }));
     getSandbox.mockReturnValue(createSandbox({ status: "ready" }));
     cancelSession.mockResolvedValue(undefined);
-    getSandboxSocket.mockReturnValue(ws);
 
     const response = await handler.cancel();
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
     expect(cancelSession).toHaveBeenCalledOnce();
-    expect(sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
-    expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
+    expect(cancelSandbox).toHaveBeenCalledOnce();
+    expect(cancelSession.mock.invocationCallOrder[0]).toBeLessThan(
+      cancelSandbox.mock.invocationCallOrder[0]
+    );
+  });
+});
+
+describe("canonical archive outcomes", () => {
+  it.each(["cancelled", "active", "archived"] as const)(
+    "does not bypass eligibility for %s sessions",
+    async (status) => {
+      const h = createHandler();
+      h.getSession.mockReturnValue(createSession({ status }));
+      if (status !== "cancelled") h.repository.getPendingOrProcessingCount.mockReturnValue(1);
+      const response = await h.handler.archive();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        outcome: status === "cancelled" ? "skipped_cancelled" : "skipped_queued_work",
+      });
+      expect(h.transition).not.toHaveBeenCalled();
+    }
+  );
+  it("returns retryable failure when the projection cannot be confirmed", async () => {
+    const h = createHandler();
+    h.getSession.mockReturnValue(createSession());
+    h.confirmIndexStatus.mockRejectedValue(new Error("projection conflict"));
+    expect((await h.handler.archive()).status).toBe(503);
+  });
+  it("confirms index agreement even for an already archived session", async () => {
+    const h = createHandler();
+    h.getSession.mockReturnValue(createSession({ status: "archived" }));
+    const response = await h.handler.archive();
+    expect(await response.json()).toEqual({ outcome: "already_archived", status: "archived" });
+    expect(h.confirmIndexStatus).toHaveBeenCalledOnce();
   });
 });

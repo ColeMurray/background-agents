@@ -15,6 +15,7 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
     trigger_type: "slack_event",
     schedule_cron: null,
     schedule_tz: "UTC",
+    harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
@@ -84,7 +85,37 @@ describe("POST /automations — slack_event validation (integration)", () => {
       })
     );
     expect(res.status).toBe(400);
-    expect(await res.text()).toContain("slack_channel");
+    expect(await res.json()).toEqual({
+      error: expect.stringContaining("triggerConfig.conditions.0.value: slack_channel:"),
+    });
+  });
+
+  it("rejects a slack_channel condition with the wrong operator (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "exclude", value: ["C1"] }],
+        },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: expect.stringContaining("triggerConfig.conditions.0.operator: slack_channel:"),
+    });
+  });
+
+  it("rejects whitespace-only slack_channel IDs (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "any_of", value: [" "] }],
+        },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "Slack Channel requires at least one nonblank channel ID",
+    });
   });
 
   it("rejects an invalid regex text_match at save time (400)", async () => {

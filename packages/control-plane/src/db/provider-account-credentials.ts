@@ -8,27 +8,41 @@ import {
 } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { ModelProviderAccountStatus } from "@open-inspect/shared/types/provider-accounts";
+import { z } from "zod";
 
-type ProviderCredentialExchangeState = "idle" | "in_flight";
+const positiveIntegerSchema = z.number().int().positive();
+const nonnegativeIntegerSchema = z.number().int().nonnegative();
+
+const credentialRowBaseSchema = z.object({
+  encrypted_payload: z.string(),
+  credential_schema_version: positiveIntegerSchema,
+  credential_version: positiveIntegerSchema,
+  exchange_generation: nonnegativeIntegerSchema,
+  access_token_expires_at: nonnegativeIntegerSchema.nullable(),
+  updated_at: nonnegativeIntegerSchema,
+});
+
+const credentialRowSchema = z.discriminatedUnion("exchange_state", [
+  credentialRowBaseSchema.extend({
+    exchange_state: z.literal("idle"),
+    exchange_owner: z.null(),
+    exchange_started_at: z.null(),
+  }),
+  credentialRowBaseSchema.extend({
+    exchange_state: z.literal("in_flight"),
+    exchange_owner: z.string().min(1),
+    exchange_started_at: nonnegativeIntegerSchema,
+  }),
+]);
+
+type ProviderCredentialExchangeState = z.infer<typeof credentialRowSchema>["exchange_state"];
 export type ProviderCredentialExchangeAccountStatus = Exclude<
   ModelProviderAccountStatus,
   "disabled"
 >;
 
-interface CredentialRow {
-  encrypted_payload: string;
-  credential_schema_version: number;
-  credential_version: number;
-  exchange_generation: number;
-  exchange_state: ProviderCredentialExchangeState;
-  exchange_owner: string | null;
-  exchange_started_at: number | null;
-  access_token_expires_at: number | null;
-  updated_at: number;
-}
-
-export interface ProviderCredentialState<T = unknown> {
-  payload: T;
+export interface ProviderCredentialState {
+  payload: unknown;
   credentialSchemaVersion: number;
   credentialVersion: number;
   exchangeGeneration: number;
@@ -113,10 +127,10 @@ export class ProviderCredentialStore {
       );
   }
 
-  async readCredentialState<T = unknown>(
+  async readCredentialState(
     providerAccountId: string,
     provider: ModelProviderId
-  ): Promise<ProviderCredentialState<T> | null> {
+  ): Promise<ProviderCredentialState | null> {
     assertModelProviderId(provider);
     const row = await this.db
       .prepare(
@@ -125,22 +139,31 @@ export class ProviderCredentialStore {
          WHERE credentials.provider_account_id = ? AND accounts.provider = ?`
       )
       .bind(providerAccountId, provider)
-      .first<CredentialRow>();
-    if (!row) return null;
+      .first();
+    if (row === null) return null;
+    const parsed = credentialRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw new Error(`Malformed provider credential row for account ${providerAccountId}`);
+    }
+    const credential = parsed.data;
     return {
-      payload: await decryptProviderAccountPayload<T>(row.encrypted_payload, this.encryptionKey, {
-        providerAccountId,
-        provider,
-        credentialSchemaVersion: row.credential_schema_version,
-      }),
-      credentialSchemaVersion: row.credential_schema_version,
-      credentialVersion: row.credential_version,
-      exchangeGeneration: row.exchange_generation,
-      exchangeState: row.exchange_state,
-      exchangeOwner: row.exchange_owner,
-      exchangeStartedAt: row.exchange_started_at,
-      accessTokenExpiresAt: row.access_token_expires_at,
-      updatedAt: row.updated_at,
+      payload: await decryptProviderAccountPayload(
+        credential.encrypted_payload,
+        this.encryptionKey,
+        {
+          providerAccountId,
+          provider,
+          credentialSchemaVersion: credential.credential_schema_version,
+        }
+      ),
+      credentialSchemaVersion: credential.credential_schema_version,
+      credentialVersion: credential.credential_version,
+      exchangeGeneration: credential.exchange_generation,
+      exchangeState: credential.exchange_state,
+      exchangeOwner: credential.exchange_owner,
+      exchangeStartedAt: credential.exchange_started_at,
+      accessTokenExpiresAt: credential.access_token_expires_at,
+      updatedAt: credential.updated_at,
     };
   }
 

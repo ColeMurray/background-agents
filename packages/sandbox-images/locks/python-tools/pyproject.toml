@@ -1,0 +1,8 @@
+[project]
+name = "openinspect-image-python-tools"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = ["hatchling==1.27.0", "websockify==0.13.0"]
+
+[tool.uv]
+package = false

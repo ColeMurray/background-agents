@@ -9,7 +9,7 @@
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import { matchRoutingRules } from "@open-inspect/shared/types/integrations";
 import type { Env } from "../types";
-import { targetValue, type SlackSessionTarget } from "../targets";
+import { NO_REPOSITORY_TARGET_VALUE, targetValue, type SlackSessionTarget } from "../targets";
 import { getRoutingRules } from "./repos";
 import type { TargetCatalog } from "./catalog";
 
@@ -82,6 +82,9 @@ export function resolveChannelTargets(
  * name instead of its id still resolves.
  */
 export function matchTargetId(targetId: string, catalog: TargetCatalog): SlackSessionTarget | null {
+  if (targetId.toLowerCase() === NO_REPOSITORY_TARGET_VALUE) {
+    return { kind: "none" };
+  }
   if (isEnvironmentId(targetId)) {
     const environment = catalog.environments.find((e) => e.id === targetId);
     return environment ? { kind: "environment", environment } : null;

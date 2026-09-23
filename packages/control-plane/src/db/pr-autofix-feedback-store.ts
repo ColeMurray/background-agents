@@ -88,14 +88,19 @@ interface ActivityCursor {
   feedbackKey: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function encodeActivityCursor(cursor: ActivityCursor): string {
   return btoa(JSON.stringify(cursor));
 }
 
 function decodeActivityCursor(cursor: string): ActivityCursor {
   try {
-    const value = JSON.parse(atob(cursor)) as Partial<ActivityCursor>;
+    const value = JSON.parse(atob(cursor));
     if (
+      !isRecord(value) ||
       typeof value.lastReceivedAt !== "number" ||
       !Number.isFinite(value.lastReceivedAt) ||
       typeof value.feedbackKey !== "string" ||

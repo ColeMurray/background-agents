@@ -1,11 +1,12 @@
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
-import { GrokIcon, OpenAIIcon } from "@/components/ui/icons";
+import { AnthropicIcon, GrokIcon, OpenAIIcon } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 const SUBSCRIPTION_PROVIDER_ICONS = {
   openai: OpenAIIcon,
   xai: GrokIcon,
-} as const;
+  anthropic: AnthropicIcon,
+} as const satisfies Record<SubscriptionProviderId, unknown>;
 
 export function SubscriptionProviderIcon({
   provider,

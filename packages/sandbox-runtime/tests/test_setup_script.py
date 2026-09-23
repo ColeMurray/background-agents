@@ -1,7 +1,13 @@
 """Tests for RepositoryHooks.run_setup() and its integration in RepositoryBoot.boot()."""
 
 import asyncio
+import contextlib
+import os
+import signal
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from sandbox_runtime.repository_boot import RepositoryBoot
 from sandbox_runtime.runtime_config import BootMode
@@ -38,13 +44,30 @@ def _create_setup_script(repo_path, content="#!/bin/bash\necho hello\n"):
     return script
 
 
-def _fake_process(returncode=0, stdout=b""):
+def _background_writer_script(*, exit_code: int, escape_process_group: bool = False) -> str:
+    escape_group = "os.setsid()\n" if escape_process_group else ""
+    return (
+        "#!/bin/bash\n"
+        f'"{sys.executable}" -c \'import os,time\n'
+        f"{escape_group}"
+        "while True:\n"
+        '    os.write(1, b"x" * 4095 + b"\\n")\n'
+        "    time.sleep(0.01)' &\n"
+        "echo $! > child.pid\n"
+        "echo diagnostic\n"
+        f"exit {exit_code}\n"
+    )
+
+
+def _fake_process(returncode=0):
     """Return a mock async process."""
     proc = MagicMock()
     proc.returncode = returncode
-    proc.communicate = AsyncMock(return_value=(stdout, None))
+    proc.communicate = AsyncMock(side_effect=AssertionError("hooks must wait for shell exit"))
     proc.kill = MagicMock()
-    proc.wait = AsyncMock()
+    proc.wait = AsyncMock(return_value=returncode)
+    proc.stdout = asyncio.StreamReader()
+    proc.stdout.feed_eof()
     return proc
 
 
@@ -79,7 +102,7 @@ class TestSetupScriptSuccess:
     async def test_bash_called_with_correct_args(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         script = _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
+        fake_proc = _fake_process(returncode=0)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -91,11 +114,15 @@ class TestSetupScriptSuccess:
         assert call_args[0][0] == "bash"
         assert call_args[0][1] == str(script)
         assert call_args[1]["cwd"] == sup.repo_path
+        assert call_args[1]["stdout"] == asyncio.subprocess.DEVNULL
+        assert call_args[1]["stderr"] == asyncio.subprocess.STDOUT
+        fake_proc.wait.assert_awaited_once()
+        fake_proc.communicate.assert_not_awaited()
 
     async def test_inherits_environment(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"")
+        fake_proc = _fake_process(returncode=0)
 
         with (
             patch.dict("os.environ", {"MY_VAR": "hello"}, clear=False),
@@ -121,7 +148,7 @@ class TestSetupScriptFailure:
     async def test_nonzero_exit_returns_false(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
-        fake_proc = _fake_process(returncode=1, stdout=b"error: something broke\n")
+        fake_proc = _fake_process(returncode=1)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
@@ -143,134 +170,165 @@ class TestSetupScriptFailure:
 
         assert result is False
 
-    async def test_build_failure_log_omits_hook_output(self, tmp_path):
+    @pytest.mark.parametrize("boot_mode", [BootMode.FRESH, BootMode.BUILD])
+    async def test_failure_log_contains_only_metadata(self, tmp_path, boot_mode):
         sup = _make_repository_boot(tmp_path)
         sup.hooks.log = MagicMock()
         _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
-        fake_proc = _fake_process(returncode=1, stdout=b"secret from repository hook\n")
+        fake_proc = _fake_process(returncode=1)
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.BUILD)
+            result = await sup.hooks.run_setup(sup.repositories[0], boot_mode)
 
         assert result is False
         failure = sup.hooks.log.error.call_args
         assert failure.args == ("setup.failed",)
         assert failure.kwargs["exit_code"] == 1
-        assert "output_tail" not in failure.kwargs
+        assert failure.kwargs["script"] == str(sup.repo_path / ".openinspect/setup.sh")
+        assert failure.kwargs["boot_mode"] == boot_mode.value
+        assert set(failure.kwargs) == {"exit_code", "script", "duration_ms", "boot_mode"}
+
+    async def test_failed_hook_stops_background_writer_before_returning(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        _create_setup_script(sup.repo_path, content=_background_writer_script(exit_code=1))
+        child_pid = None
+
+        try:
+            with patch("sandbox_runtime.repository_hooks.os.killpg", wraps=os.killpg) as kill_group:
+                async with asyncio.timeout(2):
+                    result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
+            child_pid = int((sup.repo_path / "child.pid").read_text())
+            assert result is False
+            assert [call.args[1] for call in kill_group.call_args_list] == [signal.SIGKILL]
+        finally:
+            if child_pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGKILL)
+
+    async def test_failed_hook_returns_with_detached_background_writer(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        _create_setup_script(
+            sup.repo_path,
+            content=_background_writer_script(exit_code=1, escape_process_group=True),
+        )
+        child_pid = None
+
+        try:
+            async with asyncio.timeout(2):
+                result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
+            child_pid = int((sup.repo_path / "child.pid").read_text())
+            assert result is False
+        finally:
+            if child_pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGKILL)
 
 
 # ---------------------------------------------------------------------------
-# TestSetupScriptTimeout
+# TestSetupScriptWaitPolicy
 # ---------------------------------------------------------------------------
 
 
-class TestSetupScriptTimeout:
-    """Timeout handling for the setup script."""
+class TestSetupScriptWaitPolicy:
+    """Setup waits for the script instead of imposing a hook-specific deadline."""
 
-    async def test_timeout_kills_process(self, tmp_path):
+    async def test_legacy_timeout_environment_does_not_bound_script(self, tmp_path):
         sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=None)
-        fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
-        fake_proc.stdout = MagicMock()
-        fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
-
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
-        ):
-            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
-
-        assert result is False
-        fake_proc.kill.assert_called_once()
-        fake_proc.wait.assert_awaited_once()
-
-    async def test_build_timeout_log_omits_hook_output(self, tmp_path):
-        sup = _make_repository_boot(tmp_path)
-        sup.hooks.log = MagicMock()
-        _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=None)
-        fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
-        fake_proc.stdout = MagicMock()
-        fake_proc.stdout.read = AsyncMock(return_value=b"secret partial output\n")
-
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
-        ):
-            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.BUILD)
-
-        assert result is False
-        timeout = sup.hooks.log.error.call_args
-        assert timeout.args == ("setup.timeout",)
-        assert "output_tail" not in timeout.kwargs
-
-    async def test_default_timeout_300(self, tmp_path):
-        sup = _make_repository_boot(tmp_path)
-        _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
-        captured_timeout = {}
-
-        original_wait_for = asyncio.wait_for
-
-        async def capturing_wait_for(coro, *, timeout=None):
-            captured_timeout["value"] = timeout
-            return await original_wait_for(coro, timeout=timeout)
+        fake_proc = _fake_process(returncode=0)
 
         with (
-            patch.dict("os.environ", {}, clear=False),
+            patch.dict("os.environ", {"SETUP_TIMEOUT_SECONDS": "0"}, clear=False),
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-            patch("asyncio.wait_for", side_effect=capturing_wait_for),
-        ):
-            import os
-
-            os.environ.pop("SETUP_TIMEOUT_SECONDS", None)
-            await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
-
-        assert captured_timeout["value"] == 300
-
-    async def test_custom_timeout_from_env(self, tmp_path):
-        sup = _make_repository_boot(tmp_path)
-        _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
-        captured_timeout = {}
-
-        original_wait_for = asyncio.wait_for
-
-        async def capturing_wait_for(coro, *, timeout=None):
-            captured_timeout["value"] = timeout
-            return await original_wait_for(coro, timeout=timeout)
-
-        with (
-            patch.dict("os.environ", {"SETUP_TIMEOUT_SECONDS": "60"}, clear=False),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-            patch("asyncio.wait_for", side_effect=capturing_wait_for),
-        ):
-            await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
-
-        assert captured_timeout["value"] == 60
-
-    async def test_invalid_timeout_env_uses_default(self, tmp_path):
-        sup = _make_repository_boot(tmp_path)
-        _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
-        captured_timeout = {}
-
-        original_wait_for = asyncio.wait_for
-
-        async def capturing_wait_for(coro, *, timeout=None):
-            captured_timeout["value"] = timeout
-            return await original_wait_for(coro, timeout=timeout)
-
-        with (
-            patch.dict("os.environ", {"SETUP_TIMEOUT_SECONDS": "not_a_number"}, clear=False),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-            patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
             result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is True
-        assert captured_timeout["value"] == 300
+        fake_proc.wait.assert_awaited_once()
+        fake_proc.communicate.assert_not_awaited()
+
+    async def test_background_child_does_not_delay_shell_completion(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        _create_setup_script(
+            sup.repo_path,
+            content=_background_writer_script(exit_code=0),
+        )
+        child_pid = None
+
+        try:
+            async with asyncio.timeout(2):
+                result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
+            child_pid = int((sup.repo_path / "child.pid").read_text())
+            assert result is True
+            await asyncio.sleep(0.1)
+            os.kill(child_pid, 0)
+        finally:
+            if child_pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGKILL)
+
+    async def test_cancellation_stops_the_hook_process_group(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        _create_setup_script(sup.repo_path)
+        fake_proc = _fake_process(returncode=None)
+        fake_proc.pid = 12345
+        wait_started = asyncio.Event()
+        wait_calls = 0
+
+        async def wait():
+            nonlocal wait_calls
+            wait_calls += 1
+            if wait_calls == 1:
+                wait_started.set()
+                await asyncio.Event().wait()
+            fake_proc.returncode = -signal.SIGKILL
+            return fake_proc.returncode
+
+        fake_proc.wait.side_effect = wait
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
+            patch("sandbox_runtime.repository_hooks.os.killpg") as kill_process_group,
+        ):
+            task = asyncio.create_task(sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH))
+            await asyncio.wait_for(wait_started.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        kill_process_group.assert_called_once_with(12345, signal.SIGKILL)
+        assert wait_calls == 2
+
+    async def test_repeated_cancellation_during_spawn_still_stops_process_group(self, tmp_path):
+        sup = _make_repository_boot(tmp_path)
+        _create_setup_script(sup.repo_path)
+        fake_proc = _fake_process(returncode=None)
+        fake_proc.pid = 12345
+        spawn_started = asyncio.Event()
+        release_spawn = asyncio.Event()
+
+        async def spawn(*_args, **_kwargs):
+            spawn_started.set()
+            await release_spawn.wait()
+            return fake_proc
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, side_effect=spawn),
+            patch("sandbox_runtime.repository_hooks.os.killpg") as kill_process_group,
+        ):
+            task = asyncio.create_task(sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH))
+            await asyncio.wait_for(spawn_started.wait(), timeout=1)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            release_spawn.set()
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+
+        kill_process_group.assert_called_once_with(12345, signal.SIGKILL)
+        fake_proc.wait.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

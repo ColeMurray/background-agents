@@ -18,6 +18,23 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => true }),
 }));
 
+vi.mock("@/hooks/use-enabled-models", () => ({
+  useEnabledModels: () => ({
+    enabledModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+    enabledModelOptions: [
+      {
+        category: "Anthropic",
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+      {
+        category: "OpenAI",
+        models: [{ id: "openai/gpt-5.4", name: "GPT 5.4" }],
+      },
+    ],
+    loading: false,
+  }),
+}));
+
 expect.extend(matchers);
 
 interface RepoSettingsEntry {
@@ -30,7 +47,8 @@ const { useSWRMock, mutateMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
 }));
 
-vi.mock("swr", () => ({
+vi.mock(import("swr"), async (importOriginal) => ({
+  ...(await importOriginal()),
   default: useSWRMock,
   mutate: mutateMock,
 }));
@@ -672,10 +690,7 @@ describe("SlackIntegrationSettings", () => {
       const section = routingSection();
       // Save is disabled until the form is dirty; edit a keyword (keeping it
       // valid) so the only remaining problem is the over-limit count.
-      await user.type(
-        within(section).getAllByRole("textbox", { name: /routing keyword/i })[0],
-        "x"
-      );
+      await user.type(within(section).getAllByLabelText("Routing keyword")[0], "x");
       await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
 
       expect(toastError).toHaveBeenCalledWith(

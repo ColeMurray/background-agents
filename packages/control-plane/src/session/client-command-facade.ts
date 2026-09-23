@@ -22,6 +22,7 @@ import type { SessionMessageQueue } from "./message-queue";
 import type { PresenceService } from "./presence-service";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { SessionWebSocket } from "../platform-ports";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 
 export class SessionClientCommandFacade implements SessionClientCommands<
   SessionWebSocket,
@@ -30,8 +31,10 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   constructor(
     private readonly authenticator: SessionConnectionAuthenticator,
     private readonly prompts: SessionMessageQueue,
+    private readonly stop: () => Promise<void>,
     private readonly presence: PresenceService,
-    private readonly events: SessionEventStream
+    private readonly events: SessionEventStream,
+    private readonly recover?: (action: ShutdownRecoveryAction) => Promise<void>
   ) {}
 
   subscribe(connection: SessionWebSocket, message: ClientSubscribe): Promise<void> {
@@ -51,7 +54,14 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   }
 
   stopExecution(): Promise<void> {
-    return this.prompts.stopExecution();
+    return this.stop();
+  }
+
+  recoverShutdown(action: ShutdownRecoveryAction): Promise<void> {
+    if (!this.recover) {
+      return Promise.reject(new Error("Shutdown recovery is not configured"));
+    }
+    return this.recover(action);
   }
 
   notifyTyping(): Promise<void> {

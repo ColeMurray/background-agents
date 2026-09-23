@@ -1059,6 +1059,31 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("rejects global timeouts that do not leave room for the effective final buffer", async () => {
+      await expect(
+        store.setGlobal("sandbox", { defaults: { sandboxTimeoutMs: 300_000 } })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("does not grandfather an unchanged stored invalid global timeout", async () => {
+      await db
+        .prepare(
+          `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind("sandbox", JSON.stringify({ defaults: { sandboxTimeoutMs: 300_000 } }), 1, 1)
+        .run();
+
+      const stored = await store.getGlobal("sandbox");
+      expect(stored).toEqual({ defaults: {} });
+
+      await expect(
+        store.setGlobal("sandbox", {
+          defaults: { sandboxTimeoutMs: 300_000, terminalEnabled: true },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("normalizes cross-field violations that only appear after merge", async () => {
       // Each blob is individually valid — neither write throws — because the
       // invariant (concurrent <= total) spans two fields set in different scopes.
@@ -1071,6 +1096,30 @@ describe("IntegrationSettingsStore", () => {
       // Merge would be { maxConcurrentChildSessions: 3, maxTotalChildSessions: 2 };
       // the resolve-time normalize drops the inverted concurrent limit.
       expect(config.settings).toEqual({ maxTotalChildSessions: 2 });
+    });
+
+    it("defers timeout-buffer validation until global and repo settings are merged", async () => {
+      await store.setGlobal("sandbox", { defaults: { finalSnapshotBufferMs: 300_000 } });
+      await store.setRepoSettings("sandbox", "acme/app", { sandboxTimeoutMs: 360_000 });
+
+      expect(await store.getRepoSettings("sandbox", "acme/app")).toEqual({
+        sandboxTimeoutMs: 360_000,
+      });
+      const config = await store.getResolvedConfig("sandbox", "acme/app");
+      expect(config.settings).toMatchObject({
+        sandboxTimeoutMs: 360_000,
+        finalSnapshotBufferMs: 300_000,
+      });
+    });
+
+    it("omits an invalid relationship introduced by an environment override", async () => {
+      await store.setGlobal("sandbox", {
+        defaults: { finalSnapshotBufferMs: 300_000, terminalEnabled: true },
+      });
+      await store.setEnvironmentSettings("sandbox", "env_1", { sandboxTimeoutMs: 300_000 });
+
+      const config = await store.getResolvedConfig("sandbox", "acme/app", "env_1");
+      expect(config.settings).toEqual({ terminalEnabled: true });
     });
 
     it("round-trips fractional cpuCores and small memoryMib", async () => {
@@ -1389,6 +1438,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setGlobal("slack", {
           defaults: { routingRules: "frontend" as unknown as [] },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects partial routing rule payloads", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { routingRules: [{ keyword: "frontend" }] as unknown as [] },
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

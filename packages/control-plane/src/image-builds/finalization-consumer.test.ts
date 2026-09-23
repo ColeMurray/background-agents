@@ -1,55 +1,117 @@
 import { describe, expect, it, vi } from "vitest";
-import { consumeImageBuildFinalizationBatch } from "./finalization-consumer";
+import type { SqlDatabase } from "../db/sql-database";
+import type { JobDeps } from "../jobs";
+import type { Logger } from "../logger";
+import type { Env } from "../types";
+import { handleImageBuildFinalization } from "./finalization-consumer";
+import { ImageBuildFinalizer } from "./finalizer";
 
-function message(body: unknown) {
+vi.mock("./finalizer", () => ({
+  ImageBuildFinalizer: vi.fn(function () {
+    return { process };
+  }),
+}));
+vi.mock("./provider-factory", () => ({ createImageBuildAdapterFactory: vi.fn(() => ({})) }));
+
+const { process } = vi.hoisted(() => ({ process: vi.fn() }));
+
+const JOB = { version: 1 as const, buildId: "build-1", completionHash: "a".repeat(64) };
+
+const send = vi.fn(async () => undefined);
+
+function deps(): JobDeps {
   return {
-    id: "message-1",
-    timestamp: new Date(),
-    body,
-    attempts: 1,
-    ack: vi.fn(),
-    retry: vi.fn(),
+    env: { LOG_LEVEL: "error", JOBS: { send } } as unknown as Env,
+    db: {} as SqlDatabase,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+    correlation: { trace_id: "message-1", request_id: "message-1" },
   };
 }
 
-function batch(...messages: ReturnType<typeof message>[]): MessageBatch<unknown> {
-  return {
-    queue: "image-build-finalization",
-    messages,
-    ackAll: vi.fn(),
-    retryAll: vi.fn(),
-  } as unknown as MessageBatch<unknown>;
-}
+describe("handleImageBuildFinalization", () => {
+  it("acknowledges completed work, processed under the delivery's correlation", async () => {
+    const delivery = deps();
+    process.mockResolvedValueOnce({ type: "completed" });
 
-describe("image build finalization Queue consumer", () => {
-  it("acknowledges completed work", async () => {
-    const queued = message({
-      version: 1,
-      buildId: "build-1",
-      completionHash: "a".repeat(64),
-    });
-    const process = vi.fn(async () => ({ type: "completed" as const }));
+    const outcome = await handleImageBuildFinalization(
+      JOB,
+      { attempts: 1, maxAttempts: 13 },
+      delivery
+    );
 
-    await consumeImageBuildFinalizationBatch(batch(queued), process);
-
-    expect(process).toHaveBeenCalledWith(queued.body, "message-1");
-    expect(queued.ack).toHaveBeenCalledOnce();
-    expect(queued.retry).not.toHaveBeenCalled();
+    expect(outcome).toBe("ack");
+    expect(ImageBuildFinalizer).toHaveBeenCalledOnce();
+    expect(process).toHaveBeenCalledWith(JOB, delivery.correlation);
   });
 
-  it("retries busy or failed processing and rejects malformed commands", async () => {
-    const retry = message({
-      version: 1,
-      buildId: "build-1",
-      completionHash: "a".repeat(64),
+  it("asks for a retry after the delay the finalizer names while the build is busy", async () => {
+    process.mockResolvedValueOnce({ type: "retry", delayMs: 365_000 });
+
+    const outcome = await handleImageBuildFinalization(
+      JOB,
+      { attempts: 2, maxAttempts: 13 },
+      deps()
+    );
+
+    expect(outcome).toEqual({ retry: true, delayMs: 365_000 });
+  });
+  it.each([5, 12])(
+    "keeps the host's retry budget for a pending operation on delivery %i of 13",
+    async (attempts) => {
+      send.mockClear();
+      process.mockResolvedValueOnce({
+        type: "retry",
+        delayMs: 30_000,
+        reason: "pending_operation",
+      });
+
+      const outcome = await handleImageBuildFinalization(
+        JOB,
+        { attempts, maxAttempts: 13 },
+        deps()
+      );
+
+      expect(outcome).toEqual({ retry: true, delayMs: 30_000 });
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
+
+  it("republishes a pending operation on the last delivery instead of dead-lettering it", async () => {
+    send.mockClear();
+    process.mockResolvedValueOnce({
+      type: "retry",
+      delayMs: 30_000,
+      reason: "pending_operation",
     });
-    const malformed = message({ buildId: "build-2", callbackToken: "secret" });
-    const process = vi.fn(async () => ({ type: "retry" as const, delaySeconds: 365 }));
 
-    await consumeImageBuildFinalizationBatch(batch(retry, malformed), process);
+    // `attempts` is 1-based and `maxAttempts` counts the first delivery, so
+    // this is the delivery a retry would dead-letter.
+    const outcome = await handleImageBuildFinalization(
+      JOB,
+      { attempts: 13, maxAttempts: 13 },
+      deps()
+    );
 
-    expect(retry.retry).toHaveBeenCalledWith({ delaySeconds: 365 });
-    expect(malformed.ack).toHaveBeenCalledOnce();
-    expect(process).toHaveBeenCalledTimes(1);
+    // A capture outlives a budget sized for lease contention; the operation's
+    // own fixed deadline is what ends the wait, not the delivery count.
+    expect(outcome).toBe("ack");
+    expect(send).toHaveBeenCalledWith(
+      { kind: "image_build.finalize", payload: JOB },
+      { delayMs: 30_000 }
+    );
+  });
+
+  it("spends the host's budget on a lease-contention retry even on the last delivery", async () => {
+    send.mockClear();
+    process.mockResolvedValueOnce({ type: "retry", delayMs: 20_000 });
+
+    const outcome = await handleImageBuildFinalization(
+      JOB,
+      { attempts: 13, maxAttempts: 13 },
+      deps()
+    );
+
+    expect(outcome).toEqual({ retry: true, delayMs: 20_000 });
+    expect(send).not.toHaveBeenCalled();
   });
 });

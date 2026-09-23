@@ -1,0 +1,1 @@
+ALTER TABLE model_preferences ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;

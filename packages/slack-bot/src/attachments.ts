@@ -29,6 +29,7 @@ import type { Env } from "./types";
 const log = createLogger("attachments");
 
 const ATTACHMENT_NAME_MAX_LENGTH = 255;
+const MAX_ATTACHMENT_DOWNLOAD_CANDIDATES = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * 2;
 
 const SUPPORTED_MIME_TYPES = new Set<string>(SESSION_ATTACHMENT_IMAGE_MIME_TYPES);
 
@@ -62,7 +63,12 @@ export type SlackAttachmentDropReason =
 
 /** Downloaded image bytes plus a record of every image that was lost. */
 export interface PreparedImageAttachments {
-  files: Array<{ attachment: SlackImageAttachment; bytes: Uint8Array }>;
+  files: Array<{
+    attachment: SlackImageAttachment;
+    bytes: Uint8Array;
+    /** False for prior-thread context, whose failures must not be blamed on the current user. */
+    reportDrop?: false;
+  }>;
   /**
    * One entry per image the user attached that did NOT make it through, so
    * callers can surface a visible "couldn't read your image" note — tailored
@@ -97,6 +103,51 @@ function isTrustedSlackFileUrl(raw: string): boolean {
   }
   if (url.protocol !== "https:") return false;
   return url.hostname === "slack.com" || url.hostname.endsWith(".slack.com");
+}
+
+function isForwardableSlackImage(file: SlackMessageFile): boolean {
+  const downloadUrl = file.url_private_download || file.url_private;
+  return Boolean(
+    file.mimetype &&
+    SUPPORTED_MIME_TYPES.has(file.mimetype) &&
+    downloadUrl &&
+    file.mode !== "external" &&
+    isTrustedSlackFileUrl(downloadUrl)
+  );
+}
+
+/**
+ * Render bounded, URL-free metadata for files carried by an earlier thread
+ * message. Automation context remains byte-free; interactive context can also
+ * forward supported images through the normal attachment pipeline.
+ */
+export function slackFileAnnotations(
+  files: SlackMessageFile[] | undefined,
+  mode: "interactive" | "automation"
+): string[] {
+  if (!files?.length) return [];
+  const annotations = files.slice(0, MAX_SESSION_ATTACHMENTS_PER_MESSAGE).map((file) => {
+    const supported = isForwardableSlackImage(file);
+    const status = supported
+      ? mode === "interactive"
+        ? "supported image; eligible for secure forwarding"
+        : "supported image; not forwarded by Slack Message automations"
+      : "unsupported or unavailable file; not forwarded";
+    return `Slack file: ${JSON.stringify({
+      name: (file.name || file.title || file.id || "unnamed file").slice(
+        0,
+        ATTACHMENT_NAME_MAX_LENGTH
+      ),
+      mimetype: file.mimetype || "unknown",
+      status,
+    })}`;
+  });
+  if (files.length > MAX_SESSION_ATTACHMENTS_PER_MESSAGE) {
+    annotations.push(
+      `Slack files: ${files.length - MAX_SESSION_ATTACHMENTS_PER_MESSAGE} additional file(s) omitted from context`
+    );
+  }
+  return annotations;
 }
 
 /**
@@ -135,6 +186,10 @@ export function toImageAttachments(
     });
   }
   return attachments;
+}
+
+function attachmentIdentity(attachment: SlackImageAttachment): string {
+  return attachment.id ? `id:${attachment.id}` : `url:${attachment.downloadUrl}`;
 }
 
 /**
@@ -196,53 +251,119 @@ async function downloadSlackFile(
 }
 
 /**
- * Download image bytes for the (capped) attachments concurrently. Runs before
- * a session exists — callers can bail out of session creation when an
- * image-only request yields nothing — and bounds wall-clock time to a single
- * download timeout regardless of file count, keeping the work well inside the
- * Worker's post-response `waitUntil` window.
+ * Download image bytes in batches no larger than the remaining prompt slots.
+ * Failed candidates leave room for later candidates, while six successful
+ * downloads stop further work. Candidate attempts are also bounded defensively.
+ * Runs before a session exists so callers can avoid creating one when an
+ * image-only request yields nothing.
  */
 export async function prepareImageAttachments(
   env: Env,
   attachments: SlackImageAttachment[],
   traceId?: string
 ): Promise<PreparedImageAttachments> {
-  if (attachments.length === 0) return { files: [], dropped: [] };
-
-  const eligible = attachments.slice(0, MAX_SESSION_ATTACHMENTS_PER_MESSAGE);
-  const dropped: SlackAttachmentDropReason[] = [];
-  type DownloadOutcome =
-    | { attachment: SlackImageAttachment; bytes: Uint8Array }
-    | { attachment: SlackImageAttachment; dropReason: SlackAttachmentDropReason };
-  const outcomes = await Promise.all(
-    eligible.map(async (attachment): Promise<DownloadOutcome> => {
-      if (
-        typeof attachment.size === "number" &&
-        attachment.size > SESSION_ATTACHMENT_IMAGE_MAX_BYTES
-      ) {
-        log.warn("slack.attachment.too_large", {
-          trace_id: traceId,
-          file_id: attachment.id,
-          size_bytes: attachment.size,
-        });
-        return { attachment, dropReason: "too_large" as const };
-      }
-      const download = await downloadSlackFile(env.SLACK_BOT_TOKEN, attachment, traceId);
-      return "dropReason" in download
-        ? { attachment, dropReason: download.dropReason }
-        : { attachment, bytes: download.bytes };
-    })
+  return prepareImageCandidates(
+    env,
+    attachments.map((attachment) => ({ attachment, reportDrop: true })),
+    traceId
   );
+}
+
+interface ImageCandidate {
+  attachment: SlackImageAttachment;
+  reportDrop: boolean;
+}
+
+async function prepareImageCandidates(
+  env: Env,
+  candidates: ImageCandidate[],
+  traceId?: string
+): Promise<PreparedImageAttachments> {
+  if (candidates.length === 0) return { files: [], dropped: [] };
 
   const files: PreparedImageAttachments["files"] = [];
-  for (const outcome of outcomes) {
-    if ("bytes" in outcome) files.push({ attachment: outcome.attachment, bytes: outcome.bytes });
-    else dropped.push(outcome.dropReason);
+  const dropped: SlackAttachmentDropReason[] = [];
+  const boundedCandidates = candidates.slice(0, MAX_ATTACHMENT_DOWNLOAD_CANDIDATES);
+  for (const candidate of candidates.slice(MAX_ATTACHMENT_DOWNLOAD_CANDIDATES)) {
+    if (candidate.reportDrop) dropped.push("over_cap");
   }
-  for (const _ of attachments.slice(MAX_SESSION_ATTACHMENTS_PER_MESSAGE)) {
-    dropped.push("over_cap");
+  type DownloadOutcome =
+    | { candidate: ImageCandidate; bytes: Uint8Array }
+    | { candidate: ImageCandidate; dropReason: SlackAttachmentDropReason };
+  let candidateIndex = 0;
+
+  while (
+    candidateIndex < boundedCandidates.length &&
+    files.length < MAX_SESSION_ATTACHMENTS_PER_MESSAGE
+  ) {
+    const remaining = MAX_SESSION_ATTACHMENTS_PER_MESSAGE - files.length;
+    const batch = boundedCandidates.slice(candidateIndex, candidateIndex + remaining);
+    candidateIndex += batch.length;
+    const outcomes = await Promise.all(
+      batch.map(async (candidate): Promise<DownloadOutcome> => {
+        const { attachment } = candidate;
+        if (
+          typeof attachment.size === "number" &&
+          attachment.size > SESSION_ATTACHMENT_IMAGE_MAX_BYTES
+        ) {
+          log.warn("slack.attachment.too_large", {
+            trace_id: traceId,
+            file_id: attachment.id,
+            size_bytes: attachment.size,
+          });
+          return { candidate, dropReason: "too_large" as const };
+        }
+        const download = await downloadSlackFile(env.SLACK_BOT_TOKEN, attachment, traceId);
+        return "dropReason" in download
+          ? { candidate, dropReason: download.dropReason }
+          : { candidate, bytes: download.bytes };
+      })
+    );
+
+    for (const outcome of outcomes) {
+      if ("bytes" in outcome) {
+        const prepared = { attachment: outcome.candidate.attachment, bytes: outcome.bytes };
+        files.push(
+          outcome.candidate.reportDrop ? prepared : { ...prepared, reportDrop: false as const }
+        );
+      } else if (outcome.candidate.reportDrop) {
+        dropped.push(outcome.dropReason);
+      }
+    }
+  }
+
+  for (const candidate of boundedCandidates.slice(candidateIndex)) {
+    if (candidate.reportDrop) dropped.push("over_cap");
   }
   return { files, dropped };
+}
+
+/**
+ * Prepare current-message images first, then fill the remaining prompt slots
+ * with deduplicated images from earlier selected thread messages. Context-only
+ * overflow is silently omitted because it is not a dropped current-user input.
+ */
+export async function preparePromptImageAttachments(
+  env: Env,
+  current: SlackImageAttachment[],
+  context: SlackImageAttachment[],
+  traceId?: string
+): Promise<PreparedImageAttachments> {
+  const seen = new Set(current.map(attachmentIdentity));
+  const contextual = context.filter((attachment) => {
+    const identity = attachmentIdentity(attachment);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+  return prepareImageCandidates(
+    env,
+    [
+      ...current.map((attachment) => ({ attachment, reportDrop: true })),
+      ...contextual.map((attachment) => ({ attachment, reportDrop: false })),
+    ],
+    traceId
+  );
 }
 
 /**
@@ -255,7 +376,9 @@ async function uploadToSession(
   file: PreparedImageAttachments["files"][number],
   authorId: string,
   traceId?: string
-): Promise<{ reference: SessionAttachmentReference } | { sessionMissing: boolean }> {
+): Promise<
+  { reference: SessionAttachmentReference } | { sessionMissing: boolean; reportDrop: boolean }
+> {
   const { attachment, bytes } = file;
   try {
     const formData = new FormData();
@@ -288,7 +411,7 @@ async function uploadToSession(
         file_id: attachment.id,
         http_status: response.status,
       });
-      return { sessionMissing: response.status === 404 };
+      return { sessionMissing: response.status === 404, reportDrop: file.reportDrop !== false };
     }
     const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
@@ -298,7 +421,7 @@ async function uploadToSession(
         file_id: attachment.id,
         error: new Error("Invalid attachment upload response"),
       });
-      return { sessionMissing: false };
+      return { sessionMissing: false, reportDrop: file.reportDrop !== false };
     }
     return { reference: { attachmentId: parsed.data.attachmentId, name: attachment.name } };
   } catch (e) {
@@ -308,7 +431,7 @@ async function uploadToSession(
       file_id: attachment.id,
       error: e instanceof Error ? e : new Error(String(e)),
     });
-    return { sessionMissing: false };
+    return { sessionMissing: false, reportDrop: file.reportDrop !== false };
   }
 }
 
@@ -334,7 +457,7 @@ export async function uploadPreparedAttachments(
   for (const outcome of outcomes) {
     if ("reference" in outcome) references.push(outcome.reference);
     else {
-      dropped.push("upload_rejected");
+      if (outcome.reportDrop) dropped.push("upload_rejected");
       failures.push(outcome);
     }
   }

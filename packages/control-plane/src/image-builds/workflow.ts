@@ -4,12 +4,10 @@ import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { hashImageBuildCallbackToken, type ImageBuildCallbackAuthFailure } from "./callback-auth";
-import {
-  createImageBuildFinalizationJob,
-  type ImageBuildFinalizationQueue,
-} from "./finalization-job";
+import { createImageBuildFinalizationJob } from "./finalization-job";
 import {
   errorMessage,
+  ImageBuildAdmissionClosedError,
   ImageBuildCallbackAuthRejectedError,
   ImageBuildCallbackAuthUnavailableError,
   ImageBuildCompletionNotAcceptedError,
@@ -28,7 +26,7 @@ import {
   type PlannedCallbackAuth,
   type ResolvedImageBuildTarget,
 } from "./planner";
-import { resolveImageBuildProvider } from "./provider-policy";
+import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import type {
   ImageBuildAdapter,
@@ -39,6 +37,8 @@ import type {
 } from "./types";
 
 const logger = createLogger("image-builds:workflow");
+/** Request-path compensation is best-effort; maintenance owns slow deletes. */
+const TRIGGER_CLEANUP_TIMEOUT_MS = 5_000;
 
 export interface AcceptBuildCompleteCommand {
   completion: CompleteImageBuildCallback;
@@ -79,8 +79,7 @@ export class ImageBuildWorkflow {
     private readonly env: Env,
     private readonly store: ImageBuildStore,
     private readonly adapterFactory: ImageBuildAdapterFactory,
-    private readonly providerDeps: ImageBuildProviderDeps,
-    private readonly finalizationQueue: ImageBuildFinalizationQueue | null = null
+    private readonly providerDeps: ImageBuildProviderDeps
   ) {}
 
   /**
@@ -169,6 +168,15 @@ export class ImageBuildWorkflow {
     if (!this.env.WORKER_URL) {
       throw new ImageBuildWorkflowUnavailableError("WORKER_URL not configured");
     }
+    // Every trigger source converges here, so the deployment's admission
+    // control is enforced here too — manual rebuild, save hook and cron alike.
+    const admission = resolveImageBuildAdmission(this.env);
+    if (!admission.admitted) {
+      throw new ImageBuildAdmissionClosedError(
+        "Image builds are paused for this deployment",
+        admission.reason
+      );
+    }
     const { provider, planner } = this.providerDeps;
 
     // Validate provider configuration before any database work. This keeps a
@@ -187,10 +195,6 @@ export class ImageBuildWorkflow {
       });
       throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
     }
-    if (!this.finalizationQueue) {
-      throw new ImageBuildWorkflowUnavailableError("Image build finalization Queue not configured");
-    }
-
     await this.failStaleScopeBuild(scope, provider, ctx);
 
     const active = await this.store.getActiveBuild(scope, provider);
@@ -271,6 +275,18 @@ export class ImageBuildWorkflow {
         callbackAuth,
       });
 
+      // Record the cleanup obligation BEFORE the provider can create
+      // anything, for adapters that can find a source again by its reserved
+      // name. A create whose response is lost leaves a sandbox no row names,
+      // and an unrecorded source is an untracked one — so a failed intent
+      // write aborts the trigger rather than creating regardless.
+      if (adapter.recoverUnboundSource) {
+        const intentRecorded = await this.store.markSourceCreateIntent(buildId, provider);
+        if (!intentRecorded) {
+          throw new Error(`Failed to record ${provider} build source cleanup intent`);
+        }
+      }
+
       await adapter.startBuild(plan, {
         bindProviderSession: async (providerSessionId) => {
           providerSessionIdForCleanup = providerSessionId;
@@ -292,13 +308,42 @@ export class ImageBuildWorkflow {
 
       return { type: "triggered", buildId };
     } catch (e) {
-      if (providerSessionIdForCleanup) {
+      // Failure and callback acceptance compete on the same building row.
+      // Only the winner may tear down the source: a launch response/probe can
+      // fail after a fast build has already handed it to the finalizer.
+      let cleanupAllowed = false;
+      try {
+        cleanupAllowed = await this.store.markBuildFailed(buildId, provider, errorMessage(e));
+        if (!cleanupAllowed) {
+          const current = await this.store.finalization.getBuild(buildId);
+          if (current && current.callback_token_used_at !== null) {
+            return { type: "triggered", buildId };
+          }
+          // A concurrent supersede/failure also fences out late callbacks.
+          // In particular, a rejected bind may leave an id only this request knows.
+          cleanupAllowed = current?.status === "failed" || current?.status === "superseded";
+        }
+      } catch (markFailedError) {
+        // Without a confirmed fence, leave the durable cleanup obligation to
+        // maintenance rather than risk deleting an accepted build's source.
+        logger.warn("image_build.trigger_mark_failed_error", {
+          error: errorMessage(markFailedError),
+          build_id: buildId,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+        });
+      }
+
+      if (cleanupAllowed && providerSessionIdForCleanup) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TRIGGER_CLEANUP_TIMEOUT_MS);
         await adapter
           .cleanupFailedBuild({
             buildId,
             providerSessionId: providerSessionIdForCleanup,
             errorMessage: errorMessage(e),
             correlation: ctx,
+            signal: controller.signal,
           })
           .catch((cleanupError) => {
             logger.warn(`image_build.${provider}_trigger_cleanup_failed`, {
@@ -308,18 +353,8 @@ export class ImageBuildWorkflow {
               request_id: ctx.request_id,
               trace_id: ctx.trace_id,
             });
-          });
-      }
-
-      try {
-        await this.store.markBuildFailed(buildId, provider, errorMessage(e));
-      } catch (markFailedError) {
-        logger.warn("image_build.trigger_mark_failed_error", {
-          error: errorMessage(markFailedError),
-          build_id: buildId,
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-        });
+          })
+          .finally(() => clearTimeout(timeoutId));
       }
 
       logger.error("image_build.trigger_error", {
@@ -365,7 +400,7 @@ export class ImageBuildWorkflow {
       throw new ImageBuildCompletionNotAcceptedError("Build is not accepting completion");
     }
     if (authenticated.build.status === "building") {
-      await this.requireFinalizationQueue().send(job);
+      await this.env.JOBS.send({ kind: "image_build.finalize", payload: job });
     }
 
     logger.info("image_build.build_complete_received", {
@@ -409,7 +444,7 @@ export class ImageBuildWorkflow {
     if (acceptance === "rejected") {
       throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
     }
-    await this.requireFinalizationQueue().send(job);
+    await this.env.JOBS.send({ kind: "image_build.finalize", payload: job });
 
     logger.info("image_build.build_failed", {
       build_id: failure.buildId,
@@ -458,13 +493,6 @@ export class ImageBuildWorkflow {
     return { build, tokenHash };
   }
 
-  private requireFinalizationQueue(): ImageBuildFinalizationQueue {
-    if (!this.finalizationQueue) {
-      throw new ImageBuildWorkflowUnavailableError("Image build finalization Queue not configured");
-    }
-    return this.finalizationQueue;
-  }
-
   private loggedCallbackAuthError(
     failure: ImageBuildCallbackAuthFailure,
     params: {
@@ -500,8 +528,7 @@ export function createImageBuildWorkflowFromEnv(env: Env, db: SqlDatabase): Imag
     env,
     new ImageBuildStore(db),
     createImageBuildAdapterFactory(env),
-    provider ? { provider, planner: new ImageBuildPlanner(env, db) } : null,
-    env.IMAGE_BUILD_FINALIZATION_QUEUE ?? null
+    provider ? { provider, planner: new ImageBuildPlanner(env, db) } : null
   );
 }
 

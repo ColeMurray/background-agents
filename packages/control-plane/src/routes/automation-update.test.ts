@@ -202,6 +202,52 @@ describe("automation read, update, and delete routes", () => {
       );
     });
 
+    it("rejects a replacement pin the automation's harness cannot use", async () => {
+      mockProviderAccountStore.getById.mockResolvedValue({
+        id: "0123456789abcdef0123456789abcdef",
+        provider: "anthropic",
+        status: "active",
+        archivedAt: null,
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: {
+          providerSelections: {
+            anthropic: {
+              mode: "provider_account",
+              accountId: "0123456789abcdef0123456789abcdef",
+            },
+          },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toEqual({
+        error: expect.stringContaining("select an API key"),
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("checks the stored pins when the harness changes", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, harness: "claude" });
+      mockProviderAuthStore.list.mockResolvedValue([
+        {
+          automation_id: "auto-1",
+          provider: "anthropic",
+          auth_mode: "provider_account",
+          provider_account_id: "0123456789abcdef0123456789abcdef",
+        },
+      ]);
+
+      const res = await callRoute("PUT", "/automations/auto-1", {
+        body: { harness: "opencode" },
+      });
+
+      expect(res.status).toBe(400);
+      expect(mockProviderAuthStore.list).toHaveBeenCalledWith("auto-1");
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
     it("leaves provider pins unchanged when providerSelections is omitted", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
@@ -275,6 +321,83 @@ describe("automation read, update, and delete routes", () => {
       await expect(response.json()).resolves.toMatchObject({
         error: expect.stringContaining("triggerConfig.conditions"),
       });
+    });
+
+    it.each([{ name: "Updated" }, { triggerConfig: { conditions: [] } }])(
+      "rejects an unknown stored trigger type even when replacing config",
+      async (body) => {
+        mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "unknown" });
+
+        const response = await callRoute("PUT", "/automations/auto-1", {
+          body,
+        });
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toEqual({
+          error: "Stored automation trigger fields are invalid",
+        });
+        expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["{invalid", "", '{"conditions":null}'])(
+      "allows a valid replacement to repair corrupt stored config: %j",
+      async (trigger_config) => {
+        const existing = {
+          ...sampleRow,
+          trigger_type: "github_event",
+          event_type: "pull_request.opened",
+          trigger_config,
+        };
+        const replacement = { conditions: [] };
+        mockStore.getById
+          .mockResolvedValueOnce(existing)
+          .mockResolvedValue({ ...existing, trigger_config: JSON.stringify(replacement) });
+
+        const response = await callRoute("PUT", "/automations/auto-1", {
+          body: { triggerConfig: replacement },
+        });
+
+        expect(response.status).toBe(200);
+        expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+          "auto-1",
+          expect.objectContaining({ trigger_config: JSON.stringify(replacement) })
+        );
+        expect(mockBatch).toHaveBeenCalled();
+      }
+    );
+
+    it("allows clearing corrupt config for a trigger with optional conditions", async () => {
+      const existing = {
+        ...sampleRow,
+        trigger_type: "webhook",
+        event_type: "webhook.received",
+        trigger_config: "{invalid",
+      };
+      mockStore.getById
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValue({ ...existing, trigger_config: null });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { triggerConfig: null },
+      });
+
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith("auto-1", {
+        trigger_config: null,
+      });
+    });
+
+    it("rejects corrupt stored config when no replacement is supplied", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_config: "{invalid" });
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { name: "Updated" },
+      });
+
+      expect(response.status).toBe(500);
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
     });
 
     it("rejects an event type change that would leave incompatible conditions", async () => {

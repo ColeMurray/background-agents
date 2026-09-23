@@ -54,6 +54,32 @@ function expectClientRequestIdIndex(db: DatabaseSync): void {
   ]);
 }
 
+it("upgrades existing sessions with a persisted status revision and preserves it on restart", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, status TEXT, updated_at INTEGER)");
+    db.exec("INSERT INTO session VALUES ('legacy', 'archived', 5000)");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(({ id }) => id !== 51)) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+    applyMigrations(createDatabaseSql(db));
+    expect(db.prepare("SELECT * FROM session").get()).toEqual({
+      id: "legacy",
+      status: "archived",
+      updated_at: 5000,
+      status_revision: 1,
+    });
+    db.exec("UPDATE session SET status_revision = 7");
+    applyMigrations(createDatabaseSql(db));
+    expect(db.prepare("SELECT status_revision FROM session").get()).toEqual({ status_revision: 7 });
+  } finally {
+    db.close();
+  }
+});
+
 describe("applyMigrations", () => {
   let mock: ReturnType<typeof createMockSql>;
 
@@ -61,6 +87,12 @@ describe("applyMigrations", () => {
     mock = createMockSql();
     vi.useFakeTimers();
     vi.setSystemTime(1000);
+  });
+
+  it("has unique, strictly increasing migration ids", () => {
+    const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
   });
 
   it("runs all migrations on a fresh DO", () => {
@@ -76,9 +108,7 @@ describe("applyMigrations", () => {
     expect(selectCall).toBeDefined();
 
     // Each migration produces an exec call + an INSERT
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(MIGRATIONS.length);
 
     // Verify all IDs are recorded
@@ -94,9 +124,7 @@ describe("applyMigrations", () => {
     applyMigrations(mock.sql);
 
     // Should only have CREATE TABLE + SELECT, no migration execs or inserts
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(0);
 
     const alterCalls = mock.calls.filter((c) => c.query.includes("ALTER TABLE"));
@@ -110,9 +138,7 @@ describe("applyMigrations", () => {
 
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     // Migrations 11 through MIGRATIONS.length
     const unappliedCount = MIGRATIONS.length - 10;
     expect(inserts).toHaveLength(unappliedCount);
@@ -144,8 +170,7 @@ describe("applyMigrations", () => {
 
     expect(
       mock.calls.some(
-        ({ query, params }) =>
-          query.includes("INSERT OR IGNORE INTO _schema_migrations") && params[0] === 23
+        ({ query, params }) => query.includes("INSERT INTO _schema_migrations") && params[0] === 23
       )
     ).toBe(false);
   });
@@ -193,9 +218,7 @@ describe("applyMigrations", () => {
     expect(() => applyMigrations(mock.sql)).not.toThrow();
 
     // All migrations should still be recorded
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(MIGRATIONS.length);
   });
 
@@ -209,9 +232,7 @@ describe("applyMigrations", () => {
 
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     expect(inserts).toHaveLength(0);
   });
 
@@ -229,9 +250,7 @@ describe("applyMigrations", () => {
   it("records applied_at timestamp", () => {
     applyMigrations(mock.sql);
 
-    const inserts = mock.calls.filter((c) =>
-      c.query.includes("INSERT OR IGNORE INTO _schema_migrations")
-    );
+    const inserts = mock.calls.filter((c) => c.query.includes("INSERT INTO _schema_migrations"));
     // Second param should be the timestamp
     for (const insert of inserts) {
       expect(insert.params[1]).toBe(1000);
@@ -278,6 +297,112 @@ describe("applyMigrations", () => {
 
     const migration = MIGRATIONS.find((entry) => entry.id === 48);
     expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT");
+  });
+
+  it("adds sandbox boot phase and fencing columns for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("boot_phase TEXT");
+    expect(SCHEMA_SQL).toContain("boot_seq INTEGER");
+    expect(SCHEMA_SQL).toContain("fenced INTEGER NOT NULL DEFAULT 0");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 52);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE sandbox (id TEXT PRIMARY KEY)");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("PRAGMA table_info(sandbox)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "boot_phase", type: "TEXT", notnull: 0 }),
+          expect.objectContaining({ name: "boot_seq", type: "INTEGER", notnull: 0 }),
+          expect.objectContaining({
+            name: "fenced",
+            type: "INTEGER",
+            notnull: 1,
+            dflt_value: "0",
+          }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("removes persisted hook output tails without touching malformed event data", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 53);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE events (type TEXT NOT NULL, data TEXT NOT NULL)");
+      db.exec("CREATE TABLE sandbox (boot_phase TEXT)");
+      db.prepare("INSERT INTO events VALUES (?, ?)").run(
+        "boot_progress",
+        JSON.stringify({ type: "boot_progress", phase: "start", outputTail: ["secret"] })
+      );
+      db.prepare("INSERT INTO events VALUES (?, ?)").run("boot_progress", "not-json");
+      db.prepare("INSERT INTO events VALUES (?, ?)").run(
+        "token",
+        JSON.stringify({ type: "token", outputTail: ["unrelated"] })
+      );
+      db.prepare("INSERT INTO sandbox VALUES (?)").run(
+        JSON.stringify({ phase: "start", status: "failed", outputTail: ["secret"] })
+      );
+
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      const events = db.prepare("SELECT data FROM events ORDER BY rowid").all() as Array<{
+        data: string;
+      }>;
+      expect(JSON.parse(events[0].data)).toEqual({ type: "boot_progress", phase: "start" });
+      expect(events[1].data).toBe("not-json");
+      expect(JSON.parse(events[2].data)).toEqual({
+        type: "token",
+        outputTail: ["unrelated"],
+      });
+      const sandbox = db.prepare("SELECT boot_phase FROM sandbox").get() as {
+        boot_phase: string;
+      };
+      expect(JSON.parse(sandbox.boot_phase)).toEqual({ phase: "start", status: "failed" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reapplies the output-tail scrub after migrations have already run", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      initSchema(sql);
+      db.prepare(
+        `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+         VALUES (?, ?, ?, NULL, ?, ?)`
+      ).run(
+        "legacy-boot-progress",
+        "boot_progress",
+        JSON.stringify({ type: "boot_progress", phase: "start", outputTail: ["secret"] }),
+        1,
+        1
+      );
+
+      initSchema(sql);
+
+      const row = db
+        .prepare("SELECT data FROM events WHERE id = ?")
+        .get("legacy-boot-progress") as {
+        data: string;
+      };
+      expect(JSON.parse(row.data)).toEqual({ type: "boot_progress", phase: "start" });
+    } finally {
+      db.close();
+    }
   });
 
   it("keeps repository context consistent at the session table boundary", () => {
@@ -458,10 +583,15 @@ describe("applyMigrations", () => {
         expect.arrayContaining([
           "idx_messages_status",
           "idx_messages_author",
+          "idx_messages_created_at_id",
           "idx_messages_client_request_id",
           "idx_messages_one_processing",
         ])
       );
+      expect(db.prepare("PRAGMA index_info(idx_messages_created_at_id)").all()).toEqual([
+        expect.objectContaining({ name: "created_at" }),
+        expect.objectContaining({ name: "id" }),
+      ]);
       expectClientRequestIdIndex(db);
     } finally {
       db.close();
@@ -476,6 +606,55 @@ describe("applyMigrations", () => {
     expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
       "ADD COLUMN stop_confirmation_deadline INTEGER"
     );
+  });
+
+  it("adds session budget fields for fresh and migrated sessions", () => {
+    const sessionTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS session")[1]?.split(");")[0];
+    expect(sessionTable).toContain("max_cost_usd REAL");
+    expect(sessionTable).not.toContain("cost_warning_sent");
+    expect(sessionTable).toContain("budget_exhausted INTEGER NOT NULL DEFAULT 0");
+    expect(sessionTable).not.toContain("cost_tracking_unavailable");
+
+    expect(SCHEMA_SQL).toContain("reported_cost_usd REAL NOT NULL DEFAULT 0");
+    expect(SCHEMA_SQL).not.toContain("capabilities TEXT");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 49);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)");
+      db.exec(`CREATE TABLE ws_client_mapping (
+        ws_id TEXT PRIMARY KEY,
+        authorization_expires_at INTEGER NOT NULL DEFAULT 0
+      )`);
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(session)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "max_cost_usd", type: "REAL" }),
+          expect.objectContaining({ name: "budget_exhausted", type: "INTEGER" }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(ws_client_mapping)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "capabilities", type: "TEXT" })])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "cost_warning_sent" })])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "cost_tracking_unavailable" })])
+      );
+      expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "reported_cost_usd", type: "REAL" }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it("adds Autofix admission metadata and indexes for fresh and migrated sessions", () => {

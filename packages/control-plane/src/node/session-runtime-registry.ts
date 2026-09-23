@@ -33,6 +33,7 @@
  * explicit archive or delete route may.
  */
 
+import { WS_CLOSE_SERVICE_RESTART } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
 import type { SqlDatabase } from "../db/sql-database";
 import type { AlarmScheduleStore } from "../session/alarm/scheduler";
@@ -55,8 +56,6 @@ const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 const DEFAULT_MAX_RESIDENT = 256;
 /** How long a shutdown waits for every runtime to quiesce before forcing it. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
-/** The close code sent to sockets a shutdown closes: the peer should reconnect. */
-export const SERVICE_RESTART_CLOSE_CODE = 1012;
 
 /**
  * What the registry drives on a runtime: the session server's socket entry
@@ -72,6 +71,8 @@ export interface SessionRuntimeRegistryOptions<Runtime extends ManagedSessionRun
   /** The deployment's global store, shared by every runtime. */
   db: SqlDatabase;
   storeProvider: SessionStoreProvider;
+  /** The deployment's session index; `SessionIndexStore` satisfies it. */
+  sessionIndex: SessionIndex;
   /** The session's alarm port, from the host alarm clock. */
   alarmStoreFor: (sessionId: string) => AlarmScheduleStore;
   /** The composition root, with the deployment's configuration already bound. */
@@ -84,6 +85,11 @@ export interface SessionRuntimeRegistryOptions<Runtime extends ManagedSessionRun
   sweepIntervalMs?: number;
   maxResident?: number;
   socketHostOptions?: NodeSocketHostOptions;
+}
+
+/** Whether the deployment knows the session at all. */
+export interface SessionIndex {
+  exists(sessionId: string): Promise<boolean>;
 }
 
 export interface ShutdownOptions {
@@ -124,9 +130,9 @@ interface ActivationIntent {
   waiters: number;
 }
 
-/** A build in progress. */
+/** A build in progress; `null` when it found no session behind the id. */
 interface Opening<Runtime> {
-  promise: Promise<Acquired<Runtime>>;
+  promise: Promise<Acquired<Runtime> | null>;
   intent: ActivationIntent;
 }
 
@@ -141,6 +147,7 @@ type RetireReason = "idle" | "capacity" | "shutdown" | "activation_failed";
 export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   private readonly db: SqlDatabase;
   private readonly storeProvider: SessionStoreProvider;
+  private readonly sessionIndex: SessionIndex;
   private readonly alarmStoreFor: (sessionId: string) => AlarmScheduleStore;
   private readonly buildRuntime: (platform: SessionPlatform) => Runtime;
   private readonly log: Logger;
@@ -159,6 +166,7 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   constructor(options: SessionRuntimeRegistryOptions<Runtime>) {
     this.db = options.db;
     this.storeProvider = options.storeProvider;
+    this.sessionIndex = options.sessionIndex;
     this.alarmStoreFor = options.alarmStoreFor;
     this.buildRuntime = options.buildRuntime;
     this.log = options.log;
@@ -175,7 +183,23 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
    * resident. The runtime is leased for as long as `use` runs.
    */
   async withRuntime<T>(sessionId: string, use: (runtime: Runtime) => Promise<T>): Promise<T> {
-    const session = await this.acquireLease(sessionId, true);
+    const session = await this.acquireLease(sessionId, true, false);
+    return this.runUnderLease(session, () => use(session.runtime));
+  }
+
+  /**
+   * `withRuntime` for a session that must already exist: one with a store
+   * on this host or a row in the session index (the row is written before
+   * the session's init request, so a session being created counts). The
+   * check runs inside the single-flight open, so nothing is built for an
+   * unknown id, and `undefined` reports that nothing is behind it.
+   */
+  async withRuntimeIfPresent<T>(
+    sessionId: string,
+    use: (runtime: Runtime) => Promise<T>
+  ): Promise<T | undefined> {
+    const session = await this.acquireLease(sessionId, true, true);
+    if (!session) return undefined;
     return this.runUnderLease(session, () => use(session.runtime));
   }
 
@@ -185,7 +209,7 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
    * rehydrate the alarm: this delivery is the alarm, as on the Durable Object.
    */
   async deliverScheduledDeadline(sessionId: string): Promise<void> {
-    const session = await this.acquireLease(sessionId, false);
+    const session = await this.acquireLease(sessionId, false, false);
     await this.runUnderLease(session, () => session.runtime.server.onScheduledDeadline());
   }
 
@@ -234,8 +258,13 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
    * runtime's leases (including those close deliveries) and background
    * tasks are waited for; only then is its store closed. A runtime still
    * busy at the budget is logged and forced.
+   *
+   * Returns the sessions that were forced. A caller deciding whether the
+   * process stopped cleanly needs those: work cut off mid-flight can have
+   * persisted a deadline without arming it, which is exactly what the next
+   * boot's recovery scan exists to find.
    */
-  async shutdown(options: ShutdownOptions = {}): Promise<void> {
+  async shutdown(options: ShutdownOptions = {}): Promise<{ forced: string[] }> {
     const deadlineMs = Date.now() + (options.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS);
     this.shuttingDown = true;
     this.stopSweeper();
@@ -245,16 +274,18 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       await Promise.allSettled([...this.opening.values()].map((o) => o.promise));
     }
     if (this.sweeping) await this.sweeping;
-    await Promise.all(
+    const outcomes = await Promise.all(
       [...this.resident.values()].map((session) => this.quiesce(session, deadlineMs))
     );
+    return { forced: outcomes.filter((outcome) => outcome !== null) };
   }
 
-  private async quiesce(session: ResidentSession<Runtime>, deadlineMs: number): Promise<void> {
+  /** The session id when it had to be forced, and null when it quiesced. */
+  private async quiesce(
+    session: ResidentSession<Runtime>,
+    deadlineMs: number
+  ): Promise<string | null> {
     session.state = "quiescing";
-    for (const socket of session.sockets.sockets()) {
-      socket.close(SERVICE_RESTART_CLOSE_CODE, "Service restart");
-    }
     const quiescent = await this.waitForQuiescence(session, deadlineMs);
     if (!quiescent) {
       this.log.warn("session_registry.retired_busy", {
@@ -265,14 +296,23 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       });
     }
     this.retire(session, "shutdown");
+    return quiescent ? null : session.id;
   }
 
-  /** Whether the runtime reached quiescence before `deadlineMs` (wall clock). */
+  /**
+   * Whether the runtime reached quiescence before `deadlineMs` (wall clock).
+   * Every pass closes the sockets the runtime holds: a lease taken before
+   * the shutdown began (an upgrade being authorized, say) may still adopt
+   * one, and it must be closed like those that were there at the start.
+   */
   private async waitForQuiescence(
     session: ResidentSession<Runtime>,
     deadlineMs: number
   ): Promise<boolean> {
     for (;;) {
+      for (const socket of session.sockets.sockets()) {
+        socket.close(WS_CLOSE_SERVICE_RESTART, "Service restart");
+      }
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) return this.isQuiescent(session);
       const tasks = session.tasks.current;
@@ -298,13 +338,32 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
    * lease was pre-taken when the runtime published, or it is taken in the
    * same continuation that saw the runtime resident, so nothing can retire
    * it between the check and the lease. Refused once a shutdown has begun.
+   * With `ifPresent`, `undefined` when no session exists behind the id.
    */
+  private acquireLease(
+    sessionId: string,
+    rehydrate: boolean,
+    ifPresent: false
+  ): Promise<ResidentSession<Runtime>>;
+  private acquireLease(
+    sessionId: string,
+    rehydrate: boolean,
+    ifPresent: true
+  ): Promise<ResidentSession<Runtime> | undefined>;
   private async acquireLease(
     sessionId: string,
-    rehydrate: boolean
-  ): Promise<ResidentSession<Runtime>> {
+    rehydrate: boolean,
+    ifPresent: boolean
+  ): Promise<ResidentSession<Runtime> | undefined> {
     for (;;) {
-      const { session, leased } = await this.open(sessionId, rehydrate);
+      const acquired = await this.open(sessionId, rehydrate, ifPresent);
+      if (!acquired) {
+        // A conditional open found nothing; an unconditional caller that
+        // joined it builds on its own turn.
+        if (ifPresent) return undefined;
+        continue;
+      }
+      const { session, leased } = acquired;
       if (this.shuttingDown || session.state === "quiescing") {
         if (leased) this.release(session);
         throw new Error("SessionRuntimeRegistry is shutting down");
@@ -339,7 +398,11 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
   }
 
   /** Single-flight per id: events that find a build in progress join it. */
-  private open(sessionId: string, rehydrate: boolean): Promise<Acquired<Runtime>> {
+  private open(
+    sessionId: string,
+    rehydrate: boolean,
+    ifPresent: boolean
+  ): Promise<Acquired<Runtime> | null> {
     const resident = this.resident.get(sessionId);
     if (resident) return Promise.resolve({ session: resident, leased: false });
     const opening = this.opening.get(sessionId);
@@ -352,13 +415,29 @@ export class SessionRuntimeRegistry<Runtime extends ManagedSessionRuntime> {
       return Promise.reject(new Error("SessionRuntimeRegistry is shutting down"));
     }
     const intent: ActivationIntent = { rehydrate, waiters: 1 };
-    const promise = this.build(sessionId, intent)
-      .then((session) => ({ session, leased: true }))
+    const promise = this.buildIf(sessionId, intent, ifPresent)
+      .then((session) => (session ? { session, leased: true } : null))
       .finally(() => {
         this.opening.delete(sessionId);
       });
     this.opening.set(sessionId, { promise, intent });
     return promise;
+  }
+
+  /** `build`, unless `ifPresent` and nothing on this host or in the index knows the id. */
+  private async buildIf(
+    sessionId: string,
+    intent: ActivationIntent,
+    ifPresent: boolean
+  ): Promise<ResidentSession<Runtime> | null> {
+    if (ifPresent && !(await this.isPresent(sessionId))) return null;
+    return this.build(sessionId, intent);
+  }
+
+  private async isPresent(sessionId: string): Promise<boolean> {
+    return (
+      (await this.storeProvider.exists(sessionId)) || (await this.sessionIndex.exists(sessionId))
+    );
   }
 
   private async build(

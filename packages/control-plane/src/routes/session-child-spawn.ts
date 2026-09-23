@@ -1,3 +1,4 @@
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { parseBody } from "./body";
 import { Hono } from "hono";
 import { admit } from "../routing/admit";
@@ -121,11 +122,17 @@ export async function handleSpawnChild(
     return error("Failed to get parent session context", 500);
   }
   const spawnContext = parsedSpawnContext.data;
-  const { sandboxTimeoutMs: _currentTimeoutMs, ...resolvedChildSettingsWithoutTimeout } =
-    resolvedChildSandboxSettings;
+  const {
+    sandboxTimeoutMs: _currentTimeoutMs,
+    finalSnapshotBufferMs: _currentBufferMs,
+    ...resolvedChildSettingsWithoutTimeout
+  } = resolvedChildSandboxSettings;
   const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
   if (spawnContext.sandboxTimeoutMs !== undefined) {
     childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
+  }
+  if (spawnContext.finalSnapshotBufferMs !== undefined) {
+    childSandboxSettings.finalSnapshotBufferMs = spawnContext.finalSnapshotBufferMs;
   }
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
@@ -174,6 +181,12 @@ export async function handleSpawnChild(
     return error(`Model "${body.model}" is not enabled`, 400);
   }
   const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  // The child runs on the parent's harness; the requested model must run there.
+  const harness = spawnContext.harness;
+  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
+  if (harnessIncompatibility) {
+    return error(harnessIncompatibility.message, 400);
+  }
   if (body.reasoningEffort !== undefined && !isValidReasoningEffort(model, body.reasoningEffort)) {
     const validEfforts = getReasoningConfig(model)?.efforts;
     const suffix = validEfforts?.length
@@ -203,6 +216,14 @@ export async function handleSpawnChild(
     });
     return error("Parent provider auth unavailable", 503);
   }
+  // The child inherits the parent's auth modes but may run a different model,
+  // so the auth half of the harness rule is checked against the child's model.
+  const harnessAuthIncompatibility = checkHarnessCompatibility(
+    harness,
+    model,
+    Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+  );
+  if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
 
   const childDepth = parentDepth + 1;
   const childId = generateId();
@@ -239,6 +260,7 @@ export async function handleSpawnChild(
         ? (spawnContext.baseBranch ?? DEFAULT_BASE_BRANCH)
         : null,
     title: body.title,
+    harness,
     model,
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,
@@ -247,9 +269,6 @@ export async function handleSpawnChild(
     scmName: spawnContext.promptAuthor.scmName,
     scmEmail: spawnContext.promptAuthor.scmEmail,
     scmUserId: spawnContext.promptAuthor.scmUserId,
-    scmTokenEncrypted: spawnContext.promptAuthor.scmAccessTokenEncrypted,
-    scmRefreshTokenEncrypted: spawnContext.promptAuthor.scmRefreshTokenEncrypted,
-    scmTokenExpiresAt: spawnContext.promptAuthor.scmTokenExpiresAt,
     codeServerEnabled: childCodeServerEnabled,
     vncEnabled: childVncEnabled,
     sandboxSettings: childSandboxSettings,

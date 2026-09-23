@@ -11,10 +11,15 @@ import {
   toUiSandboxEvent,
   type PendingAssistantText,
 } from "@/lib/session-socket/event-log";
-import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
+import {
+  createSessionSocketState,
+  sessionSocketReducer,
+  type SessionSocketState,
+} from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 import type {
   ParticipantPresence,
   PromptQueueItem,
@@ -25,6 +30,7 @@ import type {
 
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
+const SHUTDOWN_RECOVERY_ACK_TIMEOUT_MS = 45_000;
 const HISTORY_PAGE_SIZE = 200;
 
 interface Message {
@@ -42,6 +48,8 @@ const NO_MESSAGES: Message[] = [];
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  /** A reconnect is scheduled and has not started yet. */
+  reconnecting: boolean;
   ready: boolean;
   presenceSynced: boolean;
   authError: string | null;
@@ -49,15 +57,16 @@ interface UseSessionSocketReturn {
   sessionState: SessionState | null;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
+  /** The latest sandbox boot: its last phase and completed-phase timings. */
+  boot: SessionSocketState["boot"];
   messages: Message[];
   events: SandboxEvent[];
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
+  canManageBudget: boolean;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
-  hasMoreHistory: boolean;
-  loadingHistory: boolean;
   sendPrompt: (
     content: string,
     model?: string,
@@ -67,6 +76,7 @@ interface UseSessionSocketReturn {
   ) => Promise<QueuePromptResult>;
   cancelPrompt: (messageId: string) => Promise<CancelPromptResult>;
   stopExecution: () => void;
+  recoverShutdown: (action: ShutdownRecoveryAction) => Promise<ShutdownRecoveryResult>;
   sendTyping: () => void;
   reconnect: () => void;
   loadOlderEvents: () => void;
@@ -83,6 +93,10 @@ type QueuePromptResult =
   | CorrelatedRequestFailure;
 
 type CancelPromptResult = { ok: true; messageId: string } | CorrelatedRequestFailure;
+/** Success confirms server acceptance only; the shutdown state confirms the outcome. */
+export type ShutdownRecoveryResult =
+  | { ok: true; action: ShutdownRecoveryAction }
+  | CorrelatedRequestFailure;
 
 interface PendingCorrelatedRequest {
   settleSuccess: (message: ServerMessage) => boolean;
@@ -114,6 +128,7 @@ export function useSessionSocket(
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
   const subscriptionWaitersRef = useRef(new Set<(subscribed: boolean) => void>());
   const pendingPromptRequestIdRef = useRef<string | null>(null);
+  const pendingRecoveryRequestIdRef = useRef<string | null>(null);
   const pendingRequestsRef = useRef(new Map<string, PendingCorrelatedRequest>());
   const {
     sandboxAccess,
@@ -137,7 +152,8 @@ export function useSessionSocket(
       clientRequestId: string,
       resolve: (result: T | CorrelatedRequestFailure) => void,
       successFromMessage: (message: ServerMessage) => T | null,
-      onSettled?: () => void
+      onSettled?: () => void,
+      timeoutMs = PROMPT_ACK_TIMEOUT_MS
     ) => {
       let settled = false;
       const finish = (result: T | CorrelatedRequestFailure) => {
@@ -149,10 +165,7 @@ export function useSessionSocket(
         resolve(result);
       };
 
-      const ackTimeoutId = setTimeout(
-        () => finish({ ok: false, reason: "timeout" }),
-        PROMPT_ACK_TIMEOUT_MS
-      );
+      const ackTimeoutId = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
       pendingRequestsRef.current.set(clientRequestId, {
         settleSuccess: (message) => {
           const result = successFromMessage(message);
@@ -208,7 +221,11 @@ export function useSessionSocket(
             message: message.message,
           });
         }
-      } else if (message.type === "prompt_queued" || message.type === "prompt_cancelled") {
+      } else if (
+        message.type === "prompt_queued" ||
+        message.type === "prompt_cancelled" ||
+        message.type === "shutdown_recovery_accepted"
+      ) {
         pendingRequestsRef.current.get(message.clientRequestId)?.settleSuccess(message);
       }
 
@@ -362,6 +379,47 @@ export function useSessionSocket(
     send({ type: "stop" });
   }, [isOpen, send]);
 
+  const recoverShutdown = useCallback(
+    async (action: ShutdownRecoveryAction): Promise<ShutdownRecoveryResult> => {
+      if (!isOpen() || !subscribedRef.current) {
+        return { ok: false, reason: "disconnected" };
+      }
+      if (pendingRecoveryRequestIdRef.current) {
+        return {
+          ok: false,
+          reason: "rejected",
+          message: "A recovery request is awaiting confirmation",
+        };
+      }
+
+      const clientRequestId = crypto.randomUUID();
+      return new Promise<ShutdownRecoveryResult>((resolve) => {
+        pendingRecoveryRequestIdRef.current = clientRequestId;
+        registerCorrelatedRequest<Extract<ShutdownRecoveryResult, { ok: true }>>(
+          clientRequestId,
+          resolve,
+          (message) =>
+            message.type === "shutdown_recovery_accepted" && message.action === action
+              ? { ok: true, action }
+              : null,
+          () => {
+            if (pendingRecoveryRequestIdRef.current === clientRequestId) {
+              pendingRecoveryRequestIdRef.current = null;
+            }
+          },
+          SHUTDOWN_RECOVERY_ACK_TIMEOUT_MS
+        );
+        if (!send({ type: "recover_preservation", action, clientRequestId })) {
+          pendingRequestsRef.current.get(clientRequestId)?.settleFailure({
+            ok: false,
+            reason: "disconnected",
+          });
+        }
+      });
+    },
+    [isOpen, registerCorrelatedRequest, send]
+  );
+
   const cancelPrompt = useCallback(
     async (messageId: string): Promise<CancelPromptResult> => {
       if (!isOpen() || !(await waitForSubscription()) || !isOpen()) {
@@ -414,24 +472,26 @@ export function useSessionSocket(
   return {
     connected: transport.connected,
     connecting: transport.connecting,
+    reconnecting: transport.reconnecting,
     ready: state.ready,
     presenceSynced: state.presenceSynced,
     authError: transport.authError,
     connectionError: transport.connectionError,
     sessionState,
     sandboxError: state.sandboxError,
+    boot: state.boot,
     messages: NO_MESSAGES,
     events: state.events,
     participants: state.participants,
     artifacts: state.artifacts,
     currentParticipantId: state.currentParticipantId,
+    canManageBudget: state.canManageBudget,
     isProcessing,
     promptQueue: state.promptQueue,
-    hasMoreHistory,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,
+    recoverShutdown,
     sendTyping,
     reconnect,
     loadOlderEvents,

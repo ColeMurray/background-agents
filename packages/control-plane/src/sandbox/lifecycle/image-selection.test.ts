@@ -6,7 +6,8 @@ import { describe, it, expect } from "vitest";
 import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
-import { MIN_COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/model";
+import { minCompatibleRuntimeVersionFor } from "../../image-builds/model";
+import { MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION } from "../runtime-manifest";
 
 const SESSION_REPOSITORIES = [
   { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -85,20 +86,9 @@ describe("evaluateImageBuildForSpawn", () => {
     });
   });
 
-  it("enforces the runtime compatibility floor", async () => {
-    expect(
-      (
-        await evaluateImageBuildForSpawn(
-          await readyImage({
-            runtime_version: `v${MIN_COMPATIBLE_RUNTIME_VERSION}-compatible-runtime`,
-          }),
-          SESSION_REPOSITORIES
-        )
-      ).outcome
-    ).toBe("selected");
-
+  it("enforces the shutdown protocol floor", async () => {
     for (const runtimeVersion of [
-      `v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-legacy-runtime`,
+      `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
       "dev",
       "",
     ]) {
@@ -109,6 +99,31 @@ describe("evaluateImageBuildForSpawn", () => {
         reason: "runtime_below_floor",
         imageBuildId: "imgb-1",
       });
+    }
+  });
+
+  it("applies the higher of the harness and shutdown protocol floors", async () => {
+    const preservation = await readyImage({
+      runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-preservation`,
+    });
+
+    for (const harness of ["claude", "opencode"] as const) {
+      expect(
+        await evaluateImageBuildForSpawn(preservation, SESSION_REPOSITORIES, harness),
+        harness
+      ).toEqual({
+        outcome: "miss",
+        reason: "runtime_below_floor",
+        imageBuildId: "imgb-1",
+      });
+
+      const current = await readyImage({
+        runtime_version: `v${minCompatibleRuntimeVersionFor(harness)}-current`,
+      });
+      expect(
+        (await evaluateImageBuildForSpawn(current, SESSION_REPOSITORIES, harness)).outcome,
+        harness
+      ).toBe("selected");
     }
   });
 

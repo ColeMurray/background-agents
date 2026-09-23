@@ -1,7 +1,8 @@
-import type {
-  SessionInboxCategory,
-  SessionInboxItem,
-  SessionListItem,
+import {
+  SESSION_INBOX_CATEGORIES,
+  type SessionInboxCategory,
+  type SessionInboxItem,
+  type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { attachSessionListMetadata } from "./session-list-metadata";
@@ -51,9 +52,7 @@ interface InboxPageData {
   nextCursor: SessionInboxCursor | null;
 }
 
-const INBOX_CATEGORIES: SessionInboxCategory[] = ["needs_attention", "in_progress", "finished"];
-
-function toListItem(row: InboxSessionRow): SessionListItem {
+function toListItem(row: InboxSessionRow): SessionInboxSession {
   return {
     id: row.id,
     title: row.title,
@@ -94,7 +93,7 @@ export class SessionInboxStore {
   ): Promise<ListSessionInboxSnapshotResult> {
     const result = await this.bindInboxSnapshotQuery(options).all<InboxSessionRow>();
     const rows = result.results ?? [];
-    const pages = INBOX_CATEGORIES.map((category) =>
+    const pages = SESSION_INBOX_CATEGORIES.map((category) =>
       this.buildPageData(
         options.limit,
         rows.filter((row) => row.category === category)
@@ -106,7 +105,7 @@ export class SessionInboxStore {
     );
     const sessionsById = new Map(sessionsWithMetadata.map((session) => [session.id, session]));
     return Object.fromEntries(
-      INBOX_CATEGORIES.map((category, index) => [
+      SESSION_INBOX_CATEGORIES.map((category, index) => [
         category,
         this.assemblePage(pages[index], sessionsById),
       ])
@@ -131,8 +130,10 @@ export class SessionInboxStore {
            LIMIT ?
          )
          SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
-         FROM selected_roots
-         JOIN effective_sessions USING (effective_root_session_id)
+         -- CROSS JOIN pins the join order: walk the viewer's sessions once and
+         -- probe the selected roots, instead of rescanning every session per root.
+         FROM effective_sessions
+         CROSS JOIN selected_roots USING (effective_root_session_id)
          ORDER BY selected_roots.latest_updated_at DESC,
                   selected_roots.effective_root_session_id DESC,
                   effective_sessions.updated_at DESC,
@@ -175,8 +176,10 @@ export class SessionInboxStore {
            WHERE category_rank <= ?
          )
          SELECT effective_sessions.*, selected_roots.latest_updated_at, selected_roots.category
-         FROM selected_roots
-         JOIN effective_sessions USING (effective_root_session_id)
+         -- CROSS JOIN pins the join order: walk the viewer's sessions once and
+         -- probe the selected roots, instead of rescanning every session per root.
+         FROM effective_sessions
+         CROSS JOIN selected_roots USING (effective_root_session_id)
          ORDER BY selected_roots.category,
                   selected_roots.latest_updated_at DESC,
                   selected_roots.effective_root_session_id DESC,
@@ -291,7 +294,7 @@ export class SessionInboxStore {
   /** Replace selected D1 rows with their metadata-enriched list items. */
   private assemblePage(
     page: InboxPageData,
-    sessionsById: Map<string, SessionListItem>
+    sessionsById: Map<string, SessionInboxSession>
   ): ListSessionInboxResult {
     const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];

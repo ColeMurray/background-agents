@@ -38,6 +38,8 @@ const environmentTarget = {
   } satisfies Environment,
 };
 
+const noRepositoryTarget = { kind: "none" as const };
+
 function okJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
@@ -173,6 +175,24 @@ describe("control plane client request payloads", () => {
     });
   });
 
+  it("creates no-repository sessions with explicit null repository fields", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      okJson({ sessionId: "session-1", status: "created" })
+    );
+
+    await createSession(makeEnv(fetch), {
+      target: noRepositoryTarget,
+      model: "anthropic/claude-sonnet-4-6",
+      branch: "ignored-without-a-repository",
+    });
+
+    expect(parseRequestBody(fetch)).toEqual({
+      repoOwner: null,
+      repoName: null,
+      model: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
   it("sends prompt attachment references only when present", async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       okJson({ messageId: "message-1", status: "queued" })
@@ -182,6 +202,8 @@ describe("control plane client request payloads", () => {
       sessionId: "session-1",
       content: "Use the screenshot",
       authorId: "slack:U123",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "high",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
     });
     await sendPrompt(makeEnv(fetch), {
@@ -194,6 +216,8 @@ describe("control plane client request payloads", () => {
     expect(parseRequestBody(fetch, 0)).toEqual({
       content: "Use the screenshot",
       source: "slack",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "high",
       attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
     });
     expect(parseRequestBody(fetch, 1)).toEqual({

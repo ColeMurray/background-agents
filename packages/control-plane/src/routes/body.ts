@@ -10,14 +10,14 @@ export function bodyIssue(failure: z.ZodError): string {
 }
 
 /**
- * Read the request body as JSON, or answer the route's 400.
+ * Read the untrusted request body as JSON, or answer the route's 400.
  *
  * For routes that validate the raw value themselves; `parseBody` is the
- * schema-backed form.
+ * schema-backed form. Callers must validate the returned value before use.
  */
-export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
+export async function parseJsonBody(request: Request): Promise<unknown> {
   try {
-    return (await request.json()) as T;
+    return await request.json();
   } catch {
     return error("Invalid JSON body", 400);
   }
@@ -35,7 +35,7 @@ export async function parseBody<Schema extends z.ZodType>(
   schema: Schema,
   message?: string
 ): Promise<z.output<Schema> | Response> {
-  const raw = await parseJsonBody<unknown>(request);
+  const raw = await parseJsonBody(request);
   if (raw instanceof Response) return raw;
   const result = await schema.safeParseAsync(raw);
   if (!result.success) return error(message ?? bodyIssue(result.error), 400);

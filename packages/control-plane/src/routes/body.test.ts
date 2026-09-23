@@ -23,11 +23,11 @@ async function rejection(result: unknown): Promise<{ status: number; body: unkno
 
 describe("parseJsonBody", () => {
   it("returns the raw value", async () => {
-    await expect(parseJsonBody<unknown>(request('{"a":1}'))).resolves.toEqual({ a: 1 });
+    await expect(parseJsonBody(request('{"a":1}'))).resolves.toEqual({ a: 1 });
   });
 
   it("answers 400 when the body is not JSON", async () => {
-    await expect(rejection(await parseJsonBody<unknown>(request("nope")))).resolves.toEqual({
+    await expect(rejection(await parseJsonBody(request("nope")))).resolves.toEqual({
       status: 400,
       body: { error: "Invalid JSON body" },
     });

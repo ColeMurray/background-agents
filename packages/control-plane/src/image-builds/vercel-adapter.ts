@@ -4,6 +4,7 @@ import {
 } from "../sandbox/providers/vercel/provider";
 import type { ImageBuildProviderImageRef } from "./model";
 import type {
+  CompletedImageBuildInput,
   DeleteImageInput,
   FailedImageBuildInput,
   FinalizeImageBuildInput,
@@ -73,7 +74,7 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter {
     };
   }
 
-  async cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void> {
+  async cleanupCompletedBuild(input: CompletedImageBuildInput): Promise<void> {
     await this.stopBuildSandbox(input);
   }
 
@@ -98,6 +99,7 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter {
       providerObjectId: input.providerSessionId,
       sessionId: input.buildId,
       reason: "environment_image_build_complete",
+      intent: "destroy",
       correlation: {
         ...input.correlation,
         sandbox_id: input.providerSessionId,

@@ -2,6 +2,8 @@ import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
   SUBSCRIPTION_PROVIDER_IDS,
+  modelProviderAccountConnectionMethod,
+  type ModelProviderAccountConnectionMethod,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import { NextResponse } from "next/server";
@@ -19,6 +21,16 @@ export function validProviderDeviceAuthorizationId(id: string): boolean {
 
 export function validSubscriptionProvider(provider: string): provider is SubscriptionProviderId {
   return SUBSCRIPTION_PROVIDER_IDS.some((candidate) => candidate === provider);
+}
+
+/** A provider whose accounts connect through the given method; the other method's routes refuse it. */
+export function validProviderForConnectionMethod(
+  provider: string,
+  method: ModelProviderAccountConnectionMethod
+): provider is SubscriptionProviderId {
+  return (
+    validSubscriptionProvider(provider) && modelProviderAccountConnectionMethod(provider) === method
+  );
 }
 
 function invalidProviderParameter(): NextResponse {

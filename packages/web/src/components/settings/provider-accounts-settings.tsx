@@ -4,12 +4,14 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   modelProviderAccountReconnectMethod,
+  STATIC_CREDENTIAL_PROVIDER_IDS,
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   type ModelProviderAccount,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   archiveProviderAccount,
+  connectProviderAccount,
   reconnectProviderAccount,
   renameProviderAccount,
   runProviderAccountAction,
@@ -22,6 +24,11 @@ import {
   ProviderDeviceAuthorizationDialog,
   type ProviderDeviceAuthorizationTarget,
 } from "@/components/settings/provider-device-authorization-dialog";
+import {
+  ANTHROPIC_CREDENTIAL_ROTATION_WARNING,
+  ProviderAuthorizationCodeDialog,
+  type ProviderAuthorizationCodeTarget,
+} from "@/components/settings/provider-authorization-code-dialog";
 import { formatRelativeTime } from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +66,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 type Confirm = { account: ModelProviderAccount; action: "disable" | "archive" } | null;
 type Connection =
   | { kind: "device"; target: ProviderDeviceAuthorizationTarget }
+  | { kind: "authorization-code"; target: ProviderAuthorizationCodeTarget }
   | { kind: "legacy-xai"; account: ModelProviderAccount };
 
 type ConnectionStrategy = {
@@ -94,7 +102,36 @@ const CONNECTION_STRATEGIES: Record<SubscriptionProviderId, ConnectionStrategy> 
           }
         : { kind: "legacy-xai", account },
   },
+  anthropic: {
+    add: () => ({
+      kind: "authorization-code",
+      target: { provider: "anthropic", operation: "create" },
+    }),
+    reconnect: (account) => ({
+      kind: "authorization-code",
+      target: {
+        provider: "anthropic",
+        operation: "reconnect",
+        providerAccountId: account.id,
+        displayName: account.displayName,
+        externalAccountId: account.externalAccountId,
+      },
+    }),
+  },
 };
+
+function connectionKey(
+  target: ProviderDeviceAuthorizationTarget | ProviderAuthorizationCodeTarget
+) {
+  return target.operation === "create"
+    ? `${target.provider}:create`
+    : `${target.provider}:reconnect:${target.providerAccountId}`;
+}
+
+/** Static credentials (a Claude setup token) cannot be verified against the provider. */
+function supportsVerify(provider: SubscriptionProviderId) {
+  return !STATIC_CREDENTIAL_PROVIDER_IDS.includes(provider);
+}
 
 function dateLabel(timestamp: number | null) {
   return timestamp ? new Date(timestamp).toLocaleString() : "Never";
@@ -123,7 +160,7 @@ function legacyKeyLocationLabel(location: LegacyProviderKeyLocation): string {
 function connectionToastMessage(
   provider: SubscriptionProviderId,
   reconnectedExisting: boolean,
-  operation: ProviderDeviceAuthorizationTarget["operation"]
+  operation: "create" | "reconnect"
 ): string {
   if (!reconnectedExisting) {
     return `${SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].subscriptionName} account connected`;
@@ -194,15 +231,24 @@ export function ProviderAccountsSettings() {
     setSaving(true);
     try {
       await operation();
-      await refresh();
-      setConnection(null);
-      setConfirm(null);
-      toast.success(success);
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : "Provider account request failed");
+      return;
     } finally {
       operationInFlightRef.current = false;
       setSaving(false);
+    }
+    // The write is durable once the request succeeds, so the form closes
+    // before the list refreshes: a refresh failure must not leave a form that
+    // would repeat the write (an identity-less setup-token account has no
+    // uniqueness backstop).
+    setConnection(null);
+    setConfirm(null);
+    toast.success(success);
+    try {
+      await refresh();
+    } catch {
+      toast.error("Saved, but the account list could not be refreshed. Reload the page to see it.");
     }
   }
 
@@ -418,17 +464,19 @@ export function ProviderAccountsSettings() {
                                     Reconnect
                                   </DropdownMenuItem>
                                 )}
-                                <DropdownMenuItem
-                                  disabled={saving || account.status !== "active"}
-                                  onSelect={() =>
-                                    void run(
-                                      () => runProviderAccountAction(account.id, "verify"),
-                                      "Account verified"
-                                    )
-                                  }
-                                >
-                                  Verify
-                                </DropdownMenuItem>
+                                {supportsVerify(account.provider) && (
+                                  <DropdownMenuItem
+                                    disabled={saving || account.status !== "active"}
+                                    onSelect={() =>
+                                      void run(
+                                        () => runProviderAccountAction(account.id, "verify"),
+                                        "Account verified"
+                                      )
+                                    }
+                                  >
+                                    Verify
+                                  </DropdownMenuItem>
+                                )}
                                 {account.status === "active" && !isDefault && (
                                   <DropdownMenuItem
                                     disabled={saving}
@@ -600,11 +648,7 @@ export function ProviderAccountsSettings() {
 
       {canManage && connection?.kind === "device" && (
         <ProviderDeviceAuthorizationDialog
-          key={
-            connection.target.operation === "create"
-              ? `${connection.target.provider}:create`
-              : `${connection.target.provider}:reconnect:${connection.target.providerAccountId}`
-          }
+          key={connectionKey(connection.target)}
           target={connection.target}
           onClose={() => setConnection(null)}
           onConnected={(result) => {
@@ -615,6 +659,41 @@ export function ProviderAccountsSettings() {
               connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
             );
           }}
+        />
+      )}
+
+      {canManage && connection?.kind === "authorization-code" && (
+        <ProviderAuthorizationCodeDialog
+          key={connectionKey(connection.target)}
+          target={connection.target}
+          saving={saving}
+          onClose={() => setConnection(null)}
+          onConnected={(result) => {
+            const target = connection.target;
+            setConnection(null);
+            void refresh();
+            toast.success(
+              connectionToastMessage(target.provider, result.reconnectedExisting, target.operation)
+            );
+          }}
+          onSubmitSetupToken={(submission) =>
+            void run(
+              () =>
+                submission.operation === "create"
+                  ? connectProviderAccount({
+                      provider: "anthropic",
+                      displayName: submission.displayName,
+                      setupToken: submission.setupToken,
+                    })
+                  : reconnectProviderAccount(submission.providerAccountId, {
+                      provider: "anthropic",
+                      setupToken: submission.setupToken,
+                    }),
+              submission.operation === "create"
+                ? connectionToastMessage("anthropic", false, "create")
+                : "Account reconnected"
+            )
+          }
         />
       )}
 
@@ -644,8 +723,10 @@ export function ProviderAccountsSettings() {
               {confirm?.action === "archive" ? "Archive" : "Disable"} this account?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Running sessions may retain issued access until it expires. Defaults and pinned
-              automations can cause a conflict and must be updated first.
+              {confirm?.account.provider === "anthropic"
+                ? ANTHROPIC_CREDENTIAL_ROTATION_WARNING
+                : "Running sessions may retain issued access until it expires."}{" "}
+              Defaults and pinned automations can cause a conflict and must be updated first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

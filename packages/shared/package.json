@@ -22,6 +22,10 @@
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
     },
+    "./harnesses": {
+      "import": "./dist/harnesses.js",
+      "types": "./dist/harnesses.d.ts"
+    },
     "./classification": {
       "import": "./dist/classification.js",
       "types": "./dist/classification.d.ts"
@@ -142,6 +146,10 @@
       "import": "./dist/types/sandbox-events.js",
       "types": "./dist/types/sandbox-events.d.ts"
     },
+    "./types/sandbox-shutdown": {
+      "import": "./dist/types/sandbox-shutdown.js",
+      "types": "./dist/types/sandbox-shutdown.d.ts"
+    },
     "./types/sessions": {
       "import": "./dist/types/sessions.js",
       "types": "./dist/types/sessions.d.ts"
@@ -157,6 +165,10 @@
     "./types/artifacts": {
       "import": "./dist/types/artifacts.js",
       "types": "./dist/types/artifacts.d.ts"
+    },
+    "./types/session-archive": {
+      "import": "./dist/types/session-archive.js",
+      "types": "./dist/types/session-archive.d.ts"
     },
     "./types/session-api": {
       "import": "./dist/types/session-api.js",
@@ -201,7 +213,7 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@octokit/webhooks-types": "^7.6.1",

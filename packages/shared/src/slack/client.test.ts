@@ -535,6 +535,82 @@ describe("getThreadMessages", () => {
     expect(url).toBe("https://slack.com/api/conversations.replies?channel=C123&ts=1.0&limit=200");
   });
 
+  it("preserves validated file metadata on thread messages", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        messages: [
+          {
+            ts: "1.1",
+            text: "",
+            user: "U1",
+            files: [
+              {
+                id: "F1",
+                name: "screenshot.png",
+                mimetype: "image/png",
+                url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+                size: 42,
+                extra: "discard me",
+              },
+            ],
+            attachments: [
+              {
+                is_share: true,
+                text: "forwarded context",
+                files: [
+                  {
+                    id: "F2",
+                    name: "forwarded.png",
+                    mimetype: "image/png",
+                    url_private: "https://files.slack.com/files-pri/T1-F2/forwarded.png",
+                    extra: "discard me too",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0");
+
+    expect(result).toEqual({
+      ok: true,
+      messages: [
+        {
+          ts: "1.1",
+          text: "",
+          user: "U1",
+          files: [
+            {
+              id: "F1",
+              name: "screenshot.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+              size: 42,
+            },
+          ],
+          attachments: [
+            {
+              is_share: true,
+              text: "forwarded context",
+              files: [
+                {
+                  id: "F2",
+                  name: "forwarded.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/files-pri/T1-F2/forwarded.png",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("passes oldest to fetch only newer replies", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

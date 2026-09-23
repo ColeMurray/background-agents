@@ -16,16 +16,18 @@
  * the lookup call, logging, and fallback plumbing.
  */
 
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   computeRepositoriesFingerprint,
   type FingerprintRepositoryInput,
 } from "../../image-builds/fingerprint";
 import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
+  minCompatibleRuntimeVersionFor,
   parseRuntimeVersionNumber,
   type ImageBuildScope,
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
+import { supportsConfirmedShutdown } from "./shutdown-policy";
 
 /**
  * The image-build row fields spawn selection reads. Mirrors the
@@ -80,12 +82,13 @@ export type ImageBuildSelectionResult =
 
 /**
  * Evaluate the latest ready image (or its absence) against the session's own
- * repository snapshot. Checks run cheapest-first; the floor fails closed on an
- * unparseable runtime version.
+ * repository snapshot. Checks run cheapest-first; the floor is the session
+ * harness's and fails closed on an unparseable runtime version.
  */
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
-  sessionRepositories: FingerprintRepositoryInput[]
+  sessionRepositories: FingerprintRepositoryInput[],
+  harness: HarnessId = DEFAULT_HARNESS
 ): Promise<ImageBuildSelectionResult> {
   if (!image) {
     return { outcome: "miss", reason: "no_ready_image" };
@@ -97,7 +100,12 @@ export async function evaluateImageBuildForSpawn(
   }
 
   const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  if (runtimeVersion === null || runtimeVersion < MIN_COMPATIBLE_RUNTIME_VERSION) {
+  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness);
+  if (
+    runtimeVersion === null ||
+    runtimeVersion < minimumRuntimeVersion ||
+    !supportsConfirmedShutdown(image.runtime_version)
+  ) {
     return { outcome: "miss", reason: "runtime_below_floor", imageBuildId: image.id };
   }
 

@@ -11,6 +11,7 @@ import type { Principal } from "../auth/principal";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import {
   authorizationDatabase,
+  createTestEnv,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
   type TestRequestHandler,
@@ -92,14 +93,11 @@ function createDatabase(permissions: readonly PermissionId[]): SqlDatabase {
 }
 
 export function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS): Env {
-  return {
+  return createTestEnv({
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: createDatabase(permissions),
-    SESSION: {} as DurableObjectNamespace,
-    DEPLOYMENT_NAME: "test",
-    TOKEN_ENCRYPTION_KEY: "test-key",
-  } as unknown as Env;
+  });
 }
 
 export const USER_PRINCIPAL: Principal = {
@@ -170,9 +168,13 @@ export const sampleRow = {
   next_run_at: now,
   consecutive_failures: 0,
   created_by: "user-1",
+  user_id: "user-1",
   created_at: now,
   updated_at: now,
   deleted_at: null,
+  event_type: null,
+  trigger_config: null,
+  trigger_auth_data: null,
 };
 
 /**
@@ -214,6 +216,13 @@ export function applyMockDefaults(): void {
     archivedAt: null,
   });
   mockProviderAdapterGet.mockReturnValue({});
-  mockResolveGitHubCredentialAuthority.mockResolvedValue({ kind: "legacy" });
+  mockResolveGitHubCredentialAuthority.mockResolvedValue({
+    kind: "service_principal",
+    accountClient: {
+      listUserAccounts: vi.fn(async () => []),
+      getAccessToken: vi.fn(async () => null),
+      accountInfo: vi.fn(async () => null),
+    },
+  });
   mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
 }

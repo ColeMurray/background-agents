@@ -25,6 +25,7 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
     branchName: "feature/original",
     status: "active",
     sandboxStatus: "ready",
+    harness: "opencode",
     messageCount: 0,
     createdAt: 1,
     ...overrides,
@@ -86,6 +87,79 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  it("hydrates shutdown state from snapshots and replaces it with semantic updates", () => {
+    const saved = {
+      phase: "saved" as const,
+      expiresAtMs: 20_000,
+      drainAtMs: 10_000,
+      savedAtMs: 15_000,
+    };
+    const failed = {
+      phase: "failed" as const,
+      expiresAtMs: 20_000,
+      drainAtMs: 10_000,
+      error: "provider_capture_failed",
+    };
+    const hydrated = createSessionSocketState(
+      createSnapshot({ session: createSessionState({ sandboxPreservation: saved }) })
+    );
+
+    expect(hydrated.sessionState?.sandboxPreservation).toEqual(saved);
+
+    const updated = reduce(
+      hydrated,
+      serverMessage({ type: "sandbox_preservation", preservation: failed })
+    );
+    expect(updated.sessionState?.sandboxPreservation).toEqual(failed);
+
+    const reconnected = reduce(
+      updated,
+      serverMessage(
+        createSubscribedMessage({
+          session: createSessionState({ sandboxPreservation: saved }),
+        })
+      )
+    );
+    expect(reconnected.sessionState?.sandboxPreservation).toEqual(saved);
+  });
+
+  it("uses authoritative totals for duplicate steps and final cost repairs", () => {
+    const event = {
+      type: "step_finish" as const,
+      messageId: "message-1",
+      cost: 0.5,
+      messageCostUsd: 0.5,
+      sandboxId: "sb",
+      timestamp: 1,
+    };
+    let state = subscribedState({
+      session: createSessionState({ totalCost: 0, maxSessionCostUsd: null }),
+    });
+    state = reduce(
+      state,
+      { type: "events_appended", events: [event] },
+      serverMessage({
+        type: "budget_status",
+        totalCost: 0.5,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+      })
+    );
+    state = reduce(state, { type: "events_appended", events: [event] });
+    expect(state.sessionState?.totalCost).toBe(0.5);
+    // A final cumulative report repairs steps the browser never received.
+    state = reduce(
+      state,
+      serverMessage({
+        type: "budget_status",
+        totalCost: 2,
+        maxSessionCostUsd: null,
+        budgetExhausted: false,
+      })
+    );
+    expect(state.sessionState?.totalCost).toBe(2);
+  });
+
   describe("snapshot", () => {
     it("hydrates the authoritative prompt queue", () => {
       const promptQueue = [
@@ -222,7 +296,6 @@ describe("sessionSocketReducer", () => {
       // linger next to a spawning or ready sandbox.
       expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).sandboxError).toBeNull();
       expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).sandboxError).toBeNull();
-      expect(reduce(failed, serverMessage({ type: "sandbox_ready" })).sandboxError).toBeNull();
       expect(
         reduce(failed, serverMessage({ type: "sandbox_status", status: "ready" })).sandboxError
       ).toBeNull();
@@ -239,7 +312,223 @@ describe("sessionSocketReducer", () => {
     });
   });
 
+  describe("boot", () => {
+    const bootProgress = (
+      overrides: Partial<Extract<SandboxEvent, { type: "boot_progress" }>> = {}
+    ): Extract<SandboxEvent, { type: "boot_progress" }> => ({
+      type: "boot_progress",
+      bootSeq: 1,
+      phase: "sync",
+      status: "started",
+      sandboxId: "sb-1",
+      timestamp: 1,
+      ...overrides,
+    });
+    const booting = () =>
+      subscribedState({
+        session: createSessionState({ sandboxStatus: "connecting" }),
+        bootPhase: { phase: "sync", status: "started", bootSeq: 1, sandboxId: "sb-1" },
+      });
+
+    it("seeds the boot from the snapshot and from subscribed", () => {
+      expect(
+        createSessionSocketState(
+          createSnapshot({
+            bootPhase: { phase: "setup", status: "started", bootSeq: 3, sandboxId: "sb-1" },
+          })
+        ).boot
+      ).toEqual({
+        sandboxId: "sb-1",
+        phase: { phase: "setup", status: "started", bootSeq: 3, sandboxId: "sb-1" },
+        timings: [],
+      });
+      expect(booting().boot?.phase).toEqual({
+        phase: "sync",
+        status: "started",
+        bootSeq: 1,
+        sandboxId: "sb-1",
+      });
+      expect(subscribedState().boot).toBeNull();
+    });
+
+    it("seeds a failed boot with the metadata the snapshot carries", () => {
+      const state = subscribedState({
+        session: createSessionState({ sandboxStatus: "failed" }),
+        spawnError: "start hook failed for acme/web-app",
+        bootPhase: {
+          phase: "start",
+          status: "failed",
+          bootSeq: 6,
+          sandboxId: "sb-1",
+          repoOwner: "acme",
+          repoName: "web-app",
+          detail: "start hook failed for acme/web-app",
+        },
+      });
+
+      expect(state.boot?.phase).toEqual({
+        phase: "start",
+        status: "failed",
+        bootSeq: 6,
+        sandboxId: "sb-1",
+        repoOwner: "acme",
+        repoName: "web-app",
+        detail: "start hook failed for acme/web-app",
+      });
+      expect(state.sandboxError).toBe("start hook failed for acme/web-app");
+    });
+
+    it("advances with each live boot_progress event and keeps completed-phase timings", () => {
+      const state = reduce(booting(), {
+        type: "events_appended",
+        events: [
+          bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          bootProgress({
+            bootSeq: 3,
+            phase: "setup",
+            status: "started",
+            repoOwner: "acme",
+            repoName: "web-app",
+          }),
+        ],
+      });
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-1",
+        phase: {
+          phase: "setup",
+          status: "started",
+          bootSeq: 3,
+          sandboxId: "sb-1",
+          repoOwner: "acme",
+          repoName: "web-app",
+        },
+        timings: [{ phase: "sync", elapsedMs: 800 }],
+      });
+      expect(state.events).toHaveLength(2);
+    });
+
+    it("ends the phase once the sandbox is ready but keeps the timings", () => {
+      const state = reduce(
+        booting(),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          ],
+        },
+        serverMessage({ type: "sandbox_status", status: "ready" })
+      );
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-1",
+        phase: null,
+        timings: [{ phase: "sync", elapsedMs: 800 }],
+      });
+      expect(state.sessionState?.sandboxStatus).toBe("ready");
+    });
+
+    it("keeps the phase through connecting and into a failure so it can be named", () => {
+      const failed = reduce(
+        booting(),
+        serverMessage({ type: "sandbox_status", status: "connecting" }),
+        {
+          type: "events_appended",
+          events: [bootProgress({ bootSeq: 4, phase: "setup", status: "failed" })],
+        },
+        serverMessage({ type: "sandbox_error", error: "setup hook failed" }),
+        serverMessage({ type: "sandbox_status", status: "failed" })
+      );
+
+      expect(failed.boot?.phase).toEqual({
+        phase: "setup",
+        status: "failed",
+        bootSeq: 4,
+        sandboxId: "sb-1",
+      });
+      expect(failed.sandboxError).toBe("setup hook failed");
+    });
+
+    it("drops the whole boot when a fresh attempt starts, with nothing to show until it reports", () => {
+      const failed = reduce(booting(), {
+        type: "events_appended",
+        events: [
+          bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          bootProgress({ bootSeq: 4, phase: "setup", status: "failed" }),
+        ],
+      });
+
+      // An older runtime on the next attempt reports no phases: the previous
+      // boot's timings must not stand in for it.
+      expect(reduce(failed, serverMessage({ type: "sandbox_spawning" })).boot).toBeNull();
+      expect(reduce(failed, serverMessage({ type: "sandbox_warming" })).boot).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "spawning" })).boot
+      ).toBeNull();
+    });
+
+    it("ends the phase when the sandbox is gone", () => {
+      const failed = reduce(booting(), {
+        type: "events_appended",
+        events: [bootProgress({ bootSeq: 4, phase: "setup", status: "started" })],
+      });
+
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stale" })).boot?.phase
+      ).toBeNull();
+      expect(
+        reduce(failed, serverMessage({ type: "sandbox_status", status: "stopped" })).boot?.phase
+      ).toBeNull();
+    });
+
+    it("starts a new boot when a different sandbox reports", () => {
+      const state = reduce(
+        booting(),
+        {
+          type: "events_appended",
+          events: [
+            bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 800 }),
+          ],
+        },
+        serverMessage({ type: "sandbox_status", status: "spawning" }),
+        {
+          type: "events_appended",
+          // Only the latest phase was relayed when the new bridge connected.
+          events: [
+            bootProgress({ sandboxId: "sb-2", bootSeq: 5, phase: "harness", status: "started" }),
+          ],
+        }
+      );
+
+      expect(state.boot).toEqual({
+        sandboxId: "sb-2",
+        phase: { phase: "harness", status: "started", bootSeq: 5, sandboxId: "sb-2" },
+        timings: [],
+      });
+    });
+  });
+
   describe("subscribed", () => {
+    it("hydrates budget management capability and applies authoritative budget updates", () => {
+      const subscribed = subscribedState({ canManageBudget: true });
+      const state = reduce(
+        subscribed,
+        serverMessage({
+          type: "budget_status",
+          totalCost: 10.5,
+          maxSessionCostUsd: 10,
+          budgetExhausted: true,
+        })
+      );
+
+      expect(state.canManageBudget).toBe(true);
+      expect(state.sessionState).toMatchObject({
+        totalCost: 10.5,
+        maxSessionCostUsd: 10,
+        budgetExhausted: true,
+      });
+    });
+
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({
         session: createSessionState({
@@ -362,7 +651,7 @@ describe("sessionSocketReducer", () => {
       expect(state.events).toEqual(events);
     });
 
-    it("accumulates step_finish cost onto the session total", () => {
+    it("leaves totals to server updates even when budget fields are absent", () => {
       const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
@@ -370,7 +659,7 @@ describe("sessionSocketReducer", () => {
           { type: "step_finish", cost: 0.5, messageId: "msg-1", sandboxId: "sb-1", timestamp: 1 },
         ],
       });
-      expect(state.sessionState?.totalCost).toBe(1.5);
+      expect(state.sessionState?.totalCost).toBe(1);
     });
 
     it("ignores missing, non-finite, and non-positive costs", () => {
@@ -613,7 +902,7 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.sandboxStatus).toBe("warming");
       state = reduce(state, serverMessage({ type: "sandbox_spawning" }));
       expect(state.sessionState?.sandboxStatus).toBe("spawning");
-      state = reduce(state, serverMessage({ type: "sandbox_ready" }));
+      state = reduce(state, serverMessage({ type: "sandbox_status", status: "ready" }));
       expect(state.sessionState?.sandboxStatus).toBe("ready");
     });
   });
@@ -744,7 +1033,10 @@ describe("sessionSocketReducer", () => {
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {
-      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }));
+      const state = reduce(
+        initialSessionSocketState,
+        serverMessage({ type: "sandbox_status", status: "ready" })
+      );
       expect(state.sessionState).toBeNull();
     });
   });

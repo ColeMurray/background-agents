@@ -50,6 +50,23 @@ describe("PersistedTerminalMessageProjectionStore", () => {
     expect(store.pending()).toEqual(older);
   });
 
+  it("rejects a malformed persisted row without consuming it", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    initSchema(sql);
+    const store = new PersistedTerminalMessageProjectionStore(sql);
+    store.setPending(older);
+    // SQLite affinity still permits nonnumeric text in an INTEGER column.
+    db.prepare(
+      "UPDATE terminal_message_projection_pending SET message_created_at = ? WHERE singleton = 1"
+    ).run("invalid-timestamp");
+
+    expect(() => store.pending()).toThrow("Malformed pending terminal message projection row");
+    expect(
+      db.prepare("SELECT message_created_at FROM terminal_message_projection_pending").get()
+    ).toEqual({ message_created_at: "invalid-timestamp" });
+  });
+
   it("keeps only the newest message and its retry metadata", () => {
     const store = createStore();
     store.setPending({ ...newer, attempts: 3, nextAttemptAt: 9_000 });

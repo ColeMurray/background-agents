@@ -8,6 +8,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import useSWR, { SWRConfig, mutate as globalMutate } from "swr";
 import { DataControlsSettings } from "./data-controls-settings";
 import { SIDEBAR_SESSIONS_KEY } from "@/lib/session-list";
+import type { SessionListSummary } from "@open-inspect/shared/types/sessions";
 
 expect.extend(matchers);
 
@@ -38,26 +39,33 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-type ArchivedSession = ReturnType<typeof createArchivedSession>;
+type ArchivedSession = SessionListSummary;
 
-function createArchivedSession(index: number, overrides: Record<string, unknown> = {}) {
+function createArchivedSession(index: number): ArchivedSession {
   return {
     id: `session-${index}`,
     title: `Session ${index}`,
     repoOwner: "open-inspect",
     repoName: "background-agents",
     baseBranch: "main",
-    branchName: null,
-    baseSha: null,
-    currentSha: null,
-    opencodeSessionId: null,
+    harness: "opencode",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
     status: "archived",
+    automationId: null,
+    automationRunId: null,
+    scmLogin: null,
+    userId: null,
+    totalCost: 0,
+    activeDurationMs: 0,
+    messageCount: 0,
+    prCount: 0,
+    environmentId: null,
     createdAt: 1000 + index,
     updatedAt: 2000 + index,
-    ...overrides,
   };
 }
 

@@ -10,13 +10,8 @@ the durable OAuth refresh token and gives each sandbox only a short-lived access
 
 ## Supported Models
 
-| Model ID             | Display name   | Reasoning efforts | Default effort |
-| -------------------- | -------------- | ----------------- | -------------- |
-| `xai/grok-4.5`       | Grok 4.5       | low, medium, high | high           |
-| `xai/grok-4.6`       | Grok 4.6       | low, medium, high | high           |
-| `xai/grok-build-0.1` | Grok Build 0.1 | Not configurable  | N/A            |
-
-Grok Build performs reasoning internally but does not accept a configurable reasoning effort.
+See [Available Models — xAI / SuperGrok](AVAILABLE_MODELS.md#xai--supergrok) for supported model
+IDs, reasoning effort options, and defaults.
 
 The **xAI / SuperGrok** group is disabled by default. An administrator must enable it under
 **Settings > Models** before it appears in session and integration model selectors.
@@ -53,7 +48,7 @@ while its absence leaves `XAI_API_KEY` available as the compatibility fallback.
 ### Step 3: Enable and Select Grok
 
 1. Open **Settings > Models**.
-2. Enable **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **xAI / SuperGrok**.
+2. Enable **Grok 4.7**, **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **xAI / SuperGrok**.
 3. Create a new session.
 4. Select the enabled Grok model and desired reasoning effort.
 5. Use **xAI authentication** to follow provider policy, select a specific account, or choose **Use
@@ -114,8 +109,8 @@ are no longer needed. See [Using OpenAI Models](OPENAI_MODELS.md#deployment-and-
 
 ### Grok does not appear in the model selector
 
-Enable **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **Settings > Models**. The xAI group
-is opt-in and is not part of the default enabled model set.
+Enable **Grok 4.7**, **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **Settings > Models**.
+The xAI group is opt-in and is not part of the default enabled model set.
 
 ### Session uses API-key mode unexpectedly
 
@@ -127,7 +122,7 @@ mode. Without a default or explicit choice, new sessions preserve legacy scoped 
 The refresh token was revoked, expired, or already rotated elsewhere. Use **Reconnect** on the
 provider account and complete xAI device authorization again.
 
-### `Model not found: xai/grok-4.6`, `xai/grok-4.5`, or `xai/grok-build-0.1`
+### `Model not found: xai/grok-4.7`, `xai/grok-4.6`, `xai/grok-4.5`, or `xai/grok-build-0.1`
 
 Rebuild the sandbox image so it includes the xAI auth proxy plugin and confirm the deployment uses
 OpenCode 1.17.18 or newer.

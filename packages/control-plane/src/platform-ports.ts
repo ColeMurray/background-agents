@@ -1,5 +1,3 @@
-import type { FetchClient } from "@open-inspect/shared/service-auth";
-
 export type { FetchClient } from "@open-inspect/shared/service-auth";
 
 /** Capability consumed by application services that defer background work. */
@@ -44,6 +42,14 @@ export interface AlarmScheduler {
   current(): Promise<number | null>;
 }
 
-// Keep platform compatibility checked at the boundary rather than widening every consumer.
-type _AssertExtends<A extends B, B> = A;
-type _FetcherSatisfiesFetchClient = _AssertExtends<Fetcher, FetchClient>;
+/** A queue's backlog, as its host reports it. */
+export interface QueueMetrics {
+  backlogCount: number;
+  backlogBytes: number;
+  oldestMessageTimestamp?: Date;
+}
+
+/** A queue's backlog, read-only. */
+export interface QueueMetricsSource {
+  metrics(): Promise<QueueMetrics>;
+}

@@ -17,12 +17,11 @@ export async function handleSessionWsToken(
 ): Promise<Response> {
   const sessionId = params.id;
 
-  const rawBody = await parseJsonBody<unknown>(request);
+  const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
 
-  // The participant identity comes from the verified principal; body SCM
-  // credentials are rejected (tokens arrive via the exchange; enrichment
-  // reads the store server-side).
+  // The participant identity comes from the verified principal. Current
+  // callers send identity/display fields only; token fields are rejected.
   const enforcement = applyIdentityEnforcement(ctx, "ws-token", rawBody);
   if (enforcement.rejection) return enforcement.rejection;
 

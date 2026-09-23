@@ -26,7 +26,6 @@ export {
 export type {
   SlackAuthTestResult,
   SlackChannelInfo,
-  SlackChannelListing,
   SlackEnvelope,
   CompleteExternalUploadOptions,
   ExternalUploadUrlOptions,
@@ -36,6 +35,11 @@ export type {
   SlackThreadMessage,
   SlackUser,
 } from "./client";
+export {
+  controlPlaneSlackChannelsResponseSchema,
+  slackChannelListingSchema,
+} from "./channel-contract";
+export type { ControlPlaneSlackChannelsResponse, SlackChannelListing } from "./channel-contract";
 export {
   applyMentionPolicy,
   escapeMrkdwnText,
@@ -47,7 +51,11 @@ export {
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
 export { splitIntoSlackSections, SECTION_TEXT_MAX_CHARS, MAX_RESPONSE_SECTIONS } from "./sections";
-export { selectThreadWindow, classifyThreadSpeaker } from "./thread-context";
+export {
+  classifyThreadSpeaker,
+  compareSlackTimestamps,
+  selectThreadWindow,
+} from "./thread-context";
 export type { ThreadWindowOptions, ThreadSpeaker } from "./thread-context";
 export {
   SLACK_DENIAL_REASONS,

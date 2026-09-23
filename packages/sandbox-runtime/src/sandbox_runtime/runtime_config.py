@@ -11,6 +11,8 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from .harness.base import HarnessId, parse_harness_id
+
 
 class BootMode(StrEnum):
     FRESH = "fresh"
@@ -76,6 +78,12 @@ class OpenCodeConfig:
 
 
 @dataclass(frozen=True)
+class ClaudeStagerConfig:
+    has_repository: bool
+    mcp_servers: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class ManagedSkillsConfig:
     control_plane_url: str
     sandbox_token: str
@@ -88,6 +96,7 @@ class BridgeProcessConfig:
     control_plane_url: str
     sandbox_token: str
     session_id: str
+    harness: HarnessId
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,21 @@ class RuntimeConfig:
     def session_id(self) -> str:
         return str(self.session_config.get("session_id") or "")
 
+    @property
+    def harness(self) -> HarnessId:
+        """Which agent runs this session; absent means the built-in OpenCode harness."""
+        return parse_harness_id(self.session_config.get("harness"))
+
+    @property
+    def bridge_early_connect(self) -> bool:
+        """The control plane asked for the bridge to connect ahead of the repository boot.
+
+        Only a boolean ``true`` opts in: a control plane that does not know
+        the field leaves it absent, and the runtime then boots in the
+        classic order (bridge last), which every control plane understands.
+        """
+        return self.session_config.get("bridge_early_connect") is True
+
     def repository_config(self) -> RepositoryConfig:
         raw_repositories = self.session_config.get("repositories")
         repositories = (
@@ -177,12 +201,22 @@ class RuntimeConfig:
             workspace_path=self.workspace_path,
         )
 
+    def claude_stager_config(self) -> ClaudeStagerConfig:
+        raw_mcp_servers = self.session_config.get("mcp_servers")
+        mcp_servers = (
+            tuple(item for item in raw_mcp_servers if isinstance(item, Mapping))
+            if isinstance(raw_mcp_servers, tuple)
+            else ()
+        )
+        return ClaudeStagerConfig(has_repository=self.has_repository, mcp_servers=mcp_servers)
+
     def bridge_process_config(self) -> BridgeProcessConfig:
         return BridgeProcessConfig(
             sandbox_id=self.sandbox_id,
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
             session_id=self.session_id,
+            harness=self.harness,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:

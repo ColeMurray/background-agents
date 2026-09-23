@@ -446,13 +446,14 @@ export async function mergeUsers(
     "skillProfileItemsMerged",
     db
       .prepare(
-        `INSERT OR IGNORE INTO skill_profile_items (profile_id, skill_id)
+        `INSERT INTO skill_profile_items (profile_id, skill_id)
          SELECT survivor_profile.id, loser_item.skill_id
          FROM skill_profiles loser_profile
          JOIN skill_profiles survivor_profile
            ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
          JOIN skill_profile_items loser_item ON loser_item.profile_id = loser_profile.id
-         WHERE loser_profile.user_id = ?`
+         WHERE loser_profile.user_id = ?
+         ON CONFLICT DO NOTHING`
       )
       .bind(survivorId, loserId)
   );

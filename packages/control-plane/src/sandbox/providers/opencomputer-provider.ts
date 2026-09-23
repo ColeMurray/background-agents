@@ -6,7 +6,10 @@
  * to OpenComputer rather than being driven by OpenInspect's lifecycle manager.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import {
+  supportsConfigurableSandboxTimeout,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -35,7 +38,9 @@ import {
   VCS_CLONE_TOKEN_ENV_VAR,
 } from "../sandbox-env";
 import {
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
+  signalUntilDeadline,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ImageBuildProviderTriggerConfig,
@@ -55,6 +60,9 @@ import {
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
 const RESERVED_VNC_ENV_KEYS = ["VNC_PASSWORD", "NOVNC_PORT"] as const;
+const RESTORE_READY_TIMEOUT_MS = 90_000;
+const POLL_INTERVAL_MS = 1_000;
+const SNAPSHOT_TIMEOUT_MS = 300_000;
 
 export interface OpenComputerProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -73,7 +81,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   readonly name = "opencomputer";
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: true,
@@ -86,7 +94,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
-    const template = config.prebuiltImageId ? undefined : this.requireTemplate();
+    const template = this.requireTemplate();
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
@@ -97,24 +105,30 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = config.timeoutSeconds;
-      const sandbox = config.prebuiltImageId
-        ? await this.client.forkFromCheckpoint({
-            checkpointId: config.prebuiltImageId,
-            name: config.sandboxId,
-            env: environment.envVars,
-            labels,
-            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
-            secretStore: secretStore?.name,
-          })
-        : await this.client.createSandbox({
-            name: config.sandboxId,
-            template: template ?? this.requireTemplate(),
-            env: environment.envVars,
-            labels,
-            ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
-            secretStore: secretStore?.name,
-          });
+      let sandbox = await this.client.createSandbox({
+        name: config.sandboxId,
+        template,
+        env: environment.envVars,
+        labels,
+        ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+        secretStore: secretStore?.name,
+      });
       providerObjectId = sandbox.id;
+      if (config.prebuiltImageId) {
+        try {
+          sandbox = await this.waitUntilReady(providerObjectId, sandbox);
+          await this.client.restoreCheckpoint(providerObjectId, config.prebuiltImageId);
+          sandbox = await this.waitUntilReady(providerObjectId);
+        } catch (error) {
+          if (error instanceof OpenComputerNotFoundError) {
+            throw new PrebuiltImageUnavailableError(
+              "OpenComputer prebuilt checkpoint is unavailable",
+              error
+            );
+          }
+          throw error;
+        }
+      }
       if (timeoutSeconds !== undefined) {
         await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
       }
@@ -132,6 +146,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         sandboxId: config.sandboxId,
         providerObjectId,
         createdAt: Date.now(),
+        lifetime: this.lifetimeFromSandbox(sandbox),
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,
         vncAccess: tunnels.vncAccess,
@@ -165,15 +180,18 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       });
       secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const timeoutSeconds = config.timeoutSeconds;
-      const sandbox = await this.client.forkFromCheckpoint({
-        checkpointId: config.snapshotImageId,
+      let sandbox = await this.client.createSandbox({
         name: config.sandboxId,
+        template: this.requireTemplate(),
         env: environment.envVars,
         labels: this.buildLabels(config),
         ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
+      sandbox = await this.waitUntilReady(providerObjectId, sandbox);
+      await this.client.restoreCheckpoint(providerObjectId, config.snapshotImageId);
+      sandbox = await this.waitUntilReady(providerObjectId);
       if (timeoutSeconds !== undefined) {
         await this.client.setSandboxTimeout(providerObjectId, timeoutSeconds);
       }
@@ -191,6 +209,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         success: true,
         sandboxId: config.sandboxId,
         providerObjectId,
+        lifetime: this.lifetimeFromSandbox(sandbox),
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,
         vncAccess: tunnels.vncAccess,
@@ -217,7 +236,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
+    const deadlineAtMs = config.deadlineAtMs ?? Date.now() + SNAPSHOT_TIMEOUT_MS;
     try {
+      const signal = signalUntilDeadline(deadlineAtMs, config.signal);
       const checkpoint = await this.client.createCheckpoint(
         config.providerObjectId,
         this.buildCheckpointName(config.sessionId, config.reason),
@@ -225,20 +246,41 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
           kind: OPENCOMPUTER_CHECKPOINT_KIND,
           retentionPolicy: OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
         },
-        ...(config.signal ? [config.signal] : [])
+        ...(signal ? [signal] : [])
       );
 
-      if (
-        checkpoint.status &&
-        checkpoint.status !== "ready" &&
-        checkpoint.status !== "created" &&
-        checkpoint.status !== "processing"
-      ) {
-        return { success: false, error: `Checkpoint status was ${checkpoint.status}` };
+      let current = checkpoint;
+      while (current.status === "processing" || current.status === "pending") {
+        if (Date.now() >= deadlineAtMs) {
+          return { success: false, error: "Checkpoint was not ready before the deadline" };
+        }
+        if (signal?.aborted) throw signal.reason;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, POLL_INTERVAL_MS);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(signal?.reason ?? new Error("Checkpoint polling aborted"));
+            },
+            { once: true }
+          );
+        });
+        const checkpoints = await this.client.listCheckpoints(config.providerObjectId, signal);
+        const observed = checkpoints.find((candidate) => candidate.id === checkpoint.id);
+        if (!observed) {
+          return { success: false, error: "Checkpoint was not found while waiting for readiness" };
+        }
+        current = observed;
       }
-
-      return { success: true, imageId: checkpoint.id };
+      if (current.status !== "ready" && current.status !== "created") {
+        return { success: false, error: `Checkpoint status was ${current.status ?? "unknown"}` };
+      }
+      return { success: true, imageId: current.id };
     } catch (error) {
+      if (Date.now() >= deadlineAtMs) {
+        return { success: false, error: "Checkpoint was not ready before the deadline" };
+      }
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to checkpoint OpenComputer sandbox", error);
     }
@@ -303,6 +345,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       return {
         success: true,
         providerObjectId: sandbox.id || config.providerObjectId,
+        lifetime: await this.readLifetimeAfterResume(config.providerObjectId),
         codeServerUrl,
         codeServerPassword,
         vncAccess,
@@ -315,28 +358,102 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
+    const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
     try {
       try {
-        if (config.reason === "respawn") {
+        const destroy = config.intent === "destroy";
+        if (destroy) {
           await this.client.deleteSandbox(
             config.providerObjectId,
             { deleteSecretStore: true },
-            ...(config.signal ? [config.signal] : [])
+            ...(signal ? [signal] : [])
           );
         } else {
-          await this.client.hibernateSandbox(config.providerObjectId);
+          await this.client.hibernateSandbox(config.providerObjectId, ...(signal ? [signal] : []));
+          if (config.intent === "preserve") {
+            const stopped = await this.client.getSandbox(config.providerObjectId, signal);
+            const state = (stopped.state ?? stopped.status ?? "").toLowerCase();
+            if (state !== "hibernated" && state !== "stopped" && state !== "paused") {
+              return {
+                success: false,
+                error: `Sandbox state was ${state || "unknown"} after hibernate`,
+              };
+            }
+          }
         }
       } catch (error) {
-        if (error instanceof OpenComputerNotFoundError) return { success: true };
+        if (error instanceof OpenComputerNotFoundError) {
+          if (config.intent === "preserve") {
+            return {
+              success: false,
+              error: "Sandbox disappeared before graceful shutdown was verified",
+            };
+          }
+          return { success: true };
+        }
         throw error;
       }
       return { success: true };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError(
-        `Failed to ${config.reason === "respawn" ? "delete" : "hibernate"} OpenComputer sandbox`,
+        `Failed to ${config.intent === "destroy" ? "delete" : "hibernate"} OpenComputer sandbox`,
         error
       );
+    }
+  }
+
+  private lifetimeFromSandbox(sandbox: OpenComputerSandboxResponse) {
+    const observedAtMs = Date.now();
+    const raw = sandbox.endAt;
+    if (raw === undefined) {
+      return {
+        kind: "unknown",
+        observedAtMs,
+        reason: "OpenComputer v2 response omitted endAt",
+      } as const;
+    }
+    const expiresAtMs = raw ? Date.parse(raw) : Number.NaN;
+    return Number.isFinite(expiresAtMs)
+      ? ({ kind: "finite", expiresAtMs, observedAtMs, source: "provider" } as const)
+      : ({ kind: "unknown", observedAtMs, reason: "Invalid OpenComputer endAt" } as const);
+  }
+
+  private async readLifetimeAfterResume(providerObjectId: string) {
+    try {
+      return this.lifetimeFromSandbox(await this.client.getSandbox(providerObjectId));
+    } catch (error) {
+      log.warn("opencomputer.lifetime_read_failed", {
+        sandbox_id: providerObjectId,
+        operation: "resume",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        kind: "unknown",
+        observedAtMs: Date.now(),
+        reason: "Failed to read OpenComputer lifetime after successful resume",
+      } as const;
+    }
+  }
+
+  private async waitUntilReady(
+    providerObjectId: string,
+    initial?: OpenComputerSandboxResponse
+  ): Promise<OpenComputerSandboxResponse> {
+    const deadline = Date.now() + RESTORE_READY_TIMEOUT_MS;
+    let sandbox = initial;
+    while (true) {
+      sandbox ??= await this.client.getSandbox(providerObjectId);
+      const status = (sandbox.status ?? sandbox.state ?? "").toLowerCase();
+      if (status === "ready" || status === "running") return sandbox;
+      if (["failed", "error", "stopped", "deleted"].includes(status)) {
+        throw new Error(`OpenComputer sandbox entered terminal state ${status}`);
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("OpenComputer sandbox was not ready before restore deadline");
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      sandbox = undefined;
     }
   }
 
@@ -729,6 +846,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   }
 
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (error instanceof SandboxProviderError) return error;
     if (error instanceof OpenComputerApiError) {
       return SandboxProviderError.fromFetchError(
         `${message}: ${error.message}`,

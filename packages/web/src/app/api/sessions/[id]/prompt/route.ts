@@ -51,8 +51,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Failed to send prompt: ${errorText}`);
+      const errorBody = await response.json().catch(() => null);
+      console.error("Failed to send prompt:", errorBody);
+      if (errorBody && typeof errorBody === "object" && !Array.isArray(errorBody)) {
+        return NextResponse.json(errorBody, { status: response.status });
+      }
       return NextResponse.json({ error: "Failed to send prompt" }, { status: response.status });
     }
 

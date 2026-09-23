@@ -79,8 +79,13 @@ modal_environment_web_suffix  = ""
 # Seed the base snapshot with packages/daytona-infra/src/bootstrap.py before enabling.
 daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
 daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
-daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
+daytona_base_snapshot = ""     # Prefix for the Terraform-managed Daytona snapshot
+# daytona_base_snapshot_memory_gib = 2 # Memory inherited by sandboxes created from the snapshot
 # daytona_target = ""          # Optional Daytona target name
+# daytona_toolbox_api_url = "" # Optional override; empty uses the proxy each sandbox reports
+# Admits new Daytona prebuilt-image builds and lets fresh sessions boot from one; closing it
+# again is the rollback. Clear the gates in docs/IMAGE_PREBUILD.md#daytona-prebuilds first.
+daytona_prebuilds_enabled = false
 
 # Vercel Sandbox API
 # Only required when sandbox_provider = "vercel"
@@ -169,6 +174,11 @@ github_webhook_secret = ""
 # The webhook handler uses this to detect @mentions of the bot in PRs/issues.
 github_bot_username = ""
 
+# Model the GitHub bot uses for a repository that does not pin one in its own
+# integration config. Accepts a canonical "provider/model" id or a bare
+# "claude-"/"gpt-" id. Commented out means the default below.
+# github_bot_default_model = "anthropic/claude-haiku-4-5"
+
 # =============================================================================
 # Google OAuth Credentials (Optional)
 # =============================================================================
@@ -194,6 +204,10 @@ enable_slack_bot = false
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
 
+# Model the Slack bot uses for a user who has not picked one from the model
+# menu. Accepts a canonical "provider/model" id or a bare "claude-"/"gpt-" id.
+# slack_bot_default_model = "claude-haiku-4-5"
+
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new
 # - Enable webhooks, select "Agent session events" + "Issues" + "Comments"
@@ -214,11 +228,22 @@ linear_client_id = ""        # OAuth Application Client ID
 linear_client_secret = ""    # OAuth Application Client Secret
 linear_webhook_secret = ""   # Webhook Signing Secret from the application config
 
+# Model the Linear bot uses when no repository config, user preference, or
+# "model:" issue label selects one. Accepts a canonical "provider/model" id or a
+# bare "claude-"/"gpt-" id.
+# linear_bot_default_model = "claude-sonnet-4-6"
+
 # =============================================================================
 # API Keys
 # =============================================================================
 
-# Anthropic API key for Claude
+# Anthropic API key for Claude. Injected into Modal session sandboxes and
+# OpenComputer sandboxes; Daytona, E2B and Vercel read model keys only from the
+# secret store in the web app, which overrides this value everywhere. Optional:
+# leave it blank to supply model credentials as secrets instead. Required only
+# when classification_model names an Anthropic model AND at least one of the
+# Slack or Linear bots is enabled. Both of those are the defaults, so a stock
+# configuration does need this key.
 # From: https://console.anthropic.com/
 anthropic_api_key = ""
 

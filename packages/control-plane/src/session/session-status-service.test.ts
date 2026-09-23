@@ -4,7 +4,6 @@ import { SessionStatusService } from "./session-status-service";
 import { SessionInternalPaths } from "./contracts";
 import type { SessionRuntimeClient } from "./runtime-client";
 import type { Logger } from "../logger";
-import type { SessionIndexStore } from "../db/session-index";
 import type { SessionRow, ArtifactRow, MessageRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ArtifactRepository } from "./artifact-repository";
@@ -27,6 +26,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-haiku-4-5",
     reasoning_effort: "high",
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,
@@ -41,7 +41,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   } as SessionRow;
 }
 
-function harness(options: { session?: SessionRow | null; sessionIndex?: null } = {}) {
+function harness(options: { session?: SessionRow | null } = {}) {
   const session = options.session === undefined ? createSession() : options.session;
 
   const repository = {
@@ -61,15 +61,10 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   const broadcast = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) } as SessionMessenger;
 
-  const sessionIndex =
-    options.sessionIndex === null
-      ? null
-      : {
-          updateStatus: vi.fn(async () => true),
-          repairStatus: vi.fn(async () => true),
-          finalizeChildAdmission: vi.fn(async () => {}),
-          updateMetrics: vi.fn(async () => true),
-        };
+  const sessionIndex = {
+    finalizeChildAdmission: vi.fn(async () => {}),
+    updateMetrics: vi.fn(async () => true),
+  };
 
   const parentFetch = vi.fn(
     async (_sessionId: string, _path: string, _init?: RequestInit) =>
@@ -86,6 +81,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   };
   const backgroundTasks = createTestBackgroundTasks();
 
+  const statusProjection = { project: vi.fn(async () => true) };
   const service = new SessionStatusService(
     backgroundTasks,
     log as unknown as Logger,
@@ -93,12 +89,14 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     repository as unknown as MessageRepository,
     artifactRepository,
     messenger,
-    sessionIndex as unknown as SessionIndexStore | null,
+    sessionIndex,
+    statusProjection,
     parentSessions
   );
 
   return {
     service,
+    statusProjection,
     repository,
     artifactRepository,
     broadcast,
@@ -110,6 +108,44 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   };
 }
 
+describe("SessionStatusService.confirmIndexStatus", () => {
+  it("confirms the current archive revision through the generic projection", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    await h.service.confirmIndexStatus("archived");
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
+      "public-session-1",
+      "archived",
+      1,
+      2000
+    );
+  });
+  it("rejects a missing or superseded projection", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.statusProjection.project.mockResolvedValue(false);
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("missing or superseded");
+  });
+  it("does not project when the local status has changed", async () => {
+    const h = harness();
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("superseded");
+    expect(h.statusProjection.project).not.toHaveBeenCalled();
+  });
+  it("rejects a newer local generation even if it has the same status", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.statusProjection.project.mockImplementation(async () => {
+      h.repository.getSession.mockReturnValue(
+        createSession({ status: "archived", status_revision: 3 })
+      );
+      return true;
+    });
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("superseded");
+  });
+  it("propagates projection outages", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.statusProjection.project.mockRejectedValue(new Error("D1 unavailable"));
+    await expect(h.service.confirmIndexStatus("archived")).rejects.toThrow("D1 unavailable");
+  });
+});
+
 describe("SessionStatusService.transition", () => {
   it("returns false without side effects when there is no session", async () => {
     const h = harness({ session: null });
@@ -117,7 +153,7 @@ describe("SessionStatusService.transition", () => {
     expect(await h.service.transition("active")).toBe(false);
 
     expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
-    expect(h.sessionIndex!.updateStatus).not.toHaveBeenCalled();
+    expect(h.statusProjection.project).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
@@ -133,12 +169,13 @@ describe("SessionStatusService.transition", () => {
     );
     const updatedAt = h.repository.updateSessionStatus.mock.calls[0][2] as number;
     expect(updatedAt).toBeGreaterThan(2000);
-    expect(h.sessionIndex!.updateStatus).toHaveBeenCalledWith(
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
       "public-session-1",
       "active",
+      2,
       updatedAt
     );
-    expect(h.sessionIndex!.finalizeChildAdmission).toHaveBeenCalledWith("public-session-1");
+    expect(h.sessionIndex.finalizeChildAdmission).toHaveBeenCalledWith("public-session-1");
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "active" });
   });
 
@@ -147,7 +184,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("active")).toBe(false);
 
-    expect(h.sessionIndex!.updateStatus).toHaveBeenCalledWith("public-session-1", "active", 2000);
+    expect(h.statusProjection.project).toHaveBeenCalledWith("public-session-1", "active", 1, 2000);
     expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.parentFetch).not.toHaveBeenCalled();
@@ -158,7 +195,7 @@ describe("SessionStatusService.transition", () => {
 
     await h.service.transition("completed");
 
-    expect(h.sessionIndex!.updateMetrics).toHaveBeenCalledWith("public-session-1", {
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith("public-session-1", {
       totalCost: 2.5,
       activeDurationMs: 4500,
       messageCount: 3,
@@ -172,7 +209,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("failed")).toBe(false);
 
-    expect(h.sessionIndex!.updateMetrics).toHaveBeenCalledWith(
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith(
       "public-session-1",
       expect.any(Object)
     );
@@ -183,12 +220,12 @@ describe("SessionStatusService.transition", () => {
 
     await h.service.transition("active");
 
-    expect(h.sessionIndex!.updateMetrics).not.toHaveBeenCalled();
+    expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
   });
 
   it("logs index sync failures without throwing", async () => {
     const h = harness({ session: createSession({ status: "created" }) });
-    h.sessionIndex!.updateStatus.mockRejectedValue(new Error("d1 down"));
+    h.statusProjection.project.mockRejectedValue(new Error("d1 down"));
 
     expect(await h.service.transition("active")).toBe(true);
 
@@ -201,15 +238,6 @@ describe("SessionStatusService.transition", () => {
       })
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "active" });
-  });
-
-  it("skips index and metrics writes when no session index is bound", async () => {
-    const h = harness({ session: createSession({ status: "active" }), sessionIndex: null });
-
-    expect(await h.service.transition("completed")).toBe(true);
-
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "completed" });
-    expect(h.backgroundTasks.submissions).toHaveLength(0);
   });
 
   it("submits the parent notification as a background job", async () => {
@@ -245,7 +273,7 @@ describe("SessionStatusService.cancel", () => {
   it("closes local status and unfinished messages before publishing projections", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
     let releaseIndex!: () => void;
-    h.sessionIndex!.updateStatus.mockImplementation(
+    h.statusProjection.project.mockImplementation(
       () => new Promise<boolean>((resolve) => (releaseIndex = () => resolve(true)))
     );
     const terminalize = vi.fn();
@@ -294,9 +322,38 @@ describe("SessionStatusService.reconcileAfterExecution", () => {
 
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "failed" });
   });
+
+  it("leaves a session archived while its terminal projection was in flight", async () => {
+    // Archive is admissible once the completion is recorded (no unfinished
+    // message remains), and the reconcile runs after the D1 projection await.
+    const h = harness({ session: createSession({ status: "archived" }) });
+
+    await h.service.reconcileAfterExecution(true);
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("leaves a session cancelled while its terminal projection was in flight", async () => {
+    const h = harness({ session: createSession({ status: "cancelled" }) });
+
+    await h.service.reconcileAfterExecution(false);
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
 });
 
 describe("SessionStatusService.reconcileAfterQueueRemoval", () => {
+  it("leaves a cancelled session cancelled", async () => {
+    const h = harness({ session: createSession({ status: "cancelled" }) });
+
+    await h.service.reconcileAfterQueueRemoval();
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
   it("preserves the latest failed execution outcome", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
     h.repository.getLatestTerminalMessage.mockReturnValue({ status: "failed" } as MessageRow);
@@ -339,13 +396,18 @@ describe("SessionStatusService.repairIndexStatus", () => {
 
     await h.service.repairIndexStatus();
 
-    expect(h.sessionIndex!.repairStatus).toHaveBeenCalledWith("public-session-1", "completed");
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
+      "public-session-1",
+      "completed",
+      1,
+      2000
+    );
   });
 
   it("logs and propagates repair failures", async () => {
     const h = harness({ session: createSession({ status: "completed" }) });
     const error = new Error("d1 down");
-    h.sessionIndex!.repairStatus.mockRejectedValue(error);
+    h.statusProjection.project.mockRejectedValue(error);
 
     await expect(h.service.repairIndexStatus()).rejects.toThrow(error);
 
@@ -385,6 +447,33 @@ describe("SessionStatusService.settleFromMessageState", () => {
       "failed",
       expect.any(Number)
     );
+  });
+});
+
+describe("SessionStatusService.reconcileFromMessageState", () => {
+  it("preserves a completed prompt outcome across an external lifecycle boundary", async () => {
+    const h = harness({ session: createSession({ status: "completed" }) });
+    h.repository.getLatestTerminalMessage.mockReturnValue({ status: "completed" } as MessageRow);
+
+    await h.service.reconcileFromMessageState();
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
+      "public-session-1",
+      "completed",
+      1,
+      2000
+    );
+  });
+
+  it("preserves a user-selected closed status", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.repository.getLatestTerminalMessage.mockReturnValue({ status: "completed" } as MessageRow);
+
+    await h.service.reconcileFromMessageState();
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
   });
 });
 

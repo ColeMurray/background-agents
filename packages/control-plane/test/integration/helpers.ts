@@ -1,10 +1,12 @@
 import { SELF, env } from "cloudflare:test";
+import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
 import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
-import type { SessionDO } from "../../src/session/durable-object";
+import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -18,6 +20,18 @@ import type { SessionModelProviderAuthInput } from "../../src/model-provider-acc
  */
 export function sqlDatabase(db: D1Database): SqlDatabase {
   return db;
+}
+
+/**
+ * The ordinary HTTP entrypoint over the Worker's bindings, as `index.ts`
+ * calls it: for tests that route a request without going through `SELF`.
+ */
+export function routeRequest(
+  request: Request,
+  bindings: WorkerBindings,
+  executionCtx: ExecutionContext
+): Promise<Response> {
+  return handleControlPlaneHttp(request, createCloudflareEnv(bindings), executionCtx);
 }
 
 /**
@@ -57,6 +71,7 @@ const TEST_NAMED_SESSION_DEFAULTS = {
 export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
   { provider: "openai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
   { provider: "xai", authMode: "legacy_scoped_oauth", selectionSource: "legacy_fallback" },
+  { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
 ];
 
 async function signCookieValue(value: string, secret: string): Promise<string> {
@@ -573,6 +588,9 @@ export async function seedSandboxAuth(
   const tokenHash = await hashToken(opts.authToken);
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
+    // This helper replaces the failed test spawn with a legacy fixture.
+    // Shutdown-aware tests seed their matching generation explicitly.
+    state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
       "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
       opts.authToken,
@@ -597,6 +615,7 @@ export async function seedSandboxAuthHash(
   const tokenHash = await hashToken(opts.authToken);
 
   await runInSessionDO(stub, (instance: SessionDO, state) => {
+    state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
       "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
       tokenHash,

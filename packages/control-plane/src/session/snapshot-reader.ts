@@ -1,3 +1,4 @@
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import {
   sessionSnapshotSchema,
   type SessionSnapshotState,
@@ -8,6 +9,7 @@ import type { Logger } from "../logger";
 import type { SqlDatabase } from "../db/sql-database";
 import { EnvironmentStore } from "../db/environments";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox/sandbox-status";
+import { parseStoredSandboxBootPhase } from "../sandbox/boot-phase";
 import type { SandboxDashboardSettings } from "./sandbox-access";
 import { resolveSandboxDashboardUrl } from "./sandbox-access";
 import { findPrArtifactForRepo } from "./pr-artifacts";
@@ -15,11 +17,12 @@ import { resolvePublicSessionId } from "./public-session-id";
 import { safeParseTunnelUrls } from "./tunnel-urls";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxStateReader } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionEventStream } from "./event-stream";
 import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
+import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-shutdown";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
 export interface SessionSnapshotEnrichment {
@@ -28,15 +31,15 @@ export interface SessionSnapshotEnrichment {
 }
 
 export interface SessionSnapshotReaderDeps {
+  getShutdown?: () => SandboxShutdownState | null;
   sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
+  sandboxRepository: SandboxStateReader;
   messageRepository: MessageRepository;
   artifactRepository: ArtifactRepository;
   messageService: MessageService;
   eventStream: SessionEventStream;
   sandboxDashboardSettings: SandboxDashboardSettings;
-  /** Null when the deployment has no D1 binding — environment names resolve null. */
-  db: SqlDatabase | null;
+  db: SqlDatabase;
   durableObjectId: string;
   /** DO storage transaction so the snapshot reads are a consistent cut. */
   transaction: <T>(closure: () => T) => T;
@@ -77,6 +80,7 @@ export class SessionSnapshotReader {
         timeline: this.deps.eventStream.getReplay(),
         promptQueue: this.deps.messageRepository.listPromptQueue(),
         spawnError: local.sandbox?.last_spawn_error ?? null,
+        bootPhase: parseStoredSandboxBootPhase(local.sandbox?.boot_phase ?? null),
       };
     });
   }
@@ -96,13 +100,17 @@ export class SessionSnapshotReader {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
+      sandboxPreservation: this.deps.getShutdown?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,
+      harness: getValidHarnessOrDefault(session.harness),
       model: session.model ?? DEFAULT_MODEL,
       reasoningEffort: session.reasoning_effort ?? undefined,
       isProcessing: this.getIsProcessing(),
       parentSessionId: session.parent_session_id,
       totalCost: session.total_cost ?? 0,
+      maxSessionCostUsd: session.max_cost_usd,
+      budgetExhausted: session.budget_exhausted === 1,
       codeServerUrl: sandbox?.code_server_url ?? null,
       vncUrl: sandbox?.vnc_url ?? null,
       tunnelUrls: sandbox?.tunnel_urls
@@ -128,7 +136,7 @@ export class SessionSnapshotReader {
    * lookup failure resolves null rather than failing the whole state read.
    */
   private async resolveEnvironmentName(environmentId: string | null): Promise<string | null> {
-    if (!environmentId || !this.deps.db) {
+    if (!environmentId) {
       return null;
     }
     try {
