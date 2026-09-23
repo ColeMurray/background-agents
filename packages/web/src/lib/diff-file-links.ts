@@ -14,6 +14,10 @@ const LINE_REFERENCE = /:\d+(?::\d+)?$/;
 // `README.md:42` also matches SCHEME, but a colon followed only by a line reference is not one.
 const PATH_WITH_LINE_REFERENCE = /^[^:/?#]+:\d+(?::\d+)?(?:[?#]|$)/;
 
+export function isPathWithLineReference(href: string): boolean {
+  return PATH_WITH_LINE_REFERENCE.test(href);
+}
+
 /**
  * Whether an href in agent output names a file in the sandbox rather than something the
  * browser can open: not a URL with a scheme (`https:`, `mailto:`), not protocol-relative,
@@ -21,7 +25,7 @@ const PATH_WITH_LINE_REFERENCE = /^[^:/?#]+:\d+(?::\d+)?(?:[?#]|$)/;
  */
 export function isRepositoryFileHref(href: string | undefined): href is string {
   if (!href) return false;
-  if (SCHEME.test(href) && !PATH_WITH_LINE_REFERENCE.test(href)) return false;
+  if (SCHEME.test(href) && !isPathWithLineReference(href)) return false;
   if (href.startsWith("//") || href.startsWith("#")) return false;
   if (href.startsWith("/")) return href.startsWith(WORKSPACE_PREFIX);
   return true;

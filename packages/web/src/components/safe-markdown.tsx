@@ -6,7 +6,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { ComponentPropsWithoutRef } from "react";
 import type { Root, RootContent } from "mdast";
-import { isRepositoryFileHref } from "@/lib/diff-file-links";
+import { isPathWithLineReference, isRepositoryFileHref } from "@/lib/diff-file-links";
 import { useSessionFileLinks } from "@/lib/session-file-links";
 
 // Strict sanitization schema to prevent XSS
@@ -66,7 +66,10 @@ const DEFAULT_IMAGE_MODE = "omit";
 function preserveFileLineReferences() {
   return (tree: Root) => {
     const visit = (node: Root | RootContent) => {
-      if (node.type === "link" && /^[^:/?#]+:\d+(?::\d+)?(?:[?#]|$)/.test(node.url)) {
+      if (
+        (node.type === "link" || node.type === "definition") &&
+        isPathWithLineReference(node.url)
+      ) {
         // A root-level path with :line looks like a URL scheme to rehype-sanitize.
         node.url = `./${node.url}`;
       }

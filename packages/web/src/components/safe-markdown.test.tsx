@@ -72,6 +72,13 @@ describe("SafeMarkdown links", () => {
     expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "README.md" });
   });
 
+  it("opens a root-level file from a reference-style link with a line number", () => {
+    const onOpen = renderInSession("See [README][r].\n\n[r]: README.md:42");
+
+    fireEvent.click(screen.getByRole("button", { name: "README" }));
+    expect(onOpen).toHaveBeenCalledWith({ repositoryPosition: 0, path: "README.md" });
+  });
+
   it("renders a repository file that is not in the diff as inert text", () => {
     const onOpen = renderInSession("See [notes.md](docs/notes.md).");
 
