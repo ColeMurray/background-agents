@@ -134,6 +134,7 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
     lookup.assert_called_once_with(deploy.app.name, create_if_missing=True)
     build.assert_called_once_with(deployed_app)
     assert create.call_args.kwargs["env"] is plan["runtimeEnv"]
+    assert create.call_args.kwargs["cpu"] == 2.0
     sandbox.terminate.assert_called_once()
     assert json.loads((tmp_path / "selected.json").read_text()) == {
         "imageId": "im-verified",
