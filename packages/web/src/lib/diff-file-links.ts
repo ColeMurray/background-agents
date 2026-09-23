@@ -21,12 +21,13 @@ export function isPathWithLineReference(href: string): boolean {
 /**
  * Whether an href in agent output names a file in the sandbox rather than something the
  * browser can open: not a URL with a scheme (`https:`, `mailto:`), not protocol-relative,
- * not a bare anchor, and not a root-relative app path other than a `/workspace/` checkout.
+ * not a bare anchor or query, and not a root-relative app path other than a `/workspace/`
+ * checkout.
  */
 export function isRepositoryFileHref(href: string | undefined): href is string {
   if (!href) return false;
   if (SCHEME.test(href) && !isPathWithLineReference(href)) return false;
-  if (href.startsWith("//") || href.startsWith("#")) return false;
+  if (href.startsWith("//") || href.startsWith("#") || href.startsWith("?")) return false;
   if (href.startsWith("/")) return href.startsWith(WORKSPACE_PREFIX);
   return true;
 }
