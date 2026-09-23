@@ -108,6 +108,28 @@ describe("useSessionAttachments", () => {
     expect(retry).toEqual(first);
   });
 
+  it("uploads fresh references for a changed prompt but preserves the original retry cache", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ attachmentId: "up-1", mimeType: "image/png" }))
+      .mockResolvedValueOnce(Response.json({ attachmentId: "up-2", mimeType: "image/png" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]));
+
+    await act(async () => {
+      expect((await result.current.uploadAll("session-1", "original"))[0].attachmentId).toBe(
+        "up-1"
+      );
+      expect((await result.current.uploadAll("session-1", "edited"))[0].attachmentId).toBe("up-2");
+      expect((await result.current.uploadAll("session-1", "original"))[0].attachmentId).toBe(
+        "up-1"
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects malformed successful upload responses", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});

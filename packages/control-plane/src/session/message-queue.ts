@@ -727,26 +727,53 @@ export class SessionMessageQueue {
       participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
     }
 
-    const enqueued = await this.enqueuePromptCore({
-      participant,
-      userId: data.authorId,
-      content: data.content,
-      source: data.source,
-      model: data.model,
-      reasoningEffort: data.reasoningEffort,
-      attachments: data.attachments,
-      callbackContext: data.callbackContext,
-      clientRequestId: data.clientRequestId,
-      canonicalUserId: data.clientRequestId ? data.canonicalUserId : undefined,
-      scmEnrichment: data.clientRequestId ? data.scmEnrichment : undefined,
-    });
+    const enqueued = await this.enqueuePromptCore(
+      {
+        participant,
+        userId: data.authorId,
+        content: data.content,
+        source: data.source,
+        model: data.model,
+        reasoningEffort: data.reasoningEffort,
+        attachments: data.attachments,
+        callbackContext: data.callbackContext,
+        clientRequestId: data.clientRequestId,
+      },
+      data.clientRequestId
+        ? () => {
+            if (data.canonicalUserId) {
+              this.participantRepository.updateParticipantCoalesce(participant.id, {
+                canonicalUserId: data.canonicalUserId,
+              });
+            }
+            if (data.scmEnrichment) {
+              this.participantRepository.updateParticipantCoalesce(participant.id, {
+                scmName: data.scmEnrichment.name,
+                scmEmail: data.scmEnrichment.email,
+                scmLogin: data.scmEnrichment.login,
+                scmUserId: data.scmEnrichment.userId,
+              });
+            }
+          }
+        : undefined
+    );
 
-    if (!enqueued.deduplicated) await this.processMessageQueue();
+    if (
+      enqueued.deduplicated &&
+      this.messageRepository.getMessageStatus(enqueued.messageId) === "pending" &&
+      this.repository.getSession()?.status !== "active"
+    ) {
+      await this.sessionStatus.transition("active");
+    }
+    await this.processMessageQueue();
 
     return { messageId: enqueued.messageId, status: "queued" };
   }
 
-  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+  private async enqueuePromptCore(
+    data: EnqueuePromptCoreData,
+    beforeInsert?: () => void
+  ): Promise<EnqueuedPrompt> {
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
@@ -820,21 +847,6 @@ export class SessionMessageQueue {
       data.reasoningEffort,
       this.log
     );
-    // Keyed HTTP enrichment belongs in this synchronous admission turn: a
-    // status transition below can yield to a sandbox ready/dispatch event.
-    if (data.canonicalUserId) {
-      this.participantRepository.updateParticipantCoalesce(data.participant.id, {
-        canonicalUserId: data.canonicalUserId,
-      });
-    }
-    if (data.scmEnrichment) {
-      this.participantRepository.updateParticipantCoalesce(data.participant.id, {
-        scmName: data.scmEnrichment.name,
-        scmEmail: data.scmEnrichment.email,
-        scmLogin: data.scmEnrichment.login,
-        scmUserId: data.scmEnrichment.userId,
-      });
-    }
     try {
       this.messageRepository.createMessageWithAttachments(
         {
@@ -851,7 +863,9 @@ export class SessionMessageQueue {
           status: "pending",
           createdAt: now,
         },
-        resolvedAttachments?.attachmentIds ?? []
+        resolvedAttachments?.attachmentIds ?? [],
+        undefined,
+        beforeInsert
       );
     } catch (error) {
       if (error instanceof AttachmentClaimConflictError) {

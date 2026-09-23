@@ -6,6 +6,7 @@ import {
   queryDO,
   seedMessage,
   serviceFetch,
+  waitForSandboxStatus,
 } from "./helpers";
 import { runInSessionDO } from "./session-do-access";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
@@ -188,6 +189,92 @@ describe("web HTTP prompt admission identity (real session SQLite)", () => {
     expect(
       (await queryDO<{ count: number }>(stub, "SELECT COUNT(*) AS count FROM messages"))[0].count
     ).toBe(2);
+    ws.close();
+  });
+
+  it("re-drives an admitted pending prompt after its original handler stops before dispatch", async () => {
+    const { stub, sessionName } = await initSession();
+    const body = JSON.stringify({ content: "Recover me", clientRequestId: crypto.randomUUID() });
+    const send = () =>
+      serviceFetch(`https://test.local/sessions/${sessionName}/prompt`, { method: "POST", body });
+    const first = await send();
+    expect(first.status).toBe(200);
+    const { messageId } = await first.json<{ messageId: string }>();
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE session SET status = 'created'");
+    });
+
+    const retry = await send();
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ messageId });
+    expect(await queryDO(stub, "SELECT status FROM session")).toEqual([{ status: "active" }]);
+    expect(
+      (await queryDO<{ count: number }>(stub, "SELECT COUNT(*) AS count FROM messages"))[0].count
+    ).toBe(1);
+  });
+
+  it("retains a cancelled keyed prompt as a terminal idempotency record", async () => {
+    const { stub, sessionName } = await initSession();
+    const attachmentId = crypto.randomUUID();
+    expect(
+      (
+        await stub.fetch("http://internal/internal/attachments", {
+          method: "POST",
+          body: JSON.stringify({
+            action: "record",
+            attachmentId,
+            mimeType: "image/png",
+            sizeBytes: 42,
+          }),
+        })
+      ).status
+    ).toBe(200);
+    const body = JSON.stringify({
+      content: "Cancel this",
+      clientRequestId: crypto.randomUUID(),
+      attachments: [{ name: "shot.png", attachmentId }],
+    });
+    const send = () =>
+      serviceFetch(`https://test.local/sessions/${sessionName}/prompt`, { method: "POST", body });
+    const first = await send();
+    expect(first.status).toBe(200);
+    const { messageId } = await first.json<{ messageId: string }>();
+    // The fixture's sandbox spawn fails; keep the admitted row pending for cancellation.
+    await waitForSandboxStatus(stub, "failed");
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE session SET budget_exhausted = 1");
+      state.storage.sql.exec(
+        "UPDATE messages SET status = 'pending', error_message = NULL, completed_at = NULL WHERE id = ?",
+        messageId
+      );
+    });
+    const { ws } = await openClientWs(sessionName, {
+      subscribe: true,
+      userId: "11111111111111111111111111111111",
+    });
+    const cancelled = collectMessages(ws, {
+      until: (message) => message.type === "prompt_cancelled",
+    });
+    ws.send(
+      JSON.stringify({ type: "cancel_prompt", messageId, clientRequestId: crypto.randomUUID() })
+    );
+    const cancelEvents = await cancelled;
+    expect(
+      await queryDO(stub, "SELECT status, error_message FROM messages WHERE id = ?", messageId)
+    ).toEqual([{ status: "failed", error_message: "Cancelled before execution" }]);
+    expect(cancelEvents).toContainEqual(
+      expect.objectContaining({ type: "prompt_cancelled", messageId })
+    );
+
+    const retry = await send();
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ messageId });
+    expect(await queryDO(stub, "SELECT id, status FROM messages")).toEqual([
+      { id: messageId, status: "failed" },
+    ]);
+    expect(
+      await queryDO(stub, "SELECT message_id FROM attachments WHERE id = ?", attachmentId)
+    ).toEqual([{ message_id: null }]);
     ws.close();
   });
 

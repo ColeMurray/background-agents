@@ -796,6 +796,10 @@ describe("Home", () => {
     await screen.findByText(/Retry on this page/);
     expect(screen.getByPlaceholderText("What do you want to build?")).toHaveValue("Look at this");
     expect(screen.getByAltText("shot.png")).toBeInTheDocument();
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["invalid"], "notes.txt", { type: "text/plain" })] },
+    });
+    await screen.findByText(/notes.txt is not a supported image/);
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
     const calls = vi.mocked(fetch).mock.calls;
@@ -811,6 +815,79 @@ describe("Home", () => {
     expect(calls.filter(([input]) => String(input).endsWith("/attachments"))).toHaveLength(1);
     expect(calls.filter(([input]) => String(input) === "/api/sessions")).toHaveLength(1);
     await waitFor(() => expect(screen.queryByAltText("shot.png")).not.toBeInTheDocument());
+  });
+
+  it("reuploads retained attachments when an uncertain submission is edited", async () => {
+    let uploads = 0;
+    let prompts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/attachments")) {
+        uploads++;
+        return Response.json({ attachmentId: `attachment-${uploads}`, mimeType: "image/png" });
+      }
+      if (url.endsWith("/prompt")) {
+        prompts++;
+        if (prompts === 1) throw new Error("response lost");
+        return Response.json({ messageId: "edited", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /background-agents/i }));
+    fireEvent.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /no repository/i })
+    );
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Original" } });
+    fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [new File(["image"], "shot.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.change(input, { target: { value: "Edited" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    const submitted = calls
+      .filter(([url]) => String(url).endsWith("/prompt"))
+      .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+    expect(submitted.map((body) => body.attachments)).toEqual([
+      [{ attachmentId: "attachment-1", name: "shot.png" }],
+      [{ attachmentId: "attachment-2", name: "shot.png" }],
+    ]);
+    expect(submitted[0].clientRequestId).not.toBe(submitted[1].clientRequestId);
+    expect(uploads).toBe(2);
+    expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
+  });
+
+  it("keeps an uncertain session out of warm retirement after its target changes", async () => {
+    let prompts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/prompt")) {
+        prompts++;
+        if (prompts === 1) throw new Error("response lost");
+        return Response.json({ messageId: "original", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Original" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.click(screen.getByRole("button", { name: "Switch agent to claude" }));
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
+    expect(calls.filter(([url]) => String(url).includes("/archive"))).toHaveLength(0);
   });
 
   it("rotates the request key after editing a failed draft", async () => {

@@ -151,7 +151,9 @@ function buildQueue(mayDispatch: () => boolean = () => true) {
   };
   const repository = {
     transaction: vi.fn((closure: () => unknown) => closure()),
-    createMessageWithAttachments: vi.fn(),
+    createMessageWithAttachments: vi.fn<MessageRepository["createMessageWithAttachments"]>(
+      (_data, _attachmentIds, _event, beforeInsert) => beforeInsert?.()
+    ),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
@@ -1006,7 +1008,9 @@ describe("SessionMessageQueue", () => {
           { name: "shot.png", attachmentId: "up-1", mimeType: "image/png" },
         ]),
       }),
-      ["up-1"]
+      ["up-1"],
+      undefined,
+      undefined
     );
   });
 
@@ -2160,10 +2164,6 @@ describe("SessionMessageQueue", () => {
           email: "user@example.com",
         },
       });
-
-      expect(h.repository.updateParticipantCoalesce.mock.invocationCallOrder[1]).toBeLessThan(
-        h.repository.createMessageWithAttachments.mock.invocationCallOrder[0]
-      );
     });
 
     it("does not enrich a keyed duplicate, even with different incoming SCM metadata", async () => {
@@ -2194,6 +2194,34 @@ describe("SessionMessageQueue", () => {
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
       expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    });
+
+    it("redrives a persisted keyed prompt whose first dispatch never ran", async () => {
+      const h = buildQueue();
+      const content = "Recover me";
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({ request_fingerprint: await fingerprintWebPrompt("part-1", { content }) })
+      );
+      h.repository.getSession.mockReturnValue(createSession({ status: "created" }));
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage({ content }));
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.sessionStatus.transition.mockImplementation(async () => {
+        h.repository.getSession.mockReturnValue(createSession({ status: "active" }));
+        return true;
+      });
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content,
+          authorId: "user-1",
+          source: "web",
+          clientRequestId: "request-1",
+        })
+      ).resolves.toMatchObject({ messageId: "msg-1" });
+
+      expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+      expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     });
 
     it("rejects exhaustion before capacity checks or participant mutations", async () => {

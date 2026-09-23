@@ -124,6 +124,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const submitInFlightRef = useRef(false);
   const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
+  const submittedSessionIdRef = useRef<string | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const targetRequestFields = buildRequestFields();
@@ -255,7 +256,6 @@ export default function Home() {
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
-    retryRequestRef.current = null;
     setModelPreferenceDraft(preference);
     localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, preference.model);
     if (preference.reasoningEffort) {
@@ -294,13 +294,13 @@ export default function Home() {
   );
 
   const handlePromptChange = (value: string) => {
-    if (value !== prompt) retryRequestRef.current = null;
     const wasEmpty = prompt.length === 0;
     setPrompt(value);
     if (
       wasEmpty &&
       value.length > 0 &&
       !pendingSessionId &&
+      !submittedSessionIdRef.current &&
       !isCreatingSession &&
       !loadingEnabledModels &&
       isLaunchable
@@ -310,9 +310,8 @@ export default function Home() {
   };
 
   const handleAddFiles = (files: Iterable<File>) => {
-    retryRequestRef.current = null;
     sessionAttachments.addFiles(files);
-    if (!pendingSessionId && !isCreatingSession && isLaunchable) {
+    if (!pendingSessionId && !submittedSessionIdRef.current && !isCreatingSession && isLaunchable) {
       createSessionForWarming();
     }
   };
@@ -348,7 +347,7 @@ export default function Home() {
     setCreating(true);
     setError("");
 
-    let sessionId = pendingSessionId;
+    let sessionId = submittedSessionIdRef.current ?? pendingSessionId;
     try {
       if (!sessionId) {
         sessionId = await createSessionForWarming();
@@ -359,15 +358,6 @@ export default function Home() {
         return;
       }
 
-      let attachments: SessionAttachmentReference[] | undefined;
-      if (hasAttachments) {
-        try {
-          attachments = await sessionAttachments.uploadAll(sessionId);
-        } catch {
-          return;
-        }
-      }
-
       const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
       const signature = promptRequestSignature({
         sessionId,
@@ -376,8 +366,18 @@ export default function Home() {
         reasoningEffort,
         attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
       });
+      let attachments: SessionAttachmentReference[] | undefined;
+      if (hasAttachments) {
+        try {
+          attachments = await sessionAttachments.uploadAll(sessionId, signature);
+        } catch {
+          return;
+        }
+      }
       const identity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
       retryRequestRef.current = identity;
+      submittedSessionIdRef.current = sessionId;
+      consumeWarmSession(sessionId);
 
       const res = await browserApiFetch(`/api/sessions/${sessionId}/prompt`, {
         method: "POST",
@@ -393,7 +393,7 @@ export default function Home() {
 
       if (res.ok) {
         retryRequestRef.current = null;
-        consumeWarmSession(sessionId);
+        submittedSessionIdRef.current = null;
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
         mutate(isSessionInboxKey);
@@ -433,10 +433,7 @@ export default function Home() {
         error: sessionAttachments.attachmentError,
         isUploading: sessionAttachments.isUploading,
         onAdd: handleAddFiles,
-        onRemove: (id) => {
-          retryRequestRef.current = null;
-          sessionAttachments.removeAttachment(id);
-        },
+        onRemove: sessionAttachments.removeAttachment,
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}

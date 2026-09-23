@@ -298,7 +298,7 @@ export class MessageRepository {
   cancelPendingMessage(messageId: string): boolean {
     return this.transactionSync(() => {
       const result = this.sql.exec(
-        `SELECT status, source, callback_context FROM messages WHERE id = ?`,
+        `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
         messageId
       );
       const message = (
@@ -306,6 +306,7 @@ export class MessageRepository {
           status?: unknown;
           source: string;
           callback_context: string | null;
+          client_request_id: string | null;
         }>
       )[0];
       const status = parseMessageStatus(message?.status);
@@ -318,6 +319,17 @@ export class MessageRepository {
         return false;
       }
 
+      if (message.client_request_id) {
+        const cancelled = this.sql.exec(
+          `UPDATE messages SET status = 'failed', error_message = 'Cancelled before execution', completed_at = ?
+             WHERE id = ? AND status = 'pending' RETURNING id`,
+          Date.now(),
+          messageId
+        );
+        if (cancelled.toArray().length !== 1) return false;
+        this.attachments.releaseForMessage(messageId);
+        return true;
+      }
       this.attachments.releaseForMessage(messageId);
       const deleted = this.sql.exec(
         `DELETE FROM messages WHERE id = ? AND status = 'pending'`,
@@ -367,14 +379,16 @@ export class MessageRepository {
     );
   }
 
-  /** Persist a message, its attachments, and canonical timeline event atomically. */
+  /** Persist a message, its attachments, and optional author update/event atomically. */
   createMessageWithAttachments(
     data: CreateMessageData,
     attachmentIds: string[],
-    event?: CreateEventData
+    event?: CreateEventData,
+    beforeInsert?: () => void
   ): void {
     this.transactionSync(() => {
       this.attachments.claimForMessage(data.id, attachmentIds);
+      beforeInsert?.();
       this.createMessage(data);
       if (event) this.eventRepository.createEvent(event);
     });
@@ -497,8 +511,10 @@ export class MessageRepository {
   getLatestTerminalMessage(): MessageRow | null {
     const result = this.sql.exec(
       `SELECT * FROM messages
-       WHERE status IN ('completed', 'failed')
-       ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
+        WHERE status IN ('completed', 'failed')
+          AND NOT (client_request_id IS NOT NULL AND started_at IS NULL
+                   AND error_message = 'Cancelled before execution')
+        ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
        LIMIT 1`
     );
     const rows = parseMessageRows(result.toArray());

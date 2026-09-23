@@ -475,6 +475,43 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("INSERT INTO messages");
   });
 
+  it("rolls back participant enrichment when the message insert fails", () => {
+    const db = new DatabaseSync(":memory:");
+    const { sql, transactionSync } = createNodeSqlStorage(db);
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      const realRepository = new MessageRepository(
+        sql,
+        transactionSync,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transactionSync)
+      );
+      expect(() =>
+        realRepository.createMessageWithAttachments(
+          {
+            id: "msg-1",
+            authorId: "missing",
+            content: "Hi",
+            source: "web",
+            status: "pending",
+            createdAt: 1,
+          },
+          [],
+          undefined,
+          () => sql.exec("UPDATE participants SET scm_login = 'changed' WHERE id = 'author'")
+        )
+      ).toThrow();
+      expect(sql.exec("SELECT scm_login FROM participants WHERE id = 'author'").one()).toEqual({
+        scm_login: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not create a message when attachments cannot all be claimed", () => {
     mock.setRowsWritten(1);
     expect(() =>
@@ -494,9 +531,10 @@ describe("MessageRepository", () => {
   });
 
   it("atomically releases attachments and cancels a pending web message", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "web", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
+      [{ status: "pending", source: "web", callback_context: null }]
+    );
     mock.setRowsWritten(1);
     expect(repository.cancelPendingMessage("msg-1")).toBe(true);
     expect(transactionSyncCalls).toBe(1);
@@ -504,10 +542,23 @@ describe("MessageRepository", () => {
     expect(mock.calls[2].query).toContain("DELETE FROM messages");
   });
 
+  it("retains a keyed cancellation as a failed message and releases its attachments", () => {
+    mock.setData(
+      `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
+      [{ status: "pending", source: "web", callback_context: null, client_request_id: "key-1" }]
+    );
+    mock.setMatchingData(/UPDATE messages SET status = 'failed'.*RETURNING id/s, [{ id: "msg-1" }]);
+    expect(repository.cancelPendingMessage("msg-1")).toBe(true);
+    expect(mock.calls[1].query).toContain("RETURNING id");
+    expect(mock.calls[2].query).toContain("UPDATE attachments SET message_id = NULL");
+    expect(mock.calls.some(({ query }) => query.startsWith("DELETE FROM messages"))).toBe(false);
+  });
+
   it("rejects cancellation for messages that may need callbacks", () => {
-    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
-      { status: "pending", source: "linear", callback_context: null },
-    ]);
+    mock.setData(
+      `SELECT status, source, callback_context, client_request_id FROM messages WHERE id = ?`,
+      [{ status: "pending", source: "linear", callback_context: null }]
+    );
     expect(repository.cancelPendingMessage("msg-1")).toBe(false);
     expect(mock.calls).toHaveLength(1);
   });
