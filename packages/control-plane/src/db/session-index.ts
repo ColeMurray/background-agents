@@ -33,6 +33,7 @@ import {
 import { bulkInsertStatements } from "./bulk-insert";
 import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
+import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import {
   SessionInboxStore,
   type ListSessionInboxOptions,
@@ -153,11 +154,7 @@ interface SessionModelProviderAuthRow {
 }
 
 /** Filters, pagination, and viewer read state for a session list query. */
-export interface ListSessionsOptions {
-  status?: SessionStatus;
-  excludeStatus?: SessionStatus;
-  excludeAutomationLineage?: boolean;
-  createdByUserIds?: readonly string[];
+export interface ListSessionsOptions extends SessionListFilters {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
@@ -534,43 +531,14 @@ export class SessionIndexStore {
   /** List sessions with optional viewer-specific read state. */
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
     const {
-      status,
-      excludeStatus,
-      excludeAutomationLineage,
-      createdByUserIds,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
     } = options;
+    const { where, params } = buildSessionListPredicates(options);
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (status) {
-      conditions.push("status = ?");
-      params.push(status);
-    }
-
-    if (excludeStatus) {
-      conditions.push("status != ?");
-      params.push(excludeStatus);
-    }
-
-    if (excludeAutomationLineage) {
-      // The "Mine" view excludes sessions no human initiated in the app.
-      // github-bot sessions are attributed to the webhook sender (the verified
-      // actor), but auto reviews and review-request handling are bot-initiated,
-      // so they are lineage-excluded alongside automation runs.
-      conditions.push("automation_id IS NULL AND spawn_source NOT IN ('automation', 'github-bot')");
-    }
-
-    if (createdByUserIds?.length) {
-      conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
-      params.push(...createdByUserIds);
-    }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    // `id DESC` breaks updated_at ties so offset pages never overlap or skip.
+    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`;
     const pageParams = [...params, limit + 1, offset];
     const result = viewerUserId
       ? await this.db
@@ -583,7 +551,7 @@ export class SessionIndexStore {
              LEFT JOIN session_read_states read_state
                ON read_state.session_id = paged_sessions.id
               AND read_state.user_id = viewer.id
-             ORDER BY paged_sessions.updated_at DESC`
+             ORDER BY paged_sessions.updated_at DESC, paged_sessions.id DESC`
           )
           .bind(...pageParams, viewerUserId)
           .all<ViewerSessionRow>()

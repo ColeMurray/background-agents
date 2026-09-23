@@ -213,12 +213,27 @@ describe("SessionSidebar", () => {
     expect(loadMoreRunning).toHaveBeenCalledOnce();
   });
 
-  it("keeps archived sessions accessible", () => {
+  it("routes the archived shortcut to the archived Sessions view", () => {
     render(<SessionSidebar />);
     expect(screen.getByRole("link", { name: /Archived/ })).toHaveAttribute(
       "href",
-      "/settings?tab=data-controls"
+      "/sessions?lifecycle=archived"
     );
+  });
+
+  it("lists Sessions above Automations and gates it on session read permission", () => {
+    const { unmount } = render(<SessionSidebar />);
+    const links = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+    expect(links.indexOf("/sessions")).toBeGreaterThanOrEqual(0);
+    expect(links.indexOf("/sessions")).toBeLessThan(links.indexOf("/automations"));
+    unmount();
+
+    authorization.permissions = new Set(["automations.read"]);
+    render(<SessionSidebar />);
+    expect(screen.queryByRole("link", { name: "Sessions" })).not.toBeInTheDocument();
+    // Every entry point to discovery sits behind the same permission.
+    expect(screen.queryByRole("link", { name: /Archived/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Automations" })).toBeInTheDocument();
   });
 
   it("shows a retry action when one category fails", () => {
