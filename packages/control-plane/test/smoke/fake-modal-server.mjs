@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Shared stand-in for the Modal data plane, for smoke tests and local previews.
  *
@@ -11,6 +12,11 @@
  * control plane calls during one session and the four bridge events that
  * carry a turn, so the smoke can assert a prompt round-trip without a cloud.
  *
+ * It speaks the canonical protocol: the control plane's test typecheck holds
+ * the events it sends to `SandboxEvent` and the commands it handles to
+ * `SandboxCommand`. Modal request bodies have no shared type, so the fields it
+ * acts on are validated on arrival and a drifted request fails loudly.
+ *
  * Reads MODAL_API_SECRET (the same HMAC secret the control plane signs with),
  * PORT, and BRIDGE_REPLY.
  */
@@ -20,6 +26,35 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { WebSocket } from "ws";
 
+/** @import { IncomingMessage, ServerResponse } from "node:http" */
+/** @import { AddressInfo } from "node:net" */
+/** @import { SandboxEvent } from "@open-inspect/shared/types/sandbox-events" */
+/** @import { SandboxCommand } from "../../src/session/types" */
+
+/**
+ * An event as this peer writes it; `send` adds the sandbox envelope.
+ * @typedef {SandboxEvent extends infer Event
+ *   ? Event extends unknown
+ *     ? Omit<Event, "sandboxId" | "timestamp">
+ *     : never
+ *   : never} BridgeEvent
+ */
+
+/**
+ * @typedef {object} FakeModalServerOptions
+ * @property {string} secret The control plane's MODAL_API_SECRET; every call must be signed with it.
+ * @property {number} [port]
+ * @property {string} [host]
+ * @property {string} [reply]
+ * @property {string} [runtimeVersion]
+ * @property {number} [heartbeatMs]
+ * @property {number} [chunkDelayMs]
+ * @property {(event: string, fields?: Record<string, unknown>) => void} [log]
+ */
+
+/** @typedef {Awaited<ReturnType<typeof startFakeModalServer>>} FakeModalServer */
+
+/** @param {FakeModalServerOptions} options */
 export async function startFakeModalServer({
   port = 0,
   host = "127.0.0.1",
@@ -29,14 +64,21 @@ export async function startFakeModalServer({
   heartbeatMs = 5000,
   chunkDelayMs = 100,
   log = () => {},
-} = {}) {
+}) {
   const SECRET = secret;
   const BRIDGE_REPLY = reply;
   let closing = false;
   let holdTurns = false;
+  /** @type {Map<string, { socket: WebSocket; heartbeat: ReturnType<typeof setInterval> | undefined }>} */
   const bridges = new Map();
+  /** @type {Set<ReturnType<typeof setTimeout>>} */
   const timers = new Set();
+  /** @type {Map<WebSocket, { finish: () => void; timer: ReturnType<typeof setTimeout> | null }>} */
   const pendingTurns = new Map();
+  /**
+   * @param {() => void} fn
+   * @param {number} ms
+   */
   const later = (fn, ms) => {
     const timer = setTimeout(() => {
       timers.delete(timer);
@@ -45,6 +87,7 @@ export async function startFakeModalServer({
     timers.add(timer);
     return timer;
   };
+  /** @param {WebSocket} socket */
   const clearTurn = (socket) => {
     const turn = pendingTurns.get(socket);
     if (turn?.timer) {
@@ -62,16 +105,20 @@ export async function startFakeModalServer({
 
   /** What the driver reads back from `/__smoke/state` to assert on. */
   const state = {
+    /** @type {Array<{ sessionId: string; sandboxId: string }>} */
     createRequests: [],
     bridgeConnections: 0,
     generationHandshakes: 0,
+    /** @type {Array<{ messageId: string; content: string }>} */
     promptsReceived: [],
     snapshots: 0,
     rejectedTokens: 0,
     preservations: 0,
     restores: 0,
     stops: 0,
+    /** @type {string[]} */
     unexpectedRequests: [],
+    /** @type {string[]} */
     errors: [],
   };
 
@@ -79,6 +126,7 @@ export async function startFakeModalServer({
    * Verify the control plane's `timestamp.signature` internal token, the
    * MODAL_API_SECRET mechanism `generateInternalToken` produces. Modal itself
    * performs this check, so the smoke proves the secret is wired on both sides.
+   * @param {string | undefined} header
    */
   function isValidInternalToken(header) {
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
@@ -98,14 +146,24 @@ export async function startFakeModalServer({
     return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
   }
 
+  /**
+   * @param {ServerResponse} res
+   * @param {number} status
+   * @param {unknown} body
+   */
   function sendJson(res, status, body) {
     const payload = JSON.stringify(body);
     res.writeHead(status, { "content-type": "application/json" });
     res.end(payload);
   }
 
+  /**
+   * @param {IncomingMessage} req
+   * @returns {Promise<unknown>}
+   */
   function readJsonBody(req) {
     return new Promise((resolve, reject) => {
+      /** @type {Buffer[]} */
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("error", reject);
@@ -120,8 +178,29 @@ export async function startFakeModalServer({
   }
 
   /**
+   * A string the control plane's Modal client puts in a request body. A missing
+   * one means that contract drifted, so the request fails instead of guessing.
+   * @param {unknown} body
+   * @param {...string} path
+   * @returns {string}
+   */
+  function requiredString(body, ...path) {
+    /** @type {unknown} */
+    let value = body;
+    for (const key of path)
+      value =
+        value && typeof value === "object"
+          ? /** @type {Record<string, unknown>} */ (value)[key]
+          : undefined;
+    if (typeof value !== "string" || !value)
+      throw new Error(`request carried no ${path.join(".")}`);
+    return value;
+  }
+
+  /**
    * Play the sandbox for one session: connect, announce ready, answer prompts
    * with a token and an execution_complete, and go away on shutdown.
+   * @param {{ sessionId: string; sandboxId: string; controlPlaneUrl: string; authToken: string }} session
    */
   async function runBridge({ sessionId, sandboxId, controlPlaneUrl, authToken }) {
     const wsUrl = `${controlPlaneUrl.replace(/^http/, "ws")}/sessions/${sessionId}/ws?type=sandbox`;
@@ -131,9 +210,11 @@ export async function startFakeModalServer({
         const socket = new WebSocket(wsUrl, {
           headers: { Authorization: `Bearer ${authToken}`, "X-Sandbox-ID": sandboxId },
         });
-        const bridge = { socket, heartbeat: null };
+        /** @type {{ socket: WebSocket; heartbeat: ReturnType<typeof setInterval> | undefined }} */
+        const bridge = { socket, heartbeat: undefined };
         bridges.set(sandboxId, bridge);
 
+        /** @param {BridgeEvent} event */
         const send = (event) =>
           socket.readyState === WebSocket.OPEN &&
           socket.send(JSON.stringify({ sandboxId, timestamp: Date.now() / 1000, ...event }));
@@ -144,7 +225,7 @@ export async function startFakeModalServer({
           log("bridge.connected", { session_id: sessionId, sandbox_id: sandboxId, attempt });
           send({
             type: "ready",
-            agentSessionId: null,
+            opencodeSessionId: null,
             harness: "opencode",
             runtimeVersion,
             preservationProtocolVersion: 1,
@@ -153,6 +234,7 @@ export async function startFakeModalServer({
         });
 
         socket.on("message", (raw) => {
+          /** @type {SandboxCommand} */
           let command;
           try {
             command = JSON.parse(raw.toString());
@@ -164,19 +246,20 @@ export async function startFakeModalServer({
             log("bridge.generation", { session_id: sessionId, generation: command.generation });
             send({ type: "sandbox_generation_ready", generation: command.generation });
           } else if (command.type === "prompt") {
-            state.promptsReceived.push({ messageId: command.messageId, content: command.content });
-            log("bridge.prompt", { session_id: sessionId, message_id: command.messageId });
+            const { messageId } = command;
+            state.promptsReceived.push({ messageId, content: command.content });
+            log("bridge.prompt", { session_id: sessionId, message_id: messageId });
             clearTurn(socket);
             const split = Math.max(1, Math.floor(BRIDGE_REPLY.length / 2));
             send({
               type: "token",
-              messageId: command.messageId,
+              messageId,
               content: BRIDGE_REPLY.slice(0, split),
             });
             const finish = () => {
               clearTurn(socket);
-              send({ type: "token", messageId: command.messageId, content: BRIDGE_REPLY });
-              send({ type: "execution_complete", messageId: command.messageId, success: true });
+              send({ type: "token", messageId, content: BRIDGE_REPLY });
+              send({ type: "execution_complete", messageId, success: true });
             };
             pendingTurns.set(socket, {
               finish,
@@ -218,30 +301,36 @@ export async function startFakeModalServer({
     if (!closing) state.errors.push("Sandbox bridge could not connect");
   }
 
+  /** @type {Set<Promise<void>>} */
   const tasks = new Set();
-  function connect(options) {
-    const task = runBridge(options).finally(() => tasks.delete(task));
+  /** @param {Parameters<typeof runBridge>[0]} session */
+  function connect(session) {
+    /** @type {Promise<void>} */
+    const task = runBridge(session).finally(() => tasks.delete(task));
     tasks.add(task);
   }
 
+  /** @param {unknown} body */
   async function handleCreateSandbox(body) {
-    const sandboxId = body.sandbox_id ?? `smoke-sandbox-${Date.now()}`;
-    state.createRequests.push({ sessionId: body.session_id, sandboxId });
+    const sessionId = requiredString(body, "session_id");
+    const controlPlaneUrl = requiredString(body, "control_plane_url");
+    const authToken = requiredString(body, "sandbox_auth_token");
+    // The only optional field: the client sends null when it generated no sandbox ID.
+    const sandboxId =
+      /** @type {{ sandbox_id?: unknown }} */ (body).sandbox_id === null
+        ? `smoke-sandbox-${Date.now()}`
+        : requiredString(body, "sandbox_id");
+    state.createRequests.push({ sessionId, sandboxId });
     log("create_sandbox", {
-      session_id: body.session_id,
+      session_id: sessionId,
       sandbox_id: sandboxId,
-      control_plane_url: body.control_plane_url,
+      control_plane_url: controlPlaneUrl,
     });
 
     // Dial back only after the response is on the wire, the way a real sandbox
     // boots after Modal has answered.
     later(() => {
-      connect({
-        sessionId: body.session_id,
-        sandboxId,
-        controlPlaneUrl: body.control_plane_url,
-        authToken: body.sandbox_auth_token,
-      });
+      connect({ sessionId, sandboxId, controlPlaneUrl, authToken });
     }, 0);
 
     return {
@@ -250,6 +339,7 @@ export async function startFakeModalServer({
     };
   }
 
+  /** @type {Record<string, (body: unknown) => unknown>} */
   const ROUTES = {
     "/api-create-sandbox": handleCreateSandbox,
     "/api-snapshot-sandbox": () => {
@@ -258,24 +348,20 @@ export async function startFakeModalServer({
     },
     "/api-restore-sandbox": (body) => {
       state.restores += 1;
-      const sandboxId = body.sandbox_id ?? `smoke-sandbox-${Date.now()}`;
+      const sandboxId = requiredString(body, "sandbox_id");
       // Restore carries the session inside `session_config`, unlike create,
       // which carries it at the root. Reading the wrong one dials
       // `/sessions/undefined/ws`, so fail loudly instead.
-      const sessionId = body.session_config?.session_id;
-      if (!sessionId) throw new Error("restore request carried no session_config.session_id");
+      const sessionId = requiredString(body, "session_config", "session_id");
+      const controlPlaneUrl = requiredString(body, "control_plane_url");
+      const authToken = requiredString(body, "sandbox_auth_token");
       later(() => {
-        connect({
-          sessionId,
-          sandboxId,
-          controlPlaneUrl: body.control_plane_url,
-          authToken: body.sandbox_auth_token,
-        });
+        connect({ sessionId, sandboxId, controlPlaneUrl, authToken });
       }, 0);
       return { success: true, data: { sandbox_id: sandboxId, modal_object_id: `mo-${sandboxId}` } };
     },
     "/api-stop-sandbox": (body) => {
-      const sandboxId = body.sandbox_id?.replace(/^mo-/, "");
+      const sandboxId = requiredString(body, "sandbox_id").replace(/^mo-/, "");
       const bridge = bridges.get(sandboxId);
       if (bridge) {
         clearInterval(bridge.heartbeat);
@@ -289,7 +375,7 @@ export async function startFakeModalServer({
   };
 
   const server = createServer((req, res) => {
-    const path = new URL(req.url, "http://localhost").pathname;
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
 
     if (path === "/__smoke/state" && req.method === "GET") {
       sendJson(res, 200, {
@@ -317,14 +403,18 @@ export async function startFakeModalServer({
     readJsonBody(req)
       .then(async (body) => sendJson(res, 200, await handler(body)))
       .catch((error) => {
-        log("request.failed", { path, error: error.message });
-        sendJson(res, 500, { success: false, error: error.message });
+        const message = error instanceof Error ? error.message : String(error);
+        log("request.failed", { path, error: message });
+        // A request this peer cannot serve is a fixture failure, never a silent 500.
+        state.errors.push(`${path}: ${message}`);
+        sendJson(res, 500, { success: false, error: message });
       });
   });
 
   server.listen(port, host);
   await once(server, "listening");
-  const address = server.address();
+  const address = /** @type {AddressInfo} */ (server.address());
+  /** @type {Promise<void> | undefined} */
   let stopped;
   return {
     origin: `http://${host}:${address.port}`,
