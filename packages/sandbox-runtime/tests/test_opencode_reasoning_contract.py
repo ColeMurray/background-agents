@@ -5,7 +5,9 @@ Only reasoning settings are retained from requests; no real provider keys are us
 
 Fixture: public subset of https://models.opencode.ai/api.json, retrieved 2026-09-09.
 Source SHA-256: a55f5a544d356a15a6491bc3293f2dabb692a381e65cce69fee4741de9636733
-Subset SHA-256: 2c9ff58346fec2db5cc4e1fefc2a6fa752f96570fca06d81bd60a9e93260955f
+GPT-6 Sol and Luna added from the 2026-09-22 retrieval.
+Source SHA-256: c9d3dc07540cf91a7b7362a3b42943132965f4ee6e8374113ee4f0f7b56b3d90
+Subset SHA-256: dbcc50ffcbcf2ff58eeed750f2a2e2e06250d802335ff55a0031b5da4f20178f
 Reconcile this frozen fixture with shared model/effort definitions when changing
 models or the binary. Mocks verify serialization, not live provider acceptance.
 """
