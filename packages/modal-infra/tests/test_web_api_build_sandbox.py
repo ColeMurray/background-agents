@@ -108,9 +108,7 @@ async def test_vm_capture_failure_never_retires_or_records_a_receipt(
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
     manager = SimpleNamespace(
         get_sandbox_by_id=AsyncMock(
-            return_value=SimpleNamespace(
-                sandbox_backend="modal-vm", modal_object_id="sb-immutable"
-            )
+            return_value=SimpleNamespace(sandbox_backend="modal-vm", modal_object_id="sb-immutable")
         ),
         take_snapshot=AsyncMock(side_effect=RuntimeError("capture failed")),
         stop_sandbox=AsyncMock(),
