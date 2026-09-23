@@ -179,12 +179,12 @@ exists, and otherwise from the catalog compiled into the pinned OpenCode binary.
 newer catalog in the background, but only the next OpenCode process reads it. Without a file on
 disk, a fresh sandbox would never know about a model published after the pinned OpenCode release.
 
-The build downloads the published catalog (`https://models.opencode.ai/api.json`) into that file, so
-every session started from the image resolves models as of the build, and the runtime adds no
-request to session boots. The download is staged next to the file and loaded by the image's own
-OpenCode (`opencode models`) before it replaces the file, so a catalog that OpenCode cannot load
-never reaches a session. The step is best-effort: on any failure the build continues and sessions
-use whatever catalog the base image carries.
+The build runs the image's own `opencode models --refresh`, which downloads the published catalog
+and loads it, so every session started from the image resolves models as of the build, and the
+runtime adds no request to session boots. The refresh runs against a throwaway cache, and its file
+replaces the real one only when OpenCode exits successfully after writing it, so a catalog that
+OpenCode cannot load never reaches a session. The step is best-effort: on any failure the build
+continues and sessions use whatever catalog the base image carries.
 
 The build skips the step when OpenCode would not read the downloaded default catalog, following
 OpenCode's own reading of each variable: `OPENCODE_MODELS_PATH` is set (even to an empty value),

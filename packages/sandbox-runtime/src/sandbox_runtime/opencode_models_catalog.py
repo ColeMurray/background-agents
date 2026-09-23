@@ -8,38 +8,32 @@ the pinned release unless a newer file is already on disk. Image builds write
 that file, and every sandbox started from the image resolves models as of the
 build.
 
-The installed OpenCode is the only judge of whether a catalog is usable: the
-downloaded bytes are staged next to the cache file, loaded by ``opencode
-models``, and only then renamed into place. The refresh is best-effort: any
-failure leaves the existing file (or its absence) untouched, which is exactly
-what OpenCode would have used anyway.
+``opencode models --refresh`` downloads the catalog, writes it and loads it with
+the installed OpenCode. It runs against a throwaway cache first, because it
+reports success when the download fails and writes a catalog before finding it
+cannot load it: only an exit 0 that produced a file replaces the real one. The
+refresh is best-effort: any failure leaves the existing file (or its absence)
+untouched, which is exactly what OpenCode would have used anyway.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import os
 import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
-
 from .log_config import configure_logging, get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-OPENCODE_MODELS_URL: Final = "https://models.opencode.ai/api.json"
-FETCH_TIMEOUT_SECONDS: Final = 30.0
-FETCH_CONNECT_RETRIES: Final = 2
-VERIFY_TIMEOUT_SECONDS: Final = 60.0
-_VERIFY_STDERR_TAIL_CHARS: Final = 500
-#: The mode OpenCode's own catalog writes produce; ``mkstemp`` creates owner-only files.
+REFRESH_TIMEOUT_SECONDS: Final = 60.0
+#: The mode OpenCode's own catalog writes produce.
 CATALOG_FILE_MODE: Final = 0o644
+_STDERR_TAIL_CHARS: Final = 500
 
 
 def resolve_opencode_models_cache_path() -> Path:
@@ -56,6 +50,7 @@ def catalog_override(environ: Mapping[str, str]) -> str | None:
     ``OPENCODE_MODELS_PATH`` (even empty) replaces the cache file, an empty
     ``OPENCODE_MODELS_URL`` means the default source, and
     ``OPENCODE_DISABLE_MODELS_FETCH`` is on only for ``true`` or ``1``.
+    ``--refresh`` downloads regardless of that last flag, so it is checked here.
     """
     if "OPENCODE_MODELS_PATH" in environ:
         return "OPENCODE_MODELS_PATH"
@@ -68,19 +63,11 @@ def catalog_override(environ: Mapping[str, str]) -> str | None:
 
 class OpenCodeModelsCatalog:
     def __init__(
-        self,
-        log: Any,
-        *,
-        url: str = OPENCODE_MODELS_URL,
-        path: Path | None = None,
-        opencode_command: str = "opencode",
-        transport: httpx.AsyncBaseTransport | None = None,
+        self, log: Any, *, path: Path | None = None, opencode_command: str = "opencode"
     ) -> None:
         self.log = log
-        self.url = url
         self.path = path
         self.opencode_command = opencode_command
-        self._transport = transport
 
     async def refresh(self) -> bool:
         """Replace the cached catalog with the published one. Only cancellation escapes."""
@@ -90,80 +77,61 @@ class OpenCodeModelsCatalog:
             return False
 
         path = self.path or resolve_opencode_models_cache_path()
-        staged: Path | None = None
         try:
-            async with asyncio.timeout(FETCH_TIMEOUT_SECONDS):
-                content = await self._fetch()
             path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor, staged_name = tempfile.mkstemp(
-                dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-            )
-            staged = Path(staged_name)
-            os.fchmod(descriptor, CATALOG_FILE_MODE)
-            with os.fdopen(descriptor, "wb") as staged_file:
-                staged_file.write(content)
-            await self._verify(staged)
-            staged.replace(path)
+            # Inside the destination directory, so the rename below stays on one
+            # filesystem and never exposes a partial file.
+            with tempfile.TemporaryDirectory(
+                dir=path.parent, prefix=".opencode-catalog-", ignore_cleanup_errors=True
+            ) as scratch:
+                downloaded = await self._download(Path(scratch))
+                size_bytes = downloaded.stat().st_size
+                downloaded.chmod(CATALOG_FILE_MODE)
+                downloaded.replace(path)
         except Exception as error:
-            if staged is not None:
-                with contextlib.suppress(OSError):
-                    staged.unlink(missing_ok=True)
-            self.log.warn("opencode_models.refresh_failed", url=self.url, exc=error)
+            self.log.warn("opencode_models.refresh_failed", exc=error)
             return False
-        self.log.info("opencode_models.refreshed", path=str(path), size_bytes=len(content))
+        self.log.info("opencode_models.refreshed", path=str(path), size_bytes=size_bytes)
         return True
 
-    async def _fetch(self) -> bytes:
-        transport = self._transport or httpx.AsyncHTTPTransport(retries=FETCH_CONNECT_RETRIES)
-        async with httpx.AsyncClient(
-            transport=transport, timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=True
-        ) as client:
-            response = await client.get(self.url)
-            response.raise_for_status()
-        # OpenCode treats an unparseable catalog as absent rather than failing,
-        # so the load check cannot catch one.
-        if not isinstance(json.loads(response.content), dict):
-            raise ValueError("catalog is not a JSON object")
-        return response.content
-
-    async def _verify(self, staged: Path) -> None:
-        """Load the staged catalog with the installed OpenCode, in a throwaway home."""
-        with tempfile.TemporaryDirectory(prefix="opencode-catalog-") as scratch:
-            environment = {
-                key: value for key, value in os.environ.items() if not key.startswith("OPENCODE_")
+    async def _download(self, scratch: Path) -> Path:
+        """Run ``opencode models --refresh`` with a throwaway home; return the catalog it wrote."""
+        environment = {
+            key: value for key, value in os.environ.items() if not key.startswith("OPENCODE_")
+        }
+        environment.update(
+            {
+                "HOME": str(scratch),
+                "XDG_CONFIG_HOME": str(scratch / "config"),
+                "XDG_DATA_HOME": str(scratch / "data"),
+                "XDG_STATE_HOME": str(scratch / "state"),
+                "XDG_CACHE_HOME": str(scratch / "cache"),
             }
-            environment.update(
-                {
-                    "HOME": scratch,
-                    "XDG_CONFIG_HOME": f"{scratch}/config",
-                    "XDG_DATA_HOME": f"{scratch}/data",
-                    "XDG_STATE_HOME": f"{scratch}/state",
-                    "XDG_CACHE_HOME": f"{scratch}/cache",
-                    "OPENCODE_MODELS_PATH": str(staged),
-                    "OPENCODE_DISABLE_MODELS_FETCH": "1",
-                }
-            )
-            process = await asyncio.create_subprocess_exec(
-                self.opencode_command,
-                "models",
-                cwd=scratch,
-                env=environment,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                async with asyncio.timeout(VERIFY_TIMEOUT_SECONDS):
-                    _stdout, stderr = await process.communicate()
-            finally:
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
+        )
+        process = await asyncio.create_subprocess_exec(
+            self.opencode_command,
+            "models",
+            "--refresh",
+            cwd=scratch,
+            env=environment,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            async with asyncio.timeout(REFRESH_TIMEOUT_SECONDS):
+                _stdout, stderr = await process.communicate()
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
         if process.returncode != 0:
-            detail = stderr.decode(errors="replace").strip()[-_VERIFY_STDERR_TAIL_CHARS:]
-            raise RuntimeError(
-                f"opencode could not load the catalog (exit {process.returncode}): {detail}"
-            )
+            detail = stderr.decode(errors="replace").strip()[-_STDERR_TAIL_CHARS:]
+            raise RuntimeError(f"opencode models --refresh exited {process.returncode}: {detail}")
+        downloaded = scratch / "cache" / "opencode" / "models.json"
+        if not downloaded.is_file():
+            raise RuntimeError("opencode models --refresh did not download a catalog")
+        return downloaded
 
 
 def main() -> int:

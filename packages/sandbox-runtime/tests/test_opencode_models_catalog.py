@@ -4,35 +4,39 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 from sandbox_runtime import opencode_models_catalog
 from sandbox_runtime.opencode_models_catalog import (
-    OPENCODE_MODELS_URL,
     OpenCodeModelsCatalog,
     catalog_override,
     resolve_opencode_models_cache_path,
 )
 
-CATALOG = {"openai": {"id": "openai", "models": {"gpt-6-sol": {"id": "gpt-6-sol"}}}}
-REJECTED = {"reject": {"id": "reject", "models": {}}}
+CATALOG = '{"openai": {"id": "openai", "models": {}}}'
 OVERRIDE_ENV_VARS = (
     "OPENCODE_MODELS_PATH",
     "OPENCODE_MODELS_URL",
     "OPENCODE_DISABLE_MODELS_FETCH",
 )
 
-# Stands in for the pinned binary: records how it was run and refuses any
-# catalog carrying a "reject" provider, as OpenCode refuses one it cannot load.
+# Stands in for `opencode models --refresh`, including its two quirks: an
+# unreachable source still exits 0 without writing, and a catalog it cannot
+# load is written before it exits 1.
 FAKE_OPENCODE = """\
 import json, os, sys, time
-catalog = json.load(open(os.environ["OPENCODE_MODELS_PATH"]))
 with open(os.environ["FAKE_OPENCODE_RECORD"], "w") as record:
     json.dump({"argv": sys.argv[1:], "env": dict(os.environ), "cwd": os.getcwd()}, record)
-if "hang" in catalog:
+behavior = os.environ["FAKE_OPENCODE_BEHAVIOR"]
+if behavior == "hang":
     time.sleep(30)
-if "reject" in catalog:
+cache = os.path.join(os.environ["XDG_CACHE_HOME"], "opencode")
+os.makedirs(cache, exist_ok=True)
+if behavior != "unreachable":
+    with open(os.path.join(cache, "models.json"), "w") as catalog:
+        catalog.write(os.environ["FAKE_OPENCODE_CATALOG"])
+print("Models cache refreshed", file=sys.stderr)
+if behavior == "unloadable":
     print("Error: Unexpected error", file=sys.stderr)
     sys.exit(1)
 """
@@ -42,160 +46,98 @@ if "reject" in catalog:
 def default_catalog_environment(monkeypatch):
     for name in OVERRIDE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("FAKE_OPENCODE_CATALOG", CATALOG)
+    monkeypatch.setenv("FAKE_OPENCODE_BEHAVIOR", "refresh")
 
 
 @pytest.fixture
-def fake_opencode(tmp_path, monkeypatch):
+def opencode_run(tmp_path, monkeypatch):
+    """Path of the record the fake ``opencode`` writes about how it was run."""
+    record = tmp_path / "opencode-run.json"
+    monkeypatch.setenv("FAKE_OPENCODE_RECORD", str(record))
+    return record
+
+
+@pytest.fixture
+def catalog(tmp_path, opencode_run):
     command = tmp_path / "bin" / "opencode"
     command.parent.mkdir()
     command.write_text(f"#!{sys.executable}\n{FAKE_OPENCODE}")
     command.chmod(0o755)
-    record = tmp_path / "opencode-run.json"
-    monkeypatch.setenv("FAKE_OPENCODE_RECORD", str(record))
-    return command, record
+    path = tmp_path / "cache" / "opencode" / "models.json"
+    path.parent.mkdir(parents=True)
+    return OpenCodeModelsCatalog(MagicMock(), path=path, opencode_command=str(command))
 
 
-def _catalog(path, body, fake_opencode):
-    command, _record = fake_opencode
-    requests = []
-
-    def respond(request):
-        requests.append(request)
-        return body(request) if callable(body) else body
-
-    log = MagicMock()
-    catalog = OpenCodeModelsCatalog(
-        log, path=path, opencode_command=str(command), transport=httpx.MockTransport(respond)
-    )
-    return catalog, log, requests
-
-
-def _cache_dir(tmp_path):
-    directory = tmp_path / "cache" / "opencode"
-    directory.mkdir(parents=True)
-    return directory
-
-
-async def test_refresh_installs_a_catalog_opencode_loads(tmp_path, fake_opencode):
-    path = _cache_dir(tmp_path) / "models.json"
-    body = json.dumps(CATALOG).encode()
-    catalog, log, requests = _catalog(path, httpx.Response(200, content=body), fake_opencode)
-
+async def test_refresh_installs_the_catalog_opencode_downloaded(catalog, opencode_run):
     assert await catalog.refresh() is True
 
-    assert [str(request.url) for request in requests] == [OPENCODE_MODELS_URL]
-    assert path.read_bytes() == body
-    assert path.stat().st_mode & 0o777 == 0o644
-    assert list(path.parent.iterdir()) == [path]
-    log.info.assert_called_once_with(
-        "opencode_models.refreshed", path=str(path), size_bytes=len(body)
+    run = json.loads(opencode_run.read_text())
+    assert run["argv"] == ["models", "--refresh"]
+    assert catalog.path.read_text() == CATALOG
+    assert catalog.path.stat().st_mode & 0o777 == 0o644
+    assert list(catalog.path.parent.iterdir()) == [catalog.path]
+    catalog.log.info.assert_called_once_with(
+        "opencode_models.refreshed", path=str(catalog.path), size_bytes=len(CATALOG)
     )
 
 
-async def test_opencode_loads_the_staged_bytes_in_an_isolated_home(
-    tmp_path, fake_opencode, monkeypatch
-):
-    path = _cache_dir(tmp_path) / "models.json"
+async def test_refresh_runs_opencode_in_a_throwaway_home(catalog, opencode_run, monkeypatch):
     monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", '{"model": "configured/model"}')
-    catalog, _log, _requests = _catalog(path, httpx.Response(200, json=CATALOG), fake_opencode)
 
     assert await catalog.refresh() is True
 
-    run = json.loads(fake_opencode[1].read_text())
-    staged = Path(run["env"]["OPENCODE_MODELS_PATH"])
-    assert run["argv"] == ["models"]
-    assert staged.parent == path.parent and staged != path
-    assert run["env"]["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
-    assert "OPENCODE_CONFIG_CONTENT" not in run["env"]
+    run = json.loads(opencode_run.read_text())
     scratch = Path(run["cwd"]).resolve()
-    assert Path(run["env"]["HOME"]).resolve() == scratch != Path.home().resolve()
+    assert scratch.parent == catalog.path.parent.resolve()
+    assert Path(run["env"]["HOME"]).resolve() == scratch
+    assert Path(run["env"]["XDG_CACHE_HOME"]).resolve() == scratch / "cache"
+    assert not any(name.startswith("OPENCODE_") for name in run["env"])
     assert not scratch.exists()
 
 
-@pytest.mark.parametrize(
-    "response",
-    [
-        httpx.Response(503, json=CATALOG),
-        httpx.Response(200, text="<html>maintenance</html>"),
-        httpx.Response(200, json=[CATALOG]),
-        httpx.Response(200, json=REJECTED),
-    ],
-    ids=["http-error", "not-json", "not-an-object", "opencode-cannot-load"],
-)
-async def test_failed_refresh_keeps_the_existing_catalog(tmp_path, fake_opencode, response):
-    path = _cache_dir(tmp_path) / "models.json"
-    path.write_text("previous")
-    catalog, log, _requests = _catalog(path, response, fake_opencode)
+@pytest.mark.parametrize("behavior", ["unreachable", "unloadable"])
+async def test_failed_refresh_keeps_the_existing_catalog(catalog, monkeypatch, behavior):
+    catalog.path.write_text("previous")
+    monkeypatch.setenv("FAKE_OPENCODE_BEHAVIOR", behavior)
 
     assert await catalog.refresh() is False
 
-    assert path.read_text() == "previous"
-    assert list(path.parent.iterdir()) == [path]
-    assert log.warn.call_args.args == ("opencode_models.refresh_failed",)
+    assert catalog.path.read_text() == "previous"
+    assert list(catalog.path.parent.iterdir()) == [catalog.path]
+    assert catalog.log.warn.call_args.args == ("opencode_models.refresh_failed",)
 
 
-async def test_opencode_rejection_is_logged_with_its_error(tmp_path, fake_opencode):
-    path = _cache_dir(tmp_path) / "models.json"
-    catalog, log, _requests = _catalog(path, httpx.Response(200, json=REJECTED), fake_opencode)
-
-    assert await catalog.refresh() is False
-
-    error = log.warn.call_args.kwargs["exc"]
-    assert "exit 1" in str(error) and "Unexpected error" in str(error)
-    assert not path.exists()
-
-
-async def test_opencode_that_never_finishes_is_killed(tmp_path, fake_opencode, monkeypatch):
-    monkeypatch.setattr(opencode_models_catalog, "VERIFY_TIMEOUT_SECONDS", 0.5)
-    path = _cache_dir(tmp_path) / "models.json"
-    catalog, log, _requests = _catalog(
-        path, httpx.Response(200, json={**CATALOG, "hang": {"models": {}}}), fake_opencode
-    )
+async def test_unloadable_catalog_is_logged_with_opencodes_error(catalog, monkeypatch):
+    monkeypatch.setenv("FAKE_OPENCODE_BEHAVIOR", "unloadable")
 
     assert await catalog.refresh() is False
 
-    assert isinstance(log.warn.call_args.kwargs["exc"], TimeoutError)
-    assert list(path.parent.iterdir()) == []
+    error = str(catalog.log.warn.call_args.kwargs["exc"])
+    assert "exited 1" in error and "Unexpected error" in error
+    assert not catalog.path.exists()
 
 
-async def test_missing_opencode_is_not_fatal(tmp_path, fake_opencode):
-    path = _cache_dir(tmp_path) / "models.json"
-    catalog, _log, _requests = _catalog(path, httpx.Response(200, json=CATALOG), fake_opencode)
+async def test_opencode_that_never_finishes_is_killed(catalog, monkeypatch):
+    monkeypatch.setattr(opencode_models_catalog, "REFRESH_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setenv("FAKE_OPENCODE_BEHAVIOR", "hang")
+
+    assert await catalog.refresh() is False
+
+    assert isinstance(catalog.log.warn.call_args.kwargs["exc"], TimeoutError)
+    assert list(catalog.path.parent.iterdir()) == []
+
+
+async def test_missing_opencode_is_not_fatal(catalog, tmp_path):
     catalog.opencode_command = str(tmp_path / "missing" / "opencode")
 
     assert await catalog.refresh() is False
-    assert list(path.parent.iterdir()) == []
+    assert list(catalog.path.parent.iterdir()) == []
 
 
-async def test_unreachable_catalog_is_not_fatal(tmp_path, fake_opencode):
-    path = _cache_dir(tmp_path) / "models.json"
-
-    def unreachable(request):
-        raise httpx.ConnectError("unreachable", request=request)
-
-    catalog, _log, _requests = _catalog(path, unreachable, fake_opencode)
-
-    assert await catalog.refresh() is False
-    assert not path.exists()
-
-
-async def test_failed_cleanup_does_not_escape(tmp_path, fake_opencode, monkeypatch):
-    path = _cache_dir(tmp_path) / "models.json"
-    catalog, log, _requests = _catalog(path, httpx.Response(200, json=REJECTED), fake_opencode)
-
-    def refuse_unlink(self, missing_ok=False):
-        raise PermissionError(13, "Permission denied", str(self))
-
-    monkeypatch.setattr(Path, "unlink", refuse_unlink)
-
-    assert await catalog.refresh() is False
-    assert log.warn.call_args.args == ("opencode_models.refresh_failed",)
-
-
-async def test_unwritable_cache_directory_is_not_fatal(tmp_path, fake_opencode):
-    path = tmp_path / "models.json" / "models.json"
-    (tmp_path / "models.json").write_text("a file where the directory should be")
-    catalog, _log, _requests = _catalog(path, httpx.Response(200, json=CATALOG), fake_opencode)
+async def test_unwritable_cache_directory_is_not_fatal(catalog, tmp_path):
+    (tmp_path / "blocked").write_text("a file where the directory should be")
+    catalog.path = tmp_path / "blocked" / "opencode" / "models.json"
 
     assert await catalog.refresh() is False
 
@@ -219,16 +161,14 @@ def test_catalog_override_follows_opencode_flag_rules(name, value, override):
     assert catalog_override({name: value}) == (name if override else None)
 
 
-async def test_operator_catalog_override_skips_the_refresh(tmp_path, fake_opencode, monkeypatch):
+async def test_operator_catalog_override_skips_the_refresh(catalog, opencode_run, monkeypatch):
     monkeypatch.setenv("OPENCODE_DISABLE_MODELS_FETCH", "1")
-    path = tmp_path / "models.json"
-    catalog, log, requests = _catalog(path, httpx.Response(200, json=CATALOG), fake_opencode)
 
     assert await catalog.refresh() is False
 
-    assert requests == []
-    assert not path.exists()
-    log.info.assert_called_once_with(
+    assert not opencode_run.exists()
+    assert not catalog.path.exists()
+    catalog.log.info.assert_called_once_with(
         "opencode_models.refresh_skipped", reason="OPENCODE_DISABLE_MODELS_FETCH"
     )
 
@@ -247,34 +187,16 @@ def test_cache_path_defaults_to_home_cache(tmp_path, monkeypatch):
 
 
 BINARY = os.environ.get("OPENCODE_TEST_BINARY")
-FROZEN_CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
 
 
-@pytest.mark.skipif(not BINARY, reason="set OPENCODE_TEST_BINARY to load catalogs with OpenCode")
-@pytest.mark.parametrize(
-    ("catalog_document", "installed"),
-    [
-        (json.loads(FROZEN_CATALOG.read_text()), True),
-        (CATALOG, False),
-        ({"error": {"models": {}}}, False),
-    ],
-    ids=["published-catalog", "models-missing-required-fields", "error-envelope"],
+@pytest.mark.skipif(
+    not BINARY, reason="set OPENCODE_TEST_BINARY to refresh with a real OpenCode (uses the network)"
 )
-async def test_pinned_opencode_decides_what_is_installed(tmp_path, catalog_document, installed):
-    path = _cache_dir(tmp_path) / "models.json"
-    path.write_text("previous")
-    catalog = OpenCodeModelsCatalog(
-        MagicMock(),
-        path=path,
-        opencode_command=BINARY,
-        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=catalog_document)),
-    )
+async def test_pinned_opencode_refreshes_the_published_catalog(tmp_path):
+    path = tmp_path / "cache" / "opencode" / "models.json"
+    catalog = OpenCodeModelsCatalog(MagicMock(), path=path, opencode_command=BINARY)
 
-    assert await catalog.refresh() is installed
+    assert await catalog.refresh() is True
 
-    assert (
-        (json.loads(path.read_text()) == catalog_document)
-        if installed
-        else (path.read_text() == "previous")
-    )
+    assert "models" in json.loads(path.read_text())["openai"]
     assert list(path.parent.iterdir()) == [path]

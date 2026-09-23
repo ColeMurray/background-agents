@@ -68,12 +68,13 @@ For manual deployment, use the returned reference in the provider's existing con
 assume building alone redirects sessions. Roll back using a previous known-good configuration and
 retained artifact. Do not delete artifacts still referenced by sessions or prepared images.
 
-The `filesystem` phase also downloads OpenCode's published model catalog into the runtime user's
-`~/.cache/opencode/models.json`, so sessions without a prepared image still see models newer than
-the pinned OpenCode release. The installed OpenCode must load the download before it replaces the
-file. The download is best-effort data, not a dependency: a failure leaves any existing catalog
-untouched, and OpenCode falls back to its compiled-in catalog only when there is none. Prepared
-repository and environment images refresh the file on every build.
+The `filesystem` phase also runs the installed `opencode models --refresh` to write OpenCode's
+published model catalog into the runtime user's `~/.cache/opencode/models.json`, so sessions without
+a prepared image still see models newer than the pinned OpenCode release. The refresh runs against a
+throwaway cache and replaces the file only when OpenCode loads what it downloaded. The download is
+best-effort data, not a dependency: a failure leaves any existing catalog untouched, and OpenCode
+falls back to its compiled-in catalog only when there is none. Prepared repository and environment
+images refresh the file on every build.
 
 **Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
 existing repository/environment image-build workflow to rebuild them after dependency-only updates
