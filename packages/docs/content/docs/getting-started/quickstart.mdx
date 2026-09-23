@@ -72,7 +72,14 @@ The same menu has an Agent row that selects the harness:
 
 The model list is filtered to what the chosen harness can run. The harness is fixed when the session is created.
 
-When the selected model belongs to OpenAI, xAI, or Anthropic and the deployment has a provider account configured, a provider authentication menu appears beside the skill selector. "Use default" follows the deployment's policy; you can also pick a specific connected account or "No account" to use the API key. The composer remembers your last model, effort, harness, and provider choices in this browser.
+The composer remembers your last model, effort, harness, and provider choices in this browser.
+
+<Callout type="info" title="If your deployment has connected provider accounts">
+  When the selected model belongs to OpenAI, xAI, or Anthropic and the deployment has a provider
+  account configured, a provider authentication menu appears beside the skill selector. "Use
+  default" follows the deployment's policy; you can also pick a specific connected account or "No
+  account" to use the API key.
+</Callout>
 
 </Step>
 
@@ -101,7 +108,7 @@ Click the paperclip ("Attach images"), paste, or drag files onto the composer. A
 <Step>
 ### Send a bounded first request
 
-A good first prompt names one outcome, the place in the code it concerns, and how the agent should verify the result. Keep the scope small enough to review in a few minutes.
+A good first prompt names one outcome, the place in the code it concerns, and how the agent should verify the result. Keep the scope small enough to review in a few minutes. [Good vs. bad prompts](/prompting/good-vs-bad-prompts) shows the difference for eight common task types.
 
 ```text
 In packages/web, the "Copy link" button on the session header does not show any confirmation after copying. Add a brief "Copied" state on the button for two seconds after a successful copy, matching how the branch-name copy button in the sidebar behaves. Add or update the component test, run the web test suite for the files you touched, and report the command you ran and its result. Do not open a pull request yet.
@@ -116,11 +123,12 @@ Send with the send button or Cmd/Ctrl+Enter. Typing in the composer already star
 
 The session header names each boot phase as it runs:
 
-1. **Cloning repository** (all repositories in a multi-repository session)
-2. **Running setup.sh** (`.openinspect/setup.sh`, if the repository has one; skipped when starting from a prebuilt image)
-3. **Starting services** (`.openinspect/start.sh`, if present)
-4. **Installing skills**
-5. **Starting agent**
+1. **Starting runtime**
+2. **Cloning repository** (all repositories in a multi-repository session)
+3. **Running setup.sh** (`.openinspect/setup.sh`, if the repository has one; skipped when starting from a prebuilt image)
+4. **Starting services** (`.openinspect/start.sh`, if present)
+5. **Installing skills**
+6. **Starting agent**
 
 Multi-repository sessions add the repository name, as in "Running setup.sh for acme/api". A `setup.sh` failure is reported as a warning and the boot continues; the status popover says which phase failed.
 
@@ -144,14 +152,14 @@ If the result is not what you wanted, send a follow-up in the same session. The 
 
 ## Troubleshooting
 
-| Symptom                                                                 | Cause                                                                                  | Fix                                                                                                               |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.   | Ask an administrator to add you (GitHub user, email, domain, or organization), then sign in again.                |
-| "You don't have permission to create sessions."                         | Your role is Viewer.                                                                   | Ask an Owner or Administrator to change your role under Settings › Workspace access.                              |
-| "No repositories found."                                                | The GitHub App is not installed on any repository.                                     | Start without a repository, or ask an administrator to install the App on the repositories you need.              |
-| Send button disabled with "Select at least one repository"              | **Multiple repositories** is selected but the set is empty.                            | Choose at least one repository, or switch to a single repository or **No repository**.                            |
-| Model menu is empty or the send fails with a model availability message | No enabled model can run on the selected harness.                                      | Switch the harness to OpenCode, or ask an administrator to enable a model under Settings › Models.                |
-| Boot stops with a failed phase                                          | `start.sh` in the primary repository exited non-zero, or the boot exceeded its budget. | Read the header's status popover for the phase, fix the script, and send the prompt again to start a new sandbox. |
+| Symptom                                                                 | Cause                                                                                  | Fix                                                                                                                  |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.   | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again. |
+| "You don't have permission to create sessions."                         | Your role is Viewer.                                                                   | Ask a workspace Owner or Administrator to change your role under Settings › Workspace access.                        |
+| "No repositories found."                                                | The GitHub App is not installed on any repository.                                     | Start without a repository, or ask the operator to install the App on the repositories you need.                     |
+| Send button disabled with "Select at least one repository"              | **Multiple repositories** is selected but the set is empty.                            | Choose at least one repository, or switch to a single repository or **No repository**.                               |
+| Model menu is empty or the send fails with a model availability message | No enabled model can run on the selected harness.                                      | Switch the harness to OpenCode, or ask a workspace Owner or Administrator to enable a model under Settings › Models. |
+| Boot stops with a failed phase                                          | `start.sh` in the primary repository exited non-zero, or the boot exceeded its budget. | Read the header's status popover for the phase, fix the script, and send the prompt again to start a new sandbox.    |
 
 ## Next steps
 

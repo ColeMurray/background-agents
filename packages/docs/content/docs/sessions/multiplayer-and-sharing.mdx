@@ -6,6 +6,7 @@ owner: control-plane
 status: published
 lastReviewed: "2026-09-23"
 relatedCode:
+  - packages/web/src/app/(app)/(sidebar)/sessions/page.tsx
   - docs/AUTH.md
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/rbac.ts
@@ -72,6 +73,13 @@ Do not paste data into a prompt that other members of the workspace must not see
 Lifecycle actions (stop, rename, archive, unarchive, remove a queued prompt, retry the diff) need `sessions.lifecycle`. Prompting needs `sessions.collaborate`. Both are part of the Member role, so in practice every non-Viewer can do all of these in any session.
 
 Role changes and suspensions take effect on the next request. A browser that already has the session open is rechecked at least every five minutes, so someone whose access was removed can keep a live connection for up to five minutes.
+
+## Troubleshooting
+
+| Symptom                                                                                   | Cause                                                                                                                                                 | Fix                                                                                                       |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The Sessions page says "You do not have permission to view sessions."                     | Your account holds no role that can read sessions. Every built-in role, Viewer included, can, so your workspace access has been removed or suspended. | Ask a workspace Owner or Administrator to check your account under Settings › Workspace access.           |
+| A person whose access was removed or suspended still sees live updates in an open session | Live connections are rechecked at least every five minutes, not on every event.                                                                       | Wait up to five minutes; the connection closes on the next recheck. New requests are refused immediately. |
 
 ## Next steps
 

@@ -13,6 +13,7 @@ relatedCode:
   - packages/shared/src/types/image-builds.ts
   - packages/shared/src/types/artifacts.ts
   - packages/web/src/components/session-header.tsx
+  - packages/web/src/lib/session-socket/boot-phase.ts
   - docs/AUTOMATIONS.md
   - docs/IMAGE_PREBUILD.md
   - docs/HOW_IT_WORKS.md
@@ -112,16 +113,16 @@ Use Sync PR status in the sidebar to refresh these from the provider.
 
 ## Boot phases
 
-The session header names the phase while a sandbox boots. Multi-repository sessions add the repository, for example "Running setup.sh for acme/api".
+While a sandbox boots, the session header shows the phase's short label, and the sandbox status popover shows a longer detail line. Multi-repository sessions add the repository to the detail, for example "Running setup.sh for acme/api".
 
-| Runtime phase | Header while running                               | Header when done          |
-| ------------- | -------------------------------------------------- | ------------------------- |
-| `starting`    | The sandbox runtime is up and the boot is starting | The sandbox runtime is up |
-| `sync`        | Cloning repository                                 | Cloned the repository     |
-| `setup`       | Running setup.sh                                   | Finished setup.sh         |
-| `start`       | Running start.sh                                   | Finished start.sh         |
-| `skills`      | Installing skills                                  | Installed skills          |
-| `harness`     | Starting agent                                     | Started the agent         |
+| Runtime phase | Label (header, while running) | Detail while running                               | Detail when done          |
+| ------------- | ----------------------------- | -------------------------------------------------- | ------------------------- |
+| `starting`    | Starting runtime              | The sandbox runtime is up and the boot is starting | The sandbox runtime is up |
+| `sync`        | Cloning repository            | Cloning the repository                             | Cloned the repository     |
+| `setup`       | Running setup.sh              | Running setup.sh                                   | Finished setup.sh         |
+| `start`       | Starting services             | Running start.sh                                   | Finished start.sh         |
+| `skills`      | Installing skills             | Installing skills                                  | Installed skills          |
+| `harness`     | Starting agent                | Starting the agent                                 | Started the agent         |
 
 A phase that exited with an error but let the boot continue shows "This step exited with an error and the boot continued." Snapshot restores and prebuilt-image starts skip `setup`, so that phase does not appear for them.
 

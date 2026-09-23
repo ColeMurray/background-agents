@@ -95,7 +95,10 @@ Once configured, the page shows the status "Configured" with the committer, the 
 
 ### How signing works
 
-The private key is encrypted in the control-plane database and never delivered to a sandbox file, environment, process, or provider snapshot. Sandboxes receive only the public key. For each commit, a signer in the sandbox sends the unsigned commit buffer (Git headers, author and committer identities, and the message; no file contents or diffs) to the control plane, which decrypts the key in request-local memory and returns the signature. OpenInspect does not retain or log the buffer and keeps no signature ledger.
+1. The private key is stored encrypted in the control-plane database. It is never delivered to a sandbox file, environment, process, or provider snapshot; sandboxes receive only the public key.
+2. For each commit, a signer in the sandbox sends the unsigned commit buffer to the control plane. The buffer holds Git headers, author and committer identities, and the message; no file contents or diffs.
+3. The control plane decrypts the key in request-local memory and returns the signature.
+4. OpenInspect does not retain or log the buffer and keeps no signature ledger.
 
 ### Rotation and disabling
 

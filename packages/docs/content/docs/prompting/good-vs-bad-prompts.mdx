@@ -16,6 +16,17 @@ This page shows a strong and a weak prompt for eight common task types, so you c
 
 Each good prompt names the outcome, the context, the boundaries, a validation command, and the handoff. Each bad prompt is missing at least two of those. The prompts use invented paths; substitute your own.
 
+| Task type                 | What weak prompts most often leave out                       | Example                                                 |
+| ------------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| Bug fix                   | A reproduction and a test that proves the fix                | [Bug fix](#bug-fix)                                     |
+| Feature                   | The user-visible behavior and the pieces that already exist  | [Feature](#feature)                                     |
+| Test coverage             | The list of cases and whether production code is off limits  | [Test coverage](#test-coverage)                         |
+| Refactor                  | The target shape and a baseline test run                     | [Refactor](#refactor)                                   |
+| Dependency upgrade        | One package at a time and a validation beyond "it installed" | [Dependency upgrade](#dependency-upgrade)               |
+| UI change with screenshot | What is wrong in the image and the viewport                  | [UI change with screenshot](#ui-change-with-screenshot) |
+| Investigation only        | "Do not edit" and the shape of the report                    | [Investigation only](#investigation-only)               |
+| PR review response        | Your decision on each comment and which branch to push to    | [PR review response](#pr-review-response)               |
+
 ## Bug fix
 
 <Callout type="success" title="Good">

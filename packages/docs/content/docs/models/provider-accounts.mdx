@@ -80,7 +80,10 @@ The account is created as **Claude account**. Use **Rename** afterwards.
 1. Run `claude setup-token` on a workstation signed in to the subscription. Generate it right before pasting, because the stored expiry assumes the token is new.
 2. Enter an **Account name** and paste the printed `sk-ant-oat…` value as the **Setup token**, then **Save**.
 
-The credential is a Claude setup token: inference-only, valid for about a year, and static. It does not rotate and carries no refresh token, so **Verify** is not offered for Claude accounts. A browser-authorized account records the Claude account that granted it; authorizing the same Claude account again reconnects the existing entry instead of creating a duplicate, and once an account has that identity it can only be reconnected in the browser. A pasted setup token has no identity, so pasted tokens are not de-duplicated.
+- The credential is a Claude setup token: inference-only, valid for about a year, and static.
+- It does not rotate and carries no refresh token, so **Verify** is not offered for Claude accounts.
+- A browser-authorized account records the Claude account that granted it. Authorizing the same Claude account again reconnects the existing entry instead of creating a duplicate, and once an account has that identity it can only be reconnected in the browser.
+- A pasted setup token has no identity, so pasted tokens are not de-duplicated.
 
 </Tab>
 </Tabs>

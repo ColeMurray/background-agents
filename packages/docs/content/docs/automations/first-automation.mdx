@@ -19,8 +19,6 @@ relatedCode:
 
 This tutorial walks you through a scheduled automation that opens a dependency-update pull request every Monday morning, then shows you how to test it and read the results.
 
-![The Create Automation form with the trigger type picker, name, repository configuration, agent, model, and reasoning effort fields](/images/automations/create-automation.webp "Create Automation: choose a trigger type, name it, pick the repository, then the agent, model, and reasoning effort.")
-
 ## Prerequisites
 
 - A workspace role of Member, Administrator, or Owner. Viewers cannot create automations.
@@ -32,6 +30,8 @@ This tutorial walks you through a scheduled automation that opens a dependency-u
 ### Open the create form
 
 Open **Automations** in the sidebar and click **Create Automation**. If you would rather start from a pre-filled example, click **Browse templates** instead and choose one; the same form opens with fields already filled in (see [Automation templates](/automations/templates)).
+
+![The Create Automation form with the trigger type picker, name, repository configuration, agent, model, and reasoning effort fields](/images/automations/create-automation.webp "Create Automation: choose a trigger type, name it, pick the repository, then the agent, model, and reasoning effort.")
 
 </Step>
 <Step>
@@ -107,9 +107,7 @@ Click **Create Automation**. You land on the automation's detail page, which sho
 <Step>
 ### Test it with Trigger Now
 
-Click **Trigger Now** on the detail page. A run starts immediately under your own authority and identity, across the automation's full repository selection. The scheduled next run is not moved by a manual trigger.
-
-If a run is already active, Trigger Now is rejected with "A run is already active for this automation". Trigger Now also works while the automation is paused, so you can verify a fix before resuming.
+Click **Trigger Now** on the detail page. A run starts immediately under your own authority, and the scheduled next run does not move. If it is rejected, a run is already active; the full rules are in [Schedules](/automations/schedules#trigger-now).
 
 </Step>
 <Step>

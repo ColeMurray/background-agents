@@ -13,6 +13,7 @@ relatedCode:
   - packages/sandbox-runtime/src/sandbox_runtime/repository_hooks.py
   - packages/sandbox-runtime/src/sandbox_runtime/repository_boot.py
   - packages/sandbox-runtime/src/sandbox_runtime/runtime_config.py
+  - packages/sandbox-images/install/languages.sh
 ---
 
 This page explains the two optional scripts a repository can ship under `.openinspect/`, when each one runs, what happens when one fails, and what the scripts can rely on.
@@ -33,7 +34,7 @@ Install dependencies and build once:
 #!/bin/bash
 set -euo pipefail
 npm install
-pip install -r requirements.txt
+uv pip install --python python3 -r requirements.txt
 npm run build
 ```
 
@@ -46,7 +47,7 @@ set -euo pipefail
 docker compose up -d postgres redis
 ```
 
-The sandbox is Debian Linux with Node.js 22, Python 3.12, Bun, git, the GitHub CLI, and build-essential preinstalled, plus npm, pnpm, pip, and uv. Anything else your scripts need, they must install.
+The sandbox is Debian Linux with Node.js 22, Python 3.12, Bun, git, the GitHub CLI, and build-essential preinstalled, plus npm, pnpm, and uv. There is no `pip` command; install Python packages with `uv pip`. Anything else your scripts need, they must install. See [Sandbox environment](/reference/sandbox-environment) for the full list of tools and variables.
 
 ## When each script runs
 
@@ -148,26 +149,17 @@ TUNNEL_5173=https://abc123-5173.modal.host
 
 The file is plain `KEY=value`, so it works with `node --env-file=/workspace/.tunnels.env`, `bun --env-file=...`, `docker compose --env-file=...`, or a `source` line in the script. `TUNNEL_SANDBOX_ID` names the sandbox the URLs belong to; on a restore, a file left over from a previous sandbox is cleared before new URLs are written.
 
-The runtime waits up to 30 seconds for fresh URLs before running `start.sh`. If they are not resolved in time, `start.sh` runs without a fresh file. The session UI still receives the URLs separately and shows them in the Tunnel URLs sidebar section. The file is not written in build mode or when no tunnel ports are configured.
+The runtime waits up to 30 seconds (`TUNNEL_WAIT_TIMEOUT_SECONDS`) for fresh URLs before running `start.sh`. If they are not resolved in time, `start.sh` runs without a fresh file. The session UI still receives the URLs separately and shows them in the Tunnel URLs sidebar section. The file is not written in build mode or when no tunnel ports are configured.
 
 ## Preinstalling local MCP packages
 
-Local [MCP servers](/configure/mcp-servers) launched with `npx` are prepared at session start. A package version that is already installed globally with intact executable links is reused, including after a snapshot restore; only missing or mismatched packages are installed. Unversioned packages and tags such as `latest` are refreshed once per sandbox boot.
-
-To remove that install from first-session startup, pin the same version in both the MCP command and `setup.sh`, then rebuild the prebuilt image:
-
-```bash
-# .openinspect/setup.sh
-npm install --global @example/mcp-server@1.2.3
-```
-
-with the MCP command configured as `["npx", "-y", "@example/mcp-server@1.2.3"]`. MCP settings are not baked into images on their own; changing the pinned version causes an install until the image is rebuilt with it.
+Local [MCP servers](/configure/mcp-servers) launched with `npx` are installed at session start unless the exact version is already in the sandbox. To take that install out of startup, pin the same version in the MCP command and in a `npm install --global` line in `setup.sh`, then rebuild the prebuilt image. The full recipe is under [Startup cost of local servers](/configure/mcp-servers#startup-cost-of-local-servers).
 
 ## Guidance
 
 - **Make `setup.sh` deterministic.** Pin versions and use lockfiles. In an image build, its result is captured and served to every session until the next rebuild.
 - **Make `start.sh` idempotent.** It runs on fresh boots, prebuilt-image boots, and restores. Check whether a service is already running before starting it, or use commands that tolerate an existing instance.
-- **Do not write long-lived secrets to disk in `setup.sh`.** Anything the script persists (an `.npmrc`, a `.env` file, a downloaded credential) is captured in the prebuilt image and re-served to every session that boots from it, even after you rotate the secret. Read secrets from the environment at runtime instead. See [Secrets](/configure/secrets).
+- **Do not write long-lived secrets to disk in `setup.sh`.** Anything it persists is captured in the prebuilt image and outlives a rotation. Read secrets from the environment at runtime; see [Secrets and images](/configure/prebuilt-images#secrets-and-images).
 - **Use `set -euo pipefail`.** The runtime only sees the exit code, so make the script fail loudly instead of continuing past a broken step.
 - **Front-load work into `setup.sh`** when prebuilt images are enabled. Dependencies, builds, warmed caches, and large downloads done there are paid once per build instead of once per session.
 

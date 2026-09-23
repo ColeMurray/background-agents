@@ -165,7 +165,7 @@ If no matching ready image exists (disabled, first build not finished, no succes
 Image builds run `setup.sh` with the same secrets a session would get. Anything the script persists to disk (an `.npmrc`, a `.env` file, a downloaded credential) is captured in the image and re-served to every session that boots from it, even after you rotate the secret.
 
 - Read secrets from the environment at runtime instead of writing them into files during setup. They are injected fresh on every session.
-- Changing an environment's secrets invalidates that environment's image automatically and triggers a rebuild.
+- Changing an environment's secrets invalidates that environment's image automatically and triggers a rebuild, so a revoked value cannot keep serving from an old image.
 - Rotating repository or global secrets does not invalidate images. Stale on-disk material persists until the next commit-triggered rebuild.
 
 OpenInspect's own build plumbing never writes a credential into the image; what a setup script does with the values in its environment is the script's decision. Treat a scope's prebuilt image as no less sensitive than the scope's secrets.
@@ -174,7 +174,7 @@ OpenInspect's own build plumbing never writes a credential into the image; what 
 
 The more work you front-load into `.openinspect/setup.sh`, the faster sessions start:
 
-- Install all dependencies (`npm install`, `pip install -r requirements.txt`, `bundle install`).
+- Install all dependencies (`npm install`, `uv pip install --python python3 -r requirements.txt`, `bundle install`).
 - Run build steps (`npm run build`, `cargo build`, code generation, compiled assets).
 - Warm caches, for example by running the test suite once.
 - Pre-download large resources such as models or datasets.

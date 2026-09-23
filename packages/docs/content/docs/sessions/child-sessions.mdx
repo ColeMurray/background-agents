@@ -46,7 +46,7 @@ flowchart TB
     Parent -.->|send-child-prompt: queued follow-up| C2
     C1 -.->|get-child-status: status, response, events| Parent
     C1 -->|spawn-child| G1["Grandchild (depth 2, cannot spawn further)"]
-    Limits["Defaults from Settings > Sandbox: 5 concurrent children, 15 total children per parent"]
+    Limits["Defaults from Settings › Sandbox: 5 concurrent children, 15 total children per parent"]
     Limits -.- Parent
 ```
 

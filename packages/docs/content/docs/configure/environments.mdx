@@ -110,7 +110,8 @@ Values are copied on the control plane and never displayed. Imports are copies: 
 
 <Callout type="warn" title="Saving secrets rebuilds the image">
   When prebuilds are enabled, changing an environment's secrets retires the existing ready image and
-  triggers a rebuild, so a rotated value cannot keep serving from an old image.
+  triggers a rebuild. See [Secrets and images](/configure/prebuilt-images#secrets-and-images) for
+  what a setup script must not write to disk.
 </Callout>
 
 ## Prebuilt images

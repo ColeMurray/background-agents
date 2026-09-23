@@ -82,7 +82,7 @@ OpenInspect has four built-in roles.
 
 **Administrator.** Runs the workspace day to day: members, sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
 
-**Member.** Creates and uses sessions, collaborates in existing sessions, uses shared repositories and environments, and creates automations. Members manage and manually trigger the automations they own but cannot modify someone else's automation or change shared configuration. They can view analytics.
+**Member.** Creates and uses sessions, collaborates in existing sessions, uses shared repositories and environments, and creates automations. Members manage and manually trigger the automations they own but cannot modify someone else's automation or change shared configuration. They can view [analytics](/administration/analytics).
 
 **Viewer.** Read-only access to shared workspace resources: sessions, automations, analytics, repositories, environments, skills, and MCP servers. Viewers cannot create or prompt sessions, access sandboxes, manage personal skill profiles, trigger automations, or change shared configuration.
 
@@ -107,10 +107,10 @@ Automation definitions and run history are visible workspace-wide to any role wi
 
 Ownership follows the signed-in account that created the automation, not a display name or an external provider username.
 
-| Run type                   | Runs under whose authority                                                                                                                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scheduled and event-driven | The automation owner. At run time the owner must still be active and allowed to create sessions and use every selected repository or environment. If not, the run does not start.                                                                       |
-| Manual (**Run** button)    | The person who clicked **Run**, even when an Administrator or Owner triggers someone else's automation. The requester must be allowed to trigger it and to create the resulting session; their identity and linked source-control credentials are used. |
+| Run type                   | Runs under whose authority                                                                                                                                                                                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduled and event-driven | The automation owner. At run time the owner must still be active and allowed to create sessions and use every selected repository or environment. If not, the run does not start.                                                                               |
+| Manual (**Trigger Now**)   | The person who clicked **Trigger Now**, even when an Administrator or Owner triggers someone else's automation. The requester must be allowed to trigger it and to create the resulting session; their identity and linked source-control credentials are used. |
 
 ## Bots and integrations
 
@@ -120,7 +120,7 @@ Integrations also apply their own ingress rules. The GitHub integration, for exa
 
 ## Suspension
 
-Suspending a member disables their access without deleting their account or historical attribution. After suspension:
+There is no action to remove a member from the workspace; suspension is the way to take someone's access away. Suspending a member disables their access without deleting their account or historical attribution. After suspension:
 
 - New browser and bot operations are denied.
 - Existing browser sign-in sessions are invalidated.

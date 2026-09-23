@@ -92,7 +92,7 @@ Sandbox tools such as the terminal and code server are usable only while the san
 
 ## How a sandbox boots
 
-A prompt sent during a boot waits and dispatches as soon as the sandbox is ready. The session header names the current phase while it runs: "Cloning repository", "Running setup.sh", "Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the repository name, as in "Running setup.sh for acme/api".
+A prompt sent during a boot waits and dispatches as soon as the sandbox is ready. The session header names the current phase while it runs: "Starting runtime", "Cloning repository", "Running setup.sh", "Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the repository name, as in "Running setup.sh for acme/api".
 
 There are three boot paths.
 
@@ -174,6 +174,7 @@ When you start typing in the new-session composer, OpenInspect begins warming a 
 - **Archive** a session from its row menu in the sidebar. The dialog reads "Archive this session? You can restore archived sessions from Settings > Data Controls." Archived sessions leave the inbox and cannot be prompted.
 - **Restore** an archived session under Settings › Data Controls with **Unarchive**, or find it on the Sessions page with the Lifecycle filter set to Archived. Restoring requires lifecycle permission. Archived child sessions must also be restored before a parent can send them a follow-up.
 - **Cancel** is terminal. A cancelled session closes any unfinished prompts and does not accept new ones. To continue that work, start a new session.
+- **Delete** is not available: the web app has no delete control, so sessions are archived, not deleted, and an archived session can always be restored from Settings › Data Controls.
 
 ## Troubleshooting
 

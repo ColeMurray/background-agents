@@ -125,11 +125,15 @@ A running session's defaults cannot be changed. To go back to your defaults for 
 
 ### Image attachments
 
-Attach PNG, JPEG, WebP, or GIF images to a DM, to a channel request that mentions the bot, or to an interactive thread follow-up. Send images with instructions or on their own, for example a screenshot with "fix the visible error". Limits: at most six images per message, 10 MiB each.
+Attach PNG, JPEG, WebP, or GIF images to a DM, to a channel request that mentions the bot, or to an interactive thread follow-up, with instructions or on their own (for example a screenshot with "fix the visible error"). Limits: at most six images per message, 10 MiB each. Images on earlier messages in the thread can also be forwarded as context; the current request's images take priority within the six-image limit.
 
-If OpenInspect asks you to choose a target, choose normally; the images are retrieved after you pick and sent with the saved request. If some images cannot be read, the rest still reach the agent and the bot posts a warning in the thread. If an image-only request loses every image, nothing is sent.
+- If OpenInspect asks you to choose a target, choose normally; the images are retrieved after you pick and sent with the saved request.
+- If some images cannot be read, the rest still reach the agent and the bot posts a warning in the thread. If an image-only request loses every image, nothing is sent.
+- Remote files hosted outside Slack and non-image attachments are not forwarded.
 
-Inbound images need the Slack app's `files:read` scope (and a reinstall after adding it). Remote files hosted outside Slack and non-image attachments are not forwarded. Images on earlier messages in the thread can also be forwarded as context; the current request's images take priority within the six-image limit.
+<Callout type="info" title="Slack app scope">
+  Inbound images need the Slack app's `files:read` scope, and a reinstall after adding it.
+</Callout>
 
 ### Forwarded messages
 
@@ -142,28 +146,6 @@ The agent receives the forwarded text with links as written, its images (same si
 Dropdowns show the repositories and environments accessible to the deployment plus **No repository** (an empty sandbox). They belong to the pending thread, not to a personal repository list. OpenInspect keeps the original request for one hour; once you choose, the session starts with that request and thread context.
 
 In shared channels, only the original requester can choose. If the dropdown has expired, send the request again and name the target.
-
-### Routing rules
-
-Administrators map keywords to repositories or environments under Settings › Integrations › Slack › Routing rules so common requests route without guessing. With `frontend → acme/web-app` and `api → acme/backend`:
-
-```text
-@OpenInspect fix the frontend nav bug        (routes to acme/web-app)
-@OpenInspect add the new api endpoint         (routes to acme/backend)
-```
-
-| Rule                           | Behavior                                                                         |
-| ------------------------------ | -------------------------------------------------------------------------------- |
-| Whole words, case-insensitive  | `api` matches "the api is down" but not "rapidly"                                |
-| Channels and DMs               | Rules apply everywhere, which helps in DMs where there is no channel association |
-| Rules beat channel association | An explicit keyword wins over the channel's default repository                   |
-| Ambiguity asks, never guesses  | Two keywords for two repositories open the picker seeded with those candidates   |
-| Stale targets are ignored      | A rule whose repository is no longer accessible becomes inert                    |
-| Active threads are not moved   | A keyword in a thread reply does not change that session's repository            |
-
-### Session instructions
-
-Administrators can set workspace-wide instructions under Settings › Integrations › Slack › Session Instructions. They are appended to the first prompt of every new Slack-started session as an `## Additional Instructions` section, for standing guidance such as coding standards, preferred tools, or PR conventions. They apply to new sessions only, and are limited to 10,000 characters. Linear has the equivalent **Issue Session Instructions**.
 
 ## Threaded conversations
 
@@ -200,7 +182,33 @@ Open the OpenInspect app in Slack and go to the **Home** tab.
 
 The model list comes from the models enabled under Settings › Models. Branch priority is: repository-specific override, then global override, then the repository default branch. Preferences are per Slack user and affect new sessions only. A `!model` or `!reasoning` flag overrides them for the session it starts, or for a single follow-up, without changing them.
 
-## Agent notifications
+## Settings › Integrations › Slack
+
+Administrators manage these workspace-wide Slack settings.
+
+### Routing rules
+
+Map keywords to repositories or environments under **Routing rules** so common requests route without guessing. With `frontend → acme/web-app` and `api → acme/backend`:
+
+```text
+@OpenInspect fix the frontend nav bug        (routes to acme/web-app)
+@OpenInspect add the new api endpoint         (routes to acme/backend)
+```
+
+| Rule                           | Behavior                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| Whole words, case-insensitive  | `api` matches "the api is down" but not "rapidly"                                |
+| Channels and DMs               | Rules apply everywhere, which helps in DMs where there is no channel association |
+| Rules beat channel association | An explicit keyword wins over the channel's default repository                   |
+| Ambiguity asks, never guesses  | Two keywords for two repositories open the picker seeded with those candidates   |
+| Stale targets are ignored      | A rule whose repository is no longer accessible becomes inert                    |
+| Active threads are not moved   | A keyword in a thread reply does not change that session's repository            |
+
+### Session instructions
+
+Set workspace-wide instructions under **Session Instructions**. They are appended to the first prompt of every new Slack-started session as an `## Additional Instructions` section, for standing guidance such as coding standards, preferred tools, or PR conventions. They apply to new sessions only, and are limited to 10,000 characters. Linear has the equivalent **Issue Session Instructions**.
+
+### Agent notifications
 
 Interactive sessions always get their thread replies. Agent notifications are separate: with them enabled, the agent can post an extra message to a channel when you explicitly ask:
 
@@ -208,7 +216,7 @@ Interactive sessions always get their thread replies. Agent notifications are se
 When you finish, post a short summary to #eng-updates.
 ```
 
-1. Go to Settings › Integrations › Slack and turn on **Enable agent notifications**.
+1. Turn on **Enable agent notifications**.
 2. Invite the OpenInspect bot to every channel agents may post to. Channel membership is the access boundary; remove the bot to remove access.
 3. Optionally add repository overrides to inherit, force on, or force off notifications per repository.
 

@@ -85,9 +85,7 @@ TUNNEL_3000=https://abc123-3000.modal.host
 TUNNEL_5173=https://abc123-5173.modal.host
 ```
 
-The file is plain `KEY=value`, so it works with any tool that reads an env file: `node --env-file=/workspace/.tunnels.env`, `bun --env-file=...`, or `docker compose --env-file=...`. `TUNNEL_SANDBOX_ID` names the sandbox the URLs belong to; a file left over from a restored snapshot has a different id and is cleared on boot.
-
-The supervisor waits up to 30 seconds (`TUNNEL_WAIT_TIMEOUT_SECONDS`) for fresh URLs before running `start.sh`. If they are not ready in time, `start.sh` runs without them; the sidebar still receives the URLs separately. The file is not written when no tunnel ports are configured.
+The file is plain `KEY=value`, so any tool that reads an env file can load it. For when the file is written and how long the runtime waits for fresh URLs, see [Lifecycle scripts](/configure/lifecycle-scripts#tunnel-urls).
 
 ## When the tools are unavailable
 

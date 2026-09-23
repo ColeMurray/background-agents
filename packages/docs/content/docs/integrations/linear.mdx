@@ -86,7 +86,7 @@ Assign the issue to the Linear Agent when the title and description already desc
 
 Follow-up prompts on an issue with an active session go to that session. When available, OpenInspect adds recent agent output as context.
 
-Issue-to-session mappings are kept for several days. If the mapping has expired, or the previous session was stopped or cancelled, a new Linear Agent request may start a new session.
+Issue-to-session mappings are kept for 7 days. If the mapping has expired, or the previous session was stopped or cancelled, a new Linear Agent request may start a new session.
 
 ### Stop or cancel
 
@@ -118,7 +118,16 @@ If the resolved repository is outside the Linear **Repository Scope**, Linear sh
 
 When a session starts, Linear receives a **View Session** link. If the agent opens a pull request, Linear receives a **Pull Request** link when the session finishes. Live output, logs, artifacts, and file changes are in the web session.
 
-For a session started by a person, OpenInspect moves an unstarted issue to the team's first `started` workflow state, and only after the initial prompt reaches a live sandbox. Automation-started sessions, already-started issues, completed issues, and cancelled issues are left alone, and follow-ups never change status. OpenInspect does not change labels, assignee, priority, or project; pull request workflow changes stay with Linear's GitHub integration.
+OpenInspect changes an issue's status at most once, when a person starts a session:
+
+| Issue state before                          | What OpenInspect does                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Unstarted, session started by a person      | Moves the issue to the team's first `started` workflow state, only after the initial prompt reaches a live sandbox |
+| Unstarted, session started by an automation | Nothing                                                                                                            |
+| Already started, completed, or cancelled    | Nothing                                                                                                            |
+| Any state, on a follow-up                   | Nothing; follow-ups never change status                                                                            |
+
+OpenInspect does not change labels, assignee, priority, or project; pull request workflow changes stay with Linear's GitHub integration.
 
 ## Settings › Integrations › Linear
 

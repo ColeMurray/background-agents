@@ -24,23 +24,6 @@ The agent harness is the coding agent that runs inside the sandbox. Every sessio
 - Sessions started by Slack, GitHub, and Linear run on OpenCode.
 - OpenCode is the default harness.
 
-How the harness choice shapes a session:
-
-```mermaid
-flowchart TB
-    create["Session created"] --> harness{"Harness, fixed<br/>for the session's<br/>lifetime"}
-    inherit["Child sessions<br/>inherit it;<br/>automations<br/>carry it"] -.-> harness
-    bots["Slack, GitHub, and<br/>Linear sessions"] -- "always" --> oc
-    harness -- "OpenCode (default)" --> oc["OpenCode"]
-    harness -- "Claude Agent" --> ca["Claude Agent"]
-    oc --> ocmodels["Every model<br/>in the catalog"]
-    ca --> camodels["Anthropic<br/>models only"]
-    ocmodels --> ocauth["Anthropic via<br/>ANTHROPIC_API_KEY;<br/>OpenAI and xAI via<br/>API key or a<br/>connected account"]
-    camodels --> caauth["ANTHROPIC_API_KEY<br/>or a connected<br/>Claude account,<br/>fetched into<br/>memory on every<br/>agent start"]
-    ocauth --> events["Same session<br/>events either way:<br/>tokens, tool calls<br/>steps, warnings"]
-    caauth --> events
-```
-
 Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so the session page, timeline, and diff work the same way on either one.
 
 ## Comparison

@@ -46,7 +46,7 @@ The composer shows one control that reads `<harness>: <model> <effort>`. Open it
 
 **Default** effort means the model's own default from the table below. Choosing a specific effort applies it to the prompts you send.
 
-On an existing session you can change the model and effort for a single message. The session's harness does not change, so the list only contains models that harness can run. If a message override names a model the harness cannot run, the prompt is rejected with an error such as `Model "openai/gpt-5.5" cannot run on the Claude Agent harness.` It is never silently replaced with another model.
+You can change the model and effort for each follow-up; the harness cannot change. The list therefore only contains models the session's harness can run. If a message override names a model the harness cannot run, the prompt is rejected with an error such as `Model "openai/gpt-5.5" cannot run on the Claude Agent harness.` It is never silently replaced with another model.
 
 ## Model catalog
 
@@ -183,7 +183,7 @@ Some models appear more than once because they are reachable through more than o
 
 ## Defaults for integrations and automations
 
-Sessions started by Slack, GitHub, Linear, and automations run on the OpenCode harness and pick their model from these settings:
+Sessions started by Slack, GitHub, and Linear always run on the OpenCode harness. Automations run on the harness chosen in the automation editor (OpenCode by default). Each surface picks its model from these settings:
 
 | Surface     | Where the default lives                                                                                                                                                                                                                                                                 |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

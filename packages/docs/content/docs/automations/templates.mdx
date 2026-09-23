@@ -66,6 +66,14 @@ After clicking **Add**, the create form opens with the template applied. Before 
 
 Everything a template sets can be changed later with **Edit**, except the trigger type.
 
+## Troubleshooting
+
+| Symptom                                                     | Cause                                                                                                             | Fix                                                                                                         |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Opening the gallery sends you back to the Automations list  | Your role cannot create automations (Viewers cannot)                                                              | Ask an Owner or Administrator for the Member role; see [Workspace access](/administration/workspace-access) |
+| The Slack template will not save                            | "Slack triggers require at least one Slack Channel condition."                                                    | Add a **Slack Channel** condition with the channel to watch                                                 |
+| The form shows a different model than the template suggests | The suggested model is not enabled under Settings › Models, so the form picked an enabled one the harness can run | Keep the substitute, or enable the suggested model under Settings › Models and select it                    |
+
 ## Next steps
 
 - [Create your first automation](/automations/first-automation)

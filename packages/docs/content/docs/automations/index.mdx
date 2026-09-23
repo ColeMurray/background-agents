@@ -65,7 +65,7 @@ The trigger type is fixed after creation. To change it, create a new automation.
 
 - Nightly or weekly dependency updates that open a pull request.
 - Reacting to a deploy or incident webhook from your own tooling.
-- Triaging new Sentry issues and opening a fix PR.
+- Triaging new [Sentry issues](/automations/sentry-alerts) and opening a fix PR.
 - Reviewing pull requests as they open.
 - Recurring reports posted back to Slack.
 
@@ -114,18 +114,7 @@ The trigger type is fixed after creation. To change it, create a new automation.
 
 ## Who can create and manage automations
 
-Automation definitions and run history are visible to everyone in the workspace with automation read access. Changing and running them follows ownership:
-
-| Role          | View | Create | Manage and trigger own | Manage and trigger any |
-| ------------- | ---- | ------ | ---------------------- | ---------------------- |
-| Owner         | Yes  | Yes    | Yes                    | Yes                    |
-| Administrator | Yes  | Yes    | Yes                    | Yes                    |
-| Member        | Yes  | Yes    | Yes                    | No                     |
-| Viewer        | Yes  | No     | No                     | No                     |
-
-Ownership follows the signed-in account that created the automation.
-
-Scheduled and event-driven runs execute under the **owner's** authority. At run time the owner must still be active and allowed to create sessions and use every selected repository or environment; otherwise the run does not start. A manual run (**Trigger Now**) executes under the authority of the person who clicked it, even when an Administrator triggers someone else's automation, and uses that person's identity and linked source-control credentials. See [Workspace access](/administration/workspace-access) for role management.
+Everyone with automation read access, Viewers included, sees every automation and its run history. Members create automations and manage and trigger their own; Administrators and Owners manage and trigger any. Scheduled and event-driven runs execute under the owner's authority, while a **Trigger Now** run executes under the authority of the person who clicked it. The full role table and run-authority rules are in [Workspace access](/administration/workspace-access#how-automation-access-works).
 
 ## Automation statuses
 
@@ -154,9 +143,7 @@ Click **View session** on a row to open the session with its full output and art
 
 ## Concurrency
 
-For scheduled and manual triggers, only one run per automation can be active at a time. If the schedule comes due while a previous run is still in progress, the firing is recorded as **Skipped** with the note "Skipped because a previous run is still active", and the schedule advances. **Trigger Now** against an active run is rejected instead of recorded.
-
-Event-driven triggers use per-event concurrency keys, so unrelated events (for example two different pull requests) can run at the same time. Details are on each trigger's page.
+Scheduled and manual triggers allow one active run per automation: a schedule slot that comes due during an active run is recorded as **Skipped**, and **Trigger Now** is rejected. Event-driven triggers use per-event concurrency keys, so unrelated events (for example two different pull requests) can run at the same time. The scheduled rules are in [Schedules](/automations/schedules#one-active-run-at-a-time); event rules are on each trigger's page.
 
 ## Auto-pause after failures
 
@@ -166,21 +153,21 @@ Click **Resume** to re-enable the automation. Resuming resets the failure counte
 
 ## Execution timeout
 
-A run is marked failed with reason `execution_timeout` when it outlives the session's execution budget. That budget is the sandbox timeout in effect for the run's repository or environment (see [Sandbox settings](/configure/sandbox-settings)); when none is configured, the deployment default of 2 hours applies. A run that reports success after the sweep already declared it lost is corrected back to Completed, but the failure strike already counted stays until the next fully successful firing.
+Each run's session has an execution budget: the sandbox timeout in effect for the run's repository or environment (see [Sandbox settings](/configure/sandbox-settings)), otherwise the operator's `EXECUTION_TIMEOUT_MS`, otherwise 2 hours. The session fails the prompt at the budget, and the run fails with it. If that completion never reaches the scheduler, a sweep fails the run with reason `execution_timeout` after an additional grace period of 100 minutes. A run that reports success after the sweep already declared it lost is corrected back to Completed, but the failure strike already counted stays until the next fully successful firing.
 
 ## Limits
 
-| Limit                                        | Value                                                                       |
-| -------------------------------------------- | --------------------------------------------------------------------------- |
-| Automation name                              | 200 characters                                                              |
-| Instructions                                 | 15,000 characters                                                           |
-| Repositories and environments per automation | 10 combined (schedule triggers only; event triggers take 0 or 1 repository) |
-| Minimum schedule interval                    | 15 minutes                                                                  |
-| Inbound webhook payload                      | 64 KB                                                                       |
-| Sentry webhook payload                       | 256 KB                                                                      |
-| Concurrent runs per automation               | 1 for scheduled and manual triggers                                         |
-| Consecutive failures before auto-pause       | 3                                                                           |
-| Run execution timeout                        | The configured sandbox timeout (2 hours by default)                         |
+| Limit                                        | Value                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Automation name                              | 200 characters                                                                                                |
+| Instructions                                 | 15,000 characters                                                                                             |
+| Repositories and environments per automation | 10 combined (schedule triggers only; event triggers take 0 or 1 repository)                                   |
+| Minimum schedule interval                    | 15 minutes                                                                                                    |
+| Inbound webhook payload                      | 64 KB                                                                                                         |
+| Sentry webhook payload                       | 256 KB                                                                                                        |
+| Concurrent runs per automation               | 1 for scheduled and manual triggers                                                                           |
+| Consecutive failures before auto-pause       | 3                                                                                                             |
+| Run execution timeout                        | The session's execution budget (2 hours by default), plus a 100-minute sweep grace before `execution_timeout` |
 
 ## Next steps
 

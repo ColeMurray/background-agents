@@ -48,7 +48,7 @@ sequenceDiagram
 
 A session may hold at most 50 unfinished (pending or processing) prompts; see [Limits](/reference/limits).
 
-While a turn runs the composer placeholder changes to "Add a follow-up..." and the send button reads "Queue". Queued prompts stack above the composer under "Queued prompts", in run order. Each row has a "Remove queued prompt" button if you have the `sessions.lifecycle` permission. Removing a prompt puts its text back in the composer so you can edit it and send it again.
+While a turn runs the composer placeholder changes to "Add a follow-up..." and the send button reads "Queue". Queued prompts stack above the composer in run order, each row marked with a clock icon. Each row has a "Remove queued prompt" button if you have the `sessions.lifecycle` permission. Removing a prompt puts its text back in the composer so you can edit it and send it again.
 
 A prompt sent while the sandbox is still booting waits until the sandbox is ready, then dispatches. The header shows the boot phase while you wait.
 
@@ -79,7 +79,7 @@ If you want the session to go quiet, remove the queued prompts first, then stop 
 
 `cancelled` is a terminal session status. A cancelled session cannot be prompted again, and its sandbox is stopped.
 
-Today only child sessions reach this status: the parent agent cancels a child with its `cancel-child` tool, and nested children are cancelled with it by default. There is no cancel button on the session page for a session you started yourself; stop the turn and archive the session instead. See [child sessions](/sessions/child-sessions).
+The web app has no cancel control; in practice a session is cancelled only when a parent agent cancels it with `cancel-child`, and nested children are cancelled with it by default. For a session you started yourself, stop the turn and archive the session instead. See [child sessions](/sessions/child-sessions).
 
 ## Resuming completed or failed sessions
 
@@ -129,8 +129,8 @@ A follow-up keeps the agent's context, the branch, and the sandbox state. That i
 </Accordion>
   <Accordion title="Send is disabled">
     The session is archived or cancelled, the session's cost limit is reached (the composer says so
-    and tells you to raise or remove the limit), the selected model is unavailable, or you are a
-    Viewer. Viewers can read sessions but cannot prompt them.
+    and tells you to raise or remove the limit), or the selected model is unavailable. Viewers do not see the
+    composer at all; if there is no composer on the page, your role is Viewer.
 
 </Accordion>
 </Accordions>

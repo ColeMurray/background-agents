@@ -27,7 +27,7 @@ A background session runs in its own sandbox without you watching. You send a pr
 | Responding to PR review     | The feedback is concrete and scoped to a branch the session already owns.                                     | With PR Feedback Autofix enabled, review comments on a session's PR are queued back into that session as follow-ups. |
 | Recurring chores            | The same instructions run on a schedule or on an event, with no one in the loop.                              | A weekly dependency audit or a digest of merged PRs, run as an [automation](/automations).                           |
 
-The sandbox gives the agent a full development environment: Node.js 22, Python 3.12, Bun, git, the GitHub CLI, and `agent-browser` with headless Chromium for screenshots and UI verification. If the task can be validated by running something in that environment, it is a good candidate.
+The sandbox gives the agent a full development environment: Node.js 22, Python 3.12, Bun, git, the GitHub CLI, and `agent-browser` with headless Chrome for screenshots and UI verification. If the task can be validated by running something in that environment, it is a good candidate.
 
 ## What to keep interactive or human
 

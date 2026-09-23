@@ -7,6 +7,8 @@ status: published
 lastReviewed: "2026-09-23"
 relatedCode:
   - packages/sandbox-images/toolchain.json
+  - packages/sandbox-images/targets.json
+  - packages/modal-infra/src/sandbox/vcs_env.py
   - packages/sandbox-images/install/os/debian.sh
   - packages/sandbox-images/install/tools.sh
   - packages/sandbox-images/install/filesystem.sh
@@ -29,17 +31,17 @@ This page describes the environment your `setup.sh`, `start.sh`, and the agent r
 
 ## Preinstalled software
 
-Every sandbox boots from the same base image regardless of provider.
+Every provider's image installs the same tools. The per-provider image targets differ only in their base: the Vercel target is built on Amazon Linux, and the Vercel and OpenComputer targets use Node.js 24.
 
-| Area               | What is installed                                                                                                |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| Operating system   | Debian with `build-essential`, `git`, `curl`, `jq`, `unzip`, `openssh-client`, `ffmpeg`, and `ca-certificates`   |
-| Source control     | GitHub CLI (`gh`)                                                                                                |
-| Node.js            | Node.js 22 with `npm` and `npx`, plus `pnpm`, `bun`, and `bunx`                                                  |
-| Python             | Python 3.12 with `uv` and `uvx`. `python` and `python3` point at the same interpreter                            |
-| Browser automation | The `agent-browser` CLI with a headless Chrome for Testing build at `/usr/local/bin/google-chrome`               |
-| Agent harnesses    | OpenCode, and the Claude Agent SDK whose wheel bundles the `claude` binary                                       |
-| Sandbox tools      | `code-server` (browser VS Code), `ttyd` (web terminal), and Xvfb, Fluxbox, x11vnc, and noVNC for the VNC desktop |
+| Area               | What is installed                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Operating system   | Debian with `build-essential`, `git`, `curl`, `jq`, `unzip`, `openssh-client`, `ffmpeg`, and `ca-certificates`      |
+| Source control     | GitHub CLI (`gh`)                                                                                                   |
+| Node.js            | Node.js 22 (Node.js 24 on the Vercel and OpenComputer targets) with `npm` and `npx`, plus `pnpm`, `bun`, and `bunx` |
+| Python             | Python 3.12 with `uv` and `uvx`. `python` and `python3` point at the same interpreter                               |
+| Browser automation | The `agent-browser` CLI with a headless Chrome for Testing build at `/usr/local/bin/google-chrome`                  |
+| Agent harnesses    | OpenCode, and the Claude Agent SDK whose wheel bundles the `claude` binary                                          |
+| Sandbox tools      | `code-server` (browser VS Code), `ttyd` (web terminal), and Xvfb, Fluxbox, x11vnc, and noVNC for the VNC desktop    |
 
 Version pins live in `packages/sandbox-images/toolchain.json`. Updating the shared toolchain does not refresh existing prebuilt images; rebuild them from Settings › Images or Settings › Environments when they must pick up new tools.
 
@@ -67,7 +69,7 @@ Repository `.opencode/` and `.claude/` directories are read by their respective 
 | `SANDBOX_AUTH_TOKEN`                                                       | Always                                                        | The sandbox's own short-scoped token for control-plane calls. It authorises one session only.                                                                                                                                                                  |
 | `SESSION_CONFIG`                                                           | Always                                                        | JSON describing the session: its id, repositories, MCP servers, and related settings. The runtime and helper commands read the session id from it.                                                                                                             |
 | `REPO_OWNER`, `REPO_NAME`                                                  | Repository sessions                                           | The primary repository.                                                                                                                                                                                                                                        |
-| `GITHUB_APP_TOKEN`                                                         | Snapshot restores, as a fallback                              | A clone token so snapshots taken before the credential helper can still boot; fresh and prebuilt-image sandboxes use the credential helper instead.                                                                                                            |
+| `GITHUB_APP_TOKEN`                                                         | Modal snapshot restores only                                  | A clone token so snapshots taken before the credential helper can still boot; fresh and prebuilt-image sandboxes, and every other provider, use the credential helper instead.                                                                                 |
 | `RESTORED_FROM_SNAPSHOT`                                                   | Snapshot restores                                             | Marks a restored sandbox.                                                                                                                                                                                                                                      |
 | `OPENCODE_CONFIG_CONTENT`                                                  | OpenCode sessions                                             | The generated OpenCode configuration.                                                                                                                                                                                                                          |
 | `PYTHONUNBUFFERED`, `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG` | Always                                                        | Standard process environment.                                                                                                                                                                                                                                  |

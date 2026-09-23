@@ -21,7 +21,7 @@ Most failed runs are recovered inside the same session; this page tells you whic
 
 Before you retry anything, note:
 
-- the session URL (use **Copy link** in the header; it copies `/session/<id>`),
+- the session URL (use **Copy link** from the More menu above the composer, or the Session actions menu on phones; it copies `/session/<id>`),
 - the error text shown in the timeline or the header's status popover, including any boot phase it names,
 - roughly when it happened.
 
@@ -40,23 +40,6 @@ A failed session is not lost. Its status is `failed`, it still accepts prompts, 
 | The boot timed out                                                                   | Send the prompt again; it starts a new sandbox. Then look at setup duration. |
 | The session cost limit was reached                                                   | Raise or remove the limit, then follow up.                                   |
 | The change is sensitive or time-critical                                             | Take over manually and keep the branch.                                      |
-
-The same decisions as a flowchart:
-
-```mermaid
-flowchart LR
-    Start([Run failed or stalled]) --> Q1{Right repository, environment, and branch?}
-    Q1 -->|No| NewTarget[Start a new session with the right target]
-    Q1 -->|Yes| Q2{What does the error say?}
-    Q2 -->|Boot phase timed out| Boot[Send the prompt again, then shorten setup or use a prebuilt image]
-    Q2 -->|"setup.sh or image build failed"| Setup["Fix setup.sh, rebuild the image, start a new session"]
-    Q2 -->|Token refresh failed, Model not found| Auth[Reconnect the account or add the key, then follow up]
-    Q2 -->|Session cost limit reached| Budget[Raise or remove the limit, then follow up]
-    Q2 -->|Panel or diff failed to load| Retry[Retry from the panel or Sync PR status]
-    Q2 -->|Wrong approach, still running| Stop[Stop the current prompt, then send a correction]
-    Q2 -->|Stopped for lack of context| Follow[Follow up with the missing detail]
-    Q2 -->|Sensitive or time-critical| Manual[Take over manually and keep the branch]
-```
 
 ## Follow up with missing context
 
@@ -98,7 +81,7 @@ See [Provider accounts](/models/provider-accounts) and [Secrets](/configure/secr
 A non-zero `setup.sh` exit is reported as a warning and the boot continues, so a session can start with a broken environment and fail later. A failing `start.sh` in the first repository ends the boot.
 
 1. Read the error next to the failed build under Settings › Images (repository scope) or on the environment's row under Settings › Environments. The message names which repository's script failed.
-2. Fix `.openinspect/setup.sh`. Common causes are commands that do not exist in the sandbox (Debian Linux with Node.js, Python, and common dev tools) and builds that exceed the 30-minute build limit.
+2. Fix `.openinspect/setup.sh`. Common causes are commands that do not exist in the sandbox (Debian Linux with Node.js, Python, and common dev tools) and builds that exceed the configured build timeout (30 minutes by default; see [Sandbox settings](/configure/sandbox-settings)).
 3. Trigger a rebuild with the refresh button next to the repository or environment, and wait for **Ready**.
 4. Start a new session. The old session keeps its snapshot of the broken environment.
 

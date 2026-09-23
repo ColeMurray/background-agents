@@ -11,6 +11,7 @@ relatedCode:
   - packages/web/src/components/settings/skills-settings/index.tsx
   - docs/HOW_IT_WORKS.md
   - docs/CLAUDE_AGENT.md
+  - packages/shared/src/rbac.ts
 ---
 
 Managed skills give agents reusable instructions and supporting files, so workflows such as deployments, code reviews, incident response, or project conventions do not have to be repeated in every prompt.
@@ -24,6 +25,16 @@ A skill can apply to every session or only to selected repositories and environm
   network access already available in the session. Review instructions and scripts before enabling
   them.
 </Callout>
+
+## Prerequisites
+
+| Role                   | What you can do                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| Owner or Administrator | Create, edit, enable, disable, assign, and delete shared skills (the `skills.manage` permission). |
+| Member                 | View shared skills and create or edit your own personal profiles (`skill_profiles.manage_own`).   |
+| Viewer                 | View shared skills.                                                                               |
+
+See [Workspace access](/administration/workspace-access) for how roles are assigned.
 
 ## Quick start
 
@@ -56,15 +67,15 @@ Start a new session. Leave the skill selector on All applicable to include every
 
 ## Skills, assignments, and profiles
 
-| Concept          | Purpose                                                        | Who can use it                          |
-| ---------------- | -------------------------------------------------------------- | --------------------------------------- |
-| Shared skill     | Stores reusable instructions and optional supporting files     | Everyone using the OpenInspect instance |
-| Assignment       | Controls which session targets a shared skill applies to       | Everyone using the shared skill         |
-| Personal profile | Saves a preferred subset of shared skills for session creation | Only the profile's owner                |
+| Concept          | Purpose                                                        | Who can use it                                                               |
+| ---------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Shared skill     | Stores reusable instructions and optional supporting files     | Every session target it is assigned to; managed by Owners and Administrators |
+| Assignment       | Controls which session targets a shared skill applies to       | Managed by Owners and Administrators                                         |
+| Personal profile | Saves a preferred subset of shared skills for session creation | Only the profile's owner                                                     |
 
 Profiles do not change a skill's assignments. If a profile contains a disabled skill or one that does not apply to the selected target, that entry is ignored.
 
-Shared skills are installation-wide. Any signed-in user can create, edit, enable, disable, assign, or delete them, so coordinate changes with the other users of your instance.
+Shared skills are installation-wide: a change by an Owner or Administrator affects every matching session started afterwards, so coordinate changes with the other people who manage skills.
 
 ## Creating a shared skill
 
@@ -185,7 +196,7 @@ Profiles save a subset of shared skills you select repeatedly. They are private 
 1. Go to Settings › Skills › My profiles.
 2. Click New profile.
 3. Enter a unique profile name.
-4. Select up to 20 shared skills.
+4. Select the shared skills to include.
 5. Click Save profile.
 
 A profile is a filter, not an override. At session creation, only profile skills that are both enabled and assigned to the selected target are included. Disabled skills stay visible in the profile editor with a `(disabled)` suffix. Deleting a profile does not delete its shared skills.
@@ -202,9 +213,12 @@ After selecting no repository, a repository, a repository set, or an environment
 
 The number beside the selector previews how many skills will be included. If a profile shows "N ignored", those entries are disabled or not assigned to the selected target.
 
-Automations and integrations without a skill selector use All applicable. Child sessions created by an agent inherit the parent's exact set of skills.
-
-There is no separate installation step. Before the agent starts, OpenInspect validates and installs the selected skills ("Installing skills" in the session header). If selected content cannot be fetched, validated, or installed, the session fails to start.
+<Callout type="info" title="Sessions without a selector">
+  Automations and integrations without a skill selector use All applicable. Child sessions created
+  by an agent inherit the parent's exact set of skills. In every case OpenInspect validates and
+  installs the selected skills before the agent starts ("Installing skills" in the session header);
+  if selected content cannot be fetched, validated, or installed, the session fails to start.
+</Callout>
 
 ## Inspecting skills in a session
 
@@ -234,7 +248,6 @@ See [agent harnesses](/models/agent-harnesses) for the differences between the t
 | Supporting files                   | 99 per skill revision |
 | Individual file                    | 256 KiB               |
 | Complete skill revision            | 1 MiB                 |
-| Skills in a profile or session     | 20                    |
 | Managed skill content in a session | 5 MiB                 |
 
 Supporting-file paths must be relative, use `/` (no absolute paths or backslashes), contain no empty, `.`, or `..` segments, be at most 10 segments or 240 UTF-8 bytes, contain no control characters, be unique, and not be `SKILL.md`.

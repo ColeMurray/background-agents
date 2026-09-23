@@ -70,17 +70,16 @@ The row's status is derived from its children:
 
 ## Auto-pause counting
 
-Multi-repository firings count toward the same three-strike auto-pause as single-repository ones:
+Multi-repository firings count toward the same three-strike [auto-pause](/automations#auto-pause-after-failures) as single-repository ones, with these rules for multiple targets:
 
 - A firing with **any** failed repository counts as one failure. A weekly sweep that fails the same repository every week is still broken.
 - The failure is counted when the first repository fails, not when the last one finishes.
 - The counter resets only when a firing finishes with **every** repository completed. Partial failures never reset it.
-- Skipped firings count neither way.
 - Auto-pause stops future firings but never cancels repository sessions that already started; siblings run to completion.
 
 ## Trigger Now
 
-**Trigger Now** fires across the full current selection, one session per target, under the authority of the person who clicked it. It is rejected while a firing is active and does not move the scheduled next run. There is no "re-run failed repositories only" action; a manual trigger always starts a fresh firing across the whole selection.
+**Trigger Now** fires across the full current selection, one session per target. There is no "re-run failed repositories only" action; a manual trigger always starts a fresh firing across the whole selection. The general Trigger Now rules (who it runs as, when it is rejected, and how it affects the schedule) are in [Schedules](/automations/schedules#trigger-now).
 
 ## Troubleshooting
 

@@ -14,7 +14,7 @@ relatedCode:
   - packages/web/src/components/settings/integrations/github-autofix-settings-fields.tsx
 ---
 
-The GitHub bot reviews new pull requests, answers when you mention it in a PR, and can feed review feedback back into the session that created the PR.
+The GitHub bot reviews new pull requests and pull requests you request it on, answers when you mention it in a PR, and can feed review feedback back into the session that created the PR.
 
 This page covers day-to-day use and the settings a team owner manages. Installing the GitHub App and deploying the bot worker is operator work; see [Getting started](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md) in the repository.
 
@@ -22,39 +22,43 @@ This page covers day-to-day use and the settings a team owner manages. Installin
 
 1. Make sure the GitHub App is installed on the repository.
 2. For an automatic review, open a non-draft PR in a repository where **Auto-review new PRs** is enabled.
-3. For analysis or a reply, mention the bot in a PR comment:
+3. For a review on demand, request the bot as a reviewer in the PR's **Reviewers** picker.
+4. For analysis or a reply, mention the bot in a PR comment:
 
    ```text
    @my-app[bot] can you explain why the checkout test is failing?
    ```
 
-4. For line-specific discussion, mention the bot in an inline review comment.
-5. Watch for the eyes reaction, which means the bot accepted the request.
-6. Open the web app to watch the full session.
+5. For line-specific discussion, mention the bot in an inline review comment.
+6. Watch for the eyes reaction, which means the bot accepted the request.
+7. Open the web app to watch the full session.
 
 ## Supported workflows
 
 | Workflow                  | How it works                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------ |
 | Auto-review new PRs       | Review non-draft PRs when they are opened, if auto-review is enabled                       |
+| Request a review          | Request the bot as a reviewer on a PR to start a review session                            |
 | Respond to PR comments    | Mention the bot in a PR conversation comment                                               |
 | Respond to review threads | Mention the bot in an inline review comment                                                |
 | Act on PR feedback        | With PR Feedback Autofix, reviews and comments on a session-created PR resume that session |
 | Post back to GitHub       | Submit a PR review, reply to a review thread, or post a PR comment                         |
 | Customize behavior        | Set repository scope, trigger users, models, and custom instructions                       |
 
-There are no GitHub slash commands, and the bot cannot be requested through the PR reviewer picker. Use auto-review or `@mention` comments.
+There are no GitHub slash commands. Use auto-review, a review request, or `@mention` comments.
 
-The three entry points differ in where the session starts and what it can push:
+The entry points differ in where the session starts and what it can push:
 
 ```mermaid
 flowchart TB
     subgraph github["On GitHub"]
         opened["Non-draft PR opened"]
+        requested["Bot requested as a reviewer"]
         mention["@mention in a PR comment or review thread"]
         feedback["Review or comment on a session-created PR"]
     end
     opened -->|Auto-review enabled| review["Review session"]
+    requested --> review
     review --> posted["Posts a GitHub review"]
     mention --> fresh["New session from the default branch"]
     fresh --> answer["Posts a PR comment or thread reply"]
@@ -66,9 +70,13 @@ flowchart TB
 
 **When it runs.** With **Auto-review new PRs** enabled, OpenInspect starts a review session for each newly opened, non-draft PR in an in-scope repository. The agent inspects the diff and posts a GitHub review.
 
-**When it skips.** Auto-review does not run when the PR is a draft, the PR was opened by the GitHub App bot itself, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. Converting a draft to ready for review does not trigger it; mention the bot in a comment instead.
+**When it skips.** Auto-review does not run when the PR is a draft, the PR was opened by the GitHub App bot itself, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. Converting a draft to ready for review does not trigger it; request the bot as a reviewer or mention it in a comment instead.
 
 **What it posts.** A general review comment, an approval, a request for changes, or inline review comments, depending on what the agent finds.
+
+## Requesting a review
+
+Add the bot in the PR's **Reviewers** picker to start a review session titled `GitHub: Review PR #<number>`. The request goes through the same checks as a mention: the repository must be in **Repository Scope** and the person who requested the review must be an allowed trigger user. It does not depend on **Auto-review new PRs**, so you can use it for repositories where auto-review is off. The bot adds the eyes reaction and the agent posts a GitHub review, as with auto-review.
 
 ## @mention actions
 
@@ -134,7 +142,7 @@ A review or PR comment is queued only when all of the following hold:
 - The pull request is open.
 - The pull request was created by an OpenInspect session. Feedback on other PRs is skipped as untracked.
 - The feedback kind is enabled: a submitted review (with **Submitted reviews**) or a plain PR comment (with **Plain human PR comments**).
-- The author is allowed. A human author needs write permission on the pull request. A bot author is accepted only for reviews: the app's own reviews when **Open Inspect reviews** is on, and third-party bots listed exactly in **Exact third-party review bots**. Bot-authored top-level comments are never eligible.
+- The author is allowed. A human author needs write permission on the pull request. A bot author is accepted only for reviews: the app's own reviews when OpenInspect reviews (labelled **Open Inspect reviews** in the form) are on, and third-party bots listed exactly in **Exact third-party review bots**. Bot-authored top-level comments are never eligible.
 - A human PR comment that `@mentions` the bot is not an Autofix input; it goes through the fresh-session mention flow instead.
 - A review is in the Commented or Changes requested state and has content. Approvals and empty feedback are skipped.
 
@@ -145,7 +153,7 @@ A review or PR comment is queued only when all of the following hold:
 | Enable Autofix                | "Admit new eligible feedback into the owning session."                                       | Off     |
 | Submitted reviews             | "One complete submitted review creates one attempt."                                         | On      |
 | Plain human PR comments       | Top-level human comments on the PR; "Mentions continue to use the fresh-session flow."       | On      |
-| Open Inspect reviews          | "Allow reviews from the configured Open Inspect App, regardless of workflow."                | On      |
+| OpenInspect reviews           | "Allow reviews from the configured Open Inspect App, regardless of workflow."                | On      |
 | Exact third-party review bots | Comma-separated exact bot usernames, for example `coderabbitai[bot]`. Other bots are skipped | Empty   |
 | Attempts per PR per 24 hours  | A positive number, or **No Autofix attempt limit**                                           | 30      |
 
@@ -178,35 +186,48 @@ The agent works on the PR's branch, pushes when it changes something, and replie
 
 Feedback that is not queued is recorded with a reason. The ones you are most likely to hit:
 
-| Reason                                             | Cause                                                               |
-| -------------------------------------------------- | ------------------------------------------------------------------- |
-| `disabled`                                         | Autofix is off, or the repository is outside the bot's scope        |
-| `untracked_pull_request`                           | The PR was not created by a session                                 |
-| `pull_request_not_open`                            | The PR is closed or merged                                          |
-| `reviews_disabled`, `pr_comments_disabled`         | That feedback kind is turned off                                    |
-| `author_lacks_write_permission`                    | A human author without write access                                 |
-| `bot_not_allowed`                                  | A bot review from a bot not in the allowlist                        |
-| `bot_pr_comment`                                   | A top-level comment authored by any bot                             |
-| `own_reviews_disabled`                             | The app's own review while **Open Inspect reviews** is off          |
-| `explicit_mention`                                 | A human comment that mentions the bot (handled by the mention flow) |
-| `review_state_not_actionable`                      | An approval or another non-actionable review state                  |
-| `empty_feedback`                                   | Nothing to act on                                                   |
-| `attempt_limit`                                    | The PR reached its 24-hour attempt cap                              |
-| `session_closed`, `budget_exhausted`, `queue_full` | The owning session cannot accept more prompts                       |
+| Reason                                             | Cause                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `disabled`                                         | Autofix is off, or the repository is outside the bot's scope             |
+| `untracked_pull_request`                           | The PR was not created by a session                                      |
+| `pull_request_not_open`                            | The PR is closed or merged                                               |
+| `reviews_disabled`, `pr_comments_disabled`         | That feedback kind is turned off                                         |
+| `author_lacks_write_permission`                    | A human author without write access                                      |
+| `bot_not_allowed`                                  | A bot review from a bot not in the allowlist                             |
+| `bot_pr_comment`                                   | A top-level comment authored by any bot                                  |
+| `own_reviews_disabled`                             | The app's own review while OpenInspect reviews are off                   |
+| `own_review_replies`                               | An OpenInspect review with no body whose comments are all thread replies |
+| `unsupported_author_type`                          | The author is neither a user nor a bot                                   |
+| `explicit_mention`                                 | A human comment that mentions the bot (handled by the mention flow)      |
+| `review_state_not_actionable`                      | An approval or another non-actionable review state                       |
+| `empty_feedback`                                   | Nothing to act on                                                        |
+| `attempt_limit`                                    | The PR reached its 24-hour attempt cap                                   |
+| `session_closed`, `budget_exhausted`, `queue_full` | The owning session cannot accept more prompts                            |
 
 Feedback larger than 200,000 bytes after serialization is rejected outright.
 
 ## Commit signing
 
-OpenInspect can sign agent-created commits with one deployment-wide OpenSSH Ed25519 key, configured under Settings › Integrations › GitHub › Commit signing. The commit author stays the prompting user (or OpenInspect when unavailable), the committer and signer is a dedicated signing account, branches are pushed by the GitHub App, and the PR author is the prompting user's OAuth identity when available. The signature attests to the deployment, not to the attributed user, and GitHub vigilant mode shows such commits as **Partially verified**. Private keys never reach a sandbox. Setup, rotation, and limitations are covered in [Source control](/configure/source-control).
+OpenInspect can sign agent-created commits with one deployment-wide OpenSSH Ed25519 key, configured under Settings › Integrations › GitHub › Commit signing.
+
+- **Commit author:** the prompting user, or OpenInspect when unavailable.
+- **Committer and signer:** a dedicated signing account.
+- **Branch push:** the GitHub App.
+- **PR author:** the prompting user's OAuth identity when available.
+- **What the signature proves:** it attests to the deployment, not to the attributed user, so GitHub vigilant mode shows such commits as **Partially verified**.
+- **Key handling:** private keys never reach a sandbox.
+
+Setup, rotation, and limitations are covered in [Source control](/configure/source-control).
 
 ## Admin and safety notes
 
-**Access boundaries.** Repository access is deployment-scoped through the GitHub App installation; install the App only on intended repositories and use **Repository Scope** as an extra filter. The same App handles OAuth and repository access, and its credentials and webhook secrets stay server-side. By default trigger access requires write, maintain, or admin permission; **Only specific users** replaces that check with the list.
-
-**Bot behavior.** Auto-review skips drafts and PRs opened by the App. The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention it. If it cannot load its settings, it fails closed and starts nothing.
-
-**Prompt safety.** Code-review prompts wrap the PR title, author, branches, and description as untrusted; comment prompts wrap the triggering comment. Review-thread file and diff context, and anything the agent reads from GitHub later, are not separately transformed. Webhooks are verified, and duplicate deliveries are deduplicated so retries do not create duplicate sessions.
+| Area              | What to know                                                                                                                                                                                                                                                                           |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Access boundaries | Repository access is deployment-scoped through the GitHub App installation. Install the App only on intended repositories and use **Repository Scope** as an extra filter. The same App handles OAuth and repository access, and its credentials and webhook secrets stay server-side. |
+| Trigger access    | By default, trigger access requires write, maintain, or admin permission. **Only specific users** replaces that check with the list.                                                                                                                                                   |
+| Bot behavior      | Auto-review skips drafts and PRs opened by the App. The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention it. If it cannot load its settings, it fails closed and starts nothing.                                                           |
+| Prompt safety     | Code-review prompts wrap the PR title, author, branches, and description as untrusted; comment prompts wrap the triggering comment. Review-thread file and diff context, and anything the agent reads from GitHub later, are not separately transformed.                               |
+| Webhooks          | Webhooks are verified, and duplicate deliveries are deduplicated so retries do not create duplicate sessions.                                                                                                                                                                          |
 
 ## Troubleshooting
 
@@ -220,7 +241,7 @@ OpenInspect can sign agent-created commits with one deployment-wide OpenSSH Ed25
   <Accordion title="Auto-review did not run">
     Auto-review only runs for newly opened, non-draft PRs. Drafts, PRs opened by the App,
     out-of-scope repositories, and non-allowed users are skipped. For a PR converted from draft,
-    mention the bot in a comment.
+    request the bot as a reviewer or mention it in a comment.
 
 </Accordion>
   <Accordion title="A mention did not start a session">

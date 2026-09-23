@@ -13,24 +13,26 @@ relatedCode:
   - docs/OPENCOMPUTER_PROVIDER.md
   - packages/shared/src/types/integrations.ts
   - packages/web/src/lib/sandbox-provider.ts
+  - packages/web/src/components/settings/sandbox-settings.tsx
+  - packages/control-plane/src/sandbox/providers/vercel/provider.ts
 ---
 
-This page compares the sandbox providers a deployment can run on and lists the differences you will notice as a user or administrator.
+This page compares the sandbox providers a deployment can run on: the operator picks one (`sandbox_provider` in the deployment configuration) for every session, and each runs the same [sandbox runtime](/reference/sandbox-environment) but differs in how sandboxes start, how saved state is kept, and which [sandbox settings](/configure/sandbox-settings) it honors.
 
-The provider is chosen by the deployment operator (`sandbox_provider` in the deployment configuration) and applies to every session. Users cannot switch providers from the app. Setup instructions live in the repository docs linked at the end of this page.
+## Which provider am I on?
 
-Every provider runs the same sandbox runtime: Debian Linux with Node.js 22, Python 3.12, git, the package managers, `agent-browser` with headless Chromium, and the OpenCode and Claude Agent harnesses. The differences are in how sandboxes start, how saved state is kept, and which [sandbox settings](/configure/sandbox-settings) the provider honors.
+Users cannot switch providers from the app. Settings › Sandbox names the provider when it cannot honor a field, for example "Per-session CPU and memory overrides are unavailable for daytona; resources are configured by the deployment." A timeout-only note ("Per-session timeout overrides are unavailable for ...") appears on Daytona as well. No note at all means Modal or Vercel Sandboxes; ask your operator which one.
 
 ## Comparison
 
-|                                | Modal                                                   | Daytona                                                                          | Vercel Sandboxes                                              | OpenComputer                                                  | E2B                                                                                   |
-| ------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Startup model                  | Fresh sandbox from the base runtime image; near-instant | Persistent sandbox created from a base snapshot                                  | Fresh sandbox from a base-runtime snapshot                    | Fresh sandbox from a managed template                         | Fresh sandbox from a managed template                                                 |
-| Saved-state model              | Filesystem snapshot restore                             | Persistent sandbox: stopped on inactivity or stale heartbeat, then started again | Filesystem snapshot restore                                   | Checkpoint restore; OpenComputer owns hibernation and wake-up | Persistent sandbox: paused on inactivity, resumed on the next prompt                  |
-| Prebuilt images                | Yes (Modal image)                                       | Yes, once the operator opens admission (snapshot)                                | Yes (snapshot)                                                | Yes (checkpoint)                                              | Yes (snapshot)                                                                        |
-| CPU and memory settings        | Yes                                                     | No                                                                               | Yes, mapped to vCPUs                                          | No                                                            | No                                                                                    |
-| Sandbox timeout setting        | Yes                                                     | No                                                                               | Yes                                                           | Yes                                                           | Yes                                                                                   |
-| Lifetime limits in the sources | None stated                                             | None stated                                                                      | 45-minute sandbox lifetime; image builds capped at 35 minutes | None stated                                                   | Operator-set TTL (default 2 hours; about 1 hour on the Hobby tier); auto-pause at TTL |
+|                          | Modal                                                   | Daytona                                                                          | Vercel Sandboxes                                              | OpenComputer                                                  | E2B                                                                                   |
+| ------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Startup model            | Fresh sandbox from the base runtime image; near-instant | Persistent sandbox created from a base snapshot                                  | Fresh sandbox from a base-runtime snapshot                    | Fresh sandbox from a managed template                         | Fresh sandbox from a managed template                                                 |
+| Saved-state model        | Filesystem snapshot restore                             | Persistent sandbox: stopped on inactivity or stale heartbeat, then started again | Filesystem snapshot restore                                   | Checkpoint restore; OpenComputer owns hibernation and wake-up | Persistent sandbox: paused on inactivity, resumed on the next prompt                  |
+| Prebuilt images          | Yes (Modal image)                                       | Yes, once the operator opens admission (snapshot)                                | Yes (snapshot)                                                | Yes (checkpoint)                                              | Yes (snapshot)                                                                        |
+| CPU and memory settings  | Yes                                                     | No                                                                               | Yes, mapped to vCPUs                                          | No                                                            | No                                                                                    |
+| Sandbox timeout setting  | Yes                                                     | No                                                                               | Yes                                                           | Yes                                                           | Yes                                                                                   |
+| Default sandbox lifetime | 2 hours; configurable                                   | Persistent sandbox; the timeout setting is not honored                           | 45-minute sandbox lifetime; image builds capped at 35 minutes | OpenComputer's own default; configurable                      | Operator-set TTL (default 2 hours; about 1 hour on the Hobby tier); auto-pause at TTL |
 
 "Yes" for CPU and memory means the `cpuCores` and `memoryMib` fields under Settings › Sandbox take effect. On providers marked "No", those fields are dropped from the session's effective settings. The same applies to `sandboxTimeoutMs` where the timeout column says "No". The settings page hides the fields the current provider cannot honor.
 
@@ -102,6 +104,15 @@ Provider selection and credentials are operator tasks documented in the reposito
 - [Daytona prebuilds and admission](https://github.com/ColeMurray/background-agents/blob/main/docs/IMAGE_PREBUILD.md#daytona-prebuilds)
 
 When switching providers, keep the previous provider's credentials configured until its pending image cleanup has drained; cleanup runs against the provider each build was recorded on.
+
+## Troubleshooting
+
+| Symptom                                                                    | Cause                                                            | Fix                                                                                                   |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| CPU, memory, or Session Timeout fields are missing from Settings › Sandbox | The provider does not honor them; values stored earlier are kept | Nothing to fix in the app. Resources or timeouts are set by the deployment; ask the operator.         |
+| Settings › Images shows "Prebuilds are paused for this deployment"         | Daytona with `daytona_prebuilds_enabled` off (the default)       | Toggles still record intent. The operator opens admission; see the Daytona link under Provider setup. |
+| A Vercel session fails to start after raising CPU or memory                | Requests above 8 vCPUs or 16 GB are rejected by Vercel           | Lower `cpuCores` or `memoryMib` under Settings › Sandbox.                                             |
+| An image build on Vercel times out before the configured build timeout     | Vercel caps image-build execution at 35 minutes                  | Shorten `setup.sh`; environment builds run one setup script per repository.                           |
 
 ## Next steps
 

@@ -52,7 +52,7 @@ Archiving a child session does not affect its parent. A child that is archived m
 
 ## Batch archive
 
-The control plane also accepts a batch archive request for up to 25 sessions at a time, gated by the `sessions.bulk_archive` permission (Owner and Administrator). Each session in the batch is archived independently and reports its own outcome (`archived`, `already_archived`, `skipped_cancelled`, `skipped_queued_work`, `not_found`, or `failed`), so a refused session does not block the others. Sessions that failed can be retried on their own.
+The web app has no multi-select for archiving. The control plane accepts a batch request, `POST /sessions/batch-archive`, for up to 25 sessions at a time, gated by the `sessions.bulk_archive` permission (Owner and Administrator). Each session in the batch is archived independently and reports its own outcome (`archived`, `already_archived`, `skipped_cancelled`, `skipped_queued_work`, `not_found`, or `failed`), so a refused session does not block the others. Sessions that failed can be retried on their own.
 
 ## Restoring from Settings › Data Controls
 
@@ -85,7 +85,7 @@ When nothing is archived the page reads "No archived sessions. Sessions you arch
 
 ## Deleting sessions
 
-The permission `sessions.delete` exists (Owner, Administrator, Member) and the control plane exposes a delete operation that removes the session from the workspace index, but the web app has no delete action. There is no button to delete a session from the session page, the sessions list, or Settings › Data Controls. Archiving is the supported way to retire a session from day-to-day views while keeping its record.
+Sessions are archived, not deleted: the web app has no control to delete a session from the session page, the sessions list, or Settings › Data Controls. The permission `sessions.delete` exists (Owner, Administrator, Member) and the control plane exposes a delete operation that removes the session from the workspace index, but nothing in the web app calls it. Archiving is the supported way to retire a session from day-to-day views while keeping its record.
 
 ## Session export
 

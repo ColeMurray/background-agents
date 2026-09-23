@@ -45,7 +45,6 @@ The agent does not need you to stay connected. Send a prompt from the web app, S
 ## One lifecycle
 
 Every session, whether it starts from the web composer, a Slack message, or an automation, follows the same path.
-Every session, whether it starts from the web composer, a Slack message, or an automation, follows the same path.
 
 ```mermaid
 flowchart TB
@@ -62,12 +61,12 @@ flowchart TB
     PR --> Review([You review and merge])
 ```
 
-1. **Choose a target.** A single repository and branch, an ad-hoc set of up to 10 repositories, a saved environment, or no repository at all.
-2. **Describe the work.** One prompt with the goal, the constraints, and how the agent should prove it is done. Images can be attached.
-3. **The agent works in a sandbox.** OpenInspect creates an isolated sandbox, clones the repositories, runs the repository's setup and start scripts, installs managed skills, and starts the agent. Your prompt waits until the sandbox reports ready.
-4. **Monitor the timeline.** Tool calls, file edits, commands, and the agent's text stream into the session page as they happen. Follow-up prompts are queued in order; you can stop the running one.
-5. **Review evidence and changes.** Read the final response, open **Changes** for the diff compared with session start, and check the tests, screenshots, or other verification the agent produced.
-6. **Iterate, open a pull request, or take over.** Send another prompt on the same branch, ask for a pull request, or open the sandbox terminal and code server and finish the work yourself.
+From your side, each session comes down to four actions:
+
+1. **Choose** a target: a single repository and branch, an ad-hoc set of up to 10 repositories, a saved environment, or no repository at all.
+2. **Describe** the work in one prompt: the goal, the constraints, and how the agent should prove it is done. Images can be attached.
+3. **Review** the timeline, the final response, and **Changes** (the diff compared with session start), plus the tests or screenshots the agent produced.
+4. **Iterate**: send another prompt on the same branch, ask for a pull request, or open the sandbox terminal and code server and finish the work yourself.
 
 ## Capability map
 
