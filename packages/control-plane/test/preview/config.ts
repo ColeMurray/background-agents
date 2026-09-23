@@ -1,5 +1,6 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ENV_CONFIG_KEY_NAMES } from "../../src/node/config";
 import type { EnvConfig } from "../../src/types";
@@ -67,19 +68,27 @@ export async function webEnvFileKeys(webDir: string): Promise<string[]> {
   const keys = new Set<string>();
   for (const name of await readdir(webDir)) {
     if (name !== ".env" && !name.startsWith(".env.")) continue;
-    // Next follows symbolic links and skips missing targets, so the preview does the same.
-    const stats = await stat(join(webDir, name)).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    // Next also reads FIFOs, which cannot be inspected without consuming what Next would read.
-    if (stats?.isFIFO())
-      throw new Error(
-        `preflight: packages/web/${name} is a FIFO whose keys the preview cannot blank; move it aside first.`
-      );
-    if (!stats?.isFile()) continue;
-    const contents = await readFile(join(webDir, name), "utf8");
-    for (const [, key] of contents.matchAll(DOTENV_KEY)) keys.add(key);
+    // Next follows symbolic links and skips missing targets, so the preview does the same. One
+    // non-blocking handle is checked and read, so nothing swapped in between can stall startup.
+    const file = await open(join(webDir, name), constants.O_RDONLY | constants.O_NONBLOCK).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      }
+    );
+    if (!file) continue;
+    try {
+      const stats = await file.stat();
+      // Next also reads FIFOs, which cannot be inspected without consuming what Next would read.
+      if (stats.isFIFO())
+        throw new Error(
+          `preflight: packages/web/${name} is a FIFO whose keys the preview cannot blank; move it aside first.`
+        );
+      if (!stats.isFile()) continue;
+      for (const [, key] of (await file.readFile("utf8")).matchAll(DOTENV_KEY)) keys.add(key);
+    } finally {
+      await file.close();
+    }
   }
   return [...keys];
 }
