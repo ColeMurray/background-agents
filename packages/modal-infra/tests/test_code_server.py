@@ -4,25 +4,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.sandbox.launch import SandboxLauncher
 from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
 class TestGenerateCodeServerPassword:
-    """SandboxManager._generate_code_server_password tests."""
+    """SandboxLauncher._generate_code_server_password tests."""
 
     def test_returns_nonempty_password(self):
-        password = SandboxManager._generate_code_server_password()
+        password = SandboxLauncher._generate_code_server_password()
         assert len(password) > 0
 
     def test_generates_unique_passwords(self):
         passwords = set()
         for _ in range(20):
-            passwords.add(SandboxManager._generate_code_server_password())
+            passwords.add(SandboxLauncher._generate_code_server_password())
         assert len(passwords) == 20
 
 
 class TestResolveCodeServerTunnel:
-    """SandboxManager._resolve_tunnels tests for code-server port."""
+    """SandboxTunnels._resolve_tunnels tests for code-server port."""
 
     @pytest.mark.asyncio
     async def test_returns_tunnel_url_on_success(self):
@@ -32,7 +34,7 @@ class TestResolveCodeServerTunnel:
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {CODE_SERVER_PORT: tunnel}
 
-        resolved = await SandboxManager._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
+        resolved = await SandboxTunnels._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
         assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
 
     @pytest.mark.asyncio
@@ -40,9 +42,9 @@ class TestResolveCodeServerTunnel:
         sandbox = MagicMock()
         sandbox.tunnels.side_effect = Exception("tunnel unavailable")
 
-        with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
+        with patch("src.sandbox.tunnels.asyncio.sleep", new_callable=AsyncMock):
+            resolved = await SandboxTunnels._resolve_tunnels(
+                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff_seconds=0.0
             )
         assert resolved == {}
         assert sandbox.tunnels.call_count == 2
@@ -52,9 +54,9 @@ class TestResolveCodeServerTunnel:
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {}  # no entry for CODE_SERVER_PORT
 
-        with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
+        with patch("src.sandbox.tunnels.asyncio.sleep", new_callable=AsyncMock):
+            resolved = await SandboxTunnels._resolve_tunnels(
+                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff_seconds=0.0
             )
         assert resolved == {}
 
@@ -69,9 +71,9 @@ class TestResolveCodeServerTunnel:
             {CODE_SERVER_PORT: tunnel},
         ]
 
-        with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff=0.0
+        with patch("src.sandbox.tunnels.asyncio.sleep", new_callable=AsyncMock):
+            resolved = await SandboxTunnels._resolve_tunnels(
+                sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff_seconds=0.0
             )
         assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
         assert sandbox.tunnels.call_count == 2
@@ -96,12 +98,12 @@ class TestCreateSandboxCodeServer:
 
         fake_create = MagicMock()
         fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
 
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=("https://cs.example.com", None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls("https://cs.example.com", None, None, None)),
         )
 
         manager = SandboxManager()
@@ -140,10 +142,10 @@ class TestCreateSandboxCodeServer:
 
         fake_create = MagicMock()
         fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
 
-        tunnel_mock = AsyncMock(return_value=(None, None, None, None))
-        monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", tunnel_mock)
+        tunnel_mock = AsyncMock(return_value=TunnelUrls(None, None, None, None))
+        monkeypatch.setattr(SandboxTunnels, "resolve", tunnel_mock)
 
         manager = SandboxManager()
         config = SandboxConfig(
@@ -187,12 +189,12 @@ class TestRestoreSandboxCodeServer:
 
         fake_create = MagicMock()
         fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
+        monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", fake_from_id)
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
         monkeypatch.setattr(
-            SandboxManager,
-            "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=("https://cs-restored.example.com", None, None, None)),
+            SandboxTunnels,
+            "resolve",
+            AsyncMock(return_value=TunnelUrls("https://cs-restored.example.com", None, None, None)),
         )
 
         manager = SandboxManager()
@@ -238,10 +240,10 @@ class TestRestoreSandboxCodeServer:
 
         fake_create = MagicMock()
         fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", fake_from_id)
-        monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", fake_create)
-        tunnel_mock = AsyncMock(return_value=(None, None, None, None))
-        monkeypatch.setattr(SandboxManager, "_resolve_and_setup_tunnels", tunnel_mock)
+        monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", fake_from_id)
+        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
+        tunnel_mock = AsyncMock(return_value=TunnelUrls(None, None, None, None))
+        monkeypatch.setattr(SandboxTunnels, "resolve", tunnel_mock)
 
         manager = SandboxManager()
         handle = await manager.restore_from_snapshot(
