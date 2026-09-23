@@ -9,7 +9,7 @@
   "scripts": {
     "preview": "node scripts/preview.mjs",
     "preview:open": "node scripts/preview.mjs open",
-    "test:preview": "npm run build -w @open-inspect/shared && playwright test --config packages/web/playwright.config.ts",
+    "test:preview": "npm run build -w @open-inspect/shared && npm run test:preview -w @open-inspect/control-plane && playwright test --config packages/web/playwright.config.ts",
     "sandbox:images": "python3 packages/sandbox-images/cli.py",
     "lint": "eslint .",
     "lint:complexity": "node scripts/lint-complexity.mjs",

@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:preview": "vitest run --config vitest.preview.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p test/integration",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"

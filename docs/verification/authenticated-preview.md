@@ -110,20 +110,21 @@ name. `localhost` keeps separate cookies.
    result.
 
 ```bash
-# Install the pinned test browser once, then run the real-stack browser regressions.
+# Install the pinned test browser once, then run every preview check: the fixture/auth/ownership
+# contracts with the real idle/resume regression, then the real-stack browser regressions.
 npx playwright install chromium
 npm run test:preview
 
-# Fast fixture/auth/ownership contracts plus the real idle/resume regression.
-npm run build -w @open-inspect/shared
-npm test -w @open-inspect/control-plane -- test/preview test/support
+# The contracts alone, after building @open-inspect/shared.
+npm run test:preview -w @open-inspect/control-plane
 ```
 
 Browser tests use one worker, no retries, no mocked first-party APIs, and fresh state for each test.
 The streaming test explicitly holds/releases the external peer; it does not race a fixed sleep. The
 idle regression uses a short inactivity configuration but retains the real scheduler's minimum
 recheck interval, so it takes roughly half a minute. Shutdown uses the normal Node drain budget:
-recent client-auth timeout tasks can take several seconds to finish even after sockets close.
+recent client-auth timeout tasks can take several seconds to finish even after sockets close. The
+contracts have their own Vitest lane; the control-plane unit suite does not run them.
 
 ## Ownership, reset and errors
 
