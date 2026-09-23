@@ -77,6 +77,10 @@ function SessionsContent() {
   const updateQuery = useCallback(
     (patch: Partial<SessionDiscoveryQuery>) => {
       const pending = pendingSearch.current;
+      // Compare against the state this page last wrote, not the rendered
+      // URL: a reversal made before the previous navigation lands must still
+      // be sent, or the earlier navigation wins and the reversal is lost.
+      const previousHref = buildSessionsHref(latestQuery.current);
       const next = {
         ...latestQuery.current,
         ...(pending !== null ? { q: pending } : {}),
@@ -85,9 +89,9 @@ function SessionsContent() {
       latestQuery.current = next;
       if ("q" in patch) pendingSearch.current = null;
       const href = buildSessionsHref(next);
-      if (href !== buildSessionsHref(query)) router.replace(href, { scroll: false });
+      if (href !== previousHref) router.replace(href, { scroll: false });
     },
-    [query, router]
+    [router]
   );
   const clearFilters = useCallback(() => {
     pendingSearch.current = null;

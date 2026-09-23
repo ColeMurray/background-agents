@@ -310,6 +310,99 @@ describe("session discovery search (D1)", () => {
     expect(paged).toEqual([...ids].sort().reverse());
   });
 
+  it("moves a session updated between page requests to the top instead of into the chain", async () => {
+    const store = new SessionIndexStore(env.DB);
+    for (let index = 1; index <= 6; index += 1) {
+      await seed(store, { id: `s${index}`, title: "walk", updatedAt: index });
+    }
+
+    const first = await store.list({ search: "walk", limit: 2, offset: 0 });
+    expect(first.sessions.map((session) => session.id)).toEqual(["s6", "s5"]);
+
+    // Activity on a not-yet-paged session reorders the list underneath the
+    // walk. The order key is mutable, so no offset or keyset cursor over it
+    // can hand that session to a later page: it now sorts above everything
+    // already seen. What the contract guarantees instead: no other session
+    // is skipped, a repeated row is the only artifact (the client drops it),
+    // and the moved session leads the next first page.
+    await store.updateTitle("s2", "walk again", 100);
+
+    const second = await store.list({ search: "walk", limit: 2, offset: 2 });
+    expect(second.sessions.map((session) => session.id)).toEqual(["s5", "s4"]);
+    const third = await store.list({ search: "walk", limit: 2, offset: 4 });
+    expect(third.sessions.map((session) => session.id)).toEqual(["s3", "s1"]);
+    expect(third.hasMore).toBe(false);
+
+    const walked = [...first.sessions, ...second.sessions, ...third.sessions].map((s) => s.id);
+    expect(new Set(walked)).toEqual(new Set(["s6", "s5", "s4", "s3", "s1"]));
+    expect(walked.filter((id) => id === "s5")).toHaveLength(2);
+
+    const refreshed = await store.list({ search: "walk", limit: 2, offset: 0 });
+    expect(refreshed.sessions.map((session) => session.id)).toEqual(["s2", "s6"]);
+  });
+
+  it("records timings for a 5,000-session history", async () => {
+    const total = 5_000;
+    await env.DB.prepare(
+      `WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
+       INSERT INTO sessions (id, title, repo_owner, repo_name, status, spawn_source, created_at, updated_at)
+       SELECT 'bulk-' || printf('%05d', n), 'Routine work ' || n,
+              'owner' || (n % 10), 'repo' || (n % 10),
+              CASE WHEN n % 7 = 0 THEN 'archived' ELSE 'completed' END, 'user', n * 1000, n * 1000
+       FROM seq`
+    )
+      .bind(total)
+      .run();
+    // Half the sessions carry member rows for their primary; a tenth a second member.
+    await env.DB.prepare(
+      `INSERT INTO session_repositories (session_id, position, repo_owner, repo_name, repo_id, base_branch)
+       SELECT id, 0, repo_owner, repo_name, NULL, 'main' FROM sessions
+       WHERE CAST(substr(id, 6) AS INTEGER) % 2 = 0`
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO session_repositories (session_id, position, repo_owner, repo_name, repo_id, base_branch)
+       SELECT id, 1, 'second', 'member', NULL, 'main' FROM sessions
+       WHERE CAST(substr(id, 6) AS INTEGER) % 10 = 0`
+    ).run();
+    const store = new SessionIndexStore(env.DB);
+
+    const median = async (options: ListSessionsOptions, runs = 5): Promise<number> => {
+      const durations: number[] = [];
+      for (let run = 0; run < runs; run += 1) {
+        const started = performance.now();
+        await store.list({ ...options, viewerUserId: ALICE });
+        durations.push(performance.now() - started);
+      }
+      durations.sort((a, b) => a - b);
+      return Math.round(durations[Math.floor(runs / 2)]);
+    };
+    const cases: Array<[string, ListSessionsOptions, number]> = [
+      ["default page", { excludeStatus: "archived" }, 50],
+      [
+        "repository via scalar primary (500 matches)",
+        { excludeStatus: "archived", repository: { repoOwner: "owner3", repoName: "repo3" } },
+        50,
+      ],
+      [
+        "repository via member rows only (500 matches)",
+        { excludeStatus: "archived", repository: { repoOwner: "second", repoName: "member" } },
+        50,
+      ],
+      [
+        "repository with no sessions (full walk)",
+        { excludeStatus: "archived", repository: { repoOwner: "nobody", repoName: "nothing" } },
+        0,
+      ],
+      ["search with no match (full walk)", { excludeStatus: "archived", search: "zzz-none" }, 0],
+      ["search with one match", { excludeStatus: "archived", search: "work 4999" }, 1],
+    ];
+    for (const [label, options, expectedRows] of cases) {
+      const result = await store.list({ ...options, viewerUserId: ALICE });
+      expect(result.sessions, label).toHaveLength(expectedRows);
+      console.info(`[session-discovery] ${total} sessions, ${label}: ${await median(options)} ms`);
+    }
+  }, 60_000);
+
   it("walks an updated_at-ordered index and binds every search parameter", async () => {
     const preparedQueries: string[] = [];
     const recordingDb = {
@@ -350,6 +443,20 @@ describe("session discovery search (D1)", () => {
       "search-only"
     );
     expect(searchPlan).toMatch(/SCAN sessions USING INDEX idx_sessions_updated_at/);
+
+    // A repository nobody uses walks the whole ordered history (LOWER() keeps
+    // legacy mixed-case rows matching but costs the repository indexes); see
+    // the timings recorded by the 5,000-session test.
+    const noMatchRepositoryPlan = await explain(
+      {
+        excludeStatus: "archived",
+        repository: { repoOwner: "nobody", repoName: "nothing" },
+        viewerUserId: ALICE,
+      },
+      ["archived", "nobody", "nothing", "nobody", "nothing", 51, 0, ALICE],
+      "no-match repository"
+    );
+    expect(noMatchRepositoryPlan).toMatch(/SCAN sessions USING INDEX idx_sessions_updated_at/);
 
     const composedPlan = await explain(
       {

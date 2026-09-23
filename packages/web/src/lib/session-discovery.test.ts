@@ -50,24 +50,47 @@ describe("session discovery URL state", () => {
     });
   });
 
-  it("reports every value the API would reject instead of widening the view", () => {
-    expect(
-      parseSessionDiscoveryQuery(
-        new URLSearchParams(
-          `q=${"x".repeat(201)}&createdBy=ffffffffffffffffffffffffffffffff&repoOwner=acme&environmentId=%20&lifecycle=deleted&origin=automations`
-        )
-      )
-    ).toEqual({
+  it.each([
+    ["an oversized search", `q=${"x".repeat(201)}`, ["q"]],
+    ["a creator other than me", "createdBy=ffffffffffffffffffffffffffffffff", ["createdBy"]],
+    ["a repository owner without a name", "repoOwner=acme", ["repoName"]],
+    ["a repository name without an owner", "repoName=web-app", ["repoOwner"]],
+    ["a blank repository owner", "repoOwner=%20&repoName=web-app", ["repoOwner"]],
+    ["a blank environment", "environmentId=%20", ["environmentId"]],
+    ["an oversized environment", `environmentId=${"e".repeat(257)}`, ["environmentId"]],
+    ["an oversized repository name", `repoOwner=acme&repoName=${"n".repeat(257)}`, ["repoName"]],
+    ["an unknown lifecycle", "lifecycle=deleted", ["lifecycle"]],
+    ["an unknown origin", "origin=automations", ["origin"]],
+  ])("refuses %s instead of widening the view", (_label, url, invalidParams) => {
+    expect(parseSessionDiscoveryQuery(new URLSearchParams(url))).toEqual({
       success: false,
-      invalidParams: ["q", "createdBy", "repoName", "environmentId", "lifecycle", "origin"],
+      invalidParams,
     });
-    expect(parseSessionDiscoveryQuery(new URLSearchParams("repoName=web-app"))).toEqual({
-      success: false,
-      invalidParams: ["repoOwner"],
-    });
+  });
+
+  it("refuses parameters the page has no control for, even ones the API accepts", () => {
+    // `status=archived` is a valid API filter, but this page expresses lifecycle
+    // through `lifecycle`; honouring it would render a view the URL misnames.
     expect(
-      parseSessionDiscoveryQuery(new URLSearchParams("repoOwner=%20&repoName=web-app"))
-    ).toEqual({ success: false, invalidParams: ["repoOwner"] });
+      parseSessionDiscoveryQuery(new URLSearchParams("status=archived&limit=5&utm_source=x"))
+    ).toEqual({ success: false, invalidParams: ["status", "limit", "utm_source"] });
+  });
+
+  it("refuses repeated parameters", () => {
+    expect(parseSessionDiscoveryQuery(new URLSearchParams("q=a&q=b&createdBy=me"))).toEqual({
+      success: false,
+      invalidParams: ["q"],
+    });
+    expect(parseSessionDiscoveryQuery(new URLSearchParams("createdBy=me&createdBy=me"))).toEqual({
+      success: false,
+      invalidParams: ["createdBy"],
+    });
+  });
+
+  it("reports every refused parameter of one link", () => {
+    expect(
+      parseSessionDiscoveryQuery(new URLSearchParams("status=archived&lifecycle=deleted&origin=x"))
+    ).toEqual({ success: false, invalidParams: ["status", "origin", "lifecycle"] });
   });
 
   it("builds shareable hrefs from partial state", () => {

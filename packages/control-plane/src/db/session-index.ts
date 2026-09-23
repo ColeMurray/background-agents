@@ -31,9 +31,13 @@ import {
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
 import { bulkInsertStatements } from "./bulk-insert";
-import { LIKE_ESCAPE_CLAUSE, likeContains, likePrefix } from "./like-pattern";
 import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
+import {
+  buildSessionListPredicates,
+  REPOSITORY_MEMBERSHIP_SQL,
+  type SessionListFilters,
+} from "./session-list-predicates";
 import {
   SessionInboxStore,
   type ListSessionInboxOptions,
@@ -154,22 +158,7 @@ interface SessionModelProviderAuthRow {
 }
 
 /** Filters, pagination, and viewer read state for a session list query. */
-export interface ListSessionsOptions {
-  status?: SessionStatus;
-  excludeStatus?: SessionStatus;
-  excludeAutomationLineage?: boolean;
-  createdByUserIds?: readonly string[];
-  /**
-   * Discovery search text, already trimmed and bounded by the shared query
-   * codec. See `SessionListQuery.q` for the matching rules; the pattern is
-   * bound, never interpolated, and LIKE metacharacters match literally.
-   */
-  search?: string;
-  /** Sessions whose member set (or scalar primary) includes this repository. */
-  repository?: { repoOwner: string; repoName: string };
-  environmentId?: string;
-  /** Exact persisted `spawn_source`; see `SessionListQuery.origin`. */
-  spawnSource?: SpawnSource;
+export interface ListSessionsOptions extends SessionListFilters {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
@@ -526,16 +515,7 @@ export class SessionIndexStore {
     const row = await this.db
       .prepare(
         `SELECT 1 AS ok FROM sessions
-         WHERE id = ?
-           AND (
-             (LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
-             OR EXISTS (
-               SELECT 1 FROM session_repositories sr
-               WHERE sr.session_id = sessions.id
-                 AND LOWER(sr.repo_owner) = LOWER(?)
-                 AND LOWER(sr.repo_name) = LOWER(?)
-             )
-           )`
+         WHERE id = ? AND ${REPOSITORY_MEMBERSHIP_SQL}`
       )
       .bind(sessionId, repoOwner, repoName, repoOwner, repoName)
       .first<{ ok: number }>();
@@ -546,94 +526,11 @@ export class SessionIndexStore {
   /** List sessions with optional viewer-specific read state. */
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
     const {
-      status,
-      excludeStatus,
-      excludeAutomationLineage,
-      createdByUserIds,
-      search,
-      repository,
-      environmentId,
-      spawnSource,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
     } = options;
-
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (status) {
-      conditions.push("status = ?");
-      params.push(status);
-    }
-
-    if (excludeStatus) {
-      conditions.push("status != ?");
-      params.push(excludeStatus);
-    }
-
-    if (excludeAutomationLineage) {
-      // The "Mine" view excludes sessions no human initiated in the app.
-      // github-bot sessions are attributed to the webhook sender (the verified
-      // actor), but auto reviews and review-request handling are bot-initiated,
-      // so they are lineage-excluded alongside automation runs.
-      conditions.push("automation_id IS NULL AND spawn_source NOT IN ('automation', 'github-bot')");
-    }
-
-    if (createdByUserIds?.length) {
-      conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
-      params.push(...createdByUserIds);
-    }
-
-    if (environmentId) {
-      conditions.push("environment_id = ?");
-      params.push(environmentId);
-    }
-
-    if (spawnSource) {
-      conditions.push("spawn_source = ?");
-      params.push(spawnSource);
-    }
-
-    if (repository) {
-      // Same membership rule as isRepositoryAssociated: the scalar primary
-      // serves sessions that predate session_repositories, and the member
-      // table serves every position of a multi-repository session.
-      conditions.push(
-        `((LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
-          OR EXISTS (
-            SELECT 1 FROM session_repositories sr
-            WHERE sr.session_id = sessions.id
-              AND LOWER(sr.repo_owner) = LOWER(?)
-              AND LOWER(sr.repo_name) = LOWER(?)
-          ))`
-      );
-      params.push(
-        repository.repoOwner,
-        repository.repoName,
-        repository.repoOwner,
-        repository.repoName
-      );
-    }
-
-    if (search) {
-      // SQLite LIKE is case-insensitive for ASCII. The "owner/name" form lets
-      // one pattern match an owner, a name, or the joined label; a NULL scalar
-      // repository concatenates to NULL and simply fails to match.
-      const contains = likeContains(search);
-      conditions.push(
-        `(title LIKE ? ${LIKE_ESCAPE_CLAUSE}
-          OR id LIKE ? ${LIKE_ESCAPE_CLAUSE}
-          OR (repo_owner || '/' || repo_name) LIKE ? ${LIKE_ESCAPE_CLAUSE}
-          OR EXISTS (
-            SELECT 1 FROM session_repositories sr
-            WHERE sr.session_id = sessions.id
-              AND (sr.repo_owner || '/' || sr.repo_name) LIKE ? ${LIKE_ESCAPE_CLAUSE}
-          ))`
-      );
-      params.push(contains, likePrefix(search), contains, contains);
-    }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const { where, params } = buildSessionListPredicates(options);
 
     // `id DESC` breaks updated_at ties so offset pages never overlap or skip.
     const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`;

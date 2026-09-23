@@ -304,6 +304,27 @@ describe("SessionsPage", () => {
     );
   });
 
+  it("sends a reversal made before the previous navigation lands", () => {
+    render(<SessionsPage />);
+
+    // The URL still shows the default view while the first replace is in flight.
+    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
+      target: { value: "all" },
+    });
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?lifecycle=all", { scroll: false });
+    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
+      target: { value: "nonarchived" },
+    });
+    expect(mockReplace).toHaveBeenCalledTimes(2);
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
+
+    // Re-selecting the state already written is not a navigation.
+    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
+      target: { value: "nonarchived" },
+    });
+    expect(mockReplace).toHaveBeenCalledTimes(2);
+  });
+
   it("follows URL changes from browser navigation", () => {
     const { rerender } = render(<SessionsPage />);
 
@@ -392,11 +413,13 @@ describe("SessionsPage", () => {
   });
 
   it("refuses a link with unsupported filters instead of showing a wider result set", () => {
-    mockSearchParamsState.value = new URLSearchParams("origin=automations&repoOwner=acme");
+    // `status` is a valid API filter the page has no control for; `origin` is
+    // a value the API itself rejects. Both refuse rather than widen the view.
+    mockSearchParamsState.value = new URLSearchParams("status=archived&origin=automations");
     render(<SessionsPage />);
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "This link has unsupported filters (repoName, origin), so no sessions are shown."
+      "This link has unsupported filters (status, origin), so no sessions are shown."
     );
     expect(lastOptions()).toEqual({ enabled: false });
     expect(screen.getByRole("status")).toHaveTextContent("No sessions shown");

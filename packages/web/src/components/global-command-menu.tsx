@@ -50,14 +50,21 @@ function buildSessionUrl(session: SessionListItem): string {
   return query ? `/session/${session.id}?${query}` : `/session/${session.id}`;
 }
 
+/** Item value of the exhaustive-search handoff; it matches every search. */
+const SEARCH_ALL_SESSIONS_VALUE = "search all sessions";
+
 function filterCommandItem(value: string, search: string, keywords?: string[]): number {
+  // The handoff is an answer to any query the recent set cannot satisfy, so it
+  // is a real, counted, keyboard-reachable result for every search. Groups tie
+  // on score in insertion order, so it stays after genuine recent matches.
+  if (value === SEARCH_ALL_SESSIONS_VALUE) return 1;
   return matchesSearchTerms(`${value} ${keywords?.join(" ") ?? ""}`, search) ? 1 : 0;
 }
 
 /**
  * The exhaustive-search handoff. The menu only searches the fetched recent
- * set, so this item stays visible for any typed text and carries it to the
- * Sessions page, which searches full history server-side.
+ * set, so this item matches any typed text and carries it to the Sessions
+ * page, which searches full history server-side.
  */
 function SearchAllSessionsItem({ onSelect }: { onSelect: (href: string) => void }) {
   const search = useCommandState((state) => state.search);
@@ -65,8 +72,7 @@ function SearchAllSessionsItem({ onSelect }: { onSelect: (href: string) => void 
 
   return (
     <CommandItem
-      forceMount
-      value="search all sessions"
+      value={SEARCH_ALL_SESSIONS_VALUE}
       onSelect={() => onSelect(href)}
       className="items-start"
     >
@@ -253,9 +259,7 @@ export function GlobalCommandMenu({
           {hasPermission("sessions.read") && (
             <>
               <CommandSeparator />
-              {/* cmdk hides a group whose registered items all fail the filter; the
-                  handoff item is never registered, so the group must force-mount too. */}
-              <CommandGroup heading="All sessions" forceMount>
+              <CommandGroup heading="All sessions">
                 <SearchAllSessionsItem onSelect={(href) => handleSelect(() => onNavigate(href))} />
               </CommandGroup>
             </>

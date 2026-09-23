@@ -122,20 +122,55 @@ describe("GlobalCommandMenu", () => {
     });
     const count = screen.getByRole("status");
 
-    // The force-mounted "Search all sessions" handoff is not a result: cmdk
-    // never registers it for filtering, so it is not counted or auto-selected.
-    const handoff = screen.getByText("Search all sessions").closest("[cmdk-item]");
-    expect(handoff).not.toBeNull();
-    expect(count).toHaveTextContent(`${screen.getAllByRole("option").length - 1} results`);
+    // The "Search all sessions" handoff is an ordinary counted result.
+    expect(screen.getByRole("option", { name: /Search all sessions/ })).toBeVisible();
+    expect(count).toHaveTextContent(`${screen.getAllByRole("option").length} results`);
     expect(screen.getByText("Navigate")).toBeInTheDocument();
     expect(screen.getByText("Select")).toBeInTheDocument();
     expect(screen.getByText("Close")).toBeInTheDocument();
 
     await user.type(input, "no matching command destination");
 
-    await waitFor(() => expect(count).toHaveTextContent("0 results"));
-    expect(screen.getByText("No results found.")).toBeInTheDocument();
-    expect(screen.getByText("Search all sessions")).toBeVisible();
+    // Nothing recent matches, so the handoff is the one honest result: it is
+    // counted, the empty state does not contradict it, and it is selected.
+    await waitFor(() => expect(count).toHaveTextContent("1 result"));
+    expect(screen.queryByText("No results found.")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /Search all sessions/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+  });
+
+  it("reaches the exhaustive search from the keyboard when nothing recent matches", async () => {
+    const user = userEvent.setup();
+    const { onNavigate, onOpenChange } = renderMenu();
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+
+    await user.type(input, "old archived work{Enter}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work");
+  });
+
+  it("keeps genuine matches ahead of the handoff in keyboard order", async () => {
+    const user = userEvent.setup();
+    const { onNavigate } = renderMenu();
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+
+    await user.type(input, "sessions");
+
+    const options = screen.getAllByRole("option");
+    expect(options[0]).toHaveTextContent("Sessions");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    expect(options.at(-1)).toHaveTextContent("Search all sessions");
+
+    await user.keyboard("{End}{Enter}");
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=sessions");
   });
 
   it("navigates directly to a settings destination", async () => {

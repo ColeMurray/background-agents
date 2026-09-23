@@ -1,8 +1,9 @@
 import {
   DEFAULT_SESSION_LIST_LIMIT,
-  normalizeSessionListSearch,
+  parseSessionListQuery,
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
+  type SessionListQueryParam,
 } from "@open-inspect/shared/session-list-query";
 import {
   spawnSourceSchema,
@@ -76,81 +77,76 @@ function isLifecycle(value: string | null): value is SessionLifecycle {
   return SESSION_LIFECYCLES.includes(value as SessionLifecycle);
 }
 
-function nonEmpty(value: string | null): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed ? trimmed : null;
-}
+/** Page parameters carried unchanged to the shared list-query codec. */
+const SESSION_DISCOVERY_TRANSPORT_PARAMS = [
+  "q",
+  "createdBy",
+  "repoOwner",
+  "repoName",
+  "environmentId",
+  "origin",
+] as const satisfies readonly SessionListQueryParam[];
 
-/** Page URL parameters, named for the user-facing controls they carry. */
-type SessionDiscoveryParam =
-  | "q"
-  | "createdBy"
-  | "repoOwner"
-  | "repoName"
-  | "environmentId"
-  | "lifecycle"
-  | "origin";
+/** Every parameter a `/sessions` URL may carry; anything else is refused. */
+const SESSION_DISCOVERY_PARAMS: readonly string[] = [
+  ...SESSION_DISCOVERY_TRANSPORT_PARAMS,
+  "lifecycle",
+];
 
 export type SessionDiscoveryParseResult =
   | { success: true; data: SessionDiscoveryQuery }
-  | { success: false; invalidParams: SessionDiscoveryParam[] };
+  | { success: false; invalidParams: string[] };
 
 /**
- * Parse the page URL with the same strictness as the API. A value the
- * server would reject (or one this page has no control for, such as a
- * creator other than `me`) is reported instead of dropped, so a bad link
- * never silently shows a wider result set than it names.
+ * Parse the page URL. The shared list-query codec is the validation boundary
+ * for every transport parameter, so a value the API would reject is refused
+ * here first. The page adds its own rules: `createdBy` may only be `me` (the
+ * page has no control for other creators), `lifecycle` is the page's own
+ * control, no parameter repeats, and any other parameter is unsupported —
+ * including API parameters the page has no control for, such as `status`.
+ * Refusing is deliberate: a bad link must never silently show a wider or
+ * different result set than it names.
  */
 export function parseSessionDiscoveryQuery(
   searchParams: URLSearchParams
 ): SessionDiscoveryParseResult {
-  const invalidParams: SessionDiscoveryParam[] = [];
-
-  const q = normalizeSessionListSearch(searchParams.get("q"));
-  if (q === null) invalidParams.push("q");
-
-  const createdBy = searchParams.getAll("createdBy");
-  if (createdBy.some((value) => value !== SESSION_LIST_CURRENT_USER)) {
-    invalidParams.push("createdBy");
+  const invalidParams = new Set<string>();
+  for (const key of new Set(searchParams.keys())) {
+    if (!SESSION_DISCOVERY_PARAMS.includes(key) || searchParams.getAll(key).length > 1) {
+      invalidParams.add(key);
+    }
   }
 
-  const repoOwnerParam = searchParams.get("repoOwner");
-  const repoNameParam = searchParams.get("repoName");
-  const repoOwner = nonEmpty(repoOwnerParam);
-  const repoName = nonEmpty(repoNameParam);
-  if (repoOwnerParam !== null && repoOwner === null) {
-    invalidParams.push("repoOwner");
-  } else if (repoNameParam !== null && repoName === null) {
-    invalidParams.push("repoName");
-  } else if (repoOwner !== null && repoName === null) {
-    invalidParams.push("repoName");
-  } else if (repoOwner === null && repoName !== null) {
-    invalidParams.push("repoOwner");
+  const transport = new URLSearchParams();
+  for (const key of SESSION_DISCOVERY_TRANSPORT_PARAMS) {
+    const value = searchParams.get(key);
+    if (value !== null) transport.set(key, value);
   }
-
-  const environmentIdParam = searchParams.get("environmentId");
-  const environmentId = nonEmpty(environmentIdParam);
-  if (environmentIdParam !== null && environmentId === null) invalidParams.push("environmentId");
+  const parsed = parseSessionListQuery(transport);
+  if (!parsed.success) {
+    invalidParams.add(parsed.invalidParam);
+  } else if (parsed.data.createdBy.some((value) => value !== SESSION_LIST_CURRENT_USER)) {
+    invalidParams.add("createdBy");
+  }
 
   const lifecycleParam = searchParams.get("lifecycle");
-  if (lifecycleParam !== null && !isLifecycle(lifecycleParam)) invalidParams.push("lifecycle");
+  if (lifecycleParam !== null && !isLifecycle(lifecycleParam)) invalidParams.add("lifecycle");
 
-  const originParam = searchParams.get("origin");
-  const origin = originParam ? spawnSourceSchema.safeParse(originParam) : null;
-  if (origin && !origin.success) invalidParams.push("origin");
-
-  if (invalidParams.length > 0) return { success: false, invalidParams };
+  if (!parsed.success || invalidParams.size > 0) {
+    return { success: false, invalidParams: [...invalidParams] };
+  }
+  const { q, createdBy, repoOwner, repoName, environmentId, origin } = parsed.data;
   return {
     success: true,
     data: {
       q: q ?? "",
       creator: createdBy.length > 0 ? "mine" : "all",
       repository: repoOwner && repoName ? { repoOwner, repoName } : null,
-      environmentId,
+      environmentId: environmentId ?? null,
       lifecycle: isLifecycle(lifecycleParam)
         ? lifecycleParam
         : DEFAULT_SESSION_DISCOVERY_QUERY.lifecycle,
-      origin: origin?.success ? origin.data : null,
+      origin: origin ?? null,
     },
   };
 }

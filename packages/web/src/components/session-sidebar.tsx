@@ -384,14 +384,16 @@ export function SessionSidebar({
               </>
             )}
 
-            <Link
-              href={ARCHIVED_SESSIONS_HREF}
-              onClick={handleNavigationSelect}
-              className="mt-2 flex items-center gap-1 px-4 py-2 text-xs font-medium uppercase tracking-wider text-secondary-foreground transition hover:bg-muted hover:text-foreground"
-            >
-              <ChevronRightIcon className="h-3.5 w-3.5" />
-              Archived
-            </Link>
+            {hasPermission("sessions.read") && (
+              <Link
+                href={ARCHIVED_SESSIONS_HREF}
+                onClick={handleNavigationSelect}
+                className="mt-2 flex items-center gap-1 px-4 py-2 text-xs font-medium uppercase tracking-wider text-secondary-foreground transition hover:bg-muted hover:text-foreground"
+              >
+                <ChevronRightIcon className="h-3.5 w-3.5" />
+                Archived
+              </Link>
+            )}
           </>
         )}
       </div>

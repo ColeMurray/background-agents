@@ -231,6 +231,8 @@ describe("SessionSidebar", () => {
     authorization.permissions = new Set(["automations.read"]);
     render(<SessionSidebar />);
     expect(screen.queryByRole("link", { name: "Sessions" })).not.toBeInTheDocument();
+    // Every entry point to discovery sits behind the same permission.
+    expect(screen.queryByRole("link", { name: /Archived/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Automations" })).toBeInTheDocument();
   });
 
