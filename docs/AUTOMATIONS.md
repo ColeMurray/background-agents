@@ -128,13 +128,15 @@ Marker.io cannot attach the generic endpoint's bearer token. For a Marker worksp
 1. Create an **Inbound Webhook** automation and keep its automation ID.
 2. Set `marker_webhook_secret` to the signing secret shown by Marker.io, then deploy the control
    plane.
-3. Configure Marker to send `issue.created` for the intended project to
-   `https://<your-worker-url>/webhooks/marker/<automation-id>`.
-4. Add JSONPath filters for `$.type = issue.created` and the expected `$.data.project.id`.
-
-The adapter accepts JSON payloads up to 256 KB, verifies `X-Hub-Signature-256` over the raw body,
-deduplicates retried deliveries, and then dispatches the event through the selected inbound-webhook
-automation. The deployment-wide Marker secret matches Open-Inspect's single-tenant model.
+3. Configure Marker to send `issue.created`, `comment.created`, and `issue.status_updated` for the
+   intended project to `https://<your-worker-url>/webhooks/marker/<automation-id>`.
+4. Do not add one JSONPath project filter across those events: issue events carry the project at
+   `$.data.project.id`, while comments carry it at `$.data.issue.project.id`. Validate the project
+   and event shape in the automation instructions instead. Ignore automation-authored comments and
+   status updates that are not transitions back to an active state. The adapter accepts JSON
+   payloads up to 256 KB, verifies `X-Hub-Signature-256` over the raw body, deduplicates retried
+   deliveries, and then dispatches the event through the selected inbound-webhook automation. The
+   deployment-wide Marker secret matches Open-Inspect's single-tenant model.
 
 ### What the Agent Receives
 
