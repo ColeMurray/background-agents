@@ -113,6 +113,10 @@ async def test_supervisor_health_pulses_independently_of_bridge(tmp_path, monkey
         "sandbox_runtime.supervisor.read_health_snapshot",
         lambda: {"memory_available_mib": 1000},
     )
+    monkeypatch.setattr(
+        "sandbox_runtime.supervisor.read_top_processes",
+        lambda: [{"pid": 123, "name": "node", "rss_mib": 512}],
+    )
 
     def record(event, **_fields):
         if event == "supervisor.health":
@@ -121,11 +125,21 @@ async def test_supervisor_health_pulses_independently_of_bridge(tmp_path, monkey
     supervisor.log.info.side_effect = record
     await supervisor._health_loop()
 
-    fields = supervisor.log.info.call_args.kwargs
+    fields = next(
+        call.kwargs
+        for call in supervisor.log.info.call_args_list
+        if call.args[0] == "supervisor.health"
+    )
     assert fields["bridge_running"] is True
     assert fields["bridge_rss_mib"] == 150
     assert fields["memory_available_mib"] == 1000
     assert fields["supervisor_sleep_lag_ms"] >= 0
+    pressure = next(
+        call.kwargs
+        for call in supervisor.log.info.call_args_list
+        if call.args[0] == "supervisor.resource_pressure"
+    )
+    assert pressure["top_processes"] == [{"pid": 123, "name": "node", "rss_mib": 512}]
 
 
 @pytest.fixture(autouse=True)

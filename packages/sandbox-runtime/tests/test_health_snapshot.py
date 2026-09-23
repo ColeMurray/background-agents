@@ -23,6 +23,7 @@ def test_reads_available_linux_resource_counters(tmp_path, monkeypatch):
     monkeypatch.setattr(health_snapshot, "_PRESSURE_FILES", pressure)
 
     assert health_snapshot.read_health_snapshot() == {
+        "memory_total_mib": 4000,
         "memory_available_mib": 1500,
         "swap_total_mib": 2000,
         "swap_free_mib": 1000,
@@ -66,3 +67,19 @@ def test_missing_or_unlimited_counters_are_omitted(tmp_path, monkeypatch):
     monkeypatch.setattr(health_snapshot, "_CGROUP_MEMORY_MAX", maximum)
 
     assert health_snapshot.read_health_snapshot() == {}
+
+
+def test_top_processes_omits_command_lines_and_handles_disappearing_processes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(health_snapshot, "_PROC", tmp_path)
+    for pid, name, rss_kib in (("10", "node", 204800), ("11", "python", 102400)):
+        status = tmp_path / pid / "status"
+        status.parent.mkdir()
+        status.write_text(f"Name:\t{name}\nVmRSS:\t{rss_kib} kB\n")
+    (tmp_path / "12").mkdir()
+    (tmp_path / "self").mkdir()
+
+    assert health_snapshot.read_top_processes(limit=1) == [
+        {"pid": 10, "name": "node", "rss_mib": 200}
+    ]

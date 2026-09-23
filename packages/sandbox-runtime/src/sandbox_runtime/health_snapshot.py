@@ -4,6 +4,7 @@ from contextlib import suppress
 from pathlib import Path
 
 _MEMINFO = Path("/proc/meminfo")
+_PROC = Path("/proc")
 _LOADAVG = Path("/proc/loadavg")
 _VMSTAT = Path("/proc/vmstat")
 _PRESSURE_FILES = {
@@ -16,6 +17,7 @@ _CGROUP_MEMORY_CURRENT = Path("/sys/fs/cgroup/memory.current")
 _CGROUP_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
 _CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 _MEMINFO_FIELDS = {
+    "MemTotal": "memory_total_mib",
     "MemAvailable": "memory_available_mib",
     "SwapTotal": "swap_total_mib",
     "SwapFree": "swap_free_mib",
@@ -112,3 +114,29 @@ def read_health_snapshot() -> dict[str, int | float]:
                     result["process_threads"] = int(line.split()[1])
 
     return result
+
+
+def read_top_processes(limit: int = 5) -> list[dict[str, int | str]]:
+    """Best-effort RSS leaders without command lines, which may contain secrets."""
+    processes: list[dict[str, int | str]] = []
+    try:
+        entries = _PROC.iterdir()
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            status = _read(entry / "status")
+            if status is None:
+                continue
+            name = None
+            rss_mib = None
+            for line in status.splitlines():
+                if line.startswith("Name:"):
+                    name = line.partition(":")[2].strip()
+                elif line.startswith("VmRSS:"):
+                    with suppress(IndexError, ValueError):
+                        rss_mib = int(line.split()[1]) // 1024
+            if name and rss_mib is not None:
+                processes.append({"pid": int(entry.name), "name": name, "rss_mib": rss_mib})
+    except OSError:
+        return []
+    return sorted(processes, key=lambda process: int(process["rss_mib"]), reverse=True)[:limit]

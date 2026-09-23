@@ -18,7 +18,7 @@ from .constants import (
 )
 from .docker_control import DockerControl
 from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
-from .health_snapshot import read_health_snapshot
+from .health_snapshot import read_health_snapshot, read_top_processes
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 
@@ -486,12 +486,16 @@ class SandboxSupervisor:
             await asyncio.sleep(self.HEALTH_INTERVAL)
             if self.shutdown_event.is_set():
                 break
+            sleep_lag_ms = max(0, int((time.monotonic() - expected_wake) * 1000))
+            resources = read_health_snapshot()
             self.log.info(
                 "supervisor.health",
-                supervisor_sleep_lag_ms=max(0, int((time.monotonic() - expected_wake) * 1000)),
+                supervisor_sleep_lag_ms=sleep_lag_ms,
                 **self.agent_bridge.diagnostic_snapshot(),
-                **read_health_snapshot(),
+                **resources,
             )
+            if sleep_lag_ms > 5000 or resources.get("memory_available_mib", 4096) < 1024:
+                self.log.info("supervisor.resource_pressure", top_processes=read_top_processes())
 
     def _image_build_execution_timeout_seconds(self) -> int | None:
         raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
