@@ -22,8 +22,11 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { buildSessionsHref } from "@/lib/session-discovery";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
+/** Archived work is discovered on the Sessions page; unarchiving stays in Settings. */
+const ARCHIVED_SESSIONS_HREF = buildSessionsHref({ lifecycle: "archived" });
 type SessionGroupId = "needs-attention" | "in-progress" | "recent";
 
 const DEFAULT_SESSION_GROUP_EXPANDED_STATE: Record<SessionGroupId, boolean> = {
@@ -44,8 +47,8 @@ export function SearchSessionsButton({ onClick }: SidebarActionButtonProps) {
       variant="ghost"
       size="icon"
       onClick={onClick}
-      title={`Search sessions (${labels["open-command-menu"]})`}
-      aria-label={`Search sessions (${labels["open-command-menu"]})`}
+      title={`Quick search recent sessions (${labels["open-command-menu"]})`}
+      aria-label={`Quick search recent sessions (${labels["open-command-menu"]})`}
     >
       <SearchIcon className="w-4 h-4" />
     </Button>
@@ -299,8 +302,9 @@ export function SessionSidebar({
             key={href}
             href={href}
             onClick={handleNavigationSelect}
+            aria-current={pathname === href ? "page" : undefined}
             className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
-              pathname?.startsWith(href)
+              pathname === href || pathname?.startsWith(`${href}/`)
                 ? "text-foreground bg-muted"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
@@ -379,7 +383,7 @@ export function SessionSidebar({
             )}
 
             <Link
-              href="/settings?tab=data-controls"
+              href={ARCHIVED_SESSIONS_HREF}
               onClick={handleNavigationSelect}
               className="mt-2 flex items-center gap-1 px-4 py-2 text-xs font-medium uppercase tracking-wider text-secondary-foreground transition hover:bg-muted hover:text-foreground"
             >

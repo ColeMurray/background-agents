@@ -4,6 +4,15 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## September 23, 2026
 
+**Sessions discovery across full history.** A new **Sessions** destination in the sidebar (above
+Automations) searches every session the viewer may read, including archived work and history beyond
+the command menu's recent window. Search matches titles, session-id prefixes, and any member
+repository of a multi-repository session; creator, repository, environment, lifecycle, and
+automation-origin filters compose on the server and live in the URL, so a filtered view can be
+shared or reloaded. The command menu now labels its results as recent sessions and offers **Search
+all sessions**, carrying typed text to the page; the sidebar's Archived shortcut opens the archived
+view, with archive management still under Settings → Data Controls. The Inbox is unchanged.
+
 **Claude Opus 5.5.** Adds `anthropic/claude-opus-5-5` to the model picker and integrations, with
 adaptive thinking controls from low through max. The Claude Agent harness now uses
 `claude-agent-sdk` 0.2.158, whose bundled Claude Code release natively supports Opus 5.5.

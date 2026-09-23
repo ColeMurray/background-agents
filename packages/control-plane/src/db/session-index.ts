@@ -31,6 +31,7 @@ import {
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
 import { bulkInsertStatements } from "./bulk-insert";
+import { LIKE_ESCAPE_CLAUSE, likeContains, likePrefix } from "./like-pattern";
 import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import {
@@ -158,6 +159,17 @@ export interface ListSessionsOptions {
   excludeStatus?: SessionStatus;
   excludeAutomationLineage?: boolean;
   createdByUserIds?: readonly string[];
+  /**
+   * Discovery search text, already trimmed and bounded by the shared query
+   * codec. See `SessionListQuery.q` for the matching rules; the pattern is
+   * bound, never interpolated, and LIKE metacharacters match literally.
+   */
+  search?: string;
+  /** Sessions whose member set (or scalar primary) includes this repository. */
+  repository?: { repoOwner: string; repoName: string };
+  environmentId?: string;
+  /** Exact persisted `spawn_source`; see `SessionListQuery.origin`. */
+  spawnSource?: SpawnSource;
   limit?: number;
   offset?: number;
   viewerUserId?: string;
@@ -538,6 +550,10 @@ export class SessionIndexStore {
       excludeStatus,
       excludeAutomationLineage,
       createdByUserIds,
+      search,
+      repository,
+      environmentId,
+      spawnSource,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
@@ -568,9 +584,59 @@ export class SessionIndexStore {
       conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
       params.push(...createdByUserIds);
     }
+
+    if (environmentId) {
+      conditions.push("environment_id = ?");
+      params.push(environmentId);
+    }
+
+    if (spawnSource) {
+      conditions.push("spawn_source = ?");
+      params.push(spawnSource);
+    }
+
+    if (repository) {
+      // Same membership rule as isRepositoryAssociated: the scalar primary
+      // serves sessions that predate session_repositories, and the member
+      // table serves every position of a multi-repository session.
+      conditions.push(
+        `((LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
+          OR EXISTS (
+            SELECT 1 FROM session_repositories sr
+            WHERE sr.session_id = sessions.id
+              AND LOWER(sr.repo_owner) = LOWER(?)
+              AND LOWER(sr.repo_name) = LOWER(?)
+          ))`
+      );
+      params.push(
+        repository.repoOwner,
+        repository.repoName,
+        repository.repoOwner,
+        repository.repoName
+      );
+    }
+
+    if (search) {
+      // SQLite LIKE is case-insensitive for ASCII. The "owner/name" form lets
+      // one pattern match an owner, a name, or the joined label; a NULL scalar
+      // repository concatenates to NULL and simply fails to match.
+      const contains = likeContains(search);
+      conditions.push(
+        `(title LIKE ? ${LIKE_ESCAPE_CLAUSE}
+          OR id LIKE ? ${LIKE_ESCAPE_CLAUSE}
+          OR (repo_owner || '/' || repo_name) LIKE ? ${LIKE_ESCAPE_CLAUSE}
+          OR EXISTS (
+            SELECT 1 FROM session_repositories sr
+            WHERE sr.session_id = sessions.id
+              AND (sr.repo_owner || '/' || sr.repo_name) LIKE ? ${LIKE_ESCAPE_CLAUSE}
+          ))`
+      );
+      params.push(contains, likePrefix(search), contains, contains);
+    }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    // `id DESC` breaks updated_at ties so offset pages never overlap or skip.
+    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`;
     const pageParams = [...params, limit + 1, offset];
     const result = viewerUserId
       ? await this.db
@@ -583,7 +649,7 @@ export class SessionIndexStore {
              LEFT JOIN session_read_states read_state
                ON read_state.session_id = paged_sessions.id
               AND read_state.user_id = viewer.id
-             ORDER BY paged_sessions.updated_at DESC`
+             ORDER BY paged_sessions.updated_at DESC, paged_sessions.id DESC`
           )
           .bind(...pageParams, viewerUserId)
           .all<ViewerSessionRow>()

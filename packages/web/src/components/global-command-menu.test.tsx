@@ -122,7 +122,11 @@ describe("GlobalCommandMenu", () => {
     });
     const count = screen.getByRole("status");
 
-    expect(count).toHaveTextContent(`${screen.getAllByRole("option").length} results`);
+    // The force-mounted "Search all sessions" handoff is not a result: cmdk
+    // never registers it for filtering, so it is not counted or auto-selected.
+    const handoff = screen.getByText("Search all sessions").closest("[cmdk-item]");
+    expect(handoff).not.toBeNull();
+    expect(count).toHaveTextContent(`${screen.getAllByRole("option").length - 1} results`);
     expect(screen.getByText("Navigate")).toBeInTheDocument();
     expect(screen.getByText("Select")).toBeInTheDocument();
     expect(screen.getByText("Close")).toBeInTheDocument();
@@ -131,6 +135,7 @@ describe("GlobalCommandMenu", () => {
 
     await waitFor(() => expect(count).toHaveTextContent("0 results"));
     expect(screen.getByText("No results found.")).toBeInTheDocument();
+    expect(screen.getByText("Search all sessions")).toBeInTheDocument();
   });
 
   it("navigates directly to a settings destination", async () => {
@@ -148,7 +153,7 @@ describe("GlobalCommandMenu", () => {
     renderMenu();
 
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "request source"
     );
 
@@ -161,7 +166,7 @@ describe("GlobalCommandMenu", () => {
     renderMenu();
 
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "theme"
     );
 
@@ -174,7 +179,7 @@ describe("GlobalCommandMenu", () => {
     const user = userEvent.setup();
     const { props, rerender } = renderMenu();
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "theme"
     );
     expect(screen.queryByText("Source control")).not.toBeInTheDocument();
@@ -244,10 +249,71 @@ describe("GlobalCommandMenu", () => {
     ]);
 
     await user.type(
-      screen.getByPlaceholderText("Search sessions, settings, and commands..."),
+      screen.getByPlaceholderText("Quick search · recent sessions, settings, and commands"),
       "background investigate"
     );
 
     await waitFor(() => expect(screen.getByText("Investigate command search")).toBeInTheDocument());
+  });
+});
+
+describe("GlobalCommandMenu search-all handoff", () => {
+  it("labels the fetched set as recent and carries typed text to the Sessions page", async () => {
+    const user = userEvent.setup();
+    const { onNavigate, onOpenChange } = renderMenu([
+      {
+        id: "session-1",
+        title: "Investigate command search",
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        harness: "opencode",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status: "active",
+        parentSessionId: null,
+        spawnSource: "user",
+        spawnDepth: 0,
+        automationId: null,
+        automationRunId: null,
+        scmLogin: null,
+        userId: null,
+        totalCost: 0,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+        environmentId: null,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ]);
+
+    expect(screen.getByText("Recent sessions")).toBeInTheDocument();
+    expect(screen.getByText("Find past and current work across full history")).toBeInTheDocument();
+
+    const input = screen.getByRole("combobox", {
+      name: "Search commands, settings, and sessions",
+    });
+    await user.type(input, "old archived work");
+
+    // The handoff survives a search that matches no recent session.
+    await waitFor(() =>
+      expect(screen.getByText('Search full history for "old archived work"')).toBeInTheDocument()
+    );
+    expect(screen.queryByText("Investigate command search")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Search all sessions"));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work");
+  });
+
+  it("omits the search-all handoff and Sessions destination without session read permission", () => {
+    mocks.allowedPermissions = new Set(["sessions.create"]);
+
+    renderMenu();
+
+    expect(screen.queryByText("Search all sessions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
   });
 });
