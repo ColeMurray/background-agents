@@ -16,6 +16,8 @@ import type { ParticipantRepository, UpdateParticipantData } from "./participant
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+const KEYED_CANCELLATION_SQL = `client_request_id IS NOT NULL AND status = 'failed'
+  AND started_at IS NULL AND error_message IS 'Cancelled before execution'`;
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -106,7 +108,9 @@ export class MessageRepository {
   }
 
   getMessageCount(): number {
-    const result = this.sql.exec(`SELECT COUNT(*) as count FROM messages`);
+    const result = this.sql.exec(
+      `SELECT COUNT(*) as count FROM messages WHERE NOT (${KEYED_CANCELLATION_SQL})`
+    );
     return (result.one() as { count: number }).count;
   }
 
@@ -516,8 +520,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT * FROM messages
         WHERE status IN ('completed', 'failed')
-          AND NOT (client_request_id IS NOT NULL AND started_at IS NULL
-                   AND error_message = 'Cancelled before execution')
+          AND NOT (${KEYED_CANCELLATION_SQL})
         ORDER BY COALESCE(completed_at, started_at, created_at) DESC, created_at DESC, id DESC
        LIMIT 1`
     );

@@ -100,6 +100,58 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("'pending', 'processing'");
   });
 
+  it("excludes cancelled keyed prompts from counts without losing their request identity", () => {
+    const db = new DatabaseSync(":memory:");
+    const { sql, transactionSync } = createNodeSqlStorage(db);
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      const realRepository = new MessageRepository(
+        sql,
+        transactionSync,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transactionSync),
+        new ParticipantRepository(sql)
+      );
+      realRepository.createMessage({
+        id: "cancelled",
+        authorId: "author",
+        content: "No longer needed",
+        source: "web",
+        clientRequestId: "request-1",
+        status: "pending",
+        createdAt: 1,
+      });
+      realRepository.createMessage({
+        id: "completed",
+        authorId: "author",
+        content: "Done",
+        source: "web",
+        status: "completed",
+        createdAt: 2,
+      });
+      realRepository.createMessage({
+        id: "failed-without-cancellation",
+        authorId: "author",
+        content: "Failed",
+        source: "web",
+        clientRequestId: "request-2",
+        status: "failed",
+        createdAt: 0,
+      });
+
+      expect(realRepository.getMessageCount()).toBe(3);
+      expect(realRepository.cancelPendingMessage("cancelled")).toBe(true);
+      expect(realRepository.getMessageCount()).toBe(2);
+      expect(realRepository.getMessageByClientRequestId("request-1")?.status).toBe("failed");
+      expect(realRepository.getLatestTerminalMessage()?.id).toBe("completed");
+    } finally {
+      db.close();
+    }
+  });
+
   it("rejects malformed numeric SQL aggregate rows", () => {
     mock.setOne({ count: "5" });
     expect(() => repository.getPendingOrProcessingCount()).toThrow(
