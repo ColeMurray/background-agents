@@ -1,4 +1,6 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ENV_CONFIG_KEY_NAMES } from "../../src/node/config";
 import type { EnvConfig } from "../../src/types";
 
@@ -54,9 +56,34 @@ export function toolEnvironment(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Explicit empty values take precedence over Next's .env files. */
-export function webEnvironment(parent: NodeJS.ProcessEnv, config: EnvConfig): NodeJS.ProcessEnv {
+// dotenv's key grammar, which Next's bundled loader uses; a few extra matches only blank more.
+const DOTENV_KEY = /^\s*(?:export\s+)?([\w.-]+)(?:\s*=|:\s)/gm;
+
+/**
+ * Every key named in the web package's `.env` and `.env.*` files, whichever of them Next would
+ * load. Next reads them into its server process, so the preview must account for each one.
+ */
+export async function webEnvFileKeys(webDir: string): Promise<string[]> {
+  const keys = new Set<string>();
+  for (const entry of await readdir(webDir, { withFileTypes: true })) {
+    if (!entry.isFile() || (entry.name !== ".env" && !entry.name.startsWith(".env."))) continue;
+    const contents = await readFile(join(webDir, entry.name), "utf8");
+    for (const [, key] of contents.matchAll(DOTENV_KEY)) keys.add(key);
+  }
+  return [...keys];
+}
+
+/**
+ * Explicit empty values take precedence over Next's .env files: every key those files name is
+ * blanked, then only what the preview passes deliberately is set.
+ */
+export function webEnvironment(
+  parent: NodeJS.ProcessEnv,
+  config: EnvConfig,
+  envFileKeys: readonly string[]
+): NodeJS.ProcessEnv {
   return {
+    ...Object.fromEntries(envFileKeys.map((key) => [key, ""])),
     ...toolEnvironment(parent),
     ...Object.fromEntries(ENV_CONFIG_KEY_NAMES.map((key) => [key, ""])),
     NODE_ENV: "development",

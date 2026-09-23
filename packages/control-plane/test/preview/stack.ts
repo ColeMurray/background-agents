@@ -7,7 +7,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { startPreviewBackend, unusedPort, type PreviewBackend } from "./backend";
-import { PREVIEW_LIFETIME_MS, PREVIEW_REQUEST_TIMEOUT_MS, webEnvironment } from "./config";
+import {
+  PREVIEW_LIFETIME_MS,
+  PREVIEW_REQUEST_TIMEOUT_MS,
+  webEnvFileKeys,
+  webEnvironment,
+} from "./config";
 import { PERSONAS } from "./personas";
 import { waitFor, type Scenario } from "./scenarios";
 import { sanitizedDiagnostic } from "./diagnostics";
@@ -168,6 +173,7 @@ export async function startPreviewStack(options: {
         const logPath = join(runDir, "web.log");
         log = createWriteStream(logPath, { mode: 0o600 });
         nextError = undefined;
+        const envFileKeys = await webEnvFileKeys(join(root, "packages/web"));
         next = spawn(
           process.execPath,
           [
@@ -180,7 +186,7 @@ export async function startPreviewStack(options: {
           ],
           {
             cwd: join(root, "packages/web"),
-            env: webEnvironment(process.env, backend.config),
+            env: webEnvironment(process.env, backend.config, envFileKeys),
             stdio: ["ignore", "pipe", "pipe"],
           }
         );

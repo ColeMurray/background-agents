@@ -128,8 +128,10 @@ recent client-auth timeout tasks can take several seconds to finish even after s
 Only one Next/preview process may own a checkout. Use separate git worktrees for concurrent tasks.
 The launcher owns its Next child, host, fixture peers, temporary SQLite files, auth state, named
 browser contexts and sign-in link server. It never edits `.env.local`, resets tracked source or
-attaches to an existing server. Runtime credentials are independently generated and expire after
-four hours; the coordinator also exits at that bound. Stop and rerun to reset everything.
+attaches to an existing server. Next would load `packages/web/.env*` files into its server, so the
+launcher blanks every key those files name and then sets only the preview's own values. Runtime
+credentials are independently generated and expire after four hours; the coordinator also exits at
+that bound. Stop and rerun to reset everything.
 
 `run.json` and cookie state live in a private temporary directory (0700; state files 0600). The
 manifest contains paths, IDs and timings, not bearer tokens. Treat raw logs and state as sensitive.

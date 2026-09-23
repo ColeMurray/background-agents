@@ -4,14 +4,21 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { previewConfig, webEnvironment } from "./config";
+import { previewConfig, webEnvFileKeys, webEnvironment } from "./config";
 
 describe("preview environment isolation", () => {
-  it("overrides hostile inherited configuration and Next .env.local without changing either", async () => {
+  it("overrides hostile inherited configuration and every key in Next's .env files without changing either", async () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-preview-env-"));
     const hostile =
-      "CONTROL_PLANE_URL=https://production.invalid\nSERVICE_AUTH_SECRET=real-secret\nNEXT_PUBLIC_WS_URL=wss://production.invalid\nNEXT_PUBLIC_APP_ICON_URL=https://production.invalid/avatar\nVERCEL=1\nGITHUB_CLIENT_SECRET=live-oauth\n";
+      "CONTROL_PLANE_URL=https://production.invalid\nSERVICE_AUTH_SECRET=real-secret\nNEXT_PUBLIC_WS_URL=wss://production.invalid\nNEXT_PUBLIC_APP_ICON_URL=https://production.invalid/avatar\nVERCEL=1\nGITHUB_CLIENT_SECRET=live-oauth\nUNRELATED_PRODUCTION_TOKEN=live-unrelated\n";
     await writeFile(join(directory, ".env.local"), hostile);
+    // Every file Next loads in development, in each key syntax dotenv accepts.
+    await writeFile(join(directory, ".env"), 'export SHARED_API_KEY="live-shared"\n');
+    await writeFile(join(directory, ".env.development"), "DEVELOPMENT_ONLY_SECRET: live-yaml\n");
+    await writeFile(
+      join(directory, ".env.development.local"),
+      "LOCAL_OVERRIDE_TOKEN=live-local\nPATH=/hostile/bin\n"
+    );
     const parent = {
       ...process.env,
       WORKER_URL: "https://production.invalid",
@@ -25,11 +32,11 @@ describe("preview environment isolation", () => {
       "http://127.0.0.1:3300",
       "fixture"
     );
-    const env = webEnvironment(parent, config);
+    const env = webEnvironment(parent, config, await webEnvFileKeys(directory));
     try {
       const script = `const { loadEnvConfig } = require(${JSON.stringify(resolve(import.meta.dirname, "../../../../node_modules/@next/env"))});
         loadEnvConfig(process.cwd(), true);
-        console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(["CONTROL_PLANE_URL", "SERVICE_AUTH_SECRET", "NEXT_PUBLIC_WS_URL", "NEXT_PUBLIC_APP_ICON_URL", "VERCEL", "GITHUB_CLIENT_SECRET", "WORKER_URL", "SESSION_ID", "SANDBOX_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY"])}.map(k => [k,process.env[k]]))));`;
+        console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(["CONTROL_PLANE_URL", "SERVICE_AUTH_SECRET", "NEXT_PUBLIC_WS_URL", "NEXT_PUBLIC_APP_ICON_URL", "VERCEL", "GITHUB_CLIENT_SECRET", "WORKER_URL", "SESSION_ID", "SANDBOX_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY", "UNRELATED_PRODUCTION_TOKEN", "SHARED_API_KEY", "DEVELOPMENT_ONLY_SECRET", "LOCAL_OVERRIDE_TOKEN", "PATH"])}.map(k => [k,process.env[k]]))));`;
       const result = await promisify(execFile)(process.execPath, ["-e", script], {
         cwd: directory,
         env,
@@ -43,6 +50,11 @@ describe("preview environment isolation", () => {
         VERCEL: "",
         GITHUB_CLIENT_SECRET: "",
         WORKER_URL: "",
+        UNRELATED_PRODUCTION_TOKEN: "",
+        SHARED_API_KEY: "",
+        DEVELOPMENT_ONLY_SECRET: "",
+        LOCAL_OVERRIDE_TOKEN: "",
+        PATH: process.env.PATH,
       });
       expect(parent.SANDBOX_AUTH_TOKEN).toBe("outer-secret");
     } finally {
