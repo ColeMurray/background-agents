@@ -17,12 +17,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Any
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
 from modal.exception import TimeoutError as ModalTimeoutError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
@@ -35,20 +34,15 @@ from .app import (
     validate_control_plane_url,
 )
 from .clone_token import resolve_clone_token
+from .launch_contract import decode_create_launch, decode_restore_launch, launch_contract_label
 from .log_config import configure_logging, get_logger
+from .request_validation import ModalRequestModel as _ModalRequestModel
+from .request_validation import NonEmptyString
+from .request_validation import parse_request as _parse_request
 
 configure_logging()
 log = get_logger("web_api")
 IMAGE_BUILD_FINALIZATION_GRACE_SECONDS = 10 * 60
-
-
-class _ModalRequestModel(BaseModel):
-    # Ignore new top-level keys so old Modal deployments remain compatible
-    # while control-plane instances roll forward.
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-
-NonEmptyString = Annotated[str, Field(min_length=1)]
 
 
 class SnapshotBuildSandboxRequest(_ModalRequestModel):
@@ -88,86 +82,6 @@ class TerminateBuildSandboxRequest(_ModalRequestModel):
     build_id: NonEmptyString
     provider_session_id: NonEmptyString
     reason: NonEmptyString
-
-
-class InteractiveRepositoryRequest(_ModalRequestModel):
-    repo_owner: NonEmptyString
-    repo_name: NonEmptyString
-    branch: str | None = None
-    base_sha: str | None = None
-
-
-class RestoreRepositoryRequest(InteractiveRepositoryRequest):
-    model_config = ConfigDict(extra="allow", strict=True)
-
-
-class _RepositoryContextModel(_ModalRequestModel):
-    repo_owner: str | None = None
-    repo_name: str | None = None
-
-    @model_validator(mode="after")
-    def validate_repository_context(self) -> Self:
-        self.repo_owner, self.repo_name = _normalize_optional_repository_context(
-            self.repo_owner, self.repo_name
-        )
-        return self
-
-
-class CreateSandboxRequest(_RepositoryContextModel):
-    session_id: NonEmptyString
-    sandbox_id: str | None = None
-    control_plane_url: NonEmptyString
-    sandbox_auth_token: NonEmptyString
-    agent_session_id: str | None = None
-    opencode_session_id: str | None = None
-    harness: str | None = None
-    provider: str | None = None
-    model: str | None = None
-    branch: str | None = None
-    base_sha: str | None = None
-    mcp_servers: list[dict[str, Any]] | None = None
-    repositories: list[InteractiveRepositoryRequest] | None = None
-    working_branch_name: str | None = None
-    user_env_vars: dict[str, str] | None = None
-    repo_image_id: str | None = None
-    repo_image_sha: str | None = None
-    timeout_seconds: int | None = Field(default=None, gt=0)
-    code_server_enabled: bool = False
-    vnc_enabled: bool | None = None
-    agent_slack_notify_enabled: bool = False
-    sandbox_settings: dict[str, Any] | None = None
-
-
-class RestoreSessionConfigRequest(_RepositoryContextModel):
-    # Snapshot SESSION_CONFIG may contain fields introduced by a newer control
-    # plane, so preserve unknown nested keys while validating known launch data.
-    model_config = ConfigDict(extra="allow", strict=True)
-
-    session_id: str | None = None
-    branch: str | None = None
-    base_sha: str | None = None
-    agent_session_id: str | None = None
-    opencode_session_id: str | None = None
-    harness: str | None = None
-    provider: str | None = None
-    model: str | None = None
-    mcp_servers: list[dict[str, Any]] | None = None
-    repositories: list[RestoreRepositoryRequest] | None = None
-    working_branch_name: str | None = None
-
-
-class RestoreSandboxRequest(_ModalRequestModel):
-    snapshot_image_id: NonEmptyString
-    session_config: RestoreSessionConfigRequest
-    sandbox_id: str | None = None
-    control_plane_url: NonEmptyString
-    sandbox_auth_token: NonEmptyString
-    user_env_vars: dict[str, str] | None = None
-    timeout_seconds: int | None = Field(default=None, gt=0)
-    code_server_enabled: bool = False
-    vnc_enabled: bool | None = None
-    agent_slack_notify_enabled: bool = False
-    sandbox_settings: dict[str, Any] | None = None
 
 
 @dataclass
@@ -235,46 +149,6 @@ async def _execute_endpoint(
         )
 
 
-def _parse_request[RequestModelT: BaseModel](
-    model: type[RequestModelT], request: dict[str, object]
-) -> RequestModelT:
-    try:
-        return model.model_validate(request)
-    except ValidationError as e:
-        error = e.errors(include_input=False)[0]
-        location = error["loc"]
-        field = str(location[0]) if location else "request"
-        error_type = error["type"]
-        if field == "repositories":
-            detail = {
-                "list_type": "repositories must be a list",
-                "model_type": "repositories entries must be objects",
-                "missing": "repositories entries require repo_owner, repo_name, and branch",
-                "string_too_short": (
-                    "repositories entries require repo_owner, repo_name, and branch"
-                ),
-                "string_type": "repositories entry fields must be strings",
-            }.get(error_type, "repositories has an invalid value")
-        elif field == "user_env_vars":
-            detail = {
-                "dict_type": "user_env_vars must be an object",
-                "string_type": "user_env_vars values must be strings",
-            }.get(error_type, "user_env_vars has an invalid value")
-        elif field == "timeout_seconds":
-            detail = "timeout_seconds must be a positive integer"
-        elif len(location) > 1:
-            detail = f"{field} has an invalid value"
-        else:
-            detail = {
-                "missing": f"{field} is required",
-                "string_too_short": f"{field} is required",
-                "string_type": f"{field} must be a string",
-                "int_type": f"{field} must be an integer",
-                "bool_type": f"{field} must be a boolean",
-            }.get(error_type, f"{field} has an invalid value")
-        raise HTTPException(status_code=400, detail=detail) from None
-
-
 def require_auth(authorization: str | None) -> None:
     """
     Verify authentication, raising HTTPException on failure.
@@ -316,45 +190,6 @@ def require_valid_control_plane_url(url: str | None) -> None:
         )
 
 
-def _normalize_optional_repository_context(
-    repo_owner: str | None, repo_name: str | None
-) -> tuple[str | None, str | None]:
-    normalized_owner = repo_owner.strip() if isinstance(repo_owner, str) else None
-    normalized_name = repo_name.strip() if isinstance(repo_name, str) else None
-    normalized_owner = normalized_owner or None
-    normalized_name = normalized_name or None
-    if (normalized_owner is None) != (normalized_name is None):
-        raise HTTPException(
-            status_code=400,
-            detail="repo_owner and repo_name must be provided together",
-        )
-    return normalized_owner, normalized_name
-
-
-def _session_config_from_create_request(
-    request: dict, *, repo_owner: str | None, repo_name: str | None
-):
-    """Build the create-path SessionConfig from the flat wire request.
-
-    Create is a lossy reconstruction — the manager re-serializes this typed
-    model into SESSION_CONFIG — while restore forwards its session_config
-    dict verbatim. Wire fields share their names with SessionConfig fields,
-    so the model's own field list drives the pickup: a new field only needs
-    the SessionConfig change, not another line here. repo_owner/repo_name
-    are set from the normalized pair, never the raw request.
-    """
-    from .sandbox import SessionConfig
-
-    fields = {
-        name: request[name]
-        for name in SessionConfig.model_fields
-        if name in request and request[name] is not None
-    }
-    fields["repo_owner"] = repo_owner
-    fields["repo_name"] = repo_name
-    return SessionConfig(**fields)
-
-
 @app.function(
     image=function_image,
     secrets=[internal_api_secret],
@@ -392,8 +227,9 @@ async def api_create_sandbox(
         request_id=x_request_id,
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
-    ):
-        parsed_request = _parse_request(CreateSandboxRequest, request)
+    ) as execution:
+        execution.log_fields["launch_contract_version"] = launch_contract_label(request)
+        parsed_request = decode_create_launch(request)
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -405,11 +241,8 @@ async def api_create_sandbox(
         )
 
         manager = SandboxManager()
-        repo_owner = parsed_request.repo_owner
-        repo_name = parsed_request.repo_name
-        session_config = _session_config_from_create_request(
-            request, repo_owner=repo_owner, repo_name=repo_name
-        )
+        repo_owner, repo_name = parsed_request.repo_owner, parsed_request.repo_name
+        session_config = parsed_request.session_config
 
         config = SandboxConfig(
             repo_owner=repo_owner,
@@ -462,7 +295,14 @@ async def api_create_sandbox(
 @fastapi_endpoint(method="GET")
 def api_health() -> dict:
     """Health check endpoint. Does not require authentication."""
-    return {"success": True, "data": {"status": "healthy", "service": "open-inspect-modal"}}
+    return {
+        "success": True,
+        "data": {
+            "status": "healthy",
+            "service": "open-inspect-modal",
+            "launch_contract_versions": ["legacy", 1],
+        },
+    }
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])
@@ -663,8 +503,9 @@ async def api_restore_sandbox(
         request_id=x_request_id,
         session_id=x_session_id,
         sandbox_id=x_sandbox_id,
-    ):
-        parsed_request = _parse_request(RestoreSandboxRequest, request)
+    ) as execution:
+        execution.log_fields["launch_contract_version"] = launch_contract_label(request)
+        parsed_request = decode_restore_launch(request)
         require_valid_control_plane_url(parsed_request.control_plane_url)
 
         from .sandbox.manager import (
@@ -673,9 +514,9 @@ async def api_restore_sandbox(
             SandboxManager,
         )
 
-        session_config = parsed_request.session_config.model_dump(exclude_unset=True)
-        repo_owner = parsed_request.session_config.repo_owner
-        repo_name = parsed_request.session_config.repo_name
+        session_config = parsed_request.session_config
+        repo_owner, repo_name = parsed_request.repo_owner, parsed_request.repo_name
+        assert parsed_request.snapshot_image_id is not None
 
         manager = SandboxManager()
         clone_token = resolve_clone_token() if repo_owner and repo_name else None

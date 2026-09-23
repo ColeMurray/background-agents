@@ -1,4 +1,5 @@
 import { createModalClient } from "./client";
+import { parseModalLaunchContractVersion } from "./modal-launch-contract";
 import { createDaytonaRestClient, type DaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
@@ -32,7 +33,8 @@ function createModalProviderFromEnv(env: Env): ModalSandboxProvider {
     env.MODAL_API_SECRET,
     env.MODAL_WORKSPACE,
     env.MODAL_ENVIRONMENT_WEB_SUFFIX,
-    env.MODAL_API_URL
+    env.MODAL_API_URL,
+    parseModalLaunchContractVersion(env.MODAL_LAUNCH_CONTRACT_VERSION)
   );
 
   return createModalProvider(client);

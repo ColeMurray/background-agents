@@ -64,6 +64,8 @@ export interface EnvConfig {
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
   MODAL_WORKSPACE?: string; // Modal workspace name
+  /** Receiver-first interactive launch rollout; unset/legacy preserves the existing wire. */
+  MODAL_LAUNCH_CONTRACT_VERSION?: string;
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
   // Origin serving the Modal functions by path, in place of their derived

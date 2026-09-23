@@ -12,8 +12,8 @@
  * miss on any condition falls back to the base image; sessions are never
  * blocked on builds.
  *
- * Pure decision logic in the decisions.ts style: the lifecycle manager owns
- * the lookup call, logging, and fallback plumbing.
+ * Pure decision logic in the decisions.ts style: launch policy owns lookup
+ * and logging; the lifecycle manager owns invalidation and retry plumbing.
  */
 
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";

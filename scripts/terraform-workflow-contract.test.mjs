@@ -7,6 +7,18 @@ const workflow = await readFile(
   "utf8"
 );
 
+test("Modal launch v1 is default-off and reaches both plan and apply", () => {
+  const assignment =
+    "TF_VAR_modal_launch_contract_v1_enabled: \"${{ vars.MODAL_LAUNCH_CONTRACT_V1_ENABLED || 'false' }}\"";
+  const planStart = workflow.indexOf("\n  plan:\n");
+  const applyStart = workflow.indexOf("\n  apply:\n");
+  assert.notEqual(planStart, -1);
+  assert.notEqual(applyStart, -1);
+  for (const job of [workflow.slice(planStart, applyStart), workflow.slice(applyStart)]) {
+    assert.equal(job.split(assignment).length - 1, 1);
+  }
+});
+
 test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
   const assignment =
     "TF_VAR_daytona_base_snapshot_memory_gib: \"${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}\"";
