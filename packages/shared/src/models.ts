@@ -194,6 +194,24 @@ export const MODEL_CATALOG = [
         },
       },
       {
+        id: "openai/gpt-6-sol",
+        name: "GPT-6 Sol",
+        description: "Complex coding and agentic workflows",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
+        id: "openai/gpt-6-luna",
+        name: "GPT-6 Luna",
+        description: "Efficient model for focused, high-volume tasks",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
         id: "openai/gpt-5.3-codex",
         name: "GPT 5.3 Codex",
         description: "Latest codex",
