@@ -64,6 +64,11 @@ prompt. Ordinary inactivity uses the real preservation policy, stops the peer, a
 generation on the next prompt. Unsupported upstream requests fail visibly; there is no live
 GitHub/provider fallback. Model-account lists are intentionally empty.
 
+Sessions refuse OpenAI and xAI models without a credential, so both scenarios store inert
+`OPENAI_API_KEY` and `XAI_API_KEY` global secrets through the real secrets API; Anthropic's inert
+key is deployment config. Every model in the picker can therefore start a turn. To see the
+missing-credential error instead, delete those secrets under Settings → Secrets.
+
 ## Sign in from any browser
 
 The launcher prints one sign-in link per persona to stderr; the `ready` line carries the same links

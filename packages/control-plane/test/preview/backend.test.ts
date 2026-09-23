@@ -100,6 +100,34 @@ describe("real authenticated preview backend", () => {
       expect(await sessionUser(cookie)).toBeNull();
     }
   }, 30_000);
+  it("completes turns on every provider's models, not only the default Anthropic one", async () => {
+    const b = await start();
+    for (const model of ["openai/gpt-5.5", "xai/grok-4.7"]) {
+      const { sessionId } = await expectJson<{ sessionId: string }>(
+        await b.request("/sessions", {
+          method: "POST",
+          body: { repoOwner: "preview-org", repoName: "preview-app", model },
+        })
+      );
+      const { messageId } = await expectJson<{ messageId: string }>(
+        await b.request(`/sessions/${sessionId}/prompt`, {
+          method: "POST",
+          body: { content: `A turn on ${model}.` },
+        })
+      );
+      const settled = await waitFor(`${model} turn to settle`, async () => {
+        const { messages } = await expectJson<{
+          messages: Array<{ id: string; status: string }>;
+        }>(await b.request(`/sessions/${sessionId}/messages`));
+        const message = messages.find((m) => m.id === messageId);
+        return message && message.status !== "pending" && message.status !== "processing"
+          ? message
+          : false;
+      });
+      expect(settled, model).toMatchObject({ status: "completed" });
+    }
+    expect(b.failures()).toEqual([]);
+  }, 30_000);
   it("creates persisted history, idles through preservation and restores for another turn", async () => {
     const b = await start("populated", 2000);
     const sessionId = b.aliases.completedSession;

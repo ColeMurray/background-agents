@@ -31,11 +31,28 @@ export async function expectJson<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Sessions refuse OpenAI and xAI models without a credential, though the sandbox stand-in never
+ * calls a provider. Anthropic's inert key is deployment config (see previewConfig); these two can
+ * only arrive as secrets, so every model the picker offers can start a turn.
+ */
+const INERT_PROVIDER_SECRETS = {
+  OPENAI_API_KEY: "preview-inert-openai-key",
+  XAI_API_KEY: "preview-inert-xai-key",
+};
+
 export async function populateScenario(
   scenario: Scenario,
   request: PreviewRequest
 ): Promise<Record<string, string>> {
   const aliases: Record<string, string> = { fixtureRepository: FIXTURE_REPOSITORY.full_name };
+  await expectJson(
+    await request("/secrets", {
+      method: "PUT",
+      body: { secrets: INERT_PROVIDER_SECRETS },
+      persona: "owner",
+    })
+  );
   await expectJson(await request("/repos"));
   await expectJson(await request(`/repos/${FIXTURE_REPOSITORY.full_name}/branches`));
   if (scenario === "empty") return aliases;
