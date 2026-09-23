@@ -574,33 +574,37 @@ class AgentBridge:
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
         heartbeat_count = 0
-        last_tick = time.monotonic()
-        last_delivered: float | None = None
+        last_written: float | None = None
         while not self.shutdown_event.is_set():
+            expected_wake = time.monotonic() + self.HEARTBEAT_INTERVAL
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
-            tick = time.monotonic()
-            tick_delay_ms = max(0, int((tick - last_tick - self.HEARTBEAT_INTERVAL) * 1000))
-            last_tick = tick
-            delivered = False
+            sleep_lag_ms = max(0, int((time.monotonic() - expected_wake) * 1000))
+            write_succeeded = False
+            send_duration_ms: int | None = None
             if self.ws and self.ws.state == State.OPEN:
-                delivered = await self._send_event(self._heartbeat_event())
-                if delivered:
-                    last_delivered = time.monotonic()
+                send_started = time.monotonic()
+                # This confirms the local WebSocket write, not control-plane receipt.
+                write_succeeded = await self._send_event(self._heartbeat_event())
+                send_duration_ms = int((time.monotonic() - send_started) * 1000)
+                if write_succeeded:
+                    last_written = time.monotonic()
 
             heartbeat_count += 1
             if (
                 heartbeat_count == 1
                 or heartbeat_count % 4 == 0
-                or tick_delay_ms >= 30_000
-                or not delivered
+                or sleep_lag_ms >= 5_000
+                or (send_duration_ms is not None and send_duration_ms >= 5_000)
+                or not write_succeeded
             ):
                 self.log.info(
                     "bridge.health",
-                    heartbeat_delivered=delivered,
-                    heartbeat_tick_delay_ms=tick_delay_ms,
-                    last_heartbeat_delivered_ago_ms=(
-                        int((time.monotonic() - last_delivered) * 1000)
-                        if last_delivered is not None
+                    heartbeat_write_succeeded=write_succeeded,
+                    heartbeat_sleep_lag_ms=sleep_lag_ms,
+                    heartbeat_send_duration_ms=send_duration_ms,
+                    last_heartbeat_write_ago_ms=(
+                        int((time.monotonic() - last_written) * 1000)
+                        if last_written is not None
                         else None
                     ),
                     websocket_open=self.ws is not None and self.ws.state == State.OPEN,

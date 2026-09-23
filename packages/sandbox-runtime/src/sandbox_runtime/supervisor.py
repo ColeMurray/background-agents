@@ -18,6 +18,7 @@ from .constants import (
 )
 from .docker_control import DockerControl
 from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
+from .health_snapshot import read_health_snapshot
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 
@@ -58,6 +59,7 @@ class SandboxSupervisor:
     MAX_RESTARTS = 5
     BACKOFF_BASE = 2.0
     BACKOFF_MAX = 60.0
+    HEALTH_INTERVAL = 30.0
 
     def __init__(
         self,
@@ -477,6 +479,20 @@ class SandboxSupervisor:
             if await self._wait_for_shutdown(1.0):
                 break
 
+    async def _health_loop(self) -> None:
+        """Emit a pulse outside the bridge process to locate bridge-only stalls."""
+        while not self.shutdown_event.is_set():
+            expected_wake = time.monotonic() + self.HEALTH_INTERVAL
+            await asyncio.sleep(self.HEALTH_INTERVAL)
+            if self.shutdown_event.is_set():
+                break
+            self.log.info(
+                "supervisor.health",
+                supervisor_sleep_lag_ms=max(0, int((time.monotonic() - expected_wake) * 1000)),
+                **self.agent_bridge.diagnostic_snapshot(),
+                **read_health_snapshot(),
+            )
+
     def _image_build_execution_timeout_seconds(self) -> int | None:
         raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
         if not raw_timeout:
@@ -634,6 +650,11 @@ class SandboxSupervisor:
         early_connect = self.config.bridge_early_connect and self.boot_mode is not BootMode.BUILD
 
         harness_ready = False
+        health_task = (
+            asyncio.create_task(self._health_loop())
+            if self.boot_mode is not BootMode.BUILD
+            else None
+        )
         try:
             # Inside the try: a boot-events file this boot cannot own is
             # fatal, because a bridge reading the previous boot's lines
@@ -767,6 +788,9 @@ class SandboxSupervisor:
             )
             return False
         finally:
+            if health_task is not None:
+                health_task.cancel()
+                await asyncio.gather(health_task, return_exceptions=True)
             await self._stop_docker_watch()
             await self._stop_bridge_watch()
             await self.shutdown()

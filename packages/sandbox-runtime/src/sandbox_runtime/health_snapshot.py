@@ -4,7 +4,12 @@ from contextlib import suppress
 from pathlib import Path
 
 _MEMINFO = Path("/proc/meminfo")
-_MEMORY_PRESSURE = Path("/proc/pressure/memory")
+_PRESSURE_FILES = {
+    "cpu": Path("/proc/pressure/cpu"),
+    "memory": Path("/proc/pressure/memory"),
+    "io": Path("/proc/pressure/io"),
+}
+_SELF_STATUS = Path("/proc/self/status")
 _CGROUP_MEMORY_CURRENT = Path("/sys/fs/cgroup/memory.current")
 _CGROUP_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
 _CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
@@ -52,14 +57,27 @@ def read_health_snapshot() -> dict[str, int | float]:
                 with suppress(ValueError):
                     result[f"cgroup_{key}_count"] = int(value)
 
-    pressure = _read(_MEMORY_PRESSURE)
-    if pressure is not None:
-        for line in pressure.splitlines():
-            if line.startswith("some "):
-                for field in line.split()[1:]:
-                    if field.startswith("avg10="):
-                        with suppress(ValueError):
-                            result["memory_psi_some_avg10"] = float(field.removeprefix("avg10="))
-                break
+    for resource, path in _PRESSURE_FILES.items():
+        pressure = _read(path)
+        if pressure is not None:
+            for line in pressure.splitlines():
+                if line.startswith("some "):
+                    for field in line.split()[1:]:
+                        if field.startswith("avg10="):
+                            with suppress(ValueError):
+                                result[f"{resource}_psi_some_avg10"] = float(
+                                    field.removeprefix("avg10=")
+                                )
+                    break
+
+    status = _read(_SELF_STATUS)
+    if status is not None:
+        for line in status.splitlines():
+            if line.startswith("VmRSS:"):
+                with suppress(IndexError, ValueError):
+                    result["process_rss_mib"] = int(line.split()[1]) // 1024
+            elif line.startswith("Threads:"):
+                with suppress(IndexError, ValueError):
+                    result["process_threads"] = int(line.split()[1])
 
     return result

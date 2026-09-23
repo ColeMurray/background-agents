@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .constants import OPENCODE_PORT
@@ -113,3 +114,31 @@ class AgentBridgeProcess:
 
     def started(self) -> bool:
         return self._process is not None
+
+    def diagnostic_snapshot(self) -> dict[str, int | str | bool | None]:
+        """Read bridge process state from its supervisor, independent of the bridge loop."""
+        process = self._process
+        if process is None:
+            return {"bridge_running": False}
+        result: dict[str, int | str | bool | None] = {
+            "bridge_pid": process.pid,
+            "bridge_running": process.returncode is None,
+            "bridge_exit_code": process.returncode,
+        }
+        if process.returncode is not None:
+            return result
+        try:
+            status = Path(f"/proc/{process.pid}/status").read_text()
+        except OSError:
+            return result
+        for line in status.splitlines():
+            if line.startswith("State:"):
+                with contextlib.suppress(IndexError):
+                    result["bridge_process_state"] = line.split()[1]
+            elif line.startswith("VmRSS:"):
+                with contextlib.suppress(IndexError, ValueError):
+                    result["bridge_rss_mib"] = int(line.split()[1]) // 1024
+            elif line.startswith("Threads:"):
+                with contextlib.suppress(IndexError, ValueError):
+                    result["bridge_threads"] = int(line.split()[1])
+        return result
