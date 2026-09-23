@@ -132,6 +132,14 @@ function lastQuery() {
   return mockUseSessionDiscovery.mock.calls.at(-1)?.[0];
 }
 
+function lastOptions() {
+  return mockUseSessionDiscovery.mock.calls.at(-1)?.[1];
+}
+
+function typeSearch(value: string) {
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value } });
+}
+
 describe("SessionsPage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -140,6 +148,7 @@ describe("SessionsPage", () => {
     mockPermissions.clear();
     mockPermissions.add("sessions.read");
     mockPermissions.add("sessions.create");
+    mockPermissions.add("repositories.read");
     mockUseSessionDiscovery.mockReset();
     mockUseSessionDiscovery.mockReturnValue(defaultHookResult);
   });
@@ -258,32 +267,41 @@ describe("SessionsPage", () => {
   it("debounces search text into the URL and writes filter changes immediately", () => {
     render(<SessionsPage />);
 
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "  fix login " } });
+    typeSearch("  fix login ");
     expect(mockReplace).not.toHaveBeenCalled();
     act(() => vi.runOnlyPendingTimers());
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix+login", { scroll: false });
 
+    // Until that navigation lands, later control changes still carry it.
     fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), {
       target: { value: "acme/api" },
     });
-    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?repoOwner=acme&repoName=api", {
-      scroll: false,
-    });
+    expect(mockReplace).toHaveBeenLastCalledWith(
+      "/sessions?q=fix+login&repoOwner=acme&repoName=api",
+      { scroll: false }
+    );
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
-      target: { value: "all" },
-    });
-    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?lifecycle=all", { scroll: false });
-
-    fireEvent.change(screen.getByRole("combobox", { name: "Origin" }), {
+    mockSearchParamsState.value = new URLSearchParams("q=fix login&repoOwner=acme&repoName=api");
+    render(<SessionsPage />);
+    mockReplace.mockReset();
+    const [, page] = screen.getAllByRole("combobox", { name: "Lifecycle" });
+    fireEvent.change(page, { target: { value: "all" } });
+    expect(mockReplace).toHaveBeenLastCalledWith(
+      "/sessions?q=fix+login&repoOwner=acme&repoName=api&lifecycle=all",
+      { scroll: false }
+    );
+    fireEvent.change(screen.getAllByRole("combobox", { name: "Origin" })[1], {
       target: { value: "github-bot" },
     });
-    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?origin=github-bot", {
-      scroll: false,
-    });
-
-    fireEvent.click(screen.getByRole("radio", { name: "Mine" }));
-    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?createdBy=me", { scroll: false });
+    expect(mockReplace).toHaveBeenLastCalledWith(
+      "/sessions?q=fix+login&repoOwner=acme&repoName=api&lifecycle=all&origin=github-bot",
+      { scroll: false }
+    );
+    fireEvent.click(screen.getAllByRole("radio", { name: "Mine" })[1]);
+    expect(mockReplace).toHaveBeenLastCalledWith(
+      "/sessions?q=fix+login&createdBy=me&repoOwner=acme&repoName=api&lifecycle=all&origin=github-bot",
+      { scroll: false }
+    );
   });
 
   it("follows URL changes from browser navigation", () => {
@@ -317,17 +335,21 @@ describe("SessionsPage", () => {
   it("shows the loading, empty, no-match, and error states without hiding the controls", () => {
     mockUseSessionDiscovery.mockReturnValue({ ...defaultHookResult, sessions: [], loading: true });
     const { rerender } = render(<SessionsPage />);
-    expect(screen.getByRole("status", { name: "Loading sessions" })).toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading sessions");
     expect(screen.getByRole("searchbox")).toBeInTheDocument();
 
     mockUseSessionDiscovery.mockReturnValue({ ...defaultHookResult, sessions: [] });
     rerender(<SessionsPage />);
-    expect(screen.getByText("No sessions yet")).toBeInTheDocument();
+    expect(status).toHaveTextContent("No sessions yet");
+    expect(screen.getAllByText("No sessions yet")).toHaveLength(2);
     expect(screen.getAllByRole("link", { name: "New session" })).toHaveLength(2);
 
     mockSearchParamsState.value = new URLSearchParams("q=nothing");
     rerender(<SessionsPage />);
-    expect(screen.getByText("No sessions match these filters")).toBeInTheDocument();
+    // The same live region announces the no-match state; it stays mounted.
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status).toHaveTextContent("No sessions match these filters");
     expect(screen.queryByText("No sessions yet")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Clear filters" })).toHaveLength(2);
 
@@ -342,6 +364,7 @@ describe("SessionsPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load sessions.");
     expect(screen.getByRole("searchbox")).toHaveValue("nothing");
     expect(screen.getByText("Session stale")).toBeInTheDocument();
+    expect(status).toHaveTextContent("Showing 1 session");
     expect(screen.queryByText("No sessions match these filters")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalled();
@@ -356,7 +379,7 @@ describe("SessionsPage", () => {
     expect(loadMore).toHaveBeenCalled();
   });
 
-  it("hides the controls and explains when the user cannot read sessions", () => {
+  it("hides the controls, explains, and requests nothing when the user cannot read sessions", () => {
     mockPermissions.clear();
     render(<SessionsPage />);
 
@@ -365,5 +388,67 @@ describe("SessionsPage", () => {
     );
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "New session" })).not.toBeInTheDocument();
+    expect(lastOptions()).toEqual({ enabled: false });
+  });
+
+  it("refuses a link with unsupported filters instead of showing a wider result set", () => {
+    mockSearchParamsState.value = new URLSearchParams("origin=automations&repoOwner=acme");
+    render(<SessionsPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This link has unsupported filters (repoName, origin), so no sessions are shown."
+    );
+    expect(lastOptions()).toEqual({ enabled: false });
+    expect(screen.getByRole("status")).toHaveTextContent("No sessions shown");
+    expect(screen.queryByRole("list", { name: "Sessions" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
+  });
+
+  it("keeps typed text verbatim and composes with filter changes while a navigation is in flight", () => {
+    render(<SessionsPage />);
+
+    // A trailing space is committed trimmed but never stripped from the box.
+    typeSearch("fix ");
+    act(() => vi.runOnlyPendingTimers());
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix", { scroll: false });
+    mockSearchParamsState.value = new URLSearchParams("q=fix");
+    // (rerender simulates the navigation landing)
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "fix " } });
+    expect(screen.getByRole("searchbox")).toHaveValue("fix ");
+
+    // Keystrokes typed before the last navigation lands are not thrown away.
+    typeSearch("fix login");
+    act(() => vi.runOnlyPendingTimers());
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix+login", { scroll: false });
+    typeSearch("fix login now");
+    expect(screen.getByRole("searchbox")).toHaveValue("fix login now");
+    act(() => vi.runOnlyPendingTimers());
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix+login+now", {
+      scroll: false,
+    });
+
+    // A filter change carries the pending search and the previous filter change.
+    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
+      target: { value: "all" },
+    });
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix+login+now&lifecycle=all", {
+      scroll: false,
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Origin" }), {
+      target: { value: "automation" },
+    });
+    expect(mockReplace).toHaveBeenLastCalledWith(
+      "/sessions?q=fix+login+now&lifecycle=all&origin=automation",
+      { scroll: false }
+    );
+
+    // Clearing never resurrects the old filters from a late timer.
+    mockReplace.mockReset();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    act(() => vi.runOnlyPendingTimers());
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
   });
 });

@@ -93,37 +93,29 @@ interface SessionDiscoveryResultsProps {
   sessions: SessionListItem[];
   environmentNamesById: ReadonlyMap<string, string>;
   currentUserId: string | null;
-  hasMore: boolean;
 }
 
-/** The result list with its live count line. */
+/** The result list. The page owns the live status line so it is always mounted. */
 export function SessionDiscoveryResults({
   sessions,
   environmentNamesById,
   currentUserId,
-  hasMore,
 }: SessionDiscoveryResultsProps) {
   return (
-    <div>
-      <p role="status" aria-live="polite" className="mb-2 text-xs text-muted-foreground">
-        Showing {sessions.length} {sessions.length === 1 ? "session" : "sessions"}
-        {hasMore ? " · More available" : ""}
-      </p>
-      <ul
-        aria-label="Sessions"
-        className="divide-y divide-border-muted rounded-md border border-border-muted"
-      >
-        {sessions.map((session) => (
-          <SessionDiscoveryRow
-            key={session.id}
-            session={session}
-            environmentName={
-              session.environmentId ? environmentNamesById.get(session.environmentId) : undefined
-            }
-            currentUserId={currentUserId}
-          />
-        ))}
-      </ul>
-    </div>
+    <ul
+      aria-label="Sessions"
+      className="divide-y divide-border-muted rounded-md border border-border-muted"
+    >
+      {sessions.map((session) => (
+        <SessionDiscoveryRow
+          key={session.id}
+          session={session}
+          environmentName={
+            session.environmentId ? environmentNamesById.get(session.environmentId) : undefined
+          }
+          currentUserId={currentUserId}
+        />
+      ))}
+    </ul>
   );
 }

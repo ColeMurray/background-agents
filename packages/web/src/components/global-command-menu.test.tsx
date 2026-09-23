@@ -135,7 +135,7 @@ describe("GlobalCommandMenu", () => {
 
     await waitFor(() => expect(count).toHaveTextContent("0 results"));
     expect(screen.getByText("No results found.")).toBeInTheDocument();
-    expect(screen.getByText("Search all sessions")).toBeInTheDocument();
+    expect(screen.getByText("Search all sessions")).toBeVisible();
   });
 
   it("navigates directly to a settings destination", async () => {
@@ -298,8 +298,9 @@ describe("GlobalCommandMenu search-all handoff", () => {
 
     // The handoff survives a search that matches no recent session.
     await waitFor(() =>
-      expect(screen.getByText('Search full history for "old archived work"')).toBeInTheDocument()
+      expect(screen.getByText('Search full history for "old archived work"')).toBeVisible()
     );
+    expect(screen.getByText("Search all sessions")).toBeVisible();
     expect(screen.queryByText("Investigate command search")).not.toBeInTheDocument();
 
     await user.click(screen.getByText("Search all sessions"));

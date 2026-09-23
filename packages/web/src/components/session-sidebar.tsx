@@ -302,7 +302,9 @@ export function SessionSidebar({
             key={href}
             href={href}
             onClick={handleNavigationSelect}
-            aria-current={pathname === href ? "page" : undefined}
+            aria-current={
+              pathname === href || pathname?.startsWith(`${href}/`) ? "page" : undefined
+            }
             className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition ${
               pathname === href || pathname?.startsWith(`${href}/`)
                 ? "text-foreground bg-muted"

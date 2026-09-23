@@ -9,6 +9,7 @@ import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-lis
 import { matchesSearchTerms } from "@/lib/search";
 import { BranchIcon, PlusIcon, SearchIcon } from "@/components/ui/icons";
 import { buildSessionsHref } from "@/lib/session-discovery";
+import { MAX_SESSION_LIST_SEARCH_LENGTH } from "@open-inspect/shared/session-list-query";
 import { AppIcon } from "@/components/ui/app-icon";
 import { APP_DESTINATIONS } from "@/components/app-destinations";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
@@ -167,7 +168,10 @@ export function GlobalCommandMenu({
         Search and jump to sessions, settings, automations, and other destinations.
       </DialogDescription>
       <Command filter={filterCommandItem} label="Search commands, settings, and sessions">
-        <CommandInput placeholder="Quick search · recent sessions, settings, and commands" />
+        <CommandInput
+          placeholder="Quick search · recent sessions, settings, and commands"
+          maxLength={MAX_SESSION_LIST_SEARCH_LENGTH}
+        />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
 
@@ -249,7 +253,9 @@ export function GlobalCommandMenu({
           {hasPermission("sessions.read") && (
             <>
               <CommandSeparator />
-              <CommandGroup heading="All sessions">
+              {/* cmdk hides a group whose registered items all fail the filter; the
+                  handoff item is never registered, so the group must force-mount too. */}
+              <CommandGroup heading="All sessions" forceMount>
                 <SearchAllSessionsItem onSelect={(href) => handleSelect(() => onNavigate(href))} />
               </CommandGroup>
             </>

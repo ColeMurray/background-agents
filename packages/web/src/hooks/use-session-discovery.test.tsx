@@ -108,11 +108,76 @@ describe("useSessionDiscovery", () => {
     await waitFor(() =>
       expect(result.current.sessions.map((entry) => entry.id)).toEqual(["archived-one"])
     );
+    // Load more also revalidates the first page (SWR's default), so a row
+    // bumped since the first fetch is not shown stale next to the new page.
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&q=login",
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&q=login",
       "/api/sessions?limit=50&offset=50&excludeStatus=archived&q=login",
       "/api/sessions?limit=50&offset=0&status=archived&q=login",
     ]);
+  });
+
+  it("requests nothing while disabled and reads as an empty, settled result", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(
+      () => useSessionDiscovery(DEFAULT_SESSION_DISCOVERY_QUERY, { enabled: false }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.sessions).toEqual([]);
+    expect(result.current.hasMore).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a row the server handed to two offset pages", async () => {
+    stubPages({
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived": {
+        sessions: [session("a"), session("b")],
+        hasMore: true,
+      },
+      "/api/sessions?limit=50&offset=50&excludeStatus=archived": {
+        sessions: [session("b"), session("c")],
+        hasMore: false,
+      },
+    });
+
+    const { result } = renderHook(() => useSessionDiscovery(DEFAULT_SESSION_DISCOVERY_QUERY), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(() => result.current.loadMore());
+
+    await waitFor(() =>
+      expect(result.current.sessions.map((entry) => entry.id)).toEqual(["a", "b", "c"])
+    );
+  });
+
+  it("revalidates the first page on remount so edits made elsewhere appear", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ sessions: [session("v1")], hasMore: false }))
+      .mockResolvedValueOnce(Response.json({ sessions: [session("v2")], hasMore: false }));
+    vi.stubGlobal("fetch", fetchMock);
+    const cache = new Map();
+    const sharedWrapper = ({ children }: PropsWithChildren) => (
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0 }}>{children}</SWRConfig>
+    );
+
+    const first = renderHook(() => useSessionDiscovery(DEFAULT_SESSION_DISCOVERY_QUERY), {
+      wrapper: sharedWrapper,
+    });
+    await waitFor(() => expect(first.result.current.sessions.map((s) => s.id)).toEqual(["v1"]));
+    first.unmount();
+
+    const second = renderHook(() => useSessionDiscovery(DEFAULT_SESSION_DISCOVERY_QUERY), {
+      wrapper: sharedWrapper,
+    });
+    await waitFor(() => expect(second.result.current.sessions.map((s) => s.id)).toEqual(["v2"]));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("reports a failed page as an error that retry can clear", async () => {

@@ -20,9 +20,10 @@ const fullQuery: SessionDiscoveryQuery = {
 
 describe("session discovery URL state", () => {
   it("parses /sessions with no parameters as the default view", () => {
-    expect(parseSessionDiscoveryQuery(new URLSearchParams())).toEqual(
-      DEFAULT_SESSION_DISCOVERY_QUERY
-    );
+    expect(parseSessionDiscoveryQuery(new URLSearchParams())).toEqual({
+      success: true,
+      data: DEFAULT_SESSION_DISCOVERY_QUERY,
+    });
     expect(hasSessionDiscoveryFilters(DEFAULT_SESSION_DISCOVERY_QUERY)).toBe(false);
     expect(buildSessionsHref()).toBe("/sessions");
   });
@@ -32,20 +33,41 @@ describe("session discovery URL state", () => {
     expect(serialized).toBe(
       "q=login&createdBy=me&repoOwner=group%2Fsubgroup&repoName=service&environmentId=env-1&lifecycle=archived&origin=automation"
     );
-    expect(parseSessionDiscoveryQuery(new URLSearchParams(serialized))).toEqual(fullQuery);
+    expect(parseSessionDiscoveryQuery(new URLSearchParams(serialized))).toEqual({
+      success: true,
+      data: fullQuery,
+    });
     expect(hasSessionDiscoveryFilters(fullQuery)).toBe(true);
   });
 
-  it("falls back to defaults for invalid, blank, or half-specified values", () => {
+  it("treats blank values as absent and trims search text", () => {
+    expect(
+      parseSessionDiscoveryQuery(new URLSearchParams("q=%20trim%20&origin=&lifecycle=&createdBy="))
+    ).toEqual({ success: false, invalidParams: ["createdBy", "lifecycle"] });
+    expect(parseSessionDiscoveryQuery(new URLSearchParams("q=%20trim%20&origin="))).toEqual({
+      success: true,
+      data: { ...DEFAULT_SESSION_DISCOVERY_QUERY, q: "trim" },
+    });
+  });
+
+  it("reports every value the API would reject instead of widening the view", () => {
     expect(
       parseSessionDiscoveryQuery(
         new URLSearchParams(
-          "q=%20%20&createdBy=ffffffffffffffffffffffffffffffff&repoOwner=acme&environmentId=%20&lifecycle=deleted&origin=cron"
+          `q=${"x".repeat(201)}&createdBy=ffffffffffffffffffffffffffffffff&repoOwner=acme&environmentId=%20&lifecycle=deleted&origin=automations`
         )
       )
-    ).toEqual(DEFAULT_SESSION_DISCOVERY_QUERY);
-    expect(parseSessionDiscoveryQuery(new URLSearchParams({ q: "x".repeat(201) })).q).toBe("");
-    expect(parseSessionDiscoveryQuery(new URLSearchParams("q=%20trim%20")).q).toBe("trim");
+    ).toEqual({
+      success: false,
+      invalidParams: ["q", "createdBy", "repoName", "environmentId", "lifecycle", "origin"],
+    });
+    expect(parseSessionDiscoveryQuery(new URLSearchParams("repoName=web-app"))).toEqual({
+      success: false,
+      invalidParams: ["repoOwner"],
+    });
+    expect(
+      parseSessionDiscoveryQuery(new URLSearchParams("repoOwner=%20&repoName=web-app"))
+    ).toEqual({ success: false, invalidParams: ["repoOwner"] });
   });
 
   it("builds shareable hrefs from partial state", () => {

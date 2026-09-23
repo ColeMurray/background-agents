@@ -19,8 +19,8 @@ import { formatRepoLabel } from "./repo-label";
  * `repoName`, `environmentId`, `origin`, `createdBy=me`) plus a `lifecycle`
  * control that maps onto the API's `status`/`excludeStatus` pair. Defaults
  * are omitted so `/sessions` alone is the canonical "not archived, all
- * creators" view. Invalid values fall back to their default instead of
- * failing the page.
+ * creators" view. Values the API would reject are reported by the parser so
+ * the page can refuse them instead of widening the result set.
  */
 
 export const SESSIONS_PATH = "/sessions";
@@ -81,19 +81,77 @@ function nonEmpty(value: string | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-export function parseSessionDiscoveryQuery(searchParams: URLSearchParams): SessionDiscoveryQuery {
-  const lifecycle = searchParams.get("lifecycle");
-  const repoOwner = nonEmpty(searchParams.get("repoOwner"));
-  const repoName = nonEmpty(searchParams.get("repoName"));
-  const origin = spawnSourceSchema.safeParse(searchParams.get("origin"));
+/** Page URL parameters, named for the user-facing controls they carry. */
+type SessionDiscoveryParam =
+  | "q"
+  | "createdBy"
+  | "repoOwner"
+  | "repoName"
+  | "environmentId"
+  | "lifecycle"
+  | "origin";
+
+export type SessionDiscoveryParseResult =
+  | { success: true; data: SessionDiscoveryQuery }
+  | { success: false; invalidParams: SessionDiscoveryParam[] };
+
+/**
+ * Parse the page URL with the same strictness as the API. A value the
+ * server would reject (or one this page has no control for, such as a
+ * creator other than `me`) is reported instead of dropped, so a bad link
+ * never silently shows a wider result set than it names.
+ */
+export function parseSessionDiscoveryQuery(
+  searchParams: URLSearchParams
+): SessionDiscoveryParseResult {
+  const invalidParams: SessionDiscoveryParam[] = [];
+
+  const q = normalizeSessionListSearch(searchParams.get("q"));
+  if (q === null) invalidParams.push("q");
+
+  const createdBy = searchParams.getAll("createdBy");
+  if (createdBy.some((value) => value !== SESSION_LIST_CURRENT_USER)) {
+    invalidParams.push("createdBy");
+  }
+
+  const repoOwnerParam = searchParams.get("repoOwner");
+  const repoNameParam = searchParams.get("repoName");
+  const repoOwner = nonEmpty(repoOwnerParam);
+  const repoName = nonEmpty(repoNameParam);
+  if (repoOwnerParam !== null && repoOwner === null) {
+    invalidParams.push("repoOwner");
+  } else if (repoNameParam !== null && repoName === null) {
+    invalidParams.push("repoName");
+  } else if (repoOwner !== null && repoName === null) {
+    invalidParams.push("repoName");
+  } else if (repoOwner === null && repoName !== null) {
+    invalidParams.push("repoOwner");
+  }
+
+  const environmentIdParam = searchParams.get("environmentId");
+  const environmentId = nonEmpty(environmentIdParam);
+  if (environmentIdParam !== null && environmentId === null) invalidParams.push("environmentId");
+
+  const lifecycleParam = searchParams.get("lifecycle");
+  if (lifecycleParam !== null && !isLifecycle(lifecycleParam)) invalidParams.push("lifecycle");
+
+  const originParam = searchParams.get("origin");
+  const origin = originParam ? spawnSourceSchema.safeParse(originParam) : null;
+  if (origin && !origin.success) invalidParams.push("origin");
+
+  if (invalidParams.length > 0) return { success: false, invalidParams };
   return {
-    // Oversized text is dropped rather than sent: the API would reject it.
-    q: normalizeSessionListSearch(searchParams.get("q")) ?? "",
-    creator: searchParams.getAll("createdBy").includes(SESSION_LIST_CURRENT_USER) ? "mine" : "all",
-    repository: repoOwner && repoName ? { repoOwner, repoName } : null,
-    environmentId: nonEmpty(searchParams.get("environmentId")),
-    lifecycle: isLifecycle(lifecycle) ? lifecycle : DEFAULT_SESSION_DISCOVERY_QUERY.lifecycle,
-    origin: origin.success ? origin.data : null,
+    success: true,
+    data: {
+      q: q ?? "",
+      creator: createdBy.length > 0 ? "mine" : "all",
+      repository: repoOwner && repoName ? { repoOwner, repoName } : null,
+      environmentId,
+      lifecycle: isLifecycle(lifecycleParam)
+        ? lifecycleParam
+        : DEFAULT_SESSION_DISCOVERY_QUERY.lifecycle,
+      origin: origin?.success ? origin.data : null,
+    },
   };
 }
 
