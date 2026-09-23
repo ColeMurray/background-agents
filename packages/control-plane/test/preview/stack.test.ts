@@ -1,20 +1,38 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, it, vi } from "vitest";
 import { startPreviewStack } from "./stack";
 import type * as BackendModule from "./backend";
+import type * as FsPromises from "node:fs/promises";
 import { waitFor } from "./scenarios";
 import { PERSONAS } from "./contracts";
 
-const { startBackend } = vi.hoisted(() => ({ startBackend: vi.fn() }));
+const { startBackend, removalFailure } = vi.hoisted(() => ({
+  startBackend: vi.fn(),
+  removalFailure: { path: "" },
+}));
 vi.mock("./backend", async (original) => ({
   ...(await original<typeof BackendModule>()),
   startPreviewBackend: startBackend,
 }));
+// Fails one path's removal as a permission error would; root would ignore real permissions.
+vi.mock("node:fs/promises", async (original) => {
+  const fs = await original<typeof FsPromises>();
+  return {
+    ...fs,
+    rm: async (path: string, options?: Parameters<typeof fs.rm>[1]) => {
+      if (path === removalFailure.path)
+        throw Object.assign(new Error(`EACCES: permission denied, rm '${path}'`), {
+          code: "EACCES",
+        });
+      return fs.rm(path, options);
+    },
+  };
+});
 
 it("retains sanitized startup and cleanup evidence while releasing acquired resources", async () => {
   const root = await mkdtemp(join(tmpdir(), "oi-preview-failure-test-"));
@@ -86,17 +104,13 @@ it("releases the checkout lock even when removing the run directory fails", asyn
       close: async () => {},
     };
   });
-  const stuck = () => join(runDir, "stuck");
   try {
     await expect(
       startPreviewStack({
         root,
         onStage(stage) {
           if (stage !== "web") return;
-          // An entry the owner cannot delete: removing the run directory fails with EACCES.
-          mkdirSync(stuck());
-          writeFileSync(join(stuck(), "file"), "");
-          chmodSync(stuck(), 0o500);
+          removalFailure.path = runDir;
           throw new Error("web: primary compile failure");
         },
       })
@@ -106,8 +120,8 @@ it("releases the checkout lock even when removing the run directory fails", asyn
     expect(diagnostic).toContain("primary compile failure");
     expect(diagnostic).toContain("EACCES");
   } finally {
-    if (runDir) chmodSync(stuck(), 0o700);
-    await rm(runDir, { recursive: true, force: true });
+    removalFailure.path = "";
+    if (runDir) await rm(runDir, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
   }
 });
