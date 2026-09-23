@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from .code_server import CodeServer
     from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
-    from .opencode_models_catalog import OpenCodeModelsCatalog
     from .repository_boot import RepositoryBoot, RepositoryBootResult
     from .web_terminal import WebTerminal
 
@@ -40,6 +39,11 @@ FATAL_ERROR_REPORT_MAX_ATTEMPTS = 3
 FATAL_ERROR_REPORT_BACKOFF_BASE_SECONDS = 2
 FATAL_ERROR_REPORT_TIMEOUT_SECONDS = 5.0
 FATAL_ERROR_REPORT_MAX_CHARS = 1000
+
+#: Writes OpenCode's current model catalog to its cache file, which OpenCode
+#: reads in preference to the catalog compiled into its binary.
+OPENCODE_MODELS_REFRESH_COMMAND: tuple[str, ...] = ("opencode", "models", "--refresh")
+OPENCODE_MODELS_REFRESH_TIMEOUT_SECONDS = 120.0
 
 
 class BootExecutionCancelled(Exception):
@@ -67,7 +71,6 @@ class SandboxSupervisor:
         log: Any,
         *,
         boot_events: BootEventLog | None = None,
-        models_catalog: OpenCodeModelsCatalog | None = None,
     ) -> None:
         self.config = config
         self.repository_boot = repository_boot
@@ -84,8 +87,6 @@ class SandboxSupervisor:
         self.web_terminal = web_terminal
         self.browser_desktop = browser_desktop
         self.managed_skills = managed_skills
-        # Refreshed into an image build so the image carries a current catalog.
-        self.models_catalog = models_catalog
         self.shutdown_event = shutdown_event
         self.log = log
         self.boot_mode = BootMode.FRESH
@@ -476,6 +477,28 @@ class SandboxSupervisor:
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def _refresh_models_catalog(self) -> None:
+        """Bake OpenCode's current model catalog into the image being built. Best-effort."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *OPENCODE_MODELS_REFRESH_COMMAND,
+                cwd=Path.home(),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                async with asyncio.timeout(OPENCODE_MODELS_REFRESH_TIMEOUT_SECONDS):
+                    exit_code = await process.wait()
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+        except Exception as error:
+            self.log.warn("opencode_models.refresh_failed", exc=error)
+            return
+        self.log.info("opencode_models.refresh_finished", exit_code=exit_code)
+
     async def _run_image_build_execution(
         self, expected_tunnel_ports: list[int]
     ) -> RepositoryBootResult:
@@ -558,8 +581,7 @@ class SandboxSupervisor:
 
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
-                if self.models_catalog is not None:
-                    await self._run_until_shutdown(self.models_catalog.refresh)
+                await self._run_until_shutdown(self._refresh_models_catalog)
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",

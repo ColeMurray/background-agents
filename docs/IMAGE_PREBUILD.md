@@ -179,16 +179,11 @@ exists, and otherwise from the catalog compiled into the pinned OpenCode binary.
 newer catalog in the background, but only the next OpenCode process reads it. Without a file on
 disk, a fresh sandbox would never know about a model published after the pinned OpenCode release.
 
-The build runs the image's own `opencode models --refresh`, which downloads the published catalog
-and loads it, so every session started from the image resolves models as of the build, and the
-runtime adds no request to session boots. The refresh runs against a throwaway cache, and its file
-replaces the real one only when OpenCode exits successfully after writing it, so a catalog that
-OpenCode cannot load never reaches a session. The step is best-effort: on any failure the build
-continues and sessions use whatever catalog the base image carries.
-
-The build skips the step when OpenCode would not read the downloaded default catalog, following
-OpenCode's own reading of each variable: `OPENCODE_MODELS_PATH` is set (even to an empty value),
-`OPENCODE_MODELS_URL` is non-empty, or `OPENCODE_DISABLE_MODELS_FETCH` is `true` or `1`.
+The build runs `opencode models --refresh`, which writes the published catalog to that file, so
+every session started from the image resolves models as of the build and session boots do no extra
+work. The step is best-effort: a failure is logged and the build continues. OpenCode's own
+environment variables (`OPENCODE_MODELS_URL`, `OPENCODE_MODELS_PATH`) apply to the refresh as they
+do to sessions.
 
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
