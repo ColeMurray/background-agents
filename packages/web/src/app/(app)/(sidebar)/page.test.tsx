@@ -148,10 +148,10 @@ vi.mock("@/components/model-reasoning-selector", () => ({
       </button>
       {onHarnessChange && (
         <>
-          <button type="button" onClick={() => onHarnessChange("claude")}>
+          <button type="button" disabled={disabled} onClick={() => onHarnessChange("claude")}>
             Switch agent to claude
           </button>
-          <button type="button" onClick={() => onHarnessChange("opencode")}>
+          <button type="button" disabled={disabled} onClick={() => onHarnessChange("opencode")}>
             Switch agent to opencode
           </button>
         </>
@@ -863,7 +863,7 @@ describe("Home", () => {
     expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
   });
 
-  it("keeps an uncertain session out of warm retirement after its target changes", async () => {
+  it("locks session settings for an uncertain submission without retiring its session", async () => {
     let prompts = 0;
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
@@ -882,12 +882,58 @@ describe("Home", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     await screen.findByText(/Retry on this page/);
-    fireEvent.click(screen.getByRole("button", { name: "Switch agent to claude" }));
+    expect(screen.getByRole("button", { name: /background-agents/i })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Agent, model and effort: opencode" })
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Switch agent to claude" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /all skills/i })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /Anthropic authentication options/i })
+    ).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
     const calls = vi.mocked(fetch).mock.calls;
     expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
     expect(calls.filter(([url]) => String(url).includes("/archive"))).toHaveLength(0);
+  });
+
+  it("reuses the original request ID after uncertain A, B, then A submissions", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions")
+        return Response.json({ sessionId: "session-1", status: "created" });
+      if (url.endsWith("/prompt")) {
+        attempts++;
+        if (attempts < 3) throw new Error("response lost");
+        return Response.json({ messageId: "original", status: "queued" });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.change(input, { target: { value: "B" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(attempts).toBe(2));
+    await screen.findByText(/Retry on this page/);
+    fireEvent.change(input, { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+
+    const calls = vi.mocked(fetch).mock.calls;
+    const bodies = calls
+      .filter(([url]) => String(url).endsWith("/prompt"))
+      .map(
+        ([, init]) => JSON.parse(String(init?.body)) as { content: string; clientRequestId: string }
+      );
+    expect(bodies.map(({ content }) => content)).toEqual(["A", "B", "A"]);
+    expect(bodies[0].clientRequestId).toBe(bodies[2].clientRequestId);
+    expect(bodies[1].clientRequestId).not.toBe(bodies[0].clientRequestId);
+    expect(calls.filter(([url]) => String(url) === "/api/sessions")).toHaveLength(1);
   });
 
   it("rotates the request key after editing a failed draft", async () => {

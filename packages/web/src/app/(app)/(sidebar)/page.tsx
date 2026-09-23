@@ -123,7 +123,7 @@ export default function Home() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const submitInFlightRef = useRef(false);
-  const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
+  const retryRequestsRef = useRef(new Map<string, PromptRequestIdentity>());
   const submittedSessionIdRef = useRef<string | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
@@ -334,7 +334,7 @@ export default function Home() {
       setError(modelSelection.availability.message);
       return;
     }
-    if (!isLaunchable) {
+    if (!isLaunchable && !submittedSessionIdRef.current) {
       setError(
         sessionTarget?.kind === "repos"
           ? "Select at least one repository"
@@ -374,8 +374,11 @@ export default function Home() {
           return;
         }
       }
-      const identity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
-      retryRequestRef.current = identity;
+      const identity = resolvePromptRequestIdentity(
+        signature,
+        retryRequestsRef.current.get(signature) ?? null
+      );
+      retryRequestsRef.current.set(signature, identity);
       submittedSessionIdRef.current = sessionId;
       consumeWarmSession(sessionId);
 
@@ -392,7 +395,7 @@ export default function Home() {
       });
 
       if (res.ok) {
-        retryRequestRef.current = null;
+        retryRequestsRef.current.clear();
         submittedSessionIdRef.current = null;
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
@@ -436,6 +439,7 @@ export default function Home() {
         onRemove: sessionAttachments.removeAttachment,
       }}
       creating={creating}
+      sessionSettingsLocked={submittedSessionIdRef.current !== null}
       isCreatingSession={isCreatingSession}
       providerSelectionsHydrated={providerSelectionsHydrated}
       error={error}
@@ -468,6 +472,7 @@ function HomeContent({
   handlePromptChange,
   attachments,
   creating,
+  sessionSettingsLocked,
   isCreatingSession,
   providerSelectionsHydrated,
   error,
@@ -502,6 +507,7 @@ function HomeContent({
     onRemove: (id: string) => void;
   };
   creating: boolean;
+  sessionSettingsLocked: boolean;
   isCreatingSession: boolean;
   providerSelectionsHydrated: boolean;
   error: string;
@@ -580,7 +586,10 @@ function HomeContent({
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
-                <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
+                <SessionTargetPicker
+                  {...picker.pickerProps}
+                  disabled={creating || sessionSettingsLocked}
+                />
               </div>
 
               <div
@@ -644,7 +653,7 @@ function HomeContent({
                         attachmentsLocked ||
                         !providerSelectionsHydrated ||
                         providerAccounts.loading ||
-                        !isLaunchable
+                        (!isLaunchable && !sessionSettingsLocked)
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${labels["send-prompt"]})`}
@@ -670,7 +679,7 @@ function HomeContent({
                       onReasoningEffortChange={setReasoningEffort}
                       harness={harness}
                       onHarnessChange={setHarness}
-                      disabled={creating}
+                      disabled={creating || sessionSettingsLocked}
                     />
 
                     <SessionSkillSelector
@@ -679,7 +688,7 @@ function HomeContent({
                       target={skillPreviewTarget}
                       preview={skillPreview}
                       previewLoading={skillPreviewLoading}
-                      disabled={creating}
+                      disabled={creating || sessionSettingsLocked}
                     />
 
                     {selectedProvider && (
@@ -692,7 +701,7 @@ function HomeContent({
                           (item) => item.provider === selectedProvider
                         )}
                         value={providerSelections[selectedProvider]}
-                        disabled={creating}
+                        disabled={creating || sessionSettingsLocked}
                         onChange={(selection) =>
                           onProviderSelectionChange(selectedProvider, selection)
                         }
