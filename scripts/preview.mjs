@@ -13,6 +13,8 @@ if (
 )
   throw new Error("Preview requires Node >=22.13.0; see package.json");
 let child;
+// A terminal's Ctrl-C also reaches the child directly (same process group). Forwarding covers
+// signals sent only to npm or this process; the CLI treats every repeat as one stop request.
 const forward = (signal) => child?.kill(signal);
 const onInt = () => forward("SIGINT");
 const onTerm = () => forward("SIGTERM");

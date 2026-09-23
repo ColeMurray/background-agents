@@ -51,8 +51,12 @@ async function main() {
     controller.abort();
     notifyStop();
   };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  // Ctrl-C reaches this process twice (the process group, then the wrapper's forward), and people
+  // press it again while cleanup runs. Every repeat is the same stop request, so the handlers stay
+  // installed for the life of the process: no signal may take Node's default exit and strand the
+  // checkout lock, Next or browser contexts.
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
   let stack: PreviewStack | undefined;
   let diagnosticPath: string | undefined;
   const errors: unknown[] = [];
@@ -97,8 +101,6 @@ async function main() {
     errors.push(error);
     diagnosticPath = await stack?.recordFailure(error);
   } finally {
-    process.removeListener("SIGINT", stop);
-    process.removeListener("SIGTERM", stop);
     try {
       if (stack) await closeBrowsers(stack.manifestPath);
     } catch (error) {
