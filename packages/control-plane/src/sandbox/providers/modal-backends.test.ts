@@ -57,32 +57,6 @@ function fixture(confirmation: unknown) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("distinct Modal backend identities", () => {
-  it("uses a dedicated read-only receipt endpoint after the original capture deadline", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          success: true,
-          data: { image_id: "im-recovered" },
-        }),
-        { status: 200 }
-      )
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const provider = new ModalSandboxProvider(createModalClient("secret", "acme"), "modal-vm");
-    await expect(
-      provider.recoverSnapshotReceipt({
-        providerObjectId: 'modal-vm-session:["session","generation"]',
-        sessionId: "session",
-        deadlineAtMs: Date.now() + 30_000,
-      })
-    ).resolves.toEqual({ imageId: "im-recovered" });
-    const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toContain("api-recover-sandbox-snapshot");
-    expect(JSON.parse(options.body)).toEqual({
-      sandbox_id: 'modal-vm-session:["session","generation"]',
-    });
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
   it("retries a lost VM capture response while retaining the source", async () => {
     const { client, provider } = fixture("modal-vm");
     client.snapshotSandbox.mockRejectedValueOnce(new Error("response lost"));

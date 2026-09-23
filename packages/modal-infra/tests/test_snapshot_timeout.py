@@ -31,10 +31,25 @@ async def test_pending_vm_reference_recovers_owned_allocation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pending_vm_reference_never_confirms_absence(monkeypatch):
-    monkeypatch.setattr(
-        "src.sandbox.terminal_snapshot.recorded_vm_source", AsyncMock(return_value=None)
+async def test_pending_vm_reference_stops_only_its_owned_allocation(monkeypatch):
+    sandbox = SimpleNamespace(
+        object_id="sb-owned",
+        get_tags=_async_method(docker_allocation_tags("session", "generation")),
+        terminate=_async_method(),
     )
+    from_name = _async_method(sandbox)
+    from_id = _async_method(sandbox)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", from_name)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    await SandboxManager().stop_sandbox('modal-vm-session:["session","generation"]')
+
+    from_id.aio.assert_awaited_once_with("sb-owned")
+    sandbox.terminate.aio.assert_awaited_once_with(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_pending_vm_reference_never_confirms_absence(monkeypatch):
     lookup = _async_method()
     lookup.aio.side_effect = ModalNotFoundError("not visible yet")
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", lookup)
@@ -44,9 +59,6 @@ async def test_pending_vm_reference_never_confirms_absence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pending_vm_reference_cannot_stop_another_generation(monkeypatch):
-    monkeypatch.setattr(
-        "src.sandbox.terminal_snapshot.recorded_vm_source", AsyncMock(return_value=None)
-    )
     sandbox = SimpleNamespace(
         object_id="sb-owned",
         get_tags=_async_method(docker_allocation_tags("session", "other")),

@@ -1,7 +1,7 @@
 """Tests for the Modal provider-session image-build APIs."""
 
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, MagicMock, Mock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from modal.exception import NotFoundError as ModalNotFoundError
@@ -23,46 +23,8 @@ CALLBACK_CONTEXT = {
 }
 
 
-@pytest.fixture(autouse=True)
-def terminal_snapshot_receipts(monkeypatch):
-    from src.sandbox import terminal_snapshot
-
-    records = {}
-
-    async def put(key, value, *, skip_if_exists=False):
-        if skip_if_exists and key in records:
-            return False
-        records[key] = value
-        return True
-
-    store = SimpleNamespace(
-        get=SimpleNamespace(aio=AsyncMock(side_effect=records.get)),
-        put=SimpleNamespace(aio=AsyncMock(side_effect=put)),
-    )
-    monkeypatch.setattr(terminal_snapshot, "_receipts", store)
-    return records
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_id", [None, "im-recovered"])
-async def test_snapshot_receipt_recovery_is_read_only(
-    monkeypatch, terminal_snapshot_receipts, image_id
-):
-    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    terminal_snapshot_receipts["sb-vm"] = {"source_id": "sb-vm", "image_id": image_id}
-    manager = Mock()
-    monkeypatch.setattr("src.sandbox.manager.SandboxManager", manager)
-    result = await web_api.api_recover_sandbox_snapshot.get_raw_f()(
-        {"sandbox_id": "sb-vm"}, authorization="Bearer token"
-    )
-    assert result == {"success": True, "data": {"image_id": image_id}}
-    manager.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_vm_capture_leaves_source_alive_until_control_plane_commits(
-    monkeypatch, terminal_snapshot_receipts
-):
+async def test_vm_capture_leaves_source_alive_until_control_plane_commits(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
     handle = SimpleNamespace(sandbox_backend="modal-vm", modal_object_id="sb-immutable")
     manager = SimpleNamespace(
@@ -85,7 +47,6 @@ async def test_vm_capture_leaves_source_alive_until_control_plane_commits(
     assert second["data"]["image_id"] == "im-retry"
     assert manager.take_snapshot.await_count == 2
     manager.stop_sandbox.assert_not_awaited()
-    assert terminal_snapshot_receipts == {}
 
 
 @pytest.mark.asyncio
@@ -102,9 +63,7 @@ async def test_vm_capture_rejects_non_vm_source(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vm_capture_failure_never_retires_or_records_a_receipt(
-    monkeypatch, terminal_snapshot_receipts
-):
+async def test_vm_capture_failure_never_retires(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
     manager = SimpleNamespace(
         get_sandbox_by_id=AsyncMock(
@@ -117,121 +76,30 @@ async def test_vm_capture_failure_never_retires_or_records_a_receipt(
     with pytest.raises(web_api.HTTPException):
         await _call_vm_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
     manager.stop_sandbox.assert_not_awaited()
-    assert terminal_snapshot_receipts == {}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reference", ["sb-vm", 'modal-vm-session:["session","generation"]'])
-async def test_terminal_capture_uses_real_lookup_identity_and_replays_after_retirement(
-    monkeypatch, terminal_snapshot_receipts, reference
-):
-    from src.sandbox.launch_policy import docker_allocation_tags
-
+async def test_generic_snapshot_rejects_vm_without_capture_or_retirement(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    retired = False
-
-    async def terminate(*, wait):
-        nonlocal retired
-        assert wait is True
-        assert terminal_snapshot_receipts[reference]["image_id"] == "im-recovery"
-        retired = True
-
-    sandbox = SimpleNamespace(
-        object_id="sb-vm",
-        get_tags=SimpleNamespace(
-            aio=AsyncMock(return_value=docker_allocation_tags("session", "generation"))
-        ),
-        terminate=SimpleNamespace(aio=AsyncMock(side_effect=terminate)),
-    )
-
-    async def from_id(object_id):
-        assert object_id == "sb-vm"
-        if retired:
-            raise ModalNotFoundError("retired")
-        return sandbox
-
-    monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_id",
-        SimpleNamespace(aio=AsyncMock(side_effect=from_id)),
-    )
-    monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name",
-        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
-    )
-    capture = AsyncMock(return_value="im-recovery")
-    monkeypatch.setattr(SandboxManager, "take_snapshot", capture)
-    request = {"sandbox_id": reference, "sandbox_backend": "modal-vm"}
-    first = await _call_generic_snapshot(request)
-    assert retired
-    assert terminal_snapshot_receipts[reference]["source_id"] == "sb-vm"
-    # The CP may know only a launch reference when BOTH launch and capture responses
-    # were lost. After receipt-only recovery, explicit retirement must use the
-    # recorded immutable source, never the now-reusable session name.
-    from_name = SimpleNamespace(aio=AsyncMock(side_effect=ModalNotFoundError("source gone")))
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", from_name)
-    recovered = await web_api.api_recover_sandbox_snapshot.get_raw_f()(
-        {"sandbox_id": reference}, authorization="Bearer token"
-    )
-    assert recovered["data"]["image_id"] == "im-recovery"
-    await SandboxManager().stop_sandbox(reference)
-    from_name.aio.assert_not_awaited()
-    assert await _call_generic_snapshot(request) == first
-    capture.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_terminal_snapshot_retry_recovers_receipt_after_source_is_gone(
-    monkeypatch, terminal_snapshot_receipts
-):
-    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    handle = SimpleNamespace(sandbox_backend="modal-vm", modal_object_id="sb-vm")
-    manager = SimpleNamespace(
-        get_sandbox_by_id=AsyncMock(return_value=handle),
-        take_snapshot=AsyncMock(return_value="im-recovery"),
-        stop_sandbox=AsyncMock(),
-    )
+    manager = SimpleNamespace(get_sandbox_by_id=AsyncMock(), take_snapshot=AsyncMock())
     monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
-    request = {"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"}
-    first = await _call_generic_snapshot(request)  # Simulate dropping this response.
-    manager.get_sandbox_by_id.return_value = None
-    recovered = await _call_generic_snapshot(request)
-    assert recovered == first
-    assert recovered["data"]["image_id"] == "im-recovery"
-    manager.take_snapshot.assert_awaited_once()
-    manager.get_sandbox_by_id.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_terminal_snapshot_does_not_retire_without_durable_receipt(monkeypatch):
-    from src.sandbox import terminal_snapshot
-
-    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    terminal_snapshot._receipts.put.aio.side_effect = [True, RuntimeError("receipt unavailable")]
-    manager = SimpleNamespace(
-        get_sandbox_by_id=AsyncMock(
-            return_value=SimpleNamespace(sandbox_backend="modal-vm", modal_object_id="sb-vm")
-        ),
-        take_snapshot=AsyncMock(return_value="im-recovery"),
-        stop_sandbox=AsyncMock(),
-    )
-    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
-    with pytest.raises(web_api.HTTPException):
+    with pytest.raises(web_api.HTTPException, match="Use the VM snapshot endpoint"):
         await _call_generic_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
-    manager.stop_sandbox.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_terminal_snapshot_does_not_repeat_unknown_capture(
-    monkeypatch, terminal_snapshot_receipts
-):
-    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    terminal_snapshot_receipts["sb-vm"] = {"source_id": "sb-vm", "image_id": None}
-    manager = SimpleNamespace(take_snapshot=AsyncMock(), stop_sandbox=AsyncMock())
-    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
-    with pytest.raises(web_api.HTTPException):
-        await _call_generic_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
+    manager.get_sandbox_by_id.assert_not_awaited()
     manager.take_snapshot.assert_not_awaited()
-    manager.stop_sandbox.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generic_snapshot_rejects_unlabeled_vm_source(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(return_value=SimpleNamespace(sandbox_backend="modal-vm")),
+        take_snapshot=AsyncMock(),
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+    with pytest.raises(web_api.HTTPException, match="Use the VM snapshot endpoint"):
+        await _call_generic_snapshot({"sandbox_id": "sb-vm"})
+    manager.take_snapshot.assert_not_awaited()
 
 
 def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
@@ -964,61 +832,3 @@ async def test_generic_snapshot_passes_ordinary_deadline_to_real_manager(
     assert result["data"]["image_id"] == "im-session-1"
     get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=10)
-
-
-@pytest.mark.asyncio
-async def test_vm_snapshot_retirement_shares_the_request_deadline(monkeypatch):
-    import asyncio
-
-    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    monkeypatch.setattr(web_api, "time", SimpleNamespace(time=lambda: 1000))
-
-    async def delayed_termination(_id):
-        assert _id == "sb-vm"
-        await asyncio.sleep(10)
-
-    terminate = SimpleNamespace(aio=AsyncMock(side_effect=delayed_termination))
-    handle = SimpleNamespace(
-        sandbox_backend="modal-vm",
-        modal_object_id="sb-vm",
-        modal_sandbox=SimpleNamespace(terminate=terminate),
-    )
-    manager = SimpleNamespace(
-        get_sandbox_by_id=AsyncMock(return_value=handle),
-        take_snapshot=AsyncMock(return_value="im-vm"),
-        stop_sandbox=AsyncMock(side_effect=delayed_termination),
-    )
-    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
-    with pytest.raises(web_api.HTTPException) as exc:
-        await _call_generic_snapshot(
-            {"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm", "deadline_at_ms": 1_000_020}
-        )
-    assert exc.value.status_code == 408
-    manager.stop_sandbox.assert_awaited_once_with("sb-vm")
-
-
-@pytest.mark.asyncio
-async def test_vm_snapshot_preserves_image_when_source_disappears_during_retirement(monkeypatch):
-    from modal.exception import NotFoundError
-
-    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
-    terminate = SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("already gone")))
-    handle = SimpleNamespace(
-        sandbox_backend="modal-vm",
-        modal_object_id="sb-vm",
-        modal_sandbox=SimpleNamespace(terminate=terminate),
-    )
-    manager = SimpleNamespace(
-        get_sandbox_by_id=AsyncMock(return_value=handle),
-        take_snapshot=AsyncMock(return_value="im-recoverable"),
-        stop_sandbox=SandboxManager().stop_sandbox,
-    )
-    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
-    from_id = SimpleNamespace(aio=AsyncMock(return_value=handle.modal_sandbox))
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
-    result = await _call_generic_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
-    assert result["data"] == {
-        "source_stopped": True,
-        "image_id": "im-recoverable",
-        "sandbox_id": "sb-vm",
-    }

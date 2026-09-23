@@ -77,7 +77,7 @@ async function readShutdown(stub: DurableObjectStub): Promise<Record<string, unk
 }
 
 describe("sandbox graceful shutdown wiring", () => {
-  it("recovers an interrupted VM capture through the lifecycle boundary and commits before retirement", async () => {
+  it("holds an interrupted legacy VM capture without recapture or retirement", async () => {
     const { stub } = await initNamedSession(`vm-capture-receipt-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
     await runInSessionDO(stub, (_instance, state) => {
@@ -98,7 +98,7 @@ describe("sandbox graceful shutdown wiring", () => {
       protocolVersion: 1,
     });
     const evidence = await runInSessionDO(stub, async (instance, durableState) => {
-      let lookupCount = 0;
+      let captureCount = 0;
       let stopCount = 0;
       const provider: SandboxProvider = {
         name: "modal-vm",
@@ -113,31 +113,25 @@ describe("sandbox graceful shutdown wiring", () => {
           throw new Error("must not create");
         },
         takeSnapshot: async () => {
+          captureCount++;
           throw new Error("must not recapture");
         },
-        recoverSnapshotReceipt: async ({ providerObjectId }) => {
-          expect(providerObjectId).toBe("sb-captured");
-          lookupCount++;
-          return { imageId: "im-newest-recovered" };
-        },
         stopSandbox: async () => {
-          const row = durableState.storage.sql.exec("SELECT snapshot_image_id FROM sandbox").one();
-          expect(row.snapshot_image_id).toBe("im-newest-recovered");
           stopCount++;
           return { success: true };
         },
       };
       const restarted = realLifecycleHarness(instance, durableState, provider);
       await restarted.manager.handleShutdownAlarm();
-      return { lookupCount, stopCount, snapshot: restarted.manager.shutdownSnapshot() };
+      return { captureCount, stopCount, snapshot: restarted.manager.shutdownSnapshot() };
     });
     expect(evidence).toMatchObject({
-      lookupCount: 1,
-      stopCount: 1,
-      snapshot: { phase: "saved", hasRecoveryPoint: true },
+      captureCount: 0,
+      stopCount: 0,
+      snapshot: { phase: "unknown", hasRecoveryPoint: false },
     });
-    expect(await queryDO(stub, "SELECT snapshot_image_id, status FROM sandbox")).toEqual([
-      { snapshot_image_id: "im-newest-recovered", status: "stopped" },
+    expect(await queryDO(stub, "SELECT snapshot_image_id FROM sandbox")).toEqual([
+      { snapshot_image_id: null },
     ]);
   });
 

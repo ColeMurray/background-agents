@@ -575,35 +575,25 @@ async def api_snapshot_sandbox(
         manager = SandboxManager()
         deadline_at_ms = request.get("deadline_at_ms")
         timeout_seconds = _snapshot_timeout_seconds(request)
-        source_stopped = request.get("sandbox_backend") == "modal-vm"
+        if request.get("sandbox_backend") == "modal-vm":
+            raise HTTPException(status_code=400, detail="Use the VM snapshot endpoint")
         try:
             async with asyncio.timeout(timeout_seconds):
-                if source_stopped:
-                    from .sandbox.terminal_snapshot import snapshot_vm
-
-                    image_id = await snapshot_vm(manager, sandbox_id, timeout_seconds)
+                handle = await manager.get_sandbox_by_id(sandbox_id)
+                if not handle:
+                    raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
+                if handle.sandbox_backend == "modal-vm":
+                    raise HTTPException(status_code=400, detail="Use the VM snapshot endpoint")
+                if deadline_at_ms is None:
+                    image_id = await manager.take_snapshot(handle)
                 else:
-                    handle = await manager.get_sandbox_by_id(sandbox_id)
-                    if not handle:
-                        raise HTTPException(
-                            status_code=404, detail=f"Sandbox not found: {sandbox_id}"
-                        )
-                    if handle.sandbox_backend == "modal-vm":
-                        raise HTTPException(
-                            status_code=400, detail="VM capture requires sandbox_backend"
-                        )
-                    if deadline_at_ms is None:
-                        image_id = await manager.take_snapshot(handle)
-                    else:
-                        image_id = await manager.take_snapshot(
-                            handle, timeout_seconds=timeout_seconds
-                        )
+                    image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
         except (TimeoutError, ModalTimeoutError) as exc:
             raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
         return {
             "success": True,
             "data": {
-                "source_stopped": source_stopped,
+                "source_stopped": False,
                 "image_id": image_id,
                 "sandbox_id": sandbox_id,
             },
@@ -660,27 +650,6 @@ async def api_snapshot_vm_sandbox(
                 "sandbox_id": sandbox_id,
             },
         }
-
-
-@app.function(image=function_image, secrets=[internal_api_secret])
-@fastapi_endpoint(method="POST")
-async def api_recover_sandbox_snapshot(
-    request: dict[str, Any],
-    authorization: str | None = Header(None),
-) -> dict[str, Any]:
-    """Read a terminal VM capture receipt without repeating any provider side effect."""
-    async with _execute_endpoint(
-        endpoint_name="api_recover_sandbox_snapshot",
-        authorization=authorization,
-        trace_id=None,
-        request_id=None,
-    ):
-        sandbox_id = request.get("sandbox_id")
-        if not isinstance(sandbox_id, str) or not sandbox_id:
-            raise HTTPException(status_code=400, detail="sandbox_id is required")
-        from .sandbox.terminal_snapshot import recover_vm_snapshot
-
-        return {"success": True, "data": {"image_id": await recover_vm_snapshot(sandbox_id)}}
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])

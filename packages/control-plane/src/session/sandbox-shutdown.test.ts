@@ -158,54 +158,6 @@ function preparedEvent(
 describe("SandboxShutdownCoordinator", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("recovers a legacy terminal capture receipt after response loss", async () => {
-    const takeSnapshot = vi.fn(async () => {
-      throw new Error("response aborted after capture and retirement");
-    });
-    const recoverSnapshotReceipt = vi.fn();
-    const stopSandbox = vi.fn(async () => ({ success: true as const }));
-    const f = fixture(
-      provider({
-        name: "modal-vm",
-        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
-        takeSnapshot,
-        recoverSnapshotReceipt,
-        stopSandbox,
-      })
-    );
-    await readyFinite(f);
-    await f.shutdown.requestShutdown("checkpoint");
-    f.shutdown.prepared(preparedEvent(f.store.value!));
-    await f.shutdown.handleAlarm();
-    expect(f.store.value).toMatchObject({ phase: "unknown", captureReceiptPending: false });
-    expect(stopSandbox).not.toHaveBeenCalled();
-
-    // A persisted row from the previous VM endpoint may still be pending when
-    // the control plane rolls forward. Only that legacy row reads Modal Dict.
-    f.store.write({ ...f.store.value!, captureReceiptPending: true });
-    recoverSnapshotReceipt.mockResolvedValue({ imageId: "newest-image" });
-    f.setNow(f.store.value!.captureByMs! + 60_000); // Original request deadline is gone.
-    const restarted = new SandboxShutdownCoordinator(f.deps as never);
-    await restarted.handleAlarm();
-
-    expect(f.store.value).toMatchObject({
-      phase: "saved",
-      sourceRetired: true,
-      captureReceiptPending: false,
-      receipt: { artifactId: "newest-image", provider: "modal-vm" },
-    });
-    expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledWith(
-      GENERATION.sandboxId,
-      "newest-image",
-      "runtime-1"
-    );
-    expect(takeSnapshot).toHaveBeenCalledOnce();
-    expect(stopSandbox).toHaveBeenCalledOnce();
-    expect(f.deps.sandbox.recordSandboxSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
-      stopSandbox.mock.invocationCallOrder[0]
-    );
-  });
-
   it("commits a VM image before retiring its retained source", async () => {
     const takeSnapshot = vi.fn(async () => ({
       success: true as const,
@@ -214,14 +166,12 @@ describe("SandboxShutdownCoordinator", () => {
       sourceObjectId: "sb-immutable",
     }));
     const stopSandbox = vi.fn(async () => ({ success: true as const }));
-    const recoverSnapshotReceipt = vi.fn();
     const f = fixture(
       provider({
         name: "modal-vm",
         capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
         takeSnapshot,
         stopSandbox,
-        recoverSnapshotReceipt,
       })
     );
     await readyFinite(f);
@@ -232,7 +182,6 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value).toMatchObject({
       phase: "saved",
       sourceRetired: true,
-      captureReceiptPending: false,
       receipt: {
         artifactId: "vm-image",
         provider: "modal-vm",
@@ -250,22 +199,19 @@ describe("SandboxShutdownCoordinator", () => {
     expect(stopSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ providerObjectId: "sb-immutable" })
     );
-    expect(recoverSnapshotReceipt).not.toHaveBeenCalled();
   });
 
-  it("holds a lost VM capture response without retiring the source or polling Modal Dict", async () => {
+  it("holds a lost VM capture response without retiring the source", async () => {
     const takeSnapshot = vi.fn(async () => {
       throw new Error("capture response lost");
     });
     const stopSandbox = vi.fn(async () => ({ success: true as const }));
-    const recoverSnapshotReceipt = vi.fn();
     const f = fixture(
       provider({
         name: "modal-vm",
         capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
         takeSnapshot,
         stopSandbox,
-        recoverSnapshotReceipt,
       })
     );
     await readyFinite(f);
@@ -274,23 +220,8 @@ describe("SandboxShutdownCoordinator", () => {
     await f.shutdown.handleAlarm();
     await f.shutdown.handleAlarm();
 
-    expect(f.store.value).toMatchObject({ phase: "unknown", captureReceiptPending: false });
+    expect(f.store.value).toMatchObject({ phase: "unknown" });
     expect(stopSandbox).not.toHaveBeenCalled();
-    expect(recoverSnapshotReceipt).not.toHaveBeenCalled();
-  });
-
-  it("does not publish a recovered capture for a replaced generation", async () => {
-    const recoverSnapshotReceipt = vi.fn(async () => {
-      f.sandboxRow.created_at += 1;
-      return { imageId: "stale-image" };
-    });
-    const f = fixture(provider({ recoverSnapshotReceipt }));
-    await readyFinite(f);
-    await f.shutdown.requestShutdown("checkpoint");
-    f.store.write({ ...f.store.value!, phase: "unknown", captureReceiptPending: true });
-    await f.shutdown.handleAlarm();
-    expect(f.deps.sandbox.recordSandboxSnapshot).not.toHaveBeenCalled();
-    expect(f.store.value?.receipt).toBeUndefined();
   });
 
   it("distinguishes unmanaged and held shutdown requests", async () => {

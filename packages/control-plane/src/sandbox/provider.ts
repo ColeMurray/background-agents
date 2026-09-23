@@ -609,11 +609,6 @@ export interface SandboxProvider {
    */
   takeSnapshot?(config: SnapshotConfig): Promise<SnapshotResult>;
 
-  /** Recover only an existing terminal capture receipt. Must never initiate a snapshot or stop. */
-  recoverSnapshotReceipt?(
-    config: Pick<SnapshotConfig, "providerObjectId" | "sessionId" | "signal" | "deadlineAtMs">
-  ): Promise<{ imageId: string } | null>;
-
   /**
    * Stop a sandbox explicitly via the provider API.
    *

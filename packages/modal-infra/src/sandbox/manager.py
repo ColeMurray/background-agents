@@ -765,16 +765,11 @@ class SandboxManager:
         return image_id
 
     async def stop_sandbox(self, sandbox_id: str) -> None:
-        """Resolve a recovery reference if needed, then confirm immutable-ID retirement."""
+        """Resolve a pending reference if needed, then confirm immutable-ID retirement."""
         if sandbox_id.startswith("modal-vm-session:"):
-            from .terminal_snapshot import recorded_vm_source
-
-            source_id = await recorded_vm_source(sandbox_id)
-            if source_id is None:
-                handle = await self.get_sandbox_by_id(sandbox_id)
-                assert handle is not None and handle.modal_object_id is not None
-                source_id = handle.modal_object_id
-            sandbox_id = source_id
+            handle = await self.get_sandbox_by_id(sandbox_id)
+            assert handle is not None and handle.modal_object_id is not None
+            sandbox_id = handle.modal_object_id
         try:
             sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
             await sandbox.terminate.aio(wait=True)

@@ -32,7 +32,6 @@ const STOP_MS = 60_000;
 const CAPTURE_MS = 300_000;
 const RETIRE_MS = 30_000;
 const MARGIN_MS = 30_000;
-const CAPTURE_RECEIPT_RETRY_MS = 60_000;
 
 class ShutdownDeadlineError extends Error {}
 
@@ -59,7 +58,6 @@ interface ShutdownDependencies {
 /** One durable owner of planned stopping. Provider side effects never imply a saved receipt. */
 export class SandboxShutdownCoordinator {
   private activeOperation: string | null = null;
-  private recoveringReceipt = false;
   private checkpointOperationId: string | null = null;
   private checkpointGeneration: SandboxGeneration | null = null;
   private retiringOperation: string | null = null;
@@ -716,10 +714,6 @@ export class SandboxShutdownCoordinator {
     if (state.phase === "saved")
       return this.continuationPaused(state) ? "hold_watchdogs" : "continue";
     await this.advance();
-    const current = this.deps.store.read();
-    if (current?.phase === "unknown" && current.captureReceiptPending) {
-      await this.recoverCaptureReceipt(current);
-    }
     return "hold_watchdogs";
   }
 
@@ -795,14 +789,7 @@ export class SandboxShutdownCoordinator {
       return;
     }
     this.activeOperation = state.operationId!;
-    const capturing = {
-      ...state,
-      phase: "capturing" as const,
-      // Legacy Modal VM captures could retire the source before returning.
-      // New captures keep it alive until the receipt is committed here.
-      // Existing rows with captureReceiptPending=true remain recoverable.
-      captureReceiptPending: false,
-    };
+    const capturing = { ...state, phase: "capturing" as const };
     this.publish(capturing);
     await this.deps.alarm.schedule(state.captureByMs!);
     try {
@@ -877,7 +864,6 @@ export class SandboxShutdownCoordinator {
     const retiring: ShutdownRecord = {
       ...state,
       phase: "retiring",
-      captureReceiptPending: false,
       error: undefined,
       receipt,
       savedAtMs: receipt.savedAtMs,
@@ -899,46 +885,6 @@ export class SandboxShutdownCoordinator {
     });
     this.announce(retiring);
     return retiring;
-  }
-
-  private async recoverCaptureReceipt(state: ShutdownRecord): Promise<void> {
-    const recover = this.deps.provider.recoverSnapshotReceipt;
-    if (
-      this.recoveringReceipt ||
-      !recover ||
-      !state.providerObjectId ||
-      state.restoreInvoked ||
-      !this.current(state) ||
-      !this.providerMatches(state)
-    )
-      return;
-    this.recoveringReceipt = true;
-    try {
-      // A read-only lookup is safe after the capture deadline or eviction. Persist
-      // its next wakeup first; absence is not permission to repeat the capture.
-      await this.deps.alarm.schedule(this.now() + CAPTURE_RECEIPT_RETRY_MS);
-      const deadlineAtMs = this.now() + RETIRE_MS;
-      const session = this.deps.session.getSession()!;
-      const receipt = await this.bounded(deadlineAtMs, (signal) =>
-        recover.call(this.deps.provider, {
-          providerObjectId: state.providerObjectId!,
-          sessionId: session.session_name || session.id,
-          deadlineAtMs,
-          signal,
-        })
-      );
-      if (!receipt || !this.owns(state)) return;
-      const retiring = this.commitCaptureReceipt(
-        { ...state, retireByMs: this.now() + RETIRE_MS },
-        receipt.imageId,
-        "snapshot"
-      );
-      await this.retire(retiring);
-    } catch (error) {
-      this.deps.log?.warn("Snapshot receipt recovery remains unconfirmed", { error });
-    } finally {
-      this.recoveringReceipt = false;
-    }
   }
 
   private async retire(state: ShutdownRecord): Promise<void> {

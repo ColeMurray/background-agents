@@ -308,16 +308,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
-  recoverSnapshotReceipt(
-    config: Pick<SnapshotConfig, "providerObjectId" | "sessionId" | "signal" | "deadlineAtMs">
-  ): Promise<{ imageId: string } | null> {
-    if (this.name !== "modal-vm") return Promise.resolve(null);
-    return this.client.recoverSandboxSnapshot({
-      ...config,
-      signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
-    });
-  }
-
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     try {
       const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);

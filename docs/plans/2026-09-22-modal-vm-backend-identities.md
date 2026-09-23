@@ -351,14 +351,13 @@ Review hardening preserves those boundaries:
 - VM session generations share a provider-enforced allocation name, with exact generation ownership
   tags. A pending provider reference is stored before create/restore so snapshot and stop can
   resolve an allocation whose HTTP response was lost; this reference is not startup confirmation.
-- New VM captures use a distinct Modal endpoint that never retires the source or writes a Modal Dict
-  receipt. It returns the immutable source ID, which the control plane persists alongside the image
-  receipt and uses for retirement without a Dict lookup. A lost response leaves the source in place
+- VM captures use a distinct Modal endpoint that never retires the source or persists a
+  provider-side receipt. It returns the immutable source ID, which the control plane persists
+  alongside the image receipt and uses for retirement. A lost response leaves the source in place
   and the control plane holds the ambiguous outcome; a repeated capture can safely re-use Docker's
   idempotent preparation command. A capture without an acknowledged image ID never authorizes
-  retirement. The prior terminal endpoint and read-only receipt recovery remain temporarily for
-  in-flight canary captures during the rollout, then can be removed after those operations have
-  settled.
+  retirement. The older terminal endpoint and receipt lookup have been removed; any preexisting
+  uncertain capture stays held rather than being replayed or retired automatically.
 - Rejected allocations are durably fenced before awaited cleanup. Their explicit cleanup marker
   rearms retirement retries after restart without changing unrelated snapshot/recovery holds.
 - Switching back to gVisor carries forward the currently deployed verified VM image through a
