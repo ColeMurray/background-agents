@@ -181,10 +181,14 @@ disk, a fresh sandbox would never know about a model published after the pinned 
 
 The build downloads the published catalog (`https://models.opencode.ai/api.json`) into that file, so
 every session started from the image resolves models as of the build, and the runtime adds no
-request to session boots. The step is best-effort: on any failure the build continues and sessions
-use whatever catalog the base image carries. The build skips the step when its environment sets
-`OPENCODE_MODELS_PATH`, `OPENCODE_MODELS_URL` or `OPENCODE_DISABLE_MODELS_FETCH`, because OpenCode
-then reads a different file or no downloaded catalog at all.
+request to session boots. The download is staged next to the file and loaded by the image's own
+OpenCode (`opencode models`) before it replaces the file, so a catalog that OpenCode cannot load
+never reaches a session. The step is best-effort: on any failure the build continues and sessions
+use whatever catalog the base image carries.
+
+The build skips the step when OpenCode would not read the downloaded default catalog, following
+OpenCode's own reading of each variable: `OPENCODE_MODELS_PATH` is set (even to an empty value),
+`OPENCODE_MODELS_URL` is non-empty, or `OPENCODE_DISABLE_MODELS_FETCH` is `true` or `1`.
 
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
