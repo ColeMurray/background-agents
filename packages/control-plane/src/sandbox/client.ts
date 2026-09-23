@@ -71,6 +71,7 @@ const snapshotSandboxModalResponseSchema = z.object({
   data: z.object({
     image_id: z.string().min(1),
     source_stopped: z.boolean().optional(),
+    source_id: z.string().min(1).optional(),
   }),
 });
 
@@ -246,6 +247,7 @@ export interface StopSandboxRequest {
 
 export interface SnapshotSandboxResponse {
   sourceStopped?: boolean;
+  sourceObjectId?: string;
   imageId: string;
 }
 
@@ -320,6 +322,7 @@ export class ModalApiError extends Error {
 export class ModalClient {
   private createSandboxUrl: string;
   private snapshotSandboxUrl: string;
+  private snapshotVmSandboxUrl: string;
   private recoverSandboxSnapshotUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
@@ -369,6 +372,7 @@ export class ModalClient {
       modalEndpointUrl(functionName, workspace, environmentWebSuffix, apiUrl);
     this.createSandboxUrl = url("api-create-sandbox");
     this.snapshotSandboxUrl = url("api-snapshot-sandbox");
+    this.snapshotVmSandboxUrl = url("api-snapshot-vm-sandbox");
     this.recoverSandboxSnapshotUrl = url("api-recover-sandbox-snapshot");
     this.snapshotBuildSandboxUrl = url("api-snapshot-build-sandbox");
     this.restoreSandboxUrl = url("api-restore-sandbox");
@@ -578,7 +582,7 @@ export class ModalClient {
 
     try {
       const result = await this.postJson(
-        this.snapshotSandboxUrl,
+        request.sandboxBackend === "modal-vm" ? this.snapshotVmSandboxUrl : this.snapshotSandboxUrl,
         endpoint,
         request.deadlineAtMs === undefined
           ? MODAL_SNAPSHOT_REQUEST_DEADLINE_MS
@@ -597,7 +601,11 @@ export class ModalClient {
         (status) => (httpStatus = status)
       );
       outcome = "success";
-      return { imageId: result.data.image_id, sourceStopped: result.data.source_stopped };
+      return {
+        imageId: result.data.image_id,
+        sourceStopped: result.data.source_stopped,
+        sourceObjectId: result.data.source_id,
+      };
     } finally {
       log.info("modal.request", {
         event: "modal.request",

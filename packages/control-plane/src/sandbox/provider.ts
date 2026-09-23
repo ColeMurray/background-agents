@@ -62,8 +62,8 @@ export interface SandboxProviderCapabilities {
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */
   supportsExplicitStop?: boolean;
-  /** Whether taking a snapshot also stops the source sandbox. */
-  snapshotStopsSandbox?: boolean;
+  /** An ordinary checkpoint must enter the terminal shutdown flow first. */
+  snapshotRequiresShutdown?: boolean;
 }
 
 export type SandboxLifetime =
@@ -307,6 +307,8 @@ export interface SnapshotResult {
   error?: string;
   /** True when snapshot creation itself stopped the source sandbox. */
   sourceStopped?: boolean;
+  /** Immutable source ID to retire after committing the snapshot receipt. */
+  sourceObjectId?: string;
 }
 
 /**

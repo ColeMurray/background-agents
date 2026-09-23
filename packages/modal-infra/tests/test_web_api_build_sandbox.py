@@ -60,6 +60,69 @@ async def test_snapshot_receipt_recovery_is_read_only(
 
 
 @pytest.mark.asyncio
+async def test_vm_capture_leaves_source_alive_until_control_plane_commits(
+    monkeypatch, terminal_snapshot_receipts
+):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    handle = SimpleNamespace(sandbox_backend="modal-vm", modal_object_id="sb-immutable")
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(return_value=handle),
+        take_snapshot=AsyncMock(side_effect=["im-first", "im-retry"]),
+        stop_sandbox=AsyncMock(),
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+    request = {"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"}
+
+    first = await _call_vm_snapshot(request)
+    second = await _call_vm_snapshot(request)
+
+    assert first["data"] == {
+        "source_stopped": False,
+        "source_id": "sb-immutable",
+        "image_id": "im-first",
+        "sandbox_id": "sb-vm",
+    }
+    assert second["data"]["image_id"] == "im-retry"
+    assert manager.take_snapshot.await_count == 2
+    manager.stop_sandbox.assert_not_awaited()
+    assert terminal_snapshot_receipts == {}
+
+
+@pytest.mark.asyncio
+async def test_vm_capture_rejects_non_vm_source(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(return_value=SimpleNamespace(sandbox_backend="modal")),
+        take_snapshot=AsyncMock(),
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+    with pytest.raises(web_api.HTTPException, match="Terminal capture requires a VM"):
+        await _call_vm_snapshot({"sandbox_id": "sb-standard", "sandbox_backend": "modal-vm"})
+    manager.take_snapshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vm_capture_failure_never_retires_or_records_a_receipt(
+    monkeypatch, terminal_snapshot_receipts
+):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    manager = SimpleNamespace(
+        get_sandbox_by_id=AsyncMock(
+            return_value=SimpleNamespace(
+                sandbox_backend="modal-vm", modal_object_id="sb-immutable"
+            )
+        ),
+        take_snapshot=AsyncMock(side_effect=RuntimeError("capture failed")),
+        stop_sandbox=AsyncMock(),
+    )
+    monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
+    with pytest.raises(web_api.HTTPException):
+        await _call_vm_snapshot({"sandbox_id": "sb-vm", "sandbox_backend": "modal-vm"})
+    manager.stop_sandbox.assert_not_awaited()
+    assert terminal_snapshot_receipts == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reference", ["sb-vm", 'modal-vm-session:["session","generation"]'])
 async def test_terminal_capture_uses_real_lookup_identity_and_replays_after_retirement(
     monkeypatch, terminal_snapshot_receipts, reference
@@ -200,6 +263,17 @@ async def _call(endpoint, request: dict) -> dict:
 
 async def _call_generic_snapshot(request: dict) -> dict:
     return await web_api.api_snapshot_sandbox.get_raw_f()(
+        request,
+        authorization="Bearer test",
+        x_trace_id=None,
+        x_request_id=None,
+        x_session_id=None,
+        x_sandbox_id=None,
+    )
+
+
+async def _call_vm_snapshot(request: dict) -> dict:
+    return await web_api.api_snapshot_vm_sandbox.get_raw_f()(
         request,
         authorization="Bearer test",
         x_trace_id=None,

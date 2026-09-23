@@ -1431,9 +1431,10 @@ export class SandboxLifecycleManager
    */
   async triggerSnapshot(reason: string): Promise<void> {
     if (this.shutdown.isHolding()) return;
-    // A Vercel snapshot stops the source. It requires the same preparation
-    // and replacement ordering as a final snapshot, even after a prompt.
-    if (this.provider.capabilities.snapshotStopsSandbox) {
+    // Some providers require terminal shutdown before capturing an ordinary
+    // checkpoint. The source may be retired by the provider or after the
+    // control plane commits its capture receipt.
+    if (this.provider.capabilities.snapshotRequiresShutdown) {
       const ownership = await this.shutdown.requestShutdown(reason);
       if (ownership !== "unmanaged") return;
     }

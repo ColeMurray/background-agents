@@ -798,8 +798,10 @@ export class SandboxShutdownCoordinator {
     const capturing = {
       ...state,
       phase: "capturing" as const,
-      captureReceiptPending:
-        !!provider.capabilities.snapshotStopsSandbox && !!provider.recoverSnapshotReceipt,
+      // Legacy Modal VM captures could retire the source before returning.
+      // New captures keep it alive until the receipt is committed here.
+      // Existing rows with captureReceiptPending=true remain recoverable.
+      captureReceiptPending: false,
     };
     this.publish(capturing);
     await this.deps.alarm.schedule(state.captureByMs!);
@@ -816,6 +818,7 @@ export class SandboxShutdownCoordinator {
       };
       let artifactId = state.providerObjectId;
       let sourceStopped = retained;
+      let sourceObjectId: string | undefined;
       if (retained) {
         if (!provider.stopSandbox) throw new Error("Provider cannot preserve-stop this sandbox");
         const result = await this.bounded(state.captureByMs!, (signal) =>
@@ -832,12 +835,14 @@ export class SandboxShutdownCoordinator {
         );
         artifactId = result.imageId;
         sourceStopped = result.sourceStopped;
+        sourceObjectId = result.sourceObjectId;
       }
       if (!this.owns(capturing)) return;
       const retiring = this.commitCaptureReceipt(
         capturing,
         artifactId,
-        retained ? "retained" : "snapshot"
+        retained ? "retained" : "snapshot",
+        sourceObjectId
       );
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
@@ -858,11 +863,13 @@ export class SandboxShutdownCoordinator {
   private commitCaptureReceipt(
     state: ShutdownRecord,
     artifactId: string,
-    kind: "retained" | "snapshot"
+    kind: "retained" | "snapshot",
+    sourceObjectId?: string
   ): ShutdownRecord {
     const receipt = {
       kind,
       artifactId,
+      ...(sourceObjectId ? { sourceObjectId } : {}),
       provider: this.deps.provider.name,
       savedAtMs: this.now(),
       runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
@@ -950,7 +957,7 @@ export class SandboxShutdownCoordinator {
       await this.deps.alarm.schedule(deadlineAtMs);
       const result = await this.bounded(deadlineAtMs, (signal) =>
         this.deps.provider.stopSandbox!({
-          providerObjectId: state.providerObjectId!,
+          providerObjectId: state.receipt!.sourceObjectId ?? state.providerObjectId!,
           sessionId: session.session_name || session.id,
           reason: state.reason!,
           intent: state.receipt!.kind === "snapshot" ? "destroy" : "preserve",
@@ -1063,7 +1070,7 @@ export class SandboxShutdownCoordinator {
     sessionId: string,
     reason: string,
     deadlineAtMs: number
-  ): Promise<{ imageId: string; sourceStopped: boolean }> {
+  ): Promise<{ imageId: string; sourceStopped: boolean; sourceObjectId?: string }> {
     if (!this.deps.provider.takeSnapshot) throw new Error("Provider has no snapshot operation");
     const result = await this.bounded(deadlineAtMs, (signal) =>
       this.deps.provider.takeSnapshot!({
@@ -1076,6 +1083,10 @@ export class SandboxShutdownCoordinator {
     );
     if (!result.success || !result.imageId)
       throw new Error(result.error ?? "Provider snapshot result is unknown");
-    return { imageId: result.imageId, sourceStopped: result.sourceStopped === true };
+    return {
+      imageId: result.imageId,
+      sourceStopped: result.sourceStopped === true,
+      sourceObjectId: result.sourceObjectId,
+    };
   }
 }

@@ -505,6 +505,25 @@ def api_health() -> dict:
     return {"success": True, "data": {"status": "healthy", "service": "open-inspect-modal"}}
 
 
+def _snapshot_timeout_seconds(request: dict[str, Any]) -> float:
+    """Bound a capture by the caller's deadline without extending it."""
+    from .sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+
+    deadline_at_ms = request.get("deadline_at_ms")
+    if deadline_at_ms is None:
+        return SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+    if (
+        isinstance(deadline_at_ms, bool)
+        or not isinstance(deadline_at_ms, (int, float))
+        or not math.isfinite(deadline_at_ms)
+    ):
+        raise HTTPException(status_code=400, detail="deadline_at_ms must be a number")
+    timeout_seconds = (float(deadline_at_ms) / 1000) - time.time()
+    if timeout_seconds <= 0:
+        raise HTTPException(status_code=408, detail="snapshot deadline expired")
+    return timeout_seconds
+
+
 @app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
 async def api_snapshot_sandbox(
@@ -551,22 +570,11 @@ async def api_snapshot_sandbox(
         if not sandbox_id:
             raise HTTPException(status_code=400, detail="sandbox_id is required")
 
-        from .sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS, SandboxManager
+        from .sandbox.manager import SandboxManager
 
         manager = SandboxManager()
-
         deadline_at_ms = request.get("deadline_at_ms")
-        timeout_seconds = SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
-        if deadline_at_ms is not None:
-            if (
-                isinstance(deadline_at_ms, bool)
-                or not isinstance(deadline_at_ms, (int, float))
-                or not math.isfinite(deadline_at_ms)
-            ):
-                raise HTTPException(status_code=400, detail="deadline_at_ms must be a number")
-            timeout_seconds = (deadline_at_ms / 1000) - time.time()
-            if timeout_seconds <= 0:
-                raise HTTPException(status_code=408, detail="snapshot deadline expired")
+        timeout_seconds = _snapshot_timeout_seconds(request)
         source_stopped = request.get("sandbox_backend") == "modal-vm"
         try:
             async with asyncio.timeout(timeout_seconds):
@@ -596,6 +604,58 @@ async def api_snapshot_sandbox(
             "success": True,
             "data": {
                 "source_stopped": source_stopped,
+                "image_id": image_id,
+                "sandbox_id": sandbox_id,
+            },
+        }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_snapshot_vm_sandbox(
+    request: dict[str, Any],
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict[str, Any]:
+    """Capture a prepared VM without retiring it; the control plane owns retirement."""
+    async with _execute_endpoint(
+        endpoint_name="api_snapshot_vm_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ) as execution:
+        sandbox_id = request.get("sandbox_id")
+        execution.log_fields["sandbox_id"] = x_sandbox_id or sandbox_id
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
+        if request.get("sandbox_backend") != "modal-vm":
+            raise HTTPException(status_code=400, detail="modal-vm backend confirmation is required")
+
+        from .sandbox.manager import SandboxManager
+
+        manager = SandboxManager()
+        timeout_seconds = _snapshot_timeout_seconds(request)
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                handle = await manager.get_sandbox_by_id(sandbox_id)
+                if handle is None or handle.sandbox_backend != "modal-vm":
+                    raise HTTPException(status_code=400, detail="Terminal capture requires a VM")
+                source_id = handle.modal_object_id
+                if not source_id:
+                    raise HTTPException(status_code=500, detail="VM source ID is unavailable")
+                image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
+        except (TimeoutError, ModalTimeoutError) as exc:
+            raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
+        return {
+            "success": True,
+            "data": {
+                "source_stopped": False,
+                "source_id": source_id,
                 "image_id": image_id,
                 "sandbox_id": sandbox_id,
             },

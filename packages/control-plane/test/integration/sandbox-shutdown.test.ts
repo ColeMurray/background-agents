@@ -105,7 +105,7 @@ describe("sandbox graceful shutdown wiring", () => {
         capabilities: {
           supportsSandboxTimeout: true,
           supportsSnapshots: true,
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
           supportsRestore: true,
           supportsExplicitStop: true,
         },
@@ -540,7 +540,7 @@ describe("sandbox graceful shutdown wiring", () => {
           supportsRestore: true,
           supportsExplicitStop: true,
           supportsPersistentResume: false,
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
         },
         createSandbox: async () => {
           throw new Error("not used by inactivity regression");

@@ -140,7 +140,7 @@ describe("inactivity alarm effects", () => {
       sandbox,
       createMockProvider({
         capabilities: {
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
           supportsExplicitStop: true,
           supportsPersistentResume: false,
         },

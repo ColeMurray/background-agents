@@ -340,23 +340,25 @@ correctness. Reconcile every outstanding PR finding against the final head. The 
 are preserved regressions; build recovery, probe isolation, and log hygiene are confirmed shipping
 requirements in this change. Live Docker pause/resume is explicitly deferred.
 
-VM session snapshots use the existing **destructive snapshot** contract: the supervisor quiesces
-Docker over a local control socket, the provider captures the filesystem, then waits for VM
-retirement. Only then does the response confirm `sourceStopped`; subsequent work restores into a new
-generation. Standard Modal snapshots are unchanged. This avoids a new general snapshot protocol.
+VM session checkpoints remain **terminal**, but capture and retirement are separate operations. The
+supervisor quiesces Docker over a local control socket, Modal captures the filesystem while the
+source remains alive, and the control plane commits the image ID before it requests and confirms VM
+retirement. Subsequent work restores into a new generation. Standard Modal checkpoints remain
+nonterminal. This reuses the existing control-plane receipt-before-retirement ordering.
 
 Review hardening preserves those boundaries:
 
 - VM session generations share a provider-enforced allocation name, with exact generation ownership
   tags. A pending provider reference is stored before create/restore so snapshot and stop can
   resolve an allocation whose HTTP response was lost; this reference is not startup confirmation.
-- A terminal VM capture uses that generation's stable source reference as its operation key. Modal
-  stores its image/source receipt before retirement, and a retry can retrieve it without the source
-  still existing. After timeout or restart, the lifecycle uses a dedicated read-only receipt lookup,
-  commits any recovered image, then confirms retirement using the recorded immutable source ID. No
-  unknown capture is reissued. Modal Dict receipts expire after seven days without access. An
-  incomplete capture intent stays unknown; this does not guarantee recovery if the underlying
-  snapshot SDK response is itself lost before the receipt is recorded.
+- New VM captures use a distinct Modal endpoint that never retires the source or writes a Modal Dict
+  receipt. It returns the immutable source ID, which the control plane persists alongside the image
+  receipt and uses for retirement without a Dict lookup. A lost response leaves the source in place
+  and the control plane holds the ambiguous outcome; a repeated capture can safely re-use Docker's
+  idempotent preparation command. A capture without an acknowledged image ID never authorizes
+  retirement. The prior terminal endpoint and read-only receipt recovery remain temporarily for
+  in-flight canary captures during the rollout, then can be removed after those operations have
+  settled.
 - Rejected allocations are durably fenced before awaited cleanup. Their explicit cleanup marker
   rearms retirement retries after restart without changing unrelated snapshot/recovery holds.
 - Switching back to gVisor carries forward the currently deployed verified VM image through a

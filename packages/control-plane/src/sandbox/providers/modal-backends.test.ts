@@ -44,7 +44,9 @@ function fixture(confirmation: unknown) {
       .fn()
       .mockResolvedValue({ providerSessionId: "sb-1", sandboxBackend: confirmation }),
     startImageBuildSandbox: vi.fn().mockResolvedValue(undefined),
-    snapshotSandbox: vi.fn().mockResolvedValue({ imageId: "im-1", sourceStopped: true }),
+    snapshotSandbox: vi
+      .fn()
+      .mockResolvedValue({ imageId: "im-1", sourceStopped: false, sourceObjectId: "sb-1" }),
   };
   return {
     client,
@@ -81,7 +83,7 @@ describe("distinct Modal backend identities", () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
-  it("recovers a lost terminal snapshot response using the same source reference and deadline", async () => {
+  it("retries a lost VM capture response while retaining the source", async () => {
     const { client, provider } = fixture("modal-vm");
     client.snapshotSandbox.mockRejectedValueOnce(new Error("response lost"));
     await expect(
@@ -91,7 +93,7 @@ describe("distinct Modal backend identities", () => {
         reason: "shutdown",
         deadlineAtMs: Date.now() + 60_000,
       })
-    ).resolves.toMatchObject({ success: true, imageId: "im-1", sourceStopped: true });
+    ).resolves.toMatchObject({ success: true, imageId: "im-1", sourceStopped: false });
     expect(client.snapshotSandbox).toHaveBeenCalledTimes(2);
     expect(client.snapshotSandbox.mock.calls[0]).toEqual(client.snapshotSandbox.mock.calls[1]);
   });
@@ -115,7 +117,7 @@ describe("distinct Modal backend identities", () => {
       );
     }
     expect(provider.name).toBe("modal-vm");
-    expect(provider.capabilities.snapshotStopsSandbox).toBe(true);
+    expect(provider.capabilities.snapshotRequiresShutdown).toBe(true);
   });
 
   it.each([undefined, null, false, "modal", "future-backend", { unexpected: true }])(
@@ -213,15 +215,66 @@ describe("distinct Modal backend identities", () => {
     }
   });
 
-  it("requires explicit retirement confirmation for VM session captures", async () => {
+  it("leaves VM retirement to the control plane after capture", async () => {
     const { provider, client } = fixture("modal-vm");
     const input = { providerObjectId: "sb-1", sessionId: "session-1", reason: "checkpoint" };
     await expect(provider.takeSnapshot(input)).resolves.toMatchObject({
       success: true,
-      sourceStopped: true,
+      sourceStopped: false,
+      sourceObjectId: "sb-1",
     });
+    expect(client.stopSandbox).not.toHaveBeenCalled();
+  });
+
+  it("uses a separate VM capture endpoint so older deployments cannot stop the source", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Response.json({
+        success: true,
+        data: { image_id: "im-1", source_stopped: false, source_id: "sb-1", sandbox_id: "sb-1" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createModalClient("secret", "acme");
+    await client.snapshotSandbox({
+      providerObjectId: "sb-1",
+      sessionId: "session-1",
+      sandboxBackend: "modal-vm",
+    });
+    await client.snapshotSandbox({
+      providerObjectId: "sb-2",
+      sessionId: "session-2",
+      sandboxBackend: "modal",
+    });
+    expect(fetchMock.mock.calls[0][0]).toContain("api-snapshot-vm-sandbox");
+    expect(fetchMock.mock.calls[1][0]).toContain("api-snapshot-sandbox");
+  });
+
+  it("holds a VM capture without an immutable source ID", async () => {
+    const { provider, client } = fixture("modal-vm");
     client.snapshotSandbox.mockResolvedValue({ imageId: "im-1", sourceStopped: false });
-    await expect(provider.takeSnapshot(input)).rejects.toThrow("did not confirm source retirement");
+    await expect(
+      provider.takeSnapshot({
+        providerObjectId: "pending-ref",
+        sessionId: "session-1",
+        reason: "checkpoint",
+      })
+    ).rejects.toThrow("did not confirm its source ID");
+  });
+
+  it("holds a VM capture that does not confirm source retention", async () => {
+    const { provider, client } = fixture("modal-vm");
+    client.snapshotSandbox.mockResolvedValue({
+      imageId: "im-1",
+      sourceStopped: true,
+      sourceObjectId: "sb-1",
+    });
+    await expect(
+      provider.takeSnapshot({
+        providerObjectId: "sb-1",
+        sessionId: "session-1",
+        reason: "checkpoint",
+      })
+    ).rejects.toThrow("did not confirm source retention");
   });
 
   it.each(["modal", "modal-vm"])("keeps dashboard links for %s", (backend) => {

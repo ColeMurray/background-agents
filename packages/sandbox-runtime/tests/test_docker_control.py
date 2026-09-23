@@ -24,6 +24,8 @@ async def test_preparation_is_acknowledged_only_after_clean_stop(socket_path):
         with pytest.raises(RuntimeError, match="confirmed shutdown"):
             await request("status", path)
         await asyncio.gather(request("prepare", path), request("prepare", path))
+        # A lost capture response may prepare the same retained VM again.
+        await request("prepare", path)
         service.prepare_for_snapshot.assert_awaited_once()
         await request("status", path)
     finally:

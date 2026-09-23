@@ -114,7 +114,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     this.capabilities = {
       supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
       supportsSnapshots: true,
-      snapshotStopsSandbox: backend === "modal-vm",
+      snapshotRequiresShutdown: backend === "modal-vm",
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
@@ -263,8 +263,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       try {
         result = await this.client.snapshotSandbox(request, config.correlation);
       } catch (error) {
-        // A VM's terminal capture is keyed by this stable source reference.
-        // One retry can recover the durable receipt after a lost response.
+        // The VM capture endpoint leaves the source alive until the control
+        // plane commits the image. Docker preparation is idempotent, so a
+        // lost response can safely retry the capture.
         if (
           this.name !== "modal-vm" ||
           request.signal?.aborted ||
@@ -274,16 +275,23 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         result = await this.client.snapshotSandbox(request, config.correlation);
       }
 
-      if (this.name === "modal-vm" && result.sourceStopped !== true) {
-        throw new SandboxProviderError(
-          "Modal VM snapshot did not confirm source retirement",
-          "permanent"
-        );
+      if (this.name === "modal-vm") {
+        if (result.sourceStopped !== false)
+          throw new SandboxProviderError(
+            "Modal VM capture did not confirm source retention",
+            "permanent"
+          );
+        if (!result.sourceObjectId)
+          throw new SandboxProviderError(
+            "Modal VM capture did not confirm its source ID",
+            "permanent"
+          );
       }
       return {
         success: true,
         imageId: result.imageId,
-        ...(this.name === "modal-vm" ? { sourceStopped: true } : {}),
+        sourceStopped: result.sourceStopped === true,
+        sourceObjectId: result.sourceObjectId,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {
