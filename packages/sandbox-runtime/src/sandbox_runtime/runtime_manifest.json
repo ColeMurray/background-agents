@@ -5,6 +5,6 @@
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 72,
   "harnessMinimumGeneration": {
-    "claude": 64
+    "claude": 72
   }
 }

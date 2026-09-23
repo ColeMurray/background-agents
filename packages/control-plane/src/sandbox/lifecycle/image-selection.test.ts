@@ -115,24 +115,23 @@ describe("evaluateImageBuildForSpawn", () => {
 
   it("applies the higher of the harness and shutdown protocol floors", async () => {
     const claudeFloor = minCompatibleRuntimeVersionFor("claude");
-    expect(MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION).toBeGreaterThan(claudeFloor);
-    const image = await readyImage({
-      runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
-    });
+    expect(claudeFloor).toBeGreaterThan(MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION);
 
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "claude")).toEqual({
-      outcome: "miss",
-      reason: "runtime_below_floor",
-      imageBuildId: "imgb-1",
-    });
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "opencode")).toEqual({
-      outcome: "miss",
-      reason: "runtime_below_floor",
-      imageBuildId: "imgb-1",
-    });
-    const current = await readyImage({
+    const belowClaudeFloor = await readyImage({
       runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-preservation`,
     });
+    expect(
+      await evaluateImageBuildForSpawn(belowClaudeFloor, SESSION_REPOSITORIES, "claude")
+    ).toEqual({
+      outcome: "miss",
+      reason: "runtime_below_floor",
+      imageBuildId: "imgb-1",
+    });
+    expect(
+      (await evaluateImageBuildForSpawn(belowClaudeFloor, SESSION_REPOSITORIES, "opencode")).outcome
+    ).toBe("selected");
+
+    const current = await readyImage({ runtime_version: `v${claudeFloor}-current` });
     expect(
       (await evaluateImageBuildForSpawn(current, SESSION_REPOSITORIES, "claude")).outcome
     ).toBe("selected");
