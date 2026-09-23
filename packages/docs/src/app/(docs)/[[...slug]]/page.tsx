@@ -6,7 +6,7 @@ import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page
 import { getMDXComponents } from "@/components/mdx";
 import { PageActions } from "@/components/page-actions";
 import { createTechArticleJsonLd, serializeJsonLd } from "@/lib/seo";
-import { canonicalUrl } from "@/lib/site";
+import { canonicalUrl, editOnGitHubUrl } from "@/lib/site";
 import { getPageMarkdownUrl, source } from "@/lib/source";
 
 type DocumentationPageProps = {
@@ -32,19 +32,15 @@ export default async function DocumentationPage({ params }: DocumentationPagePro
         dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
         type="application/ld+json"
       />
-      <DocsPage
-        toc={page.data.toc}
-        full={page.data.full}
-        lastUpdate={page.data.lastReviewed}
-        editOnGithub={{
-          owner: "ColeMurray",
-          repo: "background-agents",
-          path: `packages/docs/${page.path}`,
-        }}
-      >
+      <DocsPage toc={page.data.toc} full={page.data.full}>
         <DocsTitle>{page.data.title}</DocsTitle>
         <DocsDescription>{page.data.description}</DocsDescription>
-        <PageActions markdownUrl={getPageMarkdownUrl(page)} title={page.data.title} />
+        <PageActions
+          editUrl={editOnGitHubUrl(page.path)}
+          lastReviewed={page.data.lastReviewed}
+          markdownUrl={getPageMarkdownUrl(page)}
+          title={page.data.title}
+        />
         <DocsBody>
           <MDX
             components={getMDXComponents({
@@ -73,6 +69,9 @@ export async function generateMetadata({ params }: DocumentationPageProps): Prom
     description: page.data.description,
     alternates: {
       canonical: url,
+      types: {
+        "text/markdown": canonicalUrl(getPageMarkdownUrl(page)),
+      },
     },
     openGraph: {
       type: "article",

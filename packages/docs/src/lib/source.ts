@@ -1,7 +1,7 @@
 import { loader } from "fumadocs-core/source";
 import { defineDocs } from "fumadocs-mdx/macro";
 
-import { publicPageSchema } from "@/lib/content-policy";
+import { publicPageSchema } from "./content-policy";
 
 const docs = defineDocs({
   dir: "content/docs",
@@ -9,6 +9,7 @@ const docs = defineDocs({
     schema: publicPageSchema,
     postprocess: {
       includeProcessedMarkdown: true,
+      extractLinkReferences: true,
     },
   },
 });
@@ -18,12 +19,14 @@ export const source = loader({
   source: docs.toFumadocsSource(),
 });
 
-export async function getLLMText(page: (typeof source)["$inferPage"]) {
+export type DocumentationPage = (typeof source)["$inferPage"];
+
+export async function getLLMText(page: DocumentationPage) {
   const processed = await page.data.getText("processed");
 
   return `# ${page.data.title} (${page.url})\n\n${processed}`;
 }
 
-export function getPageMarkdownUrl(page: (typeof source)["$inferPage"]): string {
+export function getPageMarkdownUrl(page: DocumentationPage): string {
   return `/llms.mdx/${[...page.slugs, "content.md"].join("/")}`;
 }
