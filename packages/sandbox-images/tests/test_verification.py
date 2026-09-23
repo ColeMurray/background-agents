@@ -65,7 +65,7 @@ def test_smoke_test_preserves_failures(monkeypatch):
 @pytest.mark.parametrize(
     "command,output,expected",
     [
-        ("node", "v22.23.2", "22.23.2"),
+        ("node", "v24.20.0", "24.20.0"),
         ("agent-browser", "agent-browser 0.37.0", "0.37.0"),
         ("code-server", "4.109.5 commit with Code 1.109.0", "4.109.5"),
         (
@@ -83,11 +83,11 @@ def test_records_normalized_observed_tool_versions(command, output, expected):
 
 
 @pytest.mark.parametrize(
-    "output", ["v22.23.20", "v22.23.2-rc1", "unexpected v22.23.2", "v22.23.2\nv22.23.20"]
+    "output", ["v24.20.00", "v24.20.0-rc1", "unexpected v24.20.0", "v24.20.0\nv24.20.00"]
 )
 def test_rejects_version_substrings_and_nonrelease_versions(output):
     with pytest.raises(RuntimeError, match="version mismatch"):
-        verification["observed_tool_version"]("node", "22.23.2", output)
+        verification["observed_tool_version"]("node", "24.20.0", output)
 
 
 @pytest.mark.parametrize(

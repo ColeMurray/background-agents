@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
@@ -505,9 +507,9 @@ describe("cross-plane env-key contract manifest", () => {
   // consumption: the runtime constants stay as code.
   const manifest = JSON.parse(
     readFileSync(
-      new URL(
-        "../../../sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json",
-        import.meta.url
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json"
       ),
       "utf8"
     )

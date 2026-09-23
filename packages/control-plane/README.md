@@ -259,7 +259,7 @@ any child starting/running → `starting`/`running`; all terminal → `completed
 
 ### Prerequisites
 
-- Node.js 22+
+- Node.js 24+
 - Terraform (for deployment)
 
 ### Setup

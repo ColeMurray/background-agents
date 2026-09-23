@@ -4,6 +4,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## September 23, 2026
 
+**Node.js 24 everywhere.** Every sandbox provider now ships Node.js 24; Modal, Daytona, and E2B
+images previously used Node.js 22. Prebuilt repository images rebuild onto the new toolchain
+automatically. Repositories that pin `engines.node` to 22 should widen the range. Contributing and
+self-hosting now require Node.js 24 or later, which the self-hosted control plane image, CI, and the
+Vercel web deployment also run.
+
 **Sessions discovery across full history.** A new **Sessions** destination in the sidebar (above
 Automations) searches every session the viewer may read, including archived work and history beyond
 the command menu's recent window. Search matches titles, session-id prefixes, and any member

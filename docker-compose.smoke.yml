@@ -34,7 +34,7 @@ services:
       - "127.0.0.1:${SMOKE_MINIO_CONSOLE_PORT:-9001}:9001"
 
   fake-modal:
-    image: node:22-slim
+    image: node:24-slim
     # The repository is the working directory so `ws` resolves from the root
     # node_modules the CI job already installed.
     working_dir: /repo
