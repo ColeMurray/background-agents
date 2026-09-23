@@ -132,10 +132,12 @@ Only one Next/preview process may own a checkout. Use separate git worktrees for
 The launcher owns its Next child, host, fixture peers, temporary SQLite files, auth state, named
 browser contexts and sign-in link server. It never edits `.env.local`, resets tracked source or
 attaches to an existing server. Next would load `packages/web/.env*` files into its server, so the
-launcher blanks every key those files name and then sets only the preview's own values. Runtime
-credentials are independently generated and expire after four hours; the coordinator also exits at
-that bound. Stop and rerun to reset everything. Stopping refuses new `preview:open` calls and waits
-for any open under way before it closes the browser contexts.
+launcher blanks every key those files name, following symbolic links as Next does, and then sets
+only the preview's own values. It refuses to start beside a FIFO `.env*` file, which it cannot read
+without consuming what Next would load. Runtime credentials are independently generated and expire
+after four hours; the coordinator also exits at that bound. Stop and rerun to reset everything.
+Stopping refuses new `preview:open` calls and waits for any open under way before it closes the
+browser contexts.
 
 `run.json` and cookie state live in a private temporary directory (0700; state files 0600). The
 manifest contains paths, IDs and timings, not bearer tokens. Treat raw logs and state as sensitive.

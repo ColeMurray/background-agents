@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -11,7 +11,11 @@ describe("preview environment isolation", () => {
     const directory = await mkdtemp(join(tmpdir(), "oi-preview-env-"));
     const hostile =
       "CONTROL_PLANE_URL=https://production.invalid\nSERVICE_AUTH_SECRET=real-secret\nNEXT_PUBLIC_WS_URL=wss://production.invalid\nNEXT_PUBLIC_APP_ICON_URL=https://production.invalid/avatar\nVERCEL=1\nGITHUB_CLIENT_SECRET=live-oauth\nUNRELATED_PRODUCTION_TOKEN=live-unrelated\n";
-    await writeFile(join(directory, ".env.local"), hostile);
+    // A symbolic link, the way a worktree can share its checkout's .env.local; Next follows it.
+    await writeFile(join(directory, "shared.env"), hostile);
+    await symlink(join(directory, "shared.env"), join(directory, ".env.local"));
+    // A link whose target is gone is skipped by Next, and must not stop the preview either.
+    await symlink(join(directory, "missing.env"), join(directory, ".env.production.local"));
     // Every file Next loads in development, in each key syntax dotenv accepts.
     await writeFile(join(directory, ".env"), 'export SHARED_API_KEY="live-shared"\n');
     await writeFile(join(directory, ".env.development"), "DEVELOPMENT_ONLY_SECRET: live-yaml\n");
@@ -57,6 +61,16 @@ describe("preview environment isolation", () => {
         PATH: process.env.PATH,
       });
       expect(parent.SANDBOX_AUTH_TOKEN).toBe("outer-secret");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to start beside a FIFO env file, which Next reads but the preview cannot", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "oi-preview-env-fifo-"));
+    try {
+      await promisify(execFile)("mkfifo", [join(directory, ".env.local")]);
+      await expect(webEnvFileKeys(directory)).rejects.toThrow(".env.local is a FIFO");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
