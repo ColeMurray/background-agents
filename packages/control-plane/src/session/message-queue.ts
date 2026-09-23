@@ -727,36 +727,27 @@ export class SessionMessageQueue {
       participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
     }
 
-    const enqueued = await this.enqueuePromptCore(
-      {
-        participant,
-        userId: data.authorId,
-        content: data.content,
-        source: data.source,
-        model: data.model,
-        reasoningEffort: data.reasoningEffort,
-        attachments: data.attachments,
-        callbackContext: data.callbackContext,
-        clientRequestId: data.clientRequestId,
-      },
-      data.clientRequestId
-        ? () => {
-            if (data.canonicalUserId) {
-              this.participantRepository.updateParticipantCoalesce(participant.id, {
-                canonicalUserId: data.canonicalUserId,
-              });
+    const enqueued = await this.enqueuePromptCore({
+      participant,
+      userId: data.authorId,
+      content: data.content,
+      source: data.source,
+      model: data.model,
+      reasoningEffort: data.reasoningEffort,
+      attachments: data.attachments,
+      callbackContext: data.callbackContext,
+      clientRequestId: data.clientRequestId,
+      authorEnrichment:
+        data.clientRequestId && (data.canonicalUserId || data.scmEnrichment)
+          ? {
+              canonicalUserId: data.canonicalUserId,
+              scmUserId: data.scmEnrichment?.userId,
+              scmLogin: data.scmEnrichment?.login,
+              scmName: data.scmEnrichment?.name,
+              scmEmail: data.scmEnrichment?.email,
             }
-            if (data.scmEnrichment) {
-              this.participantRepository.updateParticipantCoalesce(participant.id, {
-                scmName: data.scmEnrichment.name,
-                scmEmail: data.scmEnrichment.email,
-                scmLogin: data.scmEnrichment.login,
-                scmUserId: data.scmEnrichment.userId,
-              });
-            }
-          }
-        : undefined
-    );
+          : undefined,
+    });
 
     if (
       enqueued.deduplicated &&
@@ -770,10 +761,7 @@ export class SessionMessageQueue {
     return { messageId: enqueued.messageId, status: "queued" };
   }
 
-  private async enqueuePromptCore(
-    data: EnqueuePromptCoreData,
-    beforeInsert?: () => void
-  ): Promise<EnqueuedPrompt> {
+  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
@@ -865,7 +853,7 @@ export class SessionMessageQueue {
         },
         resolvedAttachments?.attachmentIds ?? [],
         undefined,
-        beforeInsert
+        data.authorEnrichment
       );
     } catch (error) {
       if (error instanceof AttachmentClaimConflictError) {

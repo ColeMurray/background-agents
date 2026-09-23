@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { MessageRepository } from "./message-repository";
+import { ParticipantRepository } from "./participant-repository";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import {
   AttachmentClaimConflictError,
@@ -87,7 +88,8 @@ describe("MessageRepository", () => {
         return closure();
       },
       new SessionAttachmentRepository(mock.sql),
-      new EventRepository(mock.sql, (closure) => closure())
+      new EventRepository(mock.sql, (closure) => closure()),
+      new ParticipantRepository(mock.sql)
     );
   });
 
@@ -475,6 +477,46 @@ describe("MessageRepository", () => {
     expect(mock.calls[1].query).toContain("INSERT INTO messages");
   });
 
+  it("stores typed author enrichment with the message", () => {
+    const db = new DatabaseSync(":memory:");
+    const { sql, transactionSync } = createNodeSqlStorage(db);
+    try {
+      initSchema(sql);
+      sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+      );
+      const realRepository = new MessageRepository(
+        sql,
+        transactionSync,
+        new SessionAttachmentRepository(sql),
+        new EventRepository(sql, transactionSync),
+        new ParticipantRepository(sql)
+      );
+      realRepository.createMessageWithAttachments(
+        {
+          id: "msg-1",
+          authorId: "author",
+          content: "Hi",
+          source: "web",
+          status: "pending",
+          createdAt: 1,
+        },
+        [],
+        undefined,
+        { canonicalUserId: "canonical-1", scmLogin: "trusted" }
+      );
+      expect(
+        sql.exec("SELECT canonical_user_id, scm_login FROM participants WHERE id = 'author'").one()
+      ).toEqual({
+        canonical_user_id: "canonical-1",
+        scm_login: "trusted",
+      });
+      expect(realRepository.getMessageById("msg-1")?.author_id).toBe("author");
+    } finally {
+      db.close();
+    }
+  });
+
   it("rolls back participant enrichment when the message insert fails", () => {
     const db = new DatabaseSync(":memory:");
     const { sql, transactionSync } = createNodeSqlStorage(db);
@@ -487,13 +529,18 @@ describe("MessageRepository", () => {
         sql,
         transactionSync,
         new SessionAttachmentRepository(sql),
-        new EventRepository(sql, transactionSync)
+        new EventRepository(sql, transactionSync),
+        new ParticipantRepository(sql)
+      );
+      sql.exec(
+        `CREATE TRIGGER reject_message BEFORE INSERT ON messages
+         BEGIN SELECT RAISE(ABORT, 'message rejected'); END`
       );
       expect(() =>
         realRepository.createMessageWithAttachments(
           {
             id: "msg-1",
-            authorId: "missing",
+            authorId: "author",
             content: "Hi",
             source: "web",
             status: "pending",
@@ -501,7 +548,7 @@ describe("MessageRepository", () => {
           },
           [],
           undefined,
-          () => sql.exec("UPDATE participants SET scm_login = 'changed' WHERE id = 'author'")
+          { scmLogin: "changed" }
         )
       ).toThrow();
       expect(sql.exec("SELECT scm_login FROM participants WHERE id = 'author'").one()).toEqual({
@@ -695,7 +742,8 @@ describe("MessageRepository", () => {
         sql,
         transaction,
         new SessionAttachmentRepository(sql),
-        new EventRepository(sql, transaction)
+        new EventRepository(sql, transaction),
+        new ParticipantRepository(sql)
       );
 
       expect(

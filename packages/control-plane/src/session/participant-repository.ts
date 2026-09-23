@@ -19,7 +19,7 @@ interface CreateParticipantData {
 }
 
 /** Data for updating a participant with COALESCE (only non-null values update). */
-interface UpdateParticipantData {
+export interface UpdateParticipantData {
   canonicalUserId?: string | null;
   scmUserId?: string | null;
   scmLogin?: string | null;

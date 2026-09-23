@@ -11,6 +11,7 @@ import type { SessionAttachmentRepository } from "./session-attachment-repositor
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
 import type { MessageListCursor } from "./message-cursor";
+import type { ParticipantRepository, UpdateParticipantData } from "./participant-repository";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
@@ -91,7 +92,8 @@ export class MessageRepository {
     private readonly sql: SqlStorage,
     private readonly transactionSync: TransactionSync,
     private readonly attachments: SessionAttachmentRepository,
-    private readonly eventRepository: EventRepository
+    private readonly eventRepository: EventRepository,
+    private readonly participants: ParticipantRepository
   ) {}
 
   getActiveDurationMs(): number {
@@ -384,11 +386,13 @@ export class MessageRepository {
     data: CreateMessageData,
     attachmentIds: string[],
     event?: CreateEventData,
-    beforeInsert?: () => void
+    authorEnrichment?: UpdateParticipantData
   ): void {
     this.transactionSync(() => {
       this.attachments.claimForMessage(data.id, attachmentIds);
-      beforeInsert?.();
+      if (authorEnrichment) {
+        this.participants.updateParticipantCoalesce(data.authorId, authorEnrichment);
+      }
       this.createMessage(data);
       if (event) this.eventRepository.createEvent(event);
     });

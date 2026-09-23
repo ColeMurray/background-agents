@@ -1,6 +1,7 @@
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { ParticipantRow } from "./types";
+import type { UpdateParticipantData } from "./participant-repository";
 
 export interface PromptMessageData {
   clientRequestId?: string;
@@ -20,6 +21,7 @@ export interface EnqueuePromptCoreData {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
   clientRequestId?: string;
+  authorEnrichment?: UpdateParticipantData;
 }
 
 export interface EnqueuedPrompt {

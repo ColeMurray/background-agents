@@ -268,7 +268,13 @@ export const STORAGE_CONTRACTS: Record<
         await storageFactory(({ sql, transactionSync }) => {
           const attachments = new SessionAttachmentRepository(sql);
           const events = new EventRepository(sql, transactionSync);
-          const repository = new MessageRepository(sql, transactionSync, attachments, events);
+          const repository = new MessageRepository(
+            sql,
+            transactionSync,
+            attachments,
+            events,
+            new ParticipantRepository(sql)
+          );
           const authorId = "message-author";
           new ParticipantRepository(sql).createParticipant({
             id: authorId,
@@ -325,7 +331,13 @@ export const STORAGE_CONTRACTS: Record<
         await storageFactory(({ sql, transactionSync }) => {
           const attachments = new SessionAttachmentRepository(sql);
           const events = new EventRepository(sql, transactionSync);
-          const repository = new MessageRepository(sql, transactionSync, attachments, events);
+          const repository = new MessageRepository(
+            sql,
+            transactionSync,
+            attachments,
+            events,
+            new ParticipantRepository(sql)
+          );
           const authorId = "message-author";
           new ParticipantRepository(sql).createParticipant({
             id: authorId,

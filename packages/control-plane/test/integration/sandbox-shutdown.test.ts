@@ -9,6 +9,7 @@ import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sa
 import { EventRepository } from "../../src/session/event-repository";
 import { MessageFailureService } from "../../src/session/message-failure-service";
 import { MessageRepository } from "../../src/session/message-repository";
+import { ParticipantRepository } from "../../src/session/participant-repository";
 import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
@@ -748,7 +749,8 @@ describe("sandbox graceful shutdown wiring", () => {
         sql,
         transaction,
         new SessionAttachmentRepository(sql),
-        events
+        events,
+        new ParticipantRepository(sql)
       );
       const background = {
         submit: (task: () => Promise<void>) => {

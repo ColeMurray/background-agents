@@ -15,6 +15,7 @@ import { componentsOf } from "./session-do-access";
 import { EventRepository } from "../../src/session/event-repository";
 import { recordSessionWarning } from "../../src/session/session-warnings";
 import { MessageRepository } from "../../src/session/message-repository";
+import { ParticipantRepository } from "../../src/session/participant-repository";
 import { SessionAttachmentRepository } from "../../src/session/session-attachment-repository";
 import { MessageFailureService } from "../../src/session/message-failure-service";
 import { createLogger } from "../../src/logger";
@@ -47,7 +48,8 @@ export function realLifecycleHarness(
     durableState.storage.sql,
     transaction,
     new SessionAttachmentRepository(durableState.storage.sql),
-    new EventRepository(durableState.storage.sql, transaction)
+    new EventRepository(durableState.storage.sql, transaction),
+    new ParticipantRepository(durableState.storage.sql)
   );
   const failures = new MessageFailureService(
     {

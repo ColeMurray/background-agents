@@ -151,9 +151,7 @@ function buildQueue(mayDispatch: () => boolean = () => true) {
   };
   const repository = {
     transaction: vi.fn((closure: () => unknown) => closure()),
-    createMessageWithAttachments: vi.fn<MessageRepository["createMessageWithAttachments"]>(
-      (_data, _attachmentIds, _event, beforeInsert) => beforeInsert?.()
-    ),
+    createMessageWithAttachments: vi.fn<MessageRepository["createMessageWithAttachments"]>(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
@@ -2135,19 +2133,18 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
-    it("enriches a new keyed participant before the status transition can dispatch it", async () => {
+    it("passes keyed author enrichment to the atomic insert before status transition", async () => {
       const h = buildQueue();
       h.sessionStatus.transition.mockImplementation(async () => {
-        expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+        expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+        expect(h.repository.createMessageWithAttachments.mock.calls[0][3]).toEqual({
           canonicalUserId: "canonical-1",
-        });
-        expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
           scmName: "Trusted User",
           scmEmail: "user@example.com",
           scmLogin: "trusted-user",
           scmUserId: "1001",
         });
-        expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+        expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
         return true;
       });
 
