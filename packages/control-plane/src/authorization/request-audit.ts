@@ -1,4 +1,9 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import {
+  AUTHORIZATION_DECISION_ACTIONS,
+  AUTHORIZATION_DECISION_METADATA_SCHEMA,
+  type AuthorizationDecisionMetadataV1,
+} from "@open-inspect/shared/types/audit-events";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
@@ -43,7 +48,7 @@ export function shouldAuditAllowedDecision(
  * The event proves only that the request was allowed or denied and how the route responded. It
  * does not prove that any domain change or asynchronous work completed, even on a 2xx: the stored
  * `operation_result` of `applied` for an allowed request is the historical encoding of admission,
- * not a domain outcome. Readers must classify these rows by `action` and `httpStatus`. Evidence
+ * not a domain outcome. Readers classify these rows with the shared `interpretAuditEvent`. Evidence
  * that an operation completed must come from an event written by the operation owner, correlated
  * by request ID.
  */
@@ -67,8 +72,11 @@ export async function auditRouteAuthorizationDecision(input: {
       : principal.kind === "service"
         ? (principal.actor?.canonicalUserId ?? input.ctx.authorization?.userId)
         : null;
+  const action = allowed
+    ? AUTHORIZATION_DECISION_ACTIONS.allowed
+    : AUTHORIZATION_DECISION_ACTIONS.denied;
   const metadata = {
-    schema: "authorization_decision.v1",
+    schema: AUTHORIZATION_DECISION_METADATA_SCHEMA,
     httpMethod: input.method,
     httpPath: input.path,
     httpStatus: input.response.status,
@@ -92,7 +100,7 @@ export async function auditRouteAuthorizationDecision(input: {
         }
       : {}),
     ...(principal.kind === "sandbox" ? { sessionId: principal.sessionId } : {}),
-  };
+  } satisfies AuthorizationDecisionMetadataV1;
 
   try {
     await input.ctx.db
@@ -110,7 +118,7 @@ export async function auditRouteAuthorizationDecision(input: {
         principal.kind,
         actorUserId ?? null,
         principal.kind === "service" ? principal.service : null,
-        allowed ? "authorization.request_allowed" : "authorization.request_denied",
+        action,
         input.path,
         decision.kind === "allowed" ? "authorization_allowed" : decision.reasonCode,
         allowed ? "applied" : "denied",
@@ -120,7 +128,7 @@ export async function auditRouteAuthorizationDecision(input: {
   } catch (cause) {
     logger.error("Authorization audit write failed", {
       event: "authorization.audit_failed",
-      action: allowed ? "authorization.request_allowed" : "authorization.request_denied",
+      action,
       error: cause instanceof Error ? cause : String(cause),
       request_id: input.ctx.request_id,
       trace_id: input.ctx.trace_id,

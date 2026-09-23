@@ -238,8 +238,14 @@ Each event has an `action`, a stored `operationResult` (`applied`, `no_op`, `den
   `operationResult` encodes the decision (`applied` for allowed, `denied` for denied) and must not
   be read as a domain outcome. Rows written before the schema existed carry `{ "legacy": true }`
   metadata and have no recorded status.
-- **Operation events** (for example `workspace.member_role_updated`) are written by the operation
-  owner alongside the change, so their `operationResult` is the domain outcome.
+- **Operation events** (the actions in `AUDIT_OPERATION_ACTIONS`, for example
+  `workspace.member_role_updated`) are written by the operation owner alongside the change, so their
+  `operationResult` is the domain outcome.
+- Any other action is unrecognized; clients should not interpret its `operationResult`.
+
+`interpretAuditEvent` in `@open-inspect/shared` implements these rules. It takes the decision from
+the exact action and reports `httpStatus` only when the metadata parses as
+`authorization_decision.v1`.
 
 A feature that needs "operation completed" evidence must emit its own event from the owning
 transaction or workflow, correlated by request ID. That evidence is never inferred from admission or

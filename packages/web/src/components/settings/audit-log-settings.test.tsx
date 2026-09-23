@@ -5,7 +5,6 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { presentAuditEvent } from "@/lib/audit-event-presentation";
 import { AuditLogSettings } from "./audit-log-settings";
 
 expect.extend(matchers);
@@ -32,8 +31,6 @@ Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
 });
 
 type OperationResult = "applied" | "no_op" | "denied" | "rejected";
-
-const OPERATION_RESULTS: OperationResult[] = ["applied", "no_op", "denied", "rejected"];
 
 function createEvent(operationResult: OperationResult, overrides: Record<string, unknown> = {}) {
   return {
@@ -112,18 +109,27 @@ describe("AuditLogSettings", () => {
       createEvent("applied"),
       createEvent("no_op"),
       createEvent("denied"),
-      createEvent("rejected", {
+      createEvent("rejected", { actorServiceSnapshot: "github-bot" }),
+      createEvent("applied", {
+        id: "event-unknown",
+        requestId: "request-unknown",
         action: "future_namespace.custom_action",
-        actorServiceSnapshot: "github-bot",
       }),
     ];
     const { container } = render(<AuditLogSettings />);
 
     expect(screen.getByRole("heading", { name: "Audit log" })).toBeInTheDocument();
-    expect(screen.getAllByRole("article")).toHaveLength(4);
-    for (const label of ["Applied", "No change", "Denied", "Rejected"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(5);
+    for (const [label, className] of [
+      ["Applied", "text-success"],
+      ["No change", "text-muted-foreground"],
+      ["Denied", "text-destructive"],
+      ["Rejected", "text-warning"],
+      ["Unrecognized", "text-muted-foreground"],
+    ]) {
+      expect(screen.getByText(label)).toHaveClass(className);
     }
+    expect(screen.queryByText("HTTP response")).not.toBeInTheDocument();
     expect(screen.getAllByText(/actor-snapshot-id/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/resource-snapshot-id/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/target-snapshot-id/).length).toBeGreaterThan(0);
@@ -239,156 +245,44 @@ describe("AuditLogSettings", () => {
     ).toBeInTheDocument();
   });
 
-  describe("authorization decisions", () => {
-    const decisions = [
-      { action: "authorization.request_allowed", label: "Allowed", className: "text-info" },
-      { action: "authorization.request_denied", label: "Denied", className: "text-destructive" },
-    ];
-    const statuses = [
-      { status: 200, text: "HTTP 200 OK" },
-      { status: 201, text: "HTTP 201 Created" },
-      { status: 400, text: "HTTP 400 Bad Request" },
-      { status: 403, text: "HTTP 403 Forbidden" },
-      { status: 409, text: "HTTP 409 Conflict" },
-      { status: 500, text: "HTTP 500 Internal Server Error" },
-    ];
+  it.each([
+    ["authorization.request_allowed", "applied", 409, "Allowed", "text-info", "HTTP 409 Conflict"],
+    [
+      "authorization.request_denied",
+      "denied",
+      403,
+      "Denied",
+      "text-destructive",
+      "HTTP 403 Forbidden",
+    ],
+  ] as const)(
+    "renders %s as a decision with its HTTP response, not a domain outcome",
+    (action, result, status, label, className, response) => {
+      const card = renderSingle(createAuthorizationEvent(action, result, decisionMetadata(status)));
 
-    for (const decision of decisions) {
-      for (const operationResult of OPERATION_RESULTS) {
-        for (const { status, text } of statuses) {
-          it(`renders ${decision.action} (${operationResult}, ${status}) as ${decision.label} with ${text}`, () => {
-            const card = renderSingle(
-              createAuthorizationEvent(decision.action, operationResult, decisionMetadata(status))
-            );
-
-            const badge = card.getByText(decision.label);
-            expect(badge).toHaveClass(decision.className);
-            expect(badge).not.toHaveClass("text-success");
-            for (const label of ["Applied", "No change", "Rejected"]) {
-              expect(card.queryByText(label)).not.toBeInTheDocument();
-            }
-            expect(card.getByText("HTTP response")).toBeVisible();
-            expect(card.getByText(text)).toBeVisible();
-          });
-        }
-      }
-    }
-
-    it("shows an unrecognized but valid HTTP status without inventing a reason phrase", () => {
-      const card = renderSingle(
-        createAuthorizationEvent("authorization.request_allowed", "applied", decisionMetadata(418))
-      );
-
-      expect(card.getByText("Allowed")).toBeInTheDocument();
-      expect(card.getByText("HTTP 418")).toBeInTheDocument();
-    });
-
-    it.each([
-      ["legacy metadata", { legacy: true }],
-      ["a missing status", { schema: "authorization_decision.v1" }],
-      ["an out-of-range status", decisionMetadata(99)],
-      ["a non-integer status", decisionMetadata(200.5)],
-      ["a string status", decisionMetadata("200")],
-    ])("keeps the decision but reports the response as unavailable for %s", (_, metadata) => {
-      const card = renderSingle(
-        createAuthorizationEvent("authorization.request_allowed", "applied", metadata)
-      );
-
-      expect(card.getByText("Allowed")).toBeInTheDocument();
-      expect(card.queryByText("Applied")).not.toBeInTheDocument();
-      expect(card.getByText("Not recorded")).toBeInTheDocument();
-      expect(card.queryByText(/^HTTP \d/)).not.toBeInTheDocument();
-    });
-
-    it("keeps raw operation result and metadata inspectable for forensic use", async () => {
-      const card = renderSingle(
-        createAuthorizationEvent("authorization.request_allowed", "applied", decisionMetadata(409))
-      );
-
-      await userEvent.click(card.getByText("Structured details"));
-      const details = card.getByText(/"operationResult": "applied"/);
-      expect(details).toBeVisible();
-      expect(details).toHaveTextContent('"httpStatus": 409');
-      expect(details).toHaveTextContent('"schema": "authorization_decision.v1"');
-    });
-
-    it.each([
-      ["an unknown authorization action", "authorization.request_escalated", decisionMetadata(200)],
-      [
-        "a known action with an unknown schema",
-        "authorization.request_allowed",
-        { ...decisionMetadata(200), schema: "authorization_decision.v2" },
-      ],
-      ["an unknown action with a decision schema", "future.request_gate", decisionMetadata(201)],
-    ])("renders %s neutrally without implying a completed mutation", (_, action, metadata) => {
-      const card = renderSingle(createAuthorizationEvent(action, "applied", metadata));
-
-      expect(card.getByText("Unclassified")).toHaveClass("text-muted-foreground");
-      expect(card.queryByText("Applied")).not.toBeInTheDocument();
-      expect(card.queryByText("Allowed")).not.toBeInTheDocument();
-      expect(card.getByText(/^HTTP 20[01]/)).toBeInTheDocument();
-    });
-  });
-
-  describe("operation outcomes", () => {
-    it.each([
-      ["applied", "Applied", "text-success"],
-      ["no_op", "No change", "text-muted-foreground"],
-      ["denied", "Denied", "text-destructive"],
-      ["rejected", "Rejected", "text-warning"],
-    ] as const)("renders a member role update with result %s as %s", (result, label, className) => {
-      const card = renderSingle(createEvent(result));
-
-      expect(card.getByText("Member role updated")).toBeInTheDocument();
       expect(card.getByText(label)).toHaveClass(className);
-      expect(card.queryByText("HTTP response")).not.toBeInTheDocument();
-    });
-
-    it("keeps operation-owner outcomes even when metadata carries an httpStatus", () => {
-      const card = renderSingle(
-        createEvent("applied", {
-          action: "workspace.member_status_updated",
-          metadata: { before: {}, requested: {}, after: {}, httpStatus: 500 },
-        })
-      );
-
-      expect(card.getByText("Member status updated")).toBeInTheDocument();
-      expect(card.getByText("Applied")).toBeInTheDocument();
-    });
-
-    it("renders unknown action names verbatim, including prototype keys", () => {
-      const card = renderSingle(createEvent("no_op", { action: "constructor" }));
-
-      expect(card.getByRole("heading", { name: "constructor" })).toBeInTheDocument();
-      expect(card.getByText("No change")).toBeInTheDocument();
-    });
-  });
-});
-
-describe("presentAuditEvent", () => {
-  it("never derives an authorization decision from operationResult alone", () => {
-    for (const operationResult of OPERATION_RESULTS) {
-      expect(
-        presentAuditEvent({
-          action: "authorization.request_allowed",
-          operationResult,
-          metadata: decisionMetadata(409),
-        })
-      ).toEqual({ kind: "authorization", decision: "allowed", httpStatus: 409 });
-      expect(
-        presentAuditEvent({
-          action: "authorization.request_denied",
-          operationResult,
-          metadata: decisionMetadata(403),
-        })
-      ).toEqual({ kind: "authorization", decision: "denied", httpStatus: 403 });
-      expect(
-        presentAuditEvent({
-          action: "workspace.member_role_updated",
-          operationResult,
-          metadata: {},
-        })
-      ).toEqual({ kind: "operation", result: operationResult });
+      expect(card.queryByText("Applied")).not.toBeInTheDocument();
+      expect(card.getByText(response)).toBeVisible();
     }
+  );
+
+  it("shows a legacy decision without fabricating a response", () => {
+    const card = renderSingle(
+      createAuthorizationEvent("authorization.request_allowed", "applied", { legacy: true })
+    );
+
+    expect(card.getByText("Allowed")).toBeInTheDocument();
+    expect(card.getByText("Not recorded")).toBeInTheDocument();
+  });
+
+  it("keeps the raw operation result and metadata inspectable", async () => {
+    const card = renderSingle(
+      createAuthorizationEvent("authorization.request_allowed", "applied", decisionMetadata(409))
+    );
+
+    await userEvent.click(card.getByText("Structured details"));
+    const details = card.getByText(/"operationResult": "applied"/);
+    expect(details).toBeVisible();
+    expect(details).toHaveTextContent('"httpStatus": 409');
   });
 });

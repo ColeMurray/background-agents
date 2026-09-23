@@ -1,9 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTHORIZATION_DECISION_ACTIONS,
+  AUTHORIZATION_DECISION_METADATA_SCHEMA,
   MAX_AUDIT_EVENT_TIMESTAMP_MS,
   auditEventListResponseSchema,
   auditEventSchema,
+  interpretAuditEvent,
+  type AuditOperationResult,
 } from "./audit-events";
+
+const RESULTS: AuditOperationResult[] = ["applied", "no_op", "denied", "rejected"];
+
+function decisionMetadata(httpStatus: unknown) {
+  return {
+    schema: AUTHORIZATION_DECISION_METADATA_SCHEMA,
+    httpMethod: "PUT",
+    httpPath: "/workspace/members/user-2/role",
+    httpStatus,
+    requirements: [],
+  };
+}
 
 const event = {
   id: "event-1",
@@ -66,4 +82,53 @@ describe("audit event contracts", () => {
       auditEventListResponseSchema.parse({ events: [], hasMore: false, nextCursor: "unexpected" })
     ).toThrow();
   });
+});
+
+describe("interpretAuditEvent", () => {
+  it.each(RESULTS)("derives decisions from the action, not operationResult %s", (result) => {
+    for (const [decision, action] of Object.entries(AUTHORIZATION_DECISION_ACTIONS)) {
+      expect(
+        interpretAuditEvent({ action, operationResult: result, metadata: decisionMetadata(409) })
+      ).toEqual({ kind: "authorization_decision", decision, httpStatus: 409 });
+    }
+  });
+
+  it.each([
+    ["legacy metadata", { legacy: true }],
+    [
+      "an unknown schema version",
+      { ...decisionMetadata(200), schema: "authorization_decision.v2" },
+    ],
+    ["a missing status", { ...decisionMetadata(200), httpStatus: undefined }],
+    ["an out-of-range status", decisionMetadata(99)],
+    ["a non-integer status", decisionMetadata(200.5)],
+    ["a string status", decisionMetadata("200")],
+  ])("keeps the decision but exposes no status for %s", (_, metadata) => {
+    expect(
+      interpretAuditEvent({
+        action: AUTHORIZATION_DECISION_ACTIONS.allowed,
+        operationResult: "applied",
+        metadata,
+      })
+    ).toEqual({ kind: "authorization_decision", decision: "allowed", httpStatus: null });
+  });
+
+  it.each(RESULTS)("passes through operation-owner result %s", (result) => {
+    expect(
+      interpretAuditEvent({
+        action: "workspace.member_role_updated",
+        operationResult: result,
+        metadata: decisionMetadata(500),
+      })
+    ).toEqual({ kind: "operation", result });
+  });
+
+  it.each(["authorization.policy_updated", "future.request_gate", "constructor"])(
+    "leaves unrecognized action %s uninterpreted, even with decision metadata",
+    (action) => {
+      expect(
+        interpretAuditEvent({ action, operationResult: "applied", metadata: decisionMetadata(200) })
+      ).toEqual({ kind: "unknown" });
+    }
+  );
 });

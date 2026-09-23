@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
@@ -247,6 +247,10 @@ const handleRequest = createTestRequestHandler([TEST_ROUTES]);
 
 beforeEach(() => {
   mocks.authenticate.mockReset();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("router authorization decision auditing", () => {

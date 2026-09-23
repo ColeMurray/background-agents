@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { AuditEvent, AuditOperationResult } from "@open-inspect/shared/types/audit-events";
+import {
+  AUTHORIZATION_DECISION_ACTIONS,
+  interpretAuditEvent,
+  type AuditEvent,
+  type AuditEventInterpretation,
+  type AuditOperationAction,
+  type AuditOperationResult,
+} from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuditEvents } from "@/hooks/use-audit-events";
-import {
-  formatHttpStatus,
-  presentAuditEvent,
-  type AuditEventPresentation,
-} from "@/lib/audit-event-presentation";
+import { formatHttpStatus } from "@/lib/http-status";
 import { formatRelativeTime } from "@/lib/time";
 
 interface BadgeTreatment {
@@ -30,33 +33,38 @@ const AUTHORIZATION_DECISIONS: Record<"allowed" | "denied", BadgeTreatment> = {
   denied: { label: "Denied", className: "bg-destructive-muted text-destructive" },
 };
 
-const UNCLASSIFIED: BadgeTreatment = {
-  label: "Unclassified",
+// The client cannot say what an unrecognized action's stored result means.
+const UNRECOGNIZED: BadgeTreatment = {
+  label: "Unrecognized",
   className: "bg-muted text-muted-foreground",
 };
 
+const OPERATION_LABELS: Record<AuditOperationAction, string> = {
+  "workspace.member_role_updated": "Member role updated",
+  "workspace.member_status_updated": "Member status updated",
+  "workspace.default_role_assigned": "Default role assigned",
+  "workspace.owner_bootstrapped": "Owner bootstrapped",
+  "workspace.user_merged": "Users merged",
+};
+
 const ACTION_LABELS = new Map<string, string>([
-  ["authorization.request_allowed", "Authorization allowed"],
-  ["authorization.request_denied", "Authorization denied"],
-  ["workspace.member_role_updated", "Member role updated"],
-  ["workspace.member_status_updated", "Member status updated"],
-  ["workspace.default_role_assigned", "Default role assigned"],
-  ["workspace.owner_bootstrapped", "Owner bootstrapped"],
-  ["workspace.user_merged", "Users merged"],
+  [AUTHORIZATION_DECISION_ACTIONS.allowed, "Authorization allowed"],
+  [AUTHORIZATION_DECISION_ACTIONS.denied, "Authorization denied"],
+  ...Object.entries(OPERATION_LABELS),
 ]);
 
 function auditActionLabel(action: string): string {
   return ACTION_LABELS.get(action) ?? action;
 }
 
-function badgeTreatment(presentation: AuditEventPresentation): BadgeTreatment {
-  switch (presentation.kind) {
-    case "authorization":
-      return AUTHORIZATION_DECISIONS[presentation.decision];
-    case "unclassified-authorization":
-      return UNCLASSIFIED;
+function badgeTreatment(interpretation: AuditEventInterpretation): BadgeTreatment {
+  switch (interpretation.kind) {
+    case "authorization_decision":
+      return AUTHORIZATION_DECISIONS[interpretation.decision];
     case "operation":
-      return OPERATION_OUTCOMES[presentation.result];
+      return OPERATION_OUTCOMES[interpretation.result];
+    case "unknown":
+      return UNRECOGNIZED;
   }
 }
 
@@ -79,8 +87,8 @@ function resourceSummary(event: AuditEvent): string {
 }
 
 function AuditEventCard({ event }: { event: AuditEvent }) {
-  const presentation = presentAuditEvent(event);
-  const badge = badgeTreatment(presentation);
+  const interpretation = interpretAuditEvent(event);
+  const badge = badgeTreatment(interpretation);
   const localTimestamp = new Date(event.occurredAt).toLocaleString();
 
   return (
@@ -119,13 +127,13 @@ function AuditEventCard({ event }: { event: AuditEvent }) {
             <dt className="text-muted-foreground">Reason</dt>
             <dd className="break-words font-mono text-foreground">{event.reasonCode}</dd>
           </div>
-          {presentation.kind !== "operation" && (
+          {interpretation.kind === "authorization_decision" && (
             <div className="min-w-0">
               <dt className="text-muted-foreground">HTTP response</dt>
               <dd className="break-words font-mono text-foreground">
-                {presentation.httpStatus === null
+                {interpretation.httpStatus === null
                   ? "Not recorded"
-                  : formatHttpStatus(presentation.httpStatus)}
+                  : formatHttpStatus(interpretation.httpStatus)}
               </dd>
             </div>
           )}
