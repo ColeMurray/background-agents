@@ -7,7 +7,8 @@ import { getMDXComponents } from "@/components/mdx";
 import { PageActions } from "@/components/page-actions";
 import { createTechArticleJsonLd, serializeJsonLd } from "@/lib/seo";
 import { canonicalUrl, editOnGitHubUrl } from "@/lib/site";
-import { getPageMarkdownUrl, source } from "@/lib/source";
+import { socialCardSize } from "@/lib/social-card";
+import { getPageImageUrl, getPageMarkdownUrl, source } from "@/lib/source";
 
 type DocumentationPageProps = {
   params: Promise<{ slug?: string[] }>;
@@ -63,6 +64,7 @@ export async function generateMetadata({ params }: DocumentationPageProps): Prom
   if (!page) notFound();
 
   const url = canonicalUrl(page.url);
+  const image = { url: getPageImageUrl(page), alt: page.data.title, ...socialCardSize };
 
   return {
     title: page.data.title,
@@ -79,11 +81,13 @@ export async function generateMetadata({ params }: DocumentationPageProps): Prom
       title: page.data.title,
       description: page.data.description,
       url,
+      images: [image],
     },
     twitter: {
       card: "summary_large_image",
       title: page.data.title,
       description: page.data.description,
+      images: [image],
     },
   };
 }

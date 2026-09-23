@@ -1,5 +1,6 @@
 "use client";
 
+import { ImageZoom } from "fumadocs-ui/components/image-zoom";
 import { useTheme } from "next-themes";
 import { useEffect, useId, useState } from "react";
 
@@ -58,6 +59,15 @@ const darkVariables = {
   activationBorderColor: "#b89b78",
 };
 
+/**
+ * Mermaid prefixes every inner id with the SVG's own id. The zoomed copy renames ids by
+ * replacing `#<id>` throughout its stylesheet, which would also rewrite references such as
+ * `url(#<id>-gradient)`. A root id that no inner id starts with keeps those references intact.
+ */
+function withDistinctRootId(svg: string, id: string): string {
+  return svg.replace(new RegExp(`(#|id=")${id}(?![\\w-])`, "g"), `$1${id}-root`);
+}
+
 export function Mermaid({ chart, caption }: MermaidProps) {
   const reactId = useId();
   const { resolvedTheme } = useTheme();
@@ -82,7 +92,7 @@ export function Mermaid({ chart, caption }: MermaidProps) {
         });
         const result = await mermaid.render(renderId, chart.trim());
         if (!cancelled) {
-          setSvg(result.svg);
+          setSvg(withDistinctRootId(result.svg, renderId));
           setError(undefined);
         }
       })
@@ -99,11 +109,14 @@ export function Mermaid({ chart, caption }: MermaidProps) {
     <figure className="not-prose my-6 overflow-hidden rounded-lg border border-fd-border bg-fd-card">
       <div
         aria-label={caption}
-        className="w-full overflow-x-auto p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
+        className="w-full overflow-x-auto p-4 [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-full [&_svg]:cursor-zoom-in"
         role="img"
       >
         {svg ? (
-          <div className="w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+          // The zoom binds to the SVG element it finds on mount, so a re-render remounts it.
+          <ImageZoom key={svg}>
+            <span className="block w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+          </ImageZoom>
         ) : error ? (
           <pre className="w-full overflow-x-auto text-xs text-fd-muted-foreground">
             {chart.trim()}

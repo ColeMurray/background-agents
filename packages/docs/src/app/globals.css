@@ -51,3 +51,8 @@ body {
 ::selection {
   background: rgb(139 115 85 / 24%);
 }
+
+/* Mermaid caps its SVG at the natural width inline; the zoomed copy must fill the viewport. */
+[data-rmiz-modal-img] > svg {
+  max-width: none !important;
+}

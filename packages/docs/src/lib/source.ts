@@ -30,3 +30,8 @@ export async function getLLMText(page: DocumentationPage) {
 export function getPageMarkdownUrl(page: DocumentationPage): string {
   return `/llms.mdx/${[...page.slugs, "content.md"].join("/")}`;
 }
+
+/** Per-page Open Graph card, served by `app/og/[...slug]/route.tsx`. */
+export function getPageImageUrl(page: DocumentationPage): string {
+  return `/og/${[...page.slugs, "image.png"].join("/")}`;
+}
