@@ -125,6 +125,22 @@ export const linearToolCallCallbackSchema = linearToolCallCallbackPayloadSchema.
 
 export type LinearToolCallCallback = z.infer<typeof linearToolCallCallbackSchema>;
 
+/**
+ * Where a Discord `/task` reply goes. The bot answers in a thread it opened on
+ * its own acknowledgement message; `threadId` is absent only when the thread
+ * could not be created, and the bot then replies in `channelId` directly.
+ */
+export const discordCallbackContextSchema = z.strictObject({
+  source: z.literal("discord"),
+  channelId: nonEmptyStringSchema,
+  threadId: nonEmptyStringSchema.optional(),
+  userId: nonEmptyStringSchema,
+  repoFullName: nonEmptyStringSchema,
+  model: nonEmptyStringSchema,
+});
+
+export type DiscordCallbackContext = z.infer<typeof discordCallbackContextSchema>;
+
 export const automationCallbackContextSchema = z.object({
   source: z.literal("automation"),
   automationId: z.string(),
@@ -137,6 +153,7 @@ export type AutomationCallbackContext = z.infer<typeof automationCallbackContext
 export const callbackContextSchema = z.union([
   slackCallbackContextSchema,
   linearCallbackContextSchema,
+  discordCallbackContextSchema,
   automationCallbackContextSchema,
 ]);
 

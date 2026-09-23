@@ -360,7 +360,11 @@ reposRoutes.get(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requirePermission("repositories.read", {
-      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+      actorlessGrants: [
+        { service: "slack-bot" },
+        { service: "linear-bot" },
+        { service: "discord-bot" },
+      ],
     }),
   }),
   (c) => dispatch(c, handleListRepos)

@@ -208,6 +208,21 @@ slack_signing_secret = ""
 # menu. Accepts a canonical "provider/model" id or a bare "claude-"/"gpt-" id.
 # slack_bot_default_model = "claude-haiku-4-5"
 
+# Discord Bot (Optional)
+# `/task prompt:<text> repo:<owner/name>` from a Discord server. Sessions run on
+# the Claude Agent harness, so a connected Claude subscription (Settings →
+# Accounts → Automated sessions) can pay for them instead of an API key.
+# Setup: docs/integrations/DISCORD.md
+enable_discord_bot = false
+
+discord_application_id      = ""  # Developer Portal → General Information
+discord_public_key          = ""  # Developer Portal → General Information
+discord_bot_token           = ""  # Developer Portal → Bot → Reset Token
+discord_allowed_role_ids    = ""  # Comma-separated; e.g. your "dev" role
+discord_allowed_channel_ids = ""  # Comma-separated; empty accepts any channel
+# discord_bot_default_model = "anthropic/claude-opus-5"
+# discord_bot_harness       = "claude"
+
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new
 # - Enable webhooks, select "Agent session events" + "Issues" + "Comments"

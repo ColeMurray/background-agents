@@ -38,6 +38,7 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_DISCORD_BOT?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)
@@ -122,6 +123,7 @@ export interface Platform {
   SLACK_BOT?: FetchClient;
   /** The linear-bot service, when deployed. */
   LINEAR_BOT?: FetchClient;
+  DISCORD_BOT?: FetchClient;
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;
   AUTOFIX_DLQ?: QueueMetricsSource;
