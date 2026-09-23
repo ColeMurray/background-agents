@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -112,4 +113,51 @@ it("still closes every other owned context when one marker is unreadable", async
   expect(exec.mock.calls[0][1]).toEqual(
     expect.arrayContaining(["--session", "oi-preview-test-viewer", "close"])
   );
+});
+
+it("refuses an open once the preview has started closing its browsers", async () => {
+  await closeBrowsers(manifestPath);
+  exec.mockClear();
+  await expect(openPersona(manifestPath, "member")).rejects.toThrow("preview is stopping");
+  expect(exec.mock.calls).toHaveLength(1); // Version check only; no browser was opened.
+  await expect(readFile(join(directory, "browser-member.json"), "utf8")).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("waits for an open under way, then closes the context it opened", async () => {
+  let finishOpen!: () => void;
+  const openFinished = new Promise<void>((resolve) => (finishOpen = resolve));
+  let openStarted!: () => void;
+  const opening = new Promise<void>((resolve) => (openStarted = resolve));
+  exec.mockImplementation(async (_file: string, args: string[]) => {
+    if (args.includes("--version")) return { stdout: "agent-browser 0.37.0" };
+    if (args.includes("open")) {
+      openStarted();
+      await openFinished;
+      return { stdout: "Opened" };
+    }
+    if (args.includes("eval"))
+      return { stdout: JSON.stringify({ success: true, data: { result: "user-member" } }) };
+    return { stdout: "Closed" };
+  });
+  const opened = openPersona(manifestPath, "member");
+  await opening;
+  const closed = closeBrowsers(manifestPath);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(exec.mock.calls.some(([, args]) => args.includes("close"))).toBe(false);
+  finishOpen();
+  await expect(opened).resolves.toEqual({ session: "oi-preview-test-member", imported: true });
+  await closed;
+  expect(exec.mock.calls.at(-1)![1]).toEqual(
+    expect.arrayContaining(["--session", "oi-preview-test-member", "close"])
+  );
+});
+
+it("does not wait for an opener that has already exited", async () => {
+  const { pid } = spawnSync(process.execPath, ["-e", ""]);
+  await writeFile(join(directory, `browser-open-${pid}-crashed`), "");
+  const startedAtMs = Date.now();
+  await closeBrowsers(manifestPath);
+  expect(Date.now() - startedAtMs).toBeLessThan(5_000);
 });
