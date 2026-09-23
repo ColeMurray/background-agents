@@ -1,4 +1,15 @@
 {
-  "title": "Configure a workspace",
-  "pages": ["repositories-and-environments", "models-providers-and-secrets"]
+  "title": "Configure repositories and environments",
+  "defaultOpen": false,
+  "pages": [
+    "lifecycle-scripts",
+    "environments",
+    "prebuilt-images",
+    "secrets",
+    "sandbox-settings",
+    "source-control",
+    "managed-skills",
+    "mcp-servers",
+    "sandbox-providers"
+  ]
 }

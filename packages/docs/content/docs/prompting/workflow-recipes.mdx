@@ -1,0 +1,286 @@
+---
+title: Workflow recipes
+description: Step-by-step recipes for common background-agent workflows, from exploring a codebase to coordinating changes across repositories.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/integrations/GITHUB.md
+  - docs/integrations/SLACK.md
+  - docs/AUTOMATIONS.md
+  - packages/sandbox-runtime/src/sandbox_runtime/harness/claude_tools.py
+  - packages/control-plane/src/session/pull-request-service.ts
+---
+
+This page gives you nine repeatable workflows, each with the prompts to send, the context to supply, and what to verify at the end.
+
+## How to read these recipes
+
+Each recipe has four parts:
+
+- **When to use** describes the situation the recipe fits.
+- **Steps** are numbered, with literal prompts in text blocks. Send them as written, with your own facts substituted.
+- **Context you provide** lists what the agent cannot find on its own, versus what it already has (the repository clone, git history, the sandbox tools, and any managed skills).
+- **Verification** is what to check in the session before you act on the result.
+
+## Explore an unfamiliar codebase
+
+**When to use:** you have inherited a repository, or you are about to make a change in an area you do not know, and you want a map before you commit to a plan.
+
+**Steps**
+
+1. Start a session on the repository and send an investigation-only prompt.
+
+   ```text
+   Investigate only; do not edit files.
+
+   Give me a map of this repository for someone about to change how
+   [feature] works. Include: the entry points, the modules involved and
+   what each owns, how they are tested, and the commands to build and
+   test them (run each command to confirm it works). Keep it under 500
+   words and use file paths throughout.
+   ```
+
+2. Ask a follow-up for the part you care about.
+
+   ```text
+   Now trace one request through [feature] from the HTTP handler to the
+   database write, listing each function with its file path.
+   ```
+
+3. Keep the session. When you are ready to make the change, send the implementation prompt as a follow-up so the agent starts with the map already in context.
+
+**Context you provide:** the feature or area you care about, and any vocabulary the codebase uses differently from what you expect. **The agent has:** the full clone, git history, and the ability to run the build and test commands.
+
+**Verification:** check the timeline for the commands the agent ran; a map that claims "tests run with `make test`" without a tool call that ran it is a guess. Spot-check two or three file paths in the write-up.
+
+## Fix a bug from an error report
+
+**When to use:** you have an error message, a stack trace, or a failing test, and you know roughly where it lives.
+
+**Steps**
+
+1. Send the report verbatim with a reproduction request.
+
+   ```text
+   Fix this error. Do not edit anything until you have reproduced it.
+
+   [paste the stack trace or failing test output]
+
+   It happens when [trigger]. Start in [file]. First, write a failing
+   test in [test file] that reproduces it, run it, and post the output.
+   Then fix the cause with the smallest change, run [test command] and
+   [typecheck command], and open a PR titled "[title]".
+   ```
+
+2. Read the reproduction in the timeline. If the agent reproduced something different from your bug, stop the prompt and send a correction.
+
+   ```text
+   That is a different failure. The one I mean only happens when
+   [condition]; the trace shows [distinguishing frame]. Try again.
+   ```
+
+3. Review the PR when it appears in the Pull requests section of the sidebar.
+
+**Context you provide:** the error text, the trigger, and anything already ruled out. **The agent has:** the code, the tests, and git history to see what changed recently.
+
+**Verification:** the timeline should show the new test failing, then passing. The Changes section should touch the cause and the test, and little else.
+
+## Add tests to an untested module
+
+**When to use:** a module has no tests, and you want coverage before you change it.
+
+**Steps**
+
+1. Send a prompt that enumerates cases and forbids changing the module.
+
+   ```text
+   Add tests for [module path]. Cover: [case], [case], [case], and
+   [edge case]. Copy the setup style from [existing test file]. Do not
+   modify [module path]. If a case reveals a bug, leave that test
+   failing and describe the bug in your summary. Run [test command] and
+   open a PR titled "Add tests for [module]".
+   ```
+
+2. If the agent reports a bug, decide whether to fix it in a second session or in a follow-up on this one.
+
+   ```text
+   Leave the failing test in this PR. Open a second PR from a new branch
+   that fixes the bug and makes the test pass; base it on this branch.
+   ```
+
+**Context you provide:** the list of cases and the reference test file. **The agent has:** the module's source and any existing test infrastructure.
+
+**Verification:** every case you listed appears as a named test in the diff. The test command in the timeline shows the expected pass and fail counts.
+
+## Prototype a UI change from a screenshot
+
+**When to use:** you can show the problem or the target more easily than describe it.
+
+**Steps**
+
+1. In the composer, click Attach images and add the screenshot (PNG, JPEG, WebP, or GIF; up to 6 per message, 10 MiB each). Describe what the image shows and what should change.
+
+   ```text
+   The attached screenshot is [page] at [viewport width]. [What is wrong
+   or what should change], in [component file]. Use the existing
+   [tokens or components]. Do not change behavior or copy.
+
+   Start the app with [dev command], open [route] with agent-browser at
+   [width], and register a screenshot as a session artifact so I can
+   compare. Run [test command]. Open a draft PR.
+   ```
+
+2. Open the Media section in the right sidebar and compare the agent's screenshot with yours.
+3. Iterate with a follow-up and a new screenshot if needed.
+
+   ```text
+   Closer. The spacing above the button should match the card header
+   (16px). Re-capture at the same width.
+   ```
+
+**Context you provide:** the screenshot, the viewport, and the component. **The agent has:** `agent-browser` with headless Chromium in the sandbox, and can start the dev server (use tunnel ports if you also want to open it yourself; see [sandbox tools](/sessions/sandbox-tools)).
+
+**Verification:** the artifact in the Media section matches what you asked for at the stated width. The diff is limited to the component you named.
+
+## Open a pull request and iterate on review feedback
+
+**When to use:** the change is ready to be reviewed by people, and you want the agent to handle the round trips.
+
+**Steps**
+
+1. Ask for the PR as part of the handoff line of your prompt. The agent pushes the branch and creates the PR; it appears in the Pull requests section with its status.
+
+   ```text
+   [task]. When done and validated, open a PR titled "[title]". In the
+   body: what changed, the commands you ran, and anything you were
+   unsure about.
+   ```
+
+2. When reviewers comment, send your decisions as a follow-up. If the session created the PR and PR Feedback Autofix is enabled under Settings › Integrations › GitHub, human reviews and PR comments are queued into the session automatically and the timeline shows "Resumed by PR feedback"; you can still add your own decisions.
+
+   ```text
+   Address the review: [thread]: do it. [thread]: do it, but use
+   [approach]. [thread]: decline, reply that [reason]. Push to the same
+   branch so the PR updates; do not open a new PR. Reply to each thread.
+   ```
+
+3. Click Sync PR status in the sidebar if the PR state looks stale.
+
+**Context you provide:** the PR title, body expectations, and your decision on each review comment. **The agent has:** the branch, the ability to push and update the same PR, and the GitHub CLI for replying.
+
+**Verification:** the PR in the sidebar shows the new commits. Each review thread has a reply. The validation commands ran again after the changes.
+
+## Review a pull request
+
+**When to use:** you want a second set of eyes on a PR, either from GitHub or from the web app.
+
+**Steps**
+
+1. **From GitHub:** mention the app's bot in a PR conversation comment or an inline review thread. Inline mentions include the file path and diff context automatically. Each mention starts a new session from the repository default branch, so use it for analysis and replies, not for pushing commits to the PR branch.
+
+   ```text
+   @my-app[bot] review this PR for correctness of the retry logic and
+   for missing tests. Reply here with findings ordered by severity.
+   ```
+
+2. **From the web:** start a session on the repository and ask for a review by PR number. The agent has the GitHub CLI and can check out the branch.
+
+   ```text
+   Review PR #[number] using `gh pr view` and `gh pr diff`. Check out
+   the branch. Look for: [concerns, such as error handling, tests, and
+   migration safety]. Run [test command] on the branch. Post your
+   findings as your final message, ordered by severity, with file and
+   line references. Do not edit files.
+   ```
+
+**Context you provide:** what to focus on and the severity ordering you want. **The agent has:** the PR diff via the GitHub CLI and the ability to run the tests on the branch.
+
+**Verification:** for GitHub mentions, the bot reacts with eyes and posts a comment; open the session from the web app for the full timeline. For web sessions, confirm the test command ran on the PR branch, not on the default branch.
+
+## Coordinate a change across several repositories
+
+**When to use:** one logical change touches more than one repository, such as an API and its client.
+
+**Steps**
+
+1. Create the session with Multiple repositories, or with a saved environment from Settings › Environments. Up to 10 repositories are cloned side by side under `/workspace/<repo-name>`; the first is the primary.
+2. Send one prompt that names each repository's part and asks for one PR per repository.
+
+   ```text
+   Two repositories are checked out: `api/` and `web/`.
+
+   In `api/`: add the `archived` field to the project response in
+   [file]; update the OpenAPI spec in [file]. Run [api test command].
+   In `web/`: consume the new field in [file]; add a "Show archived"
+   toggle to [component]. Run [web test command].
+
+   Open one PR per repository. Title the web PR "[title]" and mention
+   the api PR URL in its body.
+   ```
+
+3. Review both PRs in the Pull requests section; each is listed against its repository.
+
+**Context you provide:** which repository owns which part, and the order to merge. **The agent has:** all clones in one sandbox, so it can read the API change while editing the client.
+
+**Verification:** each repository has its own PR. The validation command ran in each repository directory. Nothing in one repository depends on an unmerged change in the other without the PR body saying so.
+
+## Split a large task with child sessions
+
+**When to use:** the task has independent parts that would take one session a long time in sequence.
+
+**Steps**
+
+1. Ask the parent to plan and spawn. The agent uses `spawn-child`, which starts a child in its own sandbox on its own branch and returns immediately; children inherit the harness, provider credentials, and skills. Limits come from `maxConcurrentChildSessions` and `maxTotalChildSessions` under Settings › Sandbox.
+
+   ```text
+   Split this work into independent child sessions, one per [unit, such
+   as package or endpoint]. For each child, give it a self-contained
+   prompt with the files it owns, the test command, and the instruction
+   to open its own PR. Do not do the work yourself. Check on the children
+   with get-child-status, and when all have finished, summarize each
+   PR and any child that failed.
+   ```
+
+2. Watch the Child sessions section in the parent's sidebar. Open a child to see its own timeline.
+3. If a child needs a correction, tell the parent; it can queue a follow-up with `send-child-prompt`, which does not interrupt the child's running turn.
+
+   ```text
+   Child "[title]" used the wrong test runner. Send it a follow-up to
+   use [command] instead and wait for it to finish.
+   ```
+
+**Context you provide:** the unit of splitting and the per-child validation command. **The agent has:** the child tools and the parent's context to write each child prompt.
+
+**Verification:** each child has a PR or a clear failure in its own timeline. The parent's summary matches the children's actual states. See [child sessions](/sessions/child-sessions).
+
+## Run a recurring digest or chore with an automation
+
+**When to use:** the same prompt should run on a schedule or when an event arrives, with no one starting it by hand.
+
+**Steps**
+
+1. Open Automations in the sidebar and click Create Automation. Choose the trigger type (Schedule, Inbound Webhook, Sentry Alert, GitHub Event, or Slack Message), a name, and the repository configuration. A scheduled automation can fan out across up to 10 repositories, one session and one PR each.
+2. Write the Instructions as you would a normal prompt, with validation and handoff. Instructions are limited to 15,000 characters.
+
+   ```text
+   Produce a weekly digest of merged pull requests in this repository
+   for the last 7 days using `gh pr list --state merged`. Group by
+   label. Write it to docs/changelog/[YYYY-WW].md in the format of the
+   newest file there. Validate that every PR number exists. Open a PR
+   titled "Digest: week of [date]" containing only the new file.
+   ```
+
+3. Click Trigger Now to run it once and check the resulting session (its title is prefixed with `[Auto]`).
+
+**Context you provide:** the schedule or event, the instructions, and the model. **The agent has:** a fresh session with the repository at the configured branch each run.
+
+**Verification:** the run appears in the automation's run history with a linked session. Read that session's timeline the first few times. Automations pause automatically after 3 consecutive failures, so check the status if runs stop. See [automations](/automations) and [schedules](/automations/schedules).
+
+## Next steps
+
+- [Prompt templates](/prompting/prompt-templates)
+- [Child sessions](/sessions/child-sessions)
+- [Your first automation](/automations/first-automation)

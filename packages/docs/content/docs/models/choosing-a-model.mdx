@@ -1,0 +1,233 @@
+---
+title: Choosing a model and reasoning effort
+description: Enable models for your workspace, pick a model and effort in the composer, and understand which credential each provider needs.
+audience: team-owner
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/shared/src/models.ts
+  - packages/shared/src/harnesses.ts
+  - packages/web/src/components/model-reasoning-selector.tsx
+  - packages/web/src/components/settings/models-settings.tsx
+  - docs/AVAILABLE_MODELS.md
+  - docs/SECRETS.md
+---
+
+This page shows you where models are turned on, how to pick a model and reasoning effort for a session, and what each provider needs before a session can use it.
+
+## Enable models in Settings › Models
+
+Settings › Models lists every model in the catalog, grouped by provider, under the heading **Enabled Models**. Toggle a model on or off, or use **Enable all** and **Disable all** on a group. Changes save automatically and apply to the model selector across the web app and the Slack bot. You cannot disable the last enabled model.
+
+| Group            | Enabled by default |
+| ---------------- | ------------------ |
+| Anthropic        | Yes                |
+| OpenAI           | Yes                |
+| OpenCode Zen     | No                 |
+| OpenCode Go      | No                 |
+| xAI / SuperGrok  | No                 |
+| Z.AI Coding Plan | No                 |
+| DeepSeek         | No                 |
+
+The deployment default model is Claude Sonnet 4.6 (`anthropic/claude-sonnet-4-6`). It is used when nothing else (a session, an integration setting, or an automation) picks a model.
+
+## Pick a model and effort in the composer
+
+The composer shows one control that reads `<harness>: <model> <effort>`. Open it to see up to three rows:
+
+| Row        | What it does                                                                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Agent**  | Chooses the harness (OpenCode or Claude Agent). Shown only when you create a session; the harness is fixed afterwards. See [Agent harnesses](/models/agent-harnesses). |
+| **Model**  | Lists the enabled models the chosen harness can run, grouped by provider, with each model's display name and one-line description.                                     |
+| **Effort** | Lists **Default** plus the efforts the model supports (None, Low, Medium, High, XHigh, Max). Hidden for models without reasoning controls.                             |
+
+**Default** effort means the model's own default from the table below. Choosing a specific effort applies it to the prompts you send.
+
+On an existing session you can change the model and effort for a single message. The session's harness does not change, so the list only contains models that harness can run. If a message override names a model the harness cannot run, the prompt is rejected with an error such as `Model "openai/gpt-5.5" cannot run on the Claude Agent harness.` It is never silently replaced with another model.
+
+## Model catalog
+
+Reasoning efforts and defaults below come from the shared model catalog. A model with no reasoning efforts has no Effort row in the composer.
+
+### Anthropic
+
+Runs on both harnesses. Credential: `ANTHROPIC_API_KEY` as a global secret, or on Claude Agent sessions a connected Claude account (see [Provider accounts](/models/provider-accounts)).
+
+| Model ID                      | Display name      | Reasoning efforts             | Default effort |
+| ----------------------------- | ----------------- | ----------------------------- | -------------- |
+| `anthropic/claude-haiku-4-5`  | Claude Haiku 4.5  | high, max                     | max            |
+| `anthropic/claude-sonnet-4-5` | Claude Sonnet 4.5 | high, max                     | max            |
+| `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | low, medium, high, max        | high           |
+| `anthropic/claude-sonnet-5`   | Claude Sonnet 5   | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-4-5`   | Claude Opus 4.5   | high, max                     | max            |
+| `anthropic/claude-opus-4-6`   | Claude Opus 4.6   | low, medium, high, max        | high           |
+| `anthropic/claude-opus-4-7`   | Claude Opus 4.7   | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-4-8`   | Claude Opus 4.8   | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-5`     | Claude Opus 5     | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-opus-5-5`   | Claude Opus 5.5   | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-fable-5`    | Claude Fable 5    | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-fable-5-1`  | Claude Fable 5.1  | low, medium, high, xhigh, max | high           |
+
+### OpenAI
+
+Runs on OpenCode only. Credential: a connected ChatGPT account, or `OPENAI_API_KEY` in the session's secret scope when the session uses API-key mode.
+
+| Model ID                     | Display name        | Reasoning efforts                   | Default effort |
+| ---------------------------- | ------------------- | ----------------------------------- | -------------- |
+| `openai/gpt-5.4`             | GPT 5.4             | none, low, medium, high, xhigh      | Not set        |
+| `openai/gpt-5.5`             | GPT 5.5             | none, low, medium, high, xhigh      | Not set        |
+| `openai/gpt-5.6-sol`         | GPT 5.6 Sol         | none, low, medium, high, xhigh      | medium         |
+| `openai/gpt-5.6-terra`       | GPT 5.6 Terra       | none, low, medium, high, xhigh      | medium         |
+| `openai/gpt-5.6-luna`        | GPT 5.6 Luna        | none, low, medium, high, xhigh, max | medium         |
+| `openai/gpt-6-astra`         | GPT-6 Astra         | low, medium, high, xhigh, max       | medium         |
+| `openai/gpt-6-sol`           | GPT-6 Sol           | none, low, medium, high, xhigh, max | medium         |
+| `openai/gpt-6-luna`          | GPT-6 Luna          | none, low, medium, high, xhigh, max | medium         |
+| `openai/gpt-5.3-codex`       | GPT 5.3 Codex       | low, medium, high, xhigh            | high           |
+| `openai/gpt-5.3-codex-spark` | GPT 5.3 Codex Spark | low, medium, high, xhigh            | high           |
+
+"Not set" means the composer shows **Default** and sends no effort unless you choose one.
+
+### xAI / SuperGrok
+
+Runs on OpenCode only. Opt-in group. Credential: a connected SuperGrok account, or `XAI_API_KEY` in API-key mode. Entitlement to a given Grok model is decided by xAI for the connected account.
+
+| Model ID             | Display name   | Reasoning efforts        | Default effort |
+| -------------------- | -------------- | ------------------------ | -------------- |
+| `xai/grok-4.5`       | Grok 4.5       | low, medium, high        | high           |
+| `xai/grok-4.6`       | Grok 4.6       | low, medium, high, xhigh | high           |
+| `xai/grok-4.7`       | Grok 4.7       | low, medium, high, xhigh | high           |
+| `xai/grok-build-0.1` | Grok Build 0.1 | Not configurable         | N/A            |
+
+### OpenCode Zen
+
+Runs on OpenCode only. Opt-in group. Credential: `OPENCODE_API_KEY` as a global or repository secret. Zen is billed per token.
+
+| Model ID                | Display name | Reasoning efforts | Default effort |
+| ----------------------- | ------------ | ----------------- | -------------- |
+| `opencode/kimi-k2.5`    | Kimi K2.5    | Not supported     | N/A            |
+| `opencode/kimi-k2.6`    | Kimi K2.6    | Not supported     | N/A            |
+| `opencode/kimi-k3`      | Kimi K3      | Not supported     | N/A            |
+| `opencode/minimax-m2.5` | MiniMax M2.5 | Not supported     | N/A            |
+| `opencode/qwen3.7-max`  | Qwen3.7 Max  | Not supported     | N/A            |
+| `opencode/glm-5`        | GLM 5        | Not supported     | N/A            |
+| `opencode/glm-5.1`      | GLM 5.1      | Not supported     | N/A            |
+| `opencode/glm-5.2`      | GLM 5.2      | Not supported     | N/A            |
+
+### OpenCode Go
+
+Runs on OpenCode only. Opt-in group. Credential: the same `OPENCODE_API_KEY` secret as Zen, but the key must carry an active OpenCode Go subscription. Go bills against the subscription's rolling allowance instead of per token, so a key without a Go subscription fails on `opencode-go/*` models while `opencode/*` models keep working.
+
+<Callout type="warn" title="Rolling allowance and unattended sessions">
+  Go usage is capped on three rolling windows: 20% of the monthly allowance per 5 hours, 50% per
+  week, and 100% per month. Allowances differ per model. An unattended session pinned to a Go model
+  can exhaust its window and fail mid-run, so keep Go models off Slack, GitHub, Linear, and
+  automation launches unless you accept that.
+</Callout>
+
+| Model ID                                   | Display name                 | Reasoning efforts | Default effort |
+| ------------------------------------------ | ---------------------------- | ----------------- | -------------- |
+| `opencode-go/grok-4.6`                     | Grok 4.6                     | Not supported     | N/A            |
+| `opencode-go/gpt-5.6-luna`                 | GPT 5.6 Luna                 | Not supported     | N/A            |
+| `opencode-go/glm-5.3-flash`                | GLM 5.3 Flash                | Not supported     | N/A            |
+| `opencode-go/glm-5.3`                      | GLM 5.3                      | Not supported     | N/A            |
+| `opencode-go/glm-5.2`                      | GLM 5.2                      | Not supported     | N/A            |
+| `opencode-go/glm-5.1`                      | GLM 5.1                      | Not supported     | N/A            |
+| `opencode-go/kimi-k3`                      | Kimi K3                      | Not supported     | N/A            |
+| `opencode-go/kimi-k2.7-code`               | Kimi K2.7 Code               | Not supported     | N/A            |
+| `opencode-go/kimi-k2.6`                    | Kimi K2.6                    | Not supported     | N/A            |
+| `opencode-go/longcat-2.0`                  | LongCat 2.0                  | Not supported     | N/A            |
+| `opencode-go/deepseek-v4.1-flash`          | DeepSeek V4.1 Flash          | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-pro`              | DeepSeek V4 Pro              | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-flash`            | DeepSeek V4 Flash            | Not supported     | N/A            |
+| `opencode-go/deepseek-v4-flash-vision-exp` | DeepSeek V4 Flash Vision Exp | Not supported     | N/A            |
+| `opencode-go/mimo-v2.5`                    | MiMo V2.5                    | Not supported     | N/A            |
+| `opencode-go/mimo-v2.5-pro`                | MiMo V2.5 Pro                | Not supported     | N/A            |
+| `opencode-go/minimax-m3`                   | MiniMax M3                   | Not supported     | N/A            |
+| `opencode-go/minimax-m2.7`                 | MiniMax M2.7                 | Not supported     | N/A            |
+| `opencode-go/muse-spark-1.3-contributor`   | Muse Spark 1.3 Contributor   | Not supported     | N/A            |
+| `opencode-go/muse-spark-1.2-contributor`   | Muse Spark 1.2 Contributor   | Not supported     | N/A            |
+| `opencode-go/qwen3.8-max`                  | Qwen3.8 Max                  | Not supported     | N/A            |
+| `opencode-go/qwen3.8-flash`                | Qwen3.8 Flash                | Not supported     | N/A            |
+| `opencode-go/qwen3.7-max`                  | Qwen3.7 Max                  | Not supported     | N/A            |
+| `opencode-go/qwen3.7-plus`                 | Qwen3.7 Plus                 | Not supported     | N/A            |
+| `opencode-go/qwen3.6-plus`                 | Qwen3.6 Plus                 | Not supported     | N/A            |
+| `opencode-go/hy4-preview`                  | Hy4 Preview                  | Not supported     | N/A            |
+| `opencode-go/hy3`                          | Hy3                          | Not supported     | N/A            |
+
+Go also publishes `minimax-m2.5`, but the pinned OpenCode release does not resolve it on the Go gateway, so it is left out of the catalog. Use `opencode/minimax-m2.5` on Zen instead.
+
+### Z.AI Coding Plan
+
+Runs on OpenCode only. Opt-in group. Credential: `ZHIPU_API_KEY` as a global or repository secret.
+
+| Model ID                  | Display name | Reasoning efforts | Default effort |
+| ------------------------- | ------------ | ----------------- | -------------- |
+| `zai-coding-plan/glm-5.2` | GLM 5.2      | Not supported     | N/A            |
+| `zai-coding-plan/glm-5.3` | GLM 5.3      | Not supported     | N/A            |
+
+### DeepSeek
+
+Runs on OpenCode only. Opt-in group. Credential: `DEEPSEEK_API_KEY` as a global or repository secret.
+
+| Model ID                     | Display name      | Reasoning efforts | Default effort |
+| ---------------------------- | ----------------- | ----------------- | -------------- |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | Not supported     | N/A            |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | Not supported     | N/A            |
+
+## The same model behind several gateways
+
+Some models appear more than once because they are reachable through more than one provider, each billed against a different credential. `opencode-go/grok-4.6` and `xai/grok-4.6` are the same Grok model behind two gateways. `opencode-go/glm-5.2`, `opencode/glm-5.2`, and `zai-coding-plan/glm-5.2` are the same GLM model behind three. Pick the entry whose billing you want.
+
+## Defaults for integrations and automations
+
+Sessions started by Slack, GitHub, Linear, and automations run on the OpenCode harness and pick their model from these settings:
+
+| Surface     | Where the default lives                                                                                                                                                                                                                                                                 |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub      | Settings › Integrations › GitHub: **Default model** and **Default reasoning effort**, plus per-repository **Repository Overrides**. Falls back to the deployment default model.                                                                                                         |
+| Linear      | Settings › Integrations › Linear: **Default model and effort** and **Repository Overrides**. A `model:*` issue label wins when **Allow model labels** is on, then a Linear user preference (when allowed), then the repository override or global default, then the deployment default. |
+| Slack       | Each Slack user sets **Model** and **Reasoning effort** in the app's **Home** tab. A request can start with `!model` and `!reasoning` flags to override them; on a request that starts a session the flags become that session's defaults.                                              |
+| Automations | The automation editor picks a model and effort per automation. The list is limited to enabled models the automation's harness can run.                                                                                                                                                  |
+
+All of these selectors show only models enabled in Settings › Models. Reasoning values must be ones the selected model supports.
+
+```text
+@OpenInspect !model anthropic/claude-sonnet-4-6 !reasoning max investigate the flaky test
+```
+
+## Troubleshooting
+
+<Accordions>
+  <Accordion title='"Model not found" when a prompt runs'>
+    The sandbox has no usable credential for the selected model. Check the session's authentication
+    mode first. In provider-account mode, verify the account and confirm it is entitled to the
+    model. In API-key mode, add the provider's key to the session's secret scope:
+    `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `ZHIPU_API_KEY`, or
+    `OPENCODE_API_KEY` (an `opencode-go/*` model additionally needs an active Go subscription on
+    that key). See [Secrets](/configure/secrets).
+
+</Accordion>
+  <Accordion title="A model is missing from the selector">
+    Its group is opt-in or the model was toggled off. Enable it in Settings › Models. Slack falls
+    back to the default enabled set if it cannot load the enabled list.
+
+</Accordion>
+  <Accordion title='"No enabled models can run on Claude Agent."'>
+    Claude Agent runs Anthropic models only, and every Anthropic model is disabled. Enable at least
+    one Anthropic model, or switch the Agent row to OpenCode.
+
+</Accordion>
+  <Accordion title="A per-message model override was rejected">
+    The override named a model the session's harness cannot run (for example an OpenAI model on a
+    Claude Agent session). Send the message with a compatible model, or start a new session on the
+    other harness.
+
+</Accordion>
+</Accordions>
+
+## Next steps
+
+- [Agent harnesses: OpenCode and Claude Agent](/models/agent-harnesses)
+- [Provider accounts and API keys](/models/provider-accounts)
+- [Secrets](/configure/secrets)

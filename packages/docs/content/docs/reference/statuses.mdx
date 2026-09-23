@@ -1,0 +1,132 @@
+---
+title: Status reference
+description: Every status value OpenInspect shows for sessions, sandboxes, messages, automations, runs, image builds, pull requests, and boot phases, with what each one means.
+audience: user
+owner: control-plane
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/shared/src/types/sessions.ts
+  - packages/shared/src/types/session-inbox.ts
+  - packages/control-plane/src/db/session-inbox-store.ts
+  - packages/shared/src/types/automations.ts
+  - packages/shared/src/types/image-builds.ts
+  - packages/shared/src/types/artifacts.ts
+  - packages/web/src/components/session-header.tsx
+  - docs/AUTOMATIONS.md
+  - docs/IMAGE_PREBUILD.md
+  - docs/HOW_IT_WORKS.md
+---
+
+This page lists every status value you can see in OpenInspect and what it means. Session status and sandbox status are separate levels: a session can be Completed while its sandbox is still Ready, and Active while no sandbox is attached.
+
+## Session status
+
+The inbox groups a session with its child sessions and puts the group under Needs attention when any member has an unread reply, under In progress when any member is Active, and under Recent otherwise. Archived sessions are not listed in the inbox.
+
+| Value       | Meaning                                                                                                            | Can be prompted                                     | Inbox category                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------- |
+| `created`   | The session exists but no prompt has been dispatched yet.                                                          | Yes                                                 | Recent                                                      |
+| `active`    | A prompt is pending or processing.                                                                                 | Yes, the prompt queues behind the running turn      | In progress                                                 |
+| `completed` | The last turn finished and nothing is queued. A new prompt restores the sandbox from its snapshot when one exists. | Yes                                                 | Recent, or Needs attention while the latest reply is unread |
+| `failed`    | The last turn ended in an error and nothing is queued.                                                             | Yes                                                 | Recent, or Needs attention while the latest reply is unread |
+| `archived`  | You archived the session.                                                                                          | No, restore it first under Settings › Data Controls | Not listed                                                  |
+| `cancelled` | The session was cancelled. A cancelled child session stays terminal.                                               | No                                                  | Recent                                                      |
+
+## Sandbox status
+
+This describes the session's current sandbox only. The web client sets `warming` on its own when it receives a warming message; the value is never stored.
+
+| Value          | Meaning                                                                                                                                                                           |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pending`      | Waiting for a sandbox to start.                                                                                                                                                   |
+| `spawning`     | The provider is creating or restoring the sandbox.                                                                                                                                |
+| `connecting`   | The runtime has connected and the boot is under way. It sends a heartbeat every 30 seconds and reports each boot phase. A prompt sent now waits.                                  |
+| `warming`      | Capacity is being prepared ahead of a prompt, for example when you start typing.                                                                                                  |
+| `ready`        | The runtime sent its ready event. Waiting prompts dispatch now.                                                                                                                   |
+| `stale`        | The runtime stopped responding, or a failed boot could not be stopped explicitly on this provider. The socket is detached and the sandbox ages out on the provider's own timeout. |
+| `snapshotting` | A filesystem snapshot is being saved.                                                                                                                                             |
+| `stopped`      | The sandbox stopped. The next prompt starts a new one.                                                                                                                            |
+| `failed`       | The sandbox could not start or recover. No snapshot is taken from a failed boot.                                                                                                  |
+
+## Message status
+
+Each prompt is a message with its own status.
+
+| Value        | Meaning                                                                     |
+| ------------ | --------------------------------------------------------------------------- |
+| `pending`    | Queued behind an earlier prompt or waiting for the sandbox to become ready. |
+| `processing` | The agent is working on it.                                                 |
+| `completed`  | The turn finished.                                                          |
+| `failed`     | The turn ended in an error, or the boot it was waiting on failed.           |
+
+## Automation status
+
+| Status   | Meaning                                                                                                        |
+| -------- | -------------------------------------------------------------------------------------------------------------- |
+| Enabled  | Running normally and ready to respond to its trigger.                                                          |
+| Degraded | Enabled but has recent consecutive failures. The badge shows the count, for example "Degraded (2 failures)".   |
+| Paused   | Not firing. Either paused by hand or auto-paused after 3 consecutive failures. Resume it to reset the counter. |
+
+## Run status
+
+A run is one session started by an automation firing. A multi-repository firing has one run per repository, and the firing's own row summarises them.
+
+| Status          | Meaning                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Starting        | A session is being created for this run.                                                                                |
+| Running         | At least one session is executing.                                                                                      |
+| Completed       | Every session finished successfully.                                                                                    |
+| Failed          | Every session hit an error. The failure reason is shown on the run.                                                     |
+| Partial failure | A multi-repository firing where some repositories completed and some failed. Shown on the firing row only.              |
+| Skipped         | The firing was skipped because a previous run was still active ("concurrent run active"). A skipped firing has no runs. |
+
+## Image build status
+
+Shown under Settings › Images for repositories and on environment rows under Settings › Environments.
+
+| Status   | Meaning                                                                                                                                              |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ready    | A prebuilt image is available. The row shows the commit it was built from, when, and how long the build took.                                        |
+| Building | A build is in progress.                                                                                                                              |
+| Failed   | The last build failed and the error is shown. The scheduler retries on its next run; an older Ready image that still matches keeps serving sessions. |
+| No image | Prebuilds are enabled but no build has completed yet.                                                                                                |
+| Disabled | Prebuilds are turned off for this scope.                                                                                                             |
+
+A stored build can also be `superseded`, which means a newer build replaced it. Superseded rows are filtered out before the page renders, so you never see them.
+
+The new-session picker annotates prebuild-enabled targets with one of "prebuilt", "prebuild building", "prebuild failed", or "prebuilds on" (enabled, nothing built yet for the current repository set).
+
+## Pull request status
+
+The Pull requests sidebar section derives a display status from the stored lifecycle state and draft flag.
+
+| Display status | Stored state               |
+| -------------- | -------------------------- |
+| Draft          | Open and marked as a draft |
+| Open           | Open and not a draft       |
+| Merged         | Merged (terminal)          |
+| Closed         | Closed without merging     |
+
+Use Sync PR status in the sidebar to refresh these from the provider.
+
+## Boot phases
+
+The session header names the phase while a sandbox boots. Multi-repository sessions add the repository, for example "Running setup.sh for acme/api".
+
+| Runtime phase | Header while running                               | Header when done          |
+| ------------- | -------------------------------------------------- | ------------------------- |
+| `starting`    | The sandbox runtime is up and the boot is starting | The sandbox runtime is up |
+| `sync`        | Cloning repository                                 | Cloned the repository     |
+| `setup`       | Running setup.sh                                   | Finished setup.sh         |
+| `start`       | Running start.sh                                   | Finished start.sh         |
+| `skills`      | Installing skills                                  | Installed skills          |
+| `harness`     | Starting agent                                     | Started the agent         |
+
+A phase that exited with an error but let the boot continue shows "This step exited with an error and the boot continued." Snapshot restores and prebuilt-image starts skip `setup`, so that phase does not appear for them.
+
+## Next steps
+
+- [Lifecycle and statuses](/sessions/lifecycle-and-statuses)
+- [Limits reference](/reference/limits)
+- [Recover from a failed run](/sessions/recover-from-failed-run)

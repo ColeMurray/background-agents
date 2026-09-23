@@ -1,0 +1,85 @@
+---
+title: When to delegate to a background agent
+description: Decide which tasks to hand to a background session, how to size them, and what to check when they finish.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - README.md
+  - docs/AUTOMATIONS.md
+  - packages/sandbox-runtime/src/sandbox_runtime/harness/claude_tools.py
+---
+
+This page helps you decide whether a task belongs in a background session, how to size it, and how to review the result.
+
+A background session runs in its own sandbox without you watching. You send a prompt, the agent clones the repository, edits files, runs commands, and optionally opens a pull request. You check the timeline and the diff when it is done. That model rewards tasks with a clear finish line and punishes tasks that need a judgment call every few minutes.
+
+## What background sessions are good at
+
+| Task shape                  | Why it fits                                                                                                   | Example                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Bounded code changes        | The outcome is a diff you can review against a stated goal.                                                   | Add an `--dry-run` flag to a CLI command and cover it with a test.                                                   |
+| Investigations              | The agent can read the whole codebase, run commands, and write up what it found without changing anything.    | Explain why a queue consumer double-processes messages after a restart.                                              |
+| Writing or extending tests  | Success is mechanical: the new tests run and pass in the sandbox.                                             | Cover `src/billing/proration.ts` with unit tests for the edge cases listed in the ticket.                            |
+| Migrations of a known shape | The pattern is already established in the repository, so the agent applies it consistently across many files. | Move every remaining `moment` call to `date-fns` following the pattern in `src/utils/dates.ts`.                      |
+| Responding to PR review     | The feedback is concrete and scoped to a branch the session already owns.                                     | With PR Feedback Autofix enabled, review comments on a session's PR are queued back into that session as follow-ups. |
+| Recurring chores            | The same instructions run on a schedule or on an event, with no one in the loop.                              | A weekly dependency audit or a digest of merged PRs, run as an [automation](/automations).                           |
+
+The sandbox gives the agent a full development environment: Node.js 22, Python 3.12, Bun, git, the GitHub CLI, and `agent-browser` with headless Chromium for screenshots and UI verification. If the task can be validated by running something in that environment, it is a good candidate.
+
+## What to keep interactive or human
+
+| Task shape                                                | Why it does not fit                                                                                                     | Do this instead                                                                           |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Ambiguous product decisions                               | The agent will pick an interpretation and build it. You will review a finished implementation of the wrong idea.        | Decide first, or ask for an investigation-only session that lists the options.            |
+| Irreversible data operations                              | The sandbox can run any command, and a prompt cannot make a destructive migration reversible.                           | Have the agent write the migration and a rollback; run it yourself.                       |
+| Incident response that needs production access            | Sessions work in a clone of the repository, not in your production environment.                                         | Use the session for the code fix and the root-cause write-up; handle production yourself. |
+| Work that needs credentials that must not enter a sandbox | Secrets you configure are injected into the sandbox as environment variables, where the agent's commands can read them. | Keep those credentials out of secrets and do that step outside the session.               |
+
+## Pre-task checklist
+
+Run through this before you write the prompt. Every row maps to a part of the [prompt formula](/prompting/writing-prompts).
+
+| Question                                      | Why it matters                                                                                                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What does "done" look like?                   | The agent stops when it believes the task is complete. If you have not said what complete means, it decides for you.                                                        |
+| What context does the agent lack?             | It has the repository, the tools, and any managed skills. It does not have the ticket thread, the Slack discussion, or the screenshot on your desk unless you include them. |
+| What must it not touch?                       | Boundaries (files, public APIs, dependencies, schema) prevent a correct change from arriving wrapped in an unwanted refactor.                                               |
+| What validation can the sandbox run?          | Name the command. If the only proof is "deploy and watch", the task needs a different shape.                                                                                |
+| How expensive is it to throw the result away? | Cheap-to-discard work can be sent with less setup. If a bad result costs a day of cleanup, invest in the prompt.                                                            |
+| Where is the review point?                    | Decide whether you want a PR, a summary in the timeline, or a plan before any edits.                                                                                        |
+| Is the target correct?                        | Check the repository, branch, and environment before sending. A perfect prompt against the wrong branch produces a perfect PR you cannot merge.                             |
+
+## Sizing
+
+One session should own one reviewable outcome.
+
+- **Split independent parts across sessions.** Three parallel sessions, each with a narrow prompt, finish faster and produce three small PRs you can review separately. One huge prompt produces one large diff and a long timeline to audit.
+- **Use child sessions when the agent should do the splitting.** The agent can call `spawn-child` to start a child session in its own sandbox on its own branch, send it follow-ups with `send-child-prompt`, and check `get-child-status`. Children inherit the parent's harness, provider credentials, and skills. Limits come from `maxConcurrentChildSessions` and `maxTotalChildSessions` under Settings › Sandbox. See [child sessions](/sessions/child-sessions).
+- **Use a multi-repository session or an environment when one change spans repositories.** Up to 10 repositories are cloned side by side under `/workspace/<repo-name>`, and the agent opens one PR per repository.
+- **Use follow-ups for new information, not for the rest of the spec.** Follow-up prompts queue until the current turn ends and run in order. A prompt that says "and then also" five times is five sessions' worth of work in one timeline.
+
+A useful test: if you cannot write the acceptance criteria in a few lines, the task is either too big or not yet understood. Start with an investigation-only session in that case.
+
+## Post-task review
+
+When the session finishes, review in this order.
+
+1. **Timeline.** Read the tool calls and commands the agent ran. Look for the validation you asked for (the test command, the build, the screenshot). If it is missing, the agent skipped it or could not run it, and the result is unverified.
+2. **Changes.** Open the Changes section in the right sidebar, or the changes panel, which compares the workspace with session start. Check for edits outside the boundaries you set.
+3. **Artifacts.** Open the Pull requests section for the PR and the Media section for screenshots or recordings the agent registered as artifacts.
+4. **Evidence versus claims.** A final message that says "all tests pass" should match a tool call that ran the tests. Trust the timeline, not the summary.
+
+Then capture what you learned for next time:
+
+- A rule you had to state in the prompt (formatting, commit style, which test runner to use) belongs in a [managed skill](/configure/managed-skills) so every session gets it.
+- A dependency the agent had to install, or a service it had to start, belongs in `.openinspect/setup.sh` or `.openinspect/start.sh`. See [lifecycle scripts](/configure/lifecycle-scripts).
+- A prompt you expect to reuse belongs in [prompt templates](/prompting/prompt-templates).
+
+## Next steps
+
+- [Writing prompts that work](/prompting/writing-prompts)
+- [Workflow recipes](/prompting/workflow-recipes)
+- [Reviewing changes](/sessions/reviewing-changes)

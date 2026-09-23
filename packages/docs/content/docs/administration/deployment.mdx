@@ -1,0 +1,91 @@
+---
+title: Deployment overview
+description: What an OpenInspect deployment consists of, what the operator configures once, and where the self-hosting, setup, and debugging guides live.
+audience: operator
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - README.md
+  - docs/GETTING_STARTED.md
+  - docs/SETUP_GUIDE.md
+  - docs/HOW_IT_WORKS.md
+  - docs/DEBUGGING_PLAYBOOK.md
+---
+
+This page orients an operator: the parts of a deployment, the decisions made once at setup, and where the full runbooks are. It is not a step-by-step guide; those live in the repository.
+
+## What a deployment consists of
+
+| Component             | Runs on                                                   | Role                                                                                                                                                |
+| --------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web client            | Vercel, or Cloudflare Workers via OpenNext                | The browser app: sign-in, sessions, settings, analytics.                                                                                            |
+| Control plane         | Cloudflare Workers with Durable Objects and a D1 database | Session state, live streaming over WebSockets, sandbox lifecycle, source-control integration, authentication and access control, encrypted secrets. |
+| Sandbox data plane    | One configured sandbox provider                           | Isolated per-session development environments where the agent runs.                                                                                 |
+| Slack bot (optional)  | Cloudflare Worker                                         | Starts sessions from Slack messages and posts results back.                                                                                         |
+| GitHub bot (optional) | Cloudflare Worker                                         | Automatic PR reviews and `@mention` handling from GitHub webhooks.                                                                                  |
+| Linear bot (optional) | Cloudflare Worker                                         | Starts sessions from Linear issue activity.                                                                                                         |
+
+Every client sees the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time.
+
+Terraform creates the infrastructure. The operator's job is to create the accounts, gather credentials, and fill in one configuration file; Terraform's job is to create and wire the services.
+
+## Sandbox providers
+
+A deployment runs on exactly one sandbox provider, chosen at setup:
+
+| Provider         | Session resume model                         | Prebuilt images |
+| ---------------- | -------------------------------------------- | :-------------: |
+| Modal (default)  | Filesystem snapshot restore                  |       Yes       |
+| Daytona          | Persistent sandbox stopped and started again |       No        |
+| Vercel Sandboxes | Filesystem snapshot restore                  |       Yes       |
+| OpenComputer     | Checkpoint-backed restore                    |       Yes       |
+| E2B              | Persistent sandbox paused and resumed        |       No        |
+
+Provider differences that users notice (which resource and timeout settings apply, whether images are prebuilt) are covered in [Sandbox providers](/configure/sandbox-providers).
+
+## What the operator configures once
+
+| Area                         | What is set                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub App                   | One App installation, required in every deployment. Its installation scope is the set of repositories the workspace can reach. Install it on selected repositories, not all.                                                                                                                                                                                                  |
+| Sign-in providers            | GitHub OAuth, Google OAuth, or both. At least one is required; partial credential pairs are rejected.                                                                                                                                                                                                                                                                         |
+| Admission allowlists         | GitHub usernames, email domains, exact email addresses, or GitHub organizations. A user is admitted if they match any allowlist. Set at least one for production; open access is a separate explicit opt-in.                                                                                                                                                                  |
+| Sandbox provider credentials | The API credentials, and where applicable the base snapshot or template, for the chosen provider.                                                                                                                                                                                                                                                                             |
+| Security secrets             | Generated once: the token encryption key, the repo-secrets encryption key, the sandbox API secret, the browser authentication secret, and the GitHub webhook secret when the GitHub bot is enabled. A provider-accounts encryption key is generated by Terraform unless overridden.                                                                                           |
+| Model credentials            | Optional at deploy time. An Anthropic key can be injected fleet-wide, or model credentials can be added later as global secrets in the web app. The Slack and Linear classifier needs a key for whichever provider it runs on.                                                                                                                                                |
+| Optional bots                | Slack app, GitHub bot webhook, Linear OAuth app, each enabled with its own flag.                                                                                                                                                                                                                                                                                              |
+| Branding                     | `app_name`, shown in the web tab title, sign-in page, landing hero, Slack and Linear messages, the pull request footer, and outbound User-Agent headers; and an optional `app_icon_url` that replaces the built-in icon and favicon. Web values are inlined at build time, so a rebrand needs a fresh web build; bot and control-plane workers read the name at request time. |
+
+Changing any of these means editing the configuration file and applying Terraform again.
+
+## Initial Owner bootstrap
+
+Owner assignment is an explicit operator action, not something sign-in grants. After deployment, the intended Owner signs in once (which creates their user with the default Member role). The operator then runs the Owner bootstrap command against the D1 database with that person's canonical user ID. The command runs as a dry run first and reports whether it is ready; it refuses a suspended or missing user or an existing unsuspended Owner, and there is no force option. On execution it writes a `workspace.owner_bootstrapped` [audit event](/administration/audit-log) and replaces the assignment in one transaction. The control-plane health endpoint then reports the owner assignment as present.
+
+The exact commands are in the self-hosting guide linked below.
+
+## Keeping a deployment current
+
+Updating means pulling the latest code, rebuilding the shared package if it changed, and applying Terraform again; it only changes what differs. If the web app is on Vercel it is redeployed separately; on Cloudflare, Terraform rebuilds it. The self-hosting guide also documents an optional GitHub Actions workflow for applying deployments from CI.
+
+## Where the runbooks are
+
+| Guide                                                                                                      | Use it for                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| [Self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md)    | The full deployment walkthrough: accounts, credentials, GitHub App, Terraform phases, bots, Owner bootstrap, verification, CI/CD. |
+| [Setup guide](https://github.com/ColeMurray/background-agents/blob/main/docs/SETUP_GUIDE.md)               | Running the web app locally against an existing backend, contributing code, or the fastest path to a full stack.                  |
+| [Debugging playbook](https://github.com/ColeMurray/background-agents/blob/main/docs/DEBUGGING_PLAYBOOK.md) | Querying the structured JSON logs every service emits, and the correlation fields (trace, session, message IDs) that join them.   |
+| [How it works](https://github.com/ColeMurray/background-agents/blob/main/docs/HOW_IT_WORKS.md)             | Architecture, sandbox lifecycle, snapshots, and the security model in depth.                                                      |
+
+<Callout type="warn" title="Keep configuration out of source control">
+  The Terraform variable files hold every credential for the deployment. Never commit them; use your
+  CI's secret store for automated applies, and rotate secrets by updating the file and applying
+  again.
+</Callout>
+
+## Next steps
+
+- [Security and trust model](/administration/security)
+- [Workspace access and roles](/administration/workspace-access)
+- [Sandbox providers](/configure/sandbox-providers)

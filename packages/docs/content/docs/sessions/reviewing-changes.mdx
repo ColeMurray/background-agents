@@ -1,0 +1,106 @@
+---
+title: Reviewing changes and evidence
+description: Where to find the session's diff, the screenshots and command output the agent produced, and how to review a session's pull request before approving it.
+audience: user
+owner: web
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/web/src/components/session-changes-panel.tsx
+  - packages/web/src/components/sidebar/files-changed-section.tsx
+  - packages/web/src/components/create-pull-request-event.tsx
+  - packages/web/src/components/screenshot-artifact-card.tsx
+  - docs/HOW_IT_WORKS.md
+  - docs/integrations/GITHUB.md
+---
+
+This page shows where a session's changes and evidence live and gives you a checklist for reviewing them before you approve a pull request.
+
+## The Changes section
+
+The right sidebar has a **Changes** section for every session with a repository. It lists the files the agent changed compared with the session's starting commit, grouped by repository in multi-repository sessions.
+
+- A "Filter N changed files" box narrows the list by path.
+- Each row shows a status letter (A added, M modified, D deleted, R renamed, T type changed, U unmerged, S submodule), the file name, and `+added -deleted` line counts. Files without a text diff show "binary", "too large", or "metadata" instead.
+- Very large change sets end with "N additional files omitted".
+
+Until the first turn ends the section says "Changes will be available after the first execution." While a later turn runs it keeps showing the previous diff and says the agent is working. When the diff is empty it says "No file changes in the latest diff." If the diff could not be computed, the section shows the error with a "Retry" link for people with `sessions.lifecycle`.
+
+Click any file to open the Changes panel.
+
+## The Changes panel
+
+The panel opens next to the timeline (or full-width on phones) with the selected file.
+
+- The header names the repository, the file path, its status, and its line counts. Use the up and down arrows ("Previous changed file" / "Next changed file") to step through files, the sidebar icon to hide or show the file list, and × or Escape to close.
+- "Compared with session start" expands to show the two commit SHAs the diff spans: the session's starting commit and the current head.
+- The layout toggle switches between Unified and Split. Split is offered only when the panel is wide enough; narrower panels and phones always use Unified. "Wrap lines" wraps long lines.
+- Files that changed without a text diff show a message instead of a patch: "This binary file changed, but it does not have a text diff.", "This patch is too large to display safely.", a file mode change, or a submodule pointer change.
+- "This file is no longer part of the latest changes." means the agent's latest turn reverted or removed that file after you selected it. Pick another file from the list.
+- "Refreshing the latest revision…" appears briefly when a newer diff replaced the one you were viewing. "Unable to load this patch." means the patch request itself failed; use the Retry banner at the top of the panel, or reopen the file.
+
+The diff always compares against the session's starting commit, so it shows the sum of every turn so far, not just the last one.
+
+## Evidence the agent produced
+
+The agent's browser tools capture screenshots and video recordings. Each one appears in the timeline as a card labeled "Screenshot" or "Video" with a caption and, for screenshots, the page URL it was taken from. The same cards are collected in the sidebar's **Media (n)** section. Click a card to open it full size.
+
+Command output lives in the timeline. Expand a work group ("Worked for 3m 10s") and then a tool row such as Bash to read the exact command and its output. Sub-agent tasks expose "Instructions" and "Result" disclosures. Treat this output as the primary evidence of what was verified: a test that appears here with a passing result was actually run in the sandbox.
+
+## The pull request
+
+When the agent opens a pull request, the timeline shows a card: "Opened pull request #12" (or "Updated pull request #12" when it pushed more commits to the same branch). Expand it to read the PR title, the branch route ("head into base"), the description, and an Open, Draft, or Updated badge, with an "Open PR" button. A failure shows "Couldn't create pull request" with the reason.
+
+The sidebar lists every PR the session opened with a Draft, Open, Merged, or Closed badge. The status is refreshed when you press **Sync PR status** (the refresh icon next to the PR), which is useful after you merge or close the PR on GitHub.
+
+Calling the tool again from the same branch updates that branch's open PR. A new branch produces a separate PR, so one session can have several.
+
+## Commit attribution
+
+Commits made in a session are attributed to the person who sent the prompt: the commit author is your SCM name and email, and the committer is the platform. Each prompt in a multiplayer session carries its own author, so a branch built by two people has two authors in its history.
+
+When the deployment has commit signing enabled, the committer and signer are the deployment's dedicated signing account, while the author remains the prompting user. Because author and committer differ, GitHub shows these commits as **Partially verified**. The signature attests that the commit came from this OpenInspect deployment; it is not a claim that the attributed user signed it personally. See [GitHub integration](/integrations/github).
+
+## Review checklist
+
+<Callout type="warn" title="Do not approve because the session completed">
+  A completed session means the agent stopped, not that the work is correct. Review the diff and the
+  evidence the same way you would review a colleague's PR.
+</Callout>
+
+1. **Scope.** Compare the file list against the prompt. Files outside the requested area need a reason in the PR description or the timeline.
+2. **Generated files.** Look for lockfiles, build output, snapshots, or fixtures that changed as a side effect of the agent's commands rather than the task.
+3. **Weakened tests.** Search the diff for skipped tests, loosened assertions, widened timeouts, or deleted test cases. A passing test run proves little if the tests were changed to pass.
+4. **Configuration changes.** Check CI, linting, TypeScript, or dependency configuration edits. Agents sometimes relax a rule to get past an error.
+5. **Secrets in fixtures.** Scan new test data, `.env` examples, and recorded HTTP fixtures for tokens or credentials the agent may have copied from the sandbox environment.
+6. **Validation ran in the right place.** Open the Bash rows and confirm the tests or build ran in the package you care about, on the final version of the code, and that the output shows a pass rather than a command that exited early.
+7. **Evidence matches the claim.** If the response says "verified in the browser", there should be a screenshot or video card showing it.
+
+## Troubleshooting
+
+<Accordions>
+  <Accordion title="The diff failed to load">
+    The Changes section or panel shows an error with a Retry link. Press Retry to recompute the
+    diff. If it keeps failing, open the branch on GitHub from the sidebar's branch link and review
+    the commits there.
+
+</Accordion>
+  <Accordion title="No changes are shown">
+    "No file changes in the latest diff." means the checkout matches the session's starting commit.
+    Either the agent did not commit (ask it to commit and push in a follow-up; check the Bash rows
+    for a `git commit`), or it edited files outside the repository clone (for example in `/tmp` or a
+    global config), which the diff does not track.
+
+</Accordion>
+  <Accordion title="The PR badge is stale">
+    PR state is cached. Press "Sync PR status" in the sidebar to refresh it after merging or closing
+    on GitHub.
+
+</Accordion>
+</Accordions>
+
+## Next steps
+
+- [Your first pull request](/getting-started/first-pull-request)
+- [Follow-ups, stopping, and cancelling](/sessions/follow-ups-and-stopping)
+- [GitHub integration](/integrations/github)

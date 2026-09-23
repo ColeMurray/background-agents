@@ -1,4 +1,5 @@
 {
-  "title": "Getting started",
-  "pages": ["quickstart", "first-task"]
+  "title": "Get started",
+  "defaultOpen": true,
+  "pages": ["quickstart", "first-pull-request", "core-concepts"]
 }

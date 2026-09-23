@@ -3,10 +3,13 @@
   "pages": [
     "index",
     "getting-started",
-    "concepts",
-    "guides",
+    "prompting",
+    "sessions",
     "configure",
+    "models",
+    "automations",
     "integrations",
-    "security"
+    "administration",
+    "reference"
   ]
 }

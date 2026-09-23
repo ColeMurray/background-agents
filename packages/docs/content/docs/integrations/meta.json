@@ -1,4 +1,5 @@
 {
   "title": "Integrations",
-  "pages": ["index"]
+  "defaultOpen": false,
+  "pages": ["index", "slack", "github", "linear"]
 }

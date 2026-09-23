@@ -1,0 +1,188 @@
+---
+title: Writing prompts that work
+description: A five-part formula for prompts that give a background agent enough to finish the job without you watching.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/MANAGED_SKILLS.md
+  - packages/shared/src/types/session-attachments.ts
+  - packages/control-plane/src/session/pull-request-service.ts
+---
+
+This page gives you a structure for prompts that a background agent can act on end to end, plus the habits that separate prompts that work from prompts that need three follow-ups.
+
+## An example that works
+
+```text
+Fix the double-charge on retried checkout webhooks.
+
+Context: When Stripe retries a `checkout.session.completed` webhook, we
+create a second order. The handler is `src/webhooks/stripe.ts`; orders are
+written in `src/orders/create.ts`. Stripe sends the same `event.id` on
+retries. See the failing case in the ticket: order ids 8812 and 8813 were
+created 40s apart from one event.
+
+Steps:
+1. Reproduce with a test in `src/webhooks/stripe.test.ts` that posts the
+   same event twice and asserts one order.
+2. Make the handler idempotent on `event.id`. Follow the pattern in
+   `src/webhooks/github.ts`, which already stores processed delivery ids.
+3. Run `npm test -- src/webhooks` and `npm run typecheck`.
+
+Boundaries: do not change the orders schema or touch the refund path.
+
+Done when: the new test passes, existing tests pass, and you open a PR
+titled "Make Stripe checkout webhook idempotent" with a short note on how
+the dedupe key is stored.
+```
+
+<Cards>
+  <Card
+    title="It gives context, not just a symptom"
+    description="File paths, the retry behavior, and a concrete failing case. The agent starts in the right place instead of searching for it."
+  />
+  <Card
+    title="It orders the work"
+    description="Reproduce first, fix second, validate third. The test exists before the fix, so the fix is checked against something."
+  />
+  <Card
+    title="It defines success"
+    description="Named commands, a PR title, and a note to include. The agent knows when to stop and what to hand back."
+  />
+  <Card
+    title="It points at an existing pattern"
+    description="The GitHub webhook handler already solves the same problem. The agent copies a house style instead of inventing one."
+  />
+</Cards>
+
+## The five-part formula
+
+Most good prompts contain these five parts. Short prompts can merge them into a paragraph; long tasks benefit from labeling them.
+
+### Outcome
+
+State what should be true when the session ends.
+
+- Lead with the change, not the history of how you noticed it.
+- Say whether you want code, a plan, a write-up, or a PR.
+- If there are several acceptable outcomes, say which one you prefer.
+- Name the PR title or the file the write-up should go in if you care.
+
+```text
+Outcome: a PR that adds rate limiting to POST /api/invites, 10 per user per hour.
+```
+
+### Context
+
+Give the agent what it cannot find in the repository.
+
+- Paste the error message, stack trace, or failing log lines verbatim.
+- Name the files and functions involved. Paths are cheaper than descriptions.
+- Include what you already ruled out so the agent does not repeat it.
+- Attach a screenshot when the problem is visual. The composer accepts PNG, JPEG, WebP, and GIF, up to 6 images per message and 10 MiB each.
+- Mention runtime facts the code does not show: the request volume, which environment it happens in, what changed recently.
+
+```text
+Context: the 500 only happens when `user.locale` is null; see the trace below. Users created before March have no locale.
+```
+
+### Boundaries
+
+Say what the agent may and may not change.
+
+- List files, modules, or layers that are off limits.
+- Say whether new dependencies are acceptable.
+- Say whether schema, public API, or config changes are acceptable.
+- Say how much refactoring you want: "minimal diff" and "clean this up while you are there" lead to very different PRs.
+- If the agent should stop and report instead of guessing, say at which point.
+
+```text
+Boundaries: no new dependencies; do not change the public response shape; keep the diff to src/invites.
+```
+
+### Validation
+
+Name the commands that prove the work.
+
+- Give the exact test, lint, build, and typecheck commands.
+- Ask for a new test when the change is a fix, and say where it goes.
+- For UI work, ask for a screenshot taken with `agent-browser` and registered as a session artifact, so it shows up in the Media section of the sidebar.
+- If the app must be running to test, say how to start it (or put that in `.openinspect/start.sh`).
+- Ask for the output of the validation to appear in the final message.
+
+```text
+Validation: `npm test -- src/invites`, `npm run lint`, and `npm run typecheck` must pass; include the test output in your summary.
+```
+
+### Handoff
+
+Say what to leave behind.
+
+- PR or no PR, draft or ready, and the title convention if you have one.
+- What the PR body or final message should contain: what changed, what was verified, what was left out.
+- Anything you want listed explicitly, such as follow-up work you did not ask for.
+- For investigation-only sessions, say "do not edit files" and describe the report shape.
+
+```text
+Handoff: open a draft PR; in the body list the files changed and the commands you ran; note any behavior you were unsure about.
+```
+
+## Do and don't
+
+<Accordions>
+  <Accordion title="Be specific and opinionated">
+    **Do:** decide the things you have opinions about and write them down. Vague prompts produce plausible work that misses your intent, and correcting it costs a follow-up turn. Example: `Use the existing Result type from src/lib/result.ts for the return value; do not throw.`
+
+    **Don't:** leave design choices open and hope the agent picks yours. `Handle errors properly` will be interpreted, and the interpretation may be a new error hierarchy you did not want.
+
+</Accordion>
+  <Accordion title="State what the agent may decide">
+    **Do:** mark the choices you are handing over. It removes false precision and tells the agent where to use judgment. Example: `Pick whichever of the two caching approaches has the smaller diff; explain the choice in the PR body.`
+
+    **Don't:** dictate every detail when you do not actually care. Over-specified prompts are longer, and the agent will follow an instruction even when the codebase argues against it.
+
+</Accordion>
+  <Accordion title="Ask for evidence before work starts">
+    **Do:** for anything larger than a small fix, ask for a short plan or a reproduction first, then send the go-ahead as a follow-up. Follow-ups queue until the current turn ends, so the agent finishes the plan before it reads your reply. Example: `Before editing, reproduce the bug with a failing test and post the test output. Then stop and wait.`
+
+    **Don't:** ask for a full implementation of something you have not confirmed the agent understands. A wrong plan is cheap to correct; a wrong PR is not.
+
+</Accordion>
+  <Accordion title="Point at files, errors, and examples">
+    **Do:** include paths, verbatim error text, and one example of the pattern you want copied. Example: `The pattern to follow is the pagination in src/api/list-users.ts.`
+
+    **Don't:** describe code you could paste. "The function that handles pagination somewhere in the API layer" makes the agent search, and it may find a different function than the one you meant.
+
+</Accordion>
+  <Accordion title="Use follow-ups for new information, not for the whole spec">
+    **Do:** use follow-ups to add a fact you forgot, to answer a question the agent raised, or to redirect after reviewing a plan. Example: `The staging config lives in config/staging.yml, not .env. Continue.`
+
+    **Don't:** send a one-line prompt and then feed the requirements in as follow-ups. Each follow-up runs after the previous turn finishes, so the agent will have already implemented its own reading of the one-liner before it sees your second message. If you need to redirect mid-turn, use the stop button (its title is "Stop current prompt; queued prompts will continue") and then send the correction.
+
+</Accordion>
+  <Accordion title="Put standing rules in skills and setup scripts, not every prompt">
+    **Do:** move rules that apply to every session into a [managed skill](/configure/managed-skills) (commit conventions, review checklists, how to run the app), and move environment preparation into `.openinspect/setup.sh` and `.openinspect/start.sh`. The session sidebar's Managed skills section shows which skills and revisions were included.
+
+    **Don't:** repeat "run prettier before committing" and "start postgres with docker compose" in every prompt. Prompts that are half boilerplate bury the part that is specific to this task.
+
+</Accordion>
+</Accordions>
+
+## Referencing repository context
+
+The agent works in a clone of the repository, so anything you can name by path, it can open.
+
+- **File paths.** `src/orders/create.ts` beats "the order creation code". In multi-repository sessions, prefix with the repository directory: `api/src/orders/create.ts` when the repository is cloned at `/workspace/api`.
+- **Commands.** Give the commands as you would type them: `npm test -- src/orders`, `uv run pytest tests/orders`. If a command needs a running service, say so or add it to `.openinspect/start.sh`.
+- **Existing tests.** Point at a test file to copy the setup from: "mirror the fixtures in `tests/orders/test_create.py`".
+- **Recent changes.** Name the PR or commit that introduced the behavior if you know it; the agent has git history and the GitHub CLI.
+- **Screenshots.** Use the Attach images button in the composer, or attach images to a Slack request. Say what the screenshot shows and what is wrong with it. See [attaching images](/sessions/attaching-images).
+
+## Next steps
+
+- [Good vs. bad prompts](/prompting/good-vs-bad-prompts)
+- [Prompt templates](/prompting/prompt-templates)
+- [Follow-ups and stopping](/sessions/follow-ups-and-stopping)

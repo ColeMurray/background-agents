@@ -1,0 +1,368 @@
+---
+title: Good vs. bad prompts
+description: Eight paired examples showing what a background agent needs for common task types, and what happens when it is missing.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/integrations/GITHUB.md
+  - packages/shared/src/types/session-attachments.ts
+  - packages/control-plane/src/session/pull-request-service.ts
+---
+
+This page shows a strong and a weak prompt for eight common task types, so you can see the difference before you send one.
+
+Each good prompt names the outcome, the context, the boundaries, a validation command, and the handoff. Each bad prompt is missing at least two of those. The prompts use invented paths; substitute your own.
+
+## Bug fix
+
+<Callout type="success" title="Good">
+
+```text
+Fix: the CSV export drops the last row when the file has no trailing newline.
+
+Repro: `uv run pytest tests/export/test_csv.py -k last_row` fails. The
+parser is `app/export/csv.py`, function `iter_rows`. I think the final
+chunk is never flushed.
+
+Fix it with the smallest change that makes the test pass and does not
+change the streaming behavior for large files. Run the full
+`tests/export` suite afterwards. Open a PR titled "Flush final CSV row
+without trailing newline" and include the pytest output in the body.
+```
+
+**Why this works**
+
+- The failing test already exists, so the agent starts by running it, not by guessing.
+- The suspected cause is stated as a hint, not a command, so the agent can confirm or reject it.
+- "Smallest change" and "do not change the streaming behavior" bound the diff.
+- The PR title and body contents are fixed, so the handoff is unambiguous.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+The CSV export is broken, can you fix it?
+```
+
+**Why this fails**
+
+- No symptom, no reproduction, no file. The agent will look for anything that could be called broken.
+- No validation, so "fixed" means whatever the agent decides it means.
+- No handoff, so you may get a commit on a branch with no PR, or a PR with an unhelpful title.
+
+**Instead:** say what is wrong, where it happens, and which test proves it.
+
+</Callout>
+
+## Feature
+
+<Callout type="success" title="Good">
+
+```text
+Add an "Archive" action to the project list at `web/src/pages/projects/index.tsx`.
+
+Behavior: each row gets an Archive menu item. Clicking it calls
+`PATCH /api/projects/:id` with `{ "status": "archived" }` (the endpoint
+already exists, see `api/src/routes/projects.ts`) and removes the row
+without a full reload. Archived projects are hidden by default; add a
+"Show archived" toggle above the list.
+
+Follow the existing row menu in `web/src/components/RowMenu.tsx`. No new
+dependencies. Add a test for the toggle in `index.test.tsx` using the
+existing MSW handlers in `web/test/handlers.ts`.
+
+Validate with `npm test -w web` and `npm run typecheck`. Take a screenshot
+of the list with one archived project shown and register it as a
+session artifact. Open a draft PR.
+```
+
+**Why this works**
+
+- The behavior is specified at the level of clicks and requests, which is exactly what the agent has to build.
+- It points at the existing endpoint and the existing menu component, so the feature matches the codebase.
+- A screenshot artifact gives you visual evidence in the Media section without opening the app yourself.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+Users want to archive projects. Add that feature end to end.
+```
+
+**Why this fails**
+
+- "End to end" invites changes to the schema, the API, and the UI, when only the UI is missing.
+- No reference to existing components means a new menu style.
+- No validation and no evidence. You will have to run the app to find out what was built.
+
+**Instead:** describe the user-visible behavior and name the pieces that already exist.
+
+</Callout>
+
+## Test coverage
+
+<Callout type="success" title="Good">
+
+```text
+Add unit tests for `src/pricing/proration.ts`. There are none today.
+
+Cover: upgrade mid-cycle, downgrade mid-cycle, change on the first and
+last day of the cycle, and a zero-length cycle (should throw). Use the
+fixtures style from `src/pricing/tax.test.ts`. Do not change
+`proration.ts` itself; if you find a bug, write the test so it fails and
+list it in your summary instead of fixing it.
+
+Run `npm test -- src/pricing`. Open a PR titled "Add proration unit tests".
+```
+
+**Why this works**
+
+- The cases are enumerated, so coverage is checkable rather than "good enough".
+- Copying an existing test file keeps the style consistent.
+- The boundary "do not change the module" prevents a test-writing task from turning into a refactor, while still capturing real bugs.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+Improve test coverage for the pricing module.
+```
+
+**Why this fails**
+
+- "Improve" has no finish line. The agent may add three tests or thirty.
+- No list of cases means the important edge cases may be the ones skipped.
+- Nothing says whether the agent may change production code to make it testable.
+
+**Instead:** name the file, list the cases, and say whether production code is off limits.
+
+</Callout>
+
+## Refactor
+
+<Callout type="success" title="Good">
+
+```text
+Refactor `services/notify/sender.go` so the three channel senders (email,
+SMS, push) share one retry loop instead of three copies.
+
+Constraints: behavior must not change. Keep the exported function
+signatures. No new packages. Keep the diff inside `services/notify`.
+
+Before editing, run `go test ./services/notify/...` and paste the result
+so we have a baseline. After editing, run it again plus `go vet ./...`.
+Open a PR; in the body, describe the new structure in three or four
+lines.
+```
+
+**Why this works**
+
+- The target structure is named (one retry loop), so the agent is not choosing among refactors.
+- A baseline test run before editing makes "behavior must not change" verifiable.
+- The scope is fenced by directory and by exported signatures.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+Clean up the notification code, it has a lot of duplication.
+```
+
+**Why this fails**
+
+- "Clean up" has no target, so the diff can touch anything the agent considers untidy.
+- No behavior guarantee and no baseline, so regressions are invisible until review.
+- No scope, so a small refactor can spread across packages.
+
+**Instead:** name the duplication, name the shape you want, and fence the diff.
+
+</Callout>
+
+## Dependency upgrade
+
+<Callout type="success" title="Good">
+
+```text
+Upgrade `react-router` from 6.x to 7.x in `web/`.
+
+Read the 7.0 migration notes first and list the breaking changes that
+affect this codebase (search for `useNavigate`, `<Routes>`, and the data
+router APIs). Apply the migration. Do not upgrade any other package
+unless the upgrade requires it, and list any such packages in the PR.
+
+Validate: `npm run build -w web`, `npm test -w web`, `npm run typecheck`.
+Then start the dev server with `npm run dev -w web`, open `/projects`
+and `/projects/1/settings` with agent-browser, and register screenshots
+of both as artifacts.
+
+Open a PR titled "Upgrade react-router to 7". In the body: the breaking
+changes you handled and any you could not verify.
+```
+
+**Why this works**
+
+- It asks for a list of breaking changes before the edit, which gives the agent a checklist and gives you something to review.
+- "Do not upgrade any other package unless required" contains the blast radius.
+- Build, tests, and screenshots together cover the failure modes of a router upgrade.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+Update our dependencies to the latest versions.
+```
+
+**Why this fails**
+
+- Dozens of packages change at once; a single failure is hard to attribute.
+- No validation beyond "it installed".
+- No boundary, so lockfile churn and unrelated major upgrades land in the same PR.
+
+**Instead:** upgrade one package per session, and ask for the breaking-change list first.
+
+</Callout>
+
+## UI change with screenshot
+
+<Callout type="success" title="Good">
+
+```text
+[attached: screenshot of the settings page]
+
+The attached screenshot shows the Billing card on `/settings`. The
+"Update card" button wraps onto two lines at 1024px width and the card
+overflows its container.
+
+Fix the layout in `web/src/components/settings/BillingCard.tsx` using
+the existing spacing tokens from `web/src/styles/tokens.css`. Do not
+change the copy or the button behavior.
+
+Start the app with `npm run dev -w web`, then use agent-browser to
+capture `/settings` at 1024px and 1440px widths and register both
+screenshots as artifacts. Run `npm test -w web`. Open a PR.
+```
+
+**Why this works**
+
+- The screenshot shows the problem; the text says what is wrong in it and at what viewport, so the agent does not guess which pixel you mean.
+- The fix is scoped to one component and one token file.
+- Screenshot artifacts at both widths are the evidence you would otherwise have to collect yourself.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+[attached: screenshot]
+
+This looks wrong, please fix.
+```
+
+**Why this fails**
+
+- The agent has to infer which element is wrong and what "right" looks like.
+- No viewport, no component, no tokens: the fix may be a hard-coded pixel value.
+- No screenshot requested, so you cannot verify without running the app.
+
+**Instead:** describe what in the image is wrong, name the component, and ask for before-and-after screenshots.
+
+</Callout>
+
+## Investigation only
+
+<Callout type="success" title="Good">
+
+```text
+Investigate only. Do not edit any files or open a PR.
+
+Question: why does `worker/consume.py` sometimes process the same job
+twice after a deploy? Logs show the duplicate runs are 2 to 5 seconds
+apart and both come from different worker pids.
+
+Read the consumer, the job table schema in `db/migrations/`, and the
+deploy script in `deploy/rollout.sh`. Write up: the most likely cause,
+the evidence in the code, two options to fix it with trade-offs, and
+which files each option would touch. Keep it under 400 words.
+```
+
+**Why this works**
+
+- "Investigate only" and "do not edit" turn off the default urge to fix.
+- The symptom includes timing and process facts that narrow the search.
+- The report shape is specified, so the write-up is comparable across sessions.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+Jobs sometimes run twice. Look into it and fix it.
+```
+
+**Why this fails**
+
+- "Look into it and fix it" commits to a fix before the cause is known. You will review a change to whichever cause the agent found first.
+- No timing or log evidence, so the search space is the whole worker.
+- No report shape, so the explanation is buried in the timeline.
+
+**Instead:** ask for the cause and options first; send the fix as a second prompt once you agree.
+
+</Callout>
+
+## PR review response
+
+<Callout type="success" title="Good">
+
+```text
+Address the review comments on the PR from this session.
+
+1. `src/api/invites.ts` line 41: the reviewer is right, the limit should
+   be read from config. Use `config.invites.hourlyLimit` and add the key
+   to `config/default.yml` with value 10.
+2. The comment about renaming `checkLimit` to `assertUnderLimit`: do it.
+3. The suggestion to move the test into an integration suite: do not do
+   that; reply on the thread that we are keeping it as a unit test
+   because the integration suite does not run on PRs.
+
+Push to the same branch so the existing PR updates. Run `npm test --
+src/api/invites` and `npm run typecheck`. Reply to each thread with what
+you changed.
+```
+
+**Why this works**
+
+- Each comment gets a decision: do it, do it this way, or decline with a reason.
+- "Push to the same branch" keeps the change on the open PR instead of creating a second one.
+- Replying per thread gives the reviewer a clean record.
+
+</Callout>
+
+<Callout type="warn" title="Bad">
+
+```text
+Fix the review comments.
+```
+
+**Why this fails**
+
+- The agent will act on every comment, including ones you disagree with.
+- No instruction about the branch, so the fix can arrive as a new PR.
+- Nothing about replying, so reviewers see commits with no explanation.
+
+**Instead:** decide each comment yourself, then hand the agent the decisions. If the session created the PR and PR Feedback Autofix is enabled under Settings › Integrations › GitHub, review comments are queued back into the session automatically; you can still add a follow-up with your decisions.
+
+</Callout>
+
+## Next steps
+
+- [Prompt templates](/prompting/prompt-templates)
+- [Workflow recipes](/prompting/workflow-recipes)
+- [Reviewing changes](/sessions/reviewing-changes)

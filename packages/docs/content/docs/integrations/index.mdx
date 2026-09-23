@@ -1,63 +1,68 @@
 ---
-title: Integrations overview
-description: Start and follow OpenInspect work from GitHub, Slack, or Linear while preserving each system's authorization model.
+title: Integrations
+description: How Slack, GitHub, Linear, and inbound automations start and continue OpenInspect sessions, and the rules they all share.
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-09-04"
+lastReviewed: "2026-09-23"
 relatedCode:
-  - docs/integrations/GITHUB.md
   - docs/integrations/SLACK.md
+  - docs/integrations/GITHUB.md
   - docs/integrations/LINEAR.md
+  - docs/HOW_IT_WORKS.md
+  - docs/AUTH.md
 ---
 
-Integrations let your team start and follow work where requests already happen. Each integration has
-its own trigger, continuation, output, and authorization behavior.
+OpenInspect sessions can be started from Slack, from a GitHub pull request, from a Linear issue, or by an automation, and every one of them is the same kind of session you would start from the web app.
 
-## GitHub
+## Choose an entry point
 
-Use the GitHub integration to review newly opened pull requests when auto-review is enabled or to
-start analysis from an `@mention` in a pull-request conversation or inline review thread.
+| Integration                                                       | Start work                                                                                                              | Continue                                                                                                                  | Where results appear                                                                                             | Authorization                                                                                                                 |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| [Slack](/integrations/slack)                                      | `@mention` the bot in a channel, or send it a DM                                                                        | Reply in the same Slack thread (the mapping lasts about 7 days)                                                           | A completion reply in the thread with a **View Session** button; full output in the web session                  | Deployment-level repository access through the GitHub App installation; the bot only works in channels it was invited to      |
+| [GitHub](/integrations/github)                                    | Open a non-draft pull request (auto-review), or `@mention` the bot in a PR comment or review thread                     | Not by comment: every accepted webhook starts a new session. PR Feedback Autofix can resume the session that created a PR | A review, review-thread replies, or a PR comment, all written by the agent; an eyes reaction confirms acceptance | GitHub App installation plus **Repository Scope** and **Allowed Trigger Users** (write, maintain, or admin access by default) |
+| [Linear](/integrations/linear)                                    | `@mention` or assign the Linear Agent on an issue                                                                       | Follow-ups through the same active Linear Agent session                                                                   | Linear activities with **View Session** and **Pull Request** links                                               | **Repository Scope** in Linear settings; repository access comes from the source-control integration, not from Linear         |
+| [Inbound webhooks and automations](/automations/inbound-webhooks) | A schedule, an inbound webhook, a GitHub event, a matching Slack channel message, or a Sentry alert fires an automation | Slack message automations continue in the triggering thread for 7 days; other triggers start a run per event              | The session in the web app; Slack message automations also post into the triggering thread                       | The automation's own conditions (for example a Slack User allowlist) and the same repository boundary as everything else      |
 
-An accepted request receives a best-effort eyes reaction. Each GitHub webhook starts a new session;
-comments do not continue one existing session the way Slack threads can. Mentions on ordinary issues
-are ignored. Comment-triggered sessions currently start from the repository's default branch, not
-the pull-request head branch.
+There are no slash commands in Slack or GitHub, and there is no browser extension. Slack requests in channels need an `@mention`, and GitHub requests need the bot's full username including `[bot]`.
 
-[Read the GitHub integration guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/GITHUB.md)
+## Rules every integration shares
 
-## Slack
+**Installation scope is the access boundary.** Integrations see the repositories the configured GitHub App installation can reach, not a per-user list. To restrict what an integration can touch, install the GitHub App only on the intended repositories, then narrow further with the integration's **Repository Scope** setting.
 
-Invite the Slack app to a channel and `@mention` it, or send it a direct message. If repository
-selection is ambiguous, choose from the provided repository or environment options. Reply in the
-same Slack thread to continue that session.
+**Trigger gates decide who can start work.** GitHub checks repository permission (or an explicit user list). Slack and Linear rely on channel membership and workspace access. Integrations act on behalf of a workspace user and are limited by that user's current role and by a fixed set of allowed operations, so a suspended user cannot start work through a bot and an Owner cannot administer the workspace through one.
 
-Slack can forward supported prompt images and, when separately configured, post bounded completion
-media. Inbound and outbound files use different Slack scopes. Adding a scope requires reinstalling
-the app for the workspace.
+**External text is treated as data.** Slack thread history, forwarded messages, GitHub PR titles and comments, and Linear issue content are passed to the agent as untrusted input, not as instructions. Do not put secrets in issues, comments, or Slack messages: their text reaches the agent.
 
-[Read the Slack integration guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/SLACK.md)
+**The web session is the source of truth.** Slack, GitHub, and Linear show acknowledgements, short completion summaries, and links. Live output, tool calls, file changes, artifacts, and the option to take over live in the [session page](/sessions/session-page). Sessions started by any integration or automation run on the OpenCode harness.
 
-## Linear
+## Guides
 
-Mention or assign the Linear Agent from an issue. Include the target `owner/repo` when project,
-team, label, and issue context do not identify one clearly. Follow-ups within an active Linear Agent
-session continue the associated OpenInspect session; stopping or cancelling clears that
-mapping.
+<Cards>
+  <Card
+    title="Slack"
+    href="/integrations/slack"
+    description="Start from a channel or DM, pick a target, continue in the thread, and let agents post updates."
+  />
+  <Card
+    title="GitHub"
+    href="/integrations/github"
+    description="Automatic PR reviews, @mention actions, PR Feedback Autofix, and the GitHub bot settings."
+  />
+  <Card
+    title="Linear"
+    href="/integrations/linear"
+    description="Mention or assign the Linear Agent on an issue and follow progress from Linear."
+  />
+  <Card
+    title="Inbound webhooks"
+    href="/automations/inbound-webhooks"
+    description="Start sessions from any system that can send an HTTP request."
+  />
+</Cards>
 
-Linear can show progress and link to the web session or resulting pull request. It does not own the
-repository's approval and merge policy.
+## Next steps
 
-[Read the Linear integration guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/LINEAR.md)
-
-## Shared safety rules
-
-- Install each integration only in intended workspaces and repositories.
-- Scope which users, channels, teams, projects, or repositories may trigger work.
-- Treat messages and issue content as agent instructions only after the integration's trigger and
-  authorization checks accept them.
-- Use the web session for the complete shared timeline and file changes.
-- Preserve human review and source-control branch policy.
-
-The Chrome extension described in older planning material is not a shipped integration and is not
-included here.
+- [Set up the Slack integration for your team](/integrations/slack)
+- [Configure the GitHub bot and PR Feedback Autofix](/integrations/github)
+- [Trigger sessions from GitHub events](/automations/github-events)
