@@ -2,6 +2,12 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 23, 2026
+
+**Claude Opus 5.5.** Adds `anthropic/claude-opus-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max. The Claude Agent harness now uses
+`claude-agent-sdk` 0.2.158, whose bundled Claude Code release natively supports Opus 5.5.
+
 ## September 21, 2026
 
 **Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from
