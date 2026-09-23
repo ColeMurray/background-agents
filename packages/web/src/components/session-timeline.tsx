@@ -593,7 +593,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
-      <SafeMarkdown content={event.content} className="text-sm" />
+      <SafeMarkdown content={event.content} className="text-sm" linkRepositoryFiles />
     </MessageFrame>
   );
 }
