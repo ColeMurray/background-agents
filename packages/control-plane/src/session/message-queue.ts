@@ -737,23 +737,10 @@ export class SessionMessageQueue {
       attachments: data.attachments,
       callbackContext: data.callbackContext,
       clientRequestId: data.clientRequestId,
+      canonicalUserId: data.clientRequestId ? data.canonicalUserId : undefined,
+      scmEnrichment: data.clientRequestId ? data.scmEnrichment : undefined,
     });
 
-    if (data.clientRequestId && !enqueued.deduplicated) {
-      if (data.canonicalUserId) {
-        this.participantRepository.updateParticipantCoalesce(participant.id, {
-          canonicalUserId: data.canonicalUserId,
-        });
-      }
-      if (data.scmEnrichment) {
-        this.participantRepository.updateParticipantCoalesce(participant.id, {
-          scmName: data.scmEnrichment.name,
-          scmEmail: data.scmEnrichment.email,
-          scmLogin: data.scmEnrichment.login,
-          scmUserId: data.scmEnrichment.userId,
-        });
-      }
-    }
     if (!enqueued.deduplicated) await this.processMessageQueue();
 
     return { messageId: enqueued.messageId, status: "queued" };
@@ -833,6 +820,21 @@ export class SessionMessageQueue {
       data.reasoningEffort,
       this.log
     );
+    // Keyed HTTP enrichment belongs in this synchronous admission turn: a
+    // status transition below can yield to a sandbox ready/dispatch event.
+    if (data.canonicalUserId) {
+      this.participantRepository.updateParticipantCoalesce(data.participant.id, {
+        canonicalUserId: data.canonicalUserId,
+      });
+    }
+    if (data.scmEnrichment) {
+      this.participantRepository.updateParticipantCoalesce(data.participant.id, {
+        scmName: data.scmEnrichment.name,
+        scmEmail: data.scmEnrichment.email,
+        scmLogin: data.scmEnrichment.login,
+        scmUserId: data.scmEnrichment.userId,
+      });
+    }
     try {
       this.messageRepository.createMessageWithAttachments(
         {

@@ -2131,6 +2131,71 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it("enriches a new keyed participant before the status transition can dispatch it", async () => {
+      const h = buildQueue();
+      h.sessionStatus.transition.mockImplementation(async () => {
+        expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+          canonicalUserId: "canonical-1",
+        });
+        expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+          scmName: "Trusted User",
+          scmEmail: "user@example.com",
+          scmLogin: "trusted-user",
+          scmUserId: "1001",
+        });
+        expect(h.repository.createMessageWithAttachments).toHaveBeenCalledOnce();
+        return true;
+      });
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "user-1",
+        source: "web",
+        clientRequestId: "request-1",
+        canonicalUserId: "canonical-1",
+        scmEnrichment: {
+          userId: "1001",
+          login: "trusted-user",
+          name: "Trusted User",
+          email: "user@example.com",
+        },
+      });
+
+      expect(h.repository.updateParticipantCoalesce.mock.invocationCallOrder[1]).toBeLessThan(
+        h.repository.createMessageWithAttachments.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("does not enrich a keyed duplicate, even with different incoming SCM metadata", async () => {
+      const h = buildQueue();
+      const content = "Fix bug";
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          request_fingerprint: await fingerprintWebPrompt("part-1", { content }),
+        })
+      );
+
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content,
+          authorId: "user-1",
+          source: "web",
+          clientRequestId: "request-1",
+          canonicalUserId: "canonical-1",
+          scmEnrichment: {
+            userId: "1001",
+            login: "changed-login",
+            name: "Changed Name",
+            email: "changed@example.com",
+          },
+        })
+      ).resolves.toMatchObject({ messageId: "msg-1" });
+
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    });
+
     it("rejects exhaustion before capacity checks or participant mutations", async () => {
       const h = buildQueue();
       h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
