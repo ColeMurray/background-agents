@@ -11,5 +11,20 @@ const server = await startFakeModalServer({
   },
 });
 console.log(JSON.stringify({ component: "fake-modal-host", event: "listening" }));
-process.once("SIGINT", () => void server.close());
-process.once("SIGTERM", () => void server.close());
+// A failed close is logged instead of escaping as an unhandled rejection. It can leave the listener
+// open, so exit explicitly rather than wait for an event loop that never drains.
+const stop = (signal) => {
+  server.close().catch((error) => {
+    console.error(
+      JSON.stringify({
+        component: "fake-modal-host",
+        event: "close_failed",
+        signal,
+        error: String(error),
+      })
+    );
+    process.exit(1);
+  });
+};
+process.once("SIGINT", stop);
+process.once("SIGTERM", stop);
