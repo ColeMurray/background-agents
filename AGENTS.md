@@ -158,8 +158,9 @@ Pushing to `main` auto-deploys changed services:
   (triggers: `terraform/`, `packages/*/`)
 - **Vercel** → web app when `web_platform = "vercel"` (triggers: `packages/web/`,
   `packages/shared/`)
-- **Vercel Docs** → public documentation (triggers: `packages/docs/`; requires the dedicated docs
-  project secrets described in `packages/docs/README.md`)
+- **Vercel Docs** → public documentation is **not** auto-deployed; run the `Deploy Docs` workflow
+  manually on `main` (requires the dedicated docs project secrets described in
+  `packages/docs/README.md`)
 - **Modal** → data plane (triggers: `packages/modal-infra/`, deployed via Terraform apply)
 
 CI runs lint, typecheck, and tests for all TypeScript and Python packages on every push and PR.

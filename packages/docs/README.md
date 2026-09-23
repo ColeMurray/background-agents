@@ -65,9 +65,10 @@ representation of every page.
 
 ## Production deployment
 
-The `Deploy Docs` GitHub Actions workflow deploys the package to a dedicated Vercel project after
-the `CI (TypeScript)` workflow succeeds for a commit on `main` that touched the docs site. The
-repository must define:
+Docs deployment is manual. After `CI (TypeScript)` is green on `main`, run the `Deploy Docs`
+workflow from the Actions tab (or `gh workflow run deploy-docs.yml --ref main`). It only runs for
+`main` and deploys the commit at the tip of `main` to a dedicated Vercel project. Merging docs
+changes does not publish them on its own. The repository must define:
 
 - `VERCEL_API_TOKEN`
 - `VERCEL_TEAM_ID`

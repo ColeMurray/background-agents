@@ -1,23 +1,15 @@
 name: Deploy Docs
 
-# Production publication waits for the repository's own validation: this
-# workflow runs only after "CI (TypeScript)" succeeds for a push to this
-# repository's main branch, and deploys that exact commit. CI also runs for
-# pull requests, including forks whose branch may be named "main", so the job
-# checks the triggering event and repository, not just the branch name.
-# `workflow_dispatch` republishes the current main commit.
+# Docs publication is manual: a maintainer runs this workflow from the Actions
+# tab after CI is green on main. It only runs for the main branch and deploys
+# the commit at the tip of main when it starts.
 on:
-  workflow_run:
-    workflows: ["CI (TypeScript)"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Queue deployments instead of cancelling an active one; each run deploys the
-# commit CI validated, so the newest run always leaves production current.
+# Queue a second request behind an active deployment instead of cancelling it.
 concurrency:
   group: deploy-docs-production
   cancel-in-progress: false
@@ -25,18 +17,11 @@ concurrency:
 env:
   VERCEL_ORG_ID: ${{ secrets.VERCEL_TEAM_ID }}
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_DOCS_PROJECT_ID }}
-  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   deploy:
     name: Deploy docs to Vercel
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -60,7 +45,6 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.DEPLOY_SHA }}
           persist-credentials: false
 
       - name: Setup Node.js
