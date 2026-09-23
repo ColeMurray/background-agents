@@ -18,6 +18,8 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "snapshot_ready",
   "push_complete",
   "push_error",
+  "sandbox_generation_ready",
+  "preservation_prepared",
 ]);
 
 /**
@@ -36,7 +38,11 @@ export class SessionSandboxEventProcessor {
     private readonly artifacts: SandboxArtifactEventHandler,
     private readonly execution: SandboxExecutionEventHandler,
     private readonly runtime: SandboxRuntimeEventHandler,
-    private readonly pushService: SandboxPushService
+    private readonly pushService: SandboxPushService,
+    private readonly shutdown?: {
+      generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
+      prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+    }
   ) {}
 
   async processSandboxEvent(event: SandboxEventWithAck): Promise<void> {
@@ -64,6 +70,18 @@ export class SessionSandboxEventProcessor {
 
   private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
+      case "sandbox_generation_ready":
+        if (!this.shutdown) {
+          throw new Error("Sandbox graceful shutdown event handlers are not configured");
+        }
+        this.shutdown.generationReady(event);
+        return;
+      case "preservation_prepared":
+        if (!this.shutdown) {
+          throw new Error("Sandbox graceful shutdown event handlers are not configured");
+        }
+        this.shutdown.prepared(event);
+        return;
       case "heartbeat":
         this.runtime.handleHeartbeat(context);
         return;
@@ -71,7 +89,10 @@ export class SessionSandboxEventProcessor {
         this.runtime.handleSessionTitle(event);
         return;
       case "ready":
-        this.runtime.handleReady(event, context);
+        await this.runtime.handleReady(event, context);
+        return;
+      case "boot_progress":
+        this.runtime.handleBootProgress(event, context);
         return;
       case "git_sync":
         this.runtime.handleGitSync(event, context);

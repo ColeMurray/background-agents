@@ -43,6 +43,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -162,7 +163,8 @@ export class SessionMessageQueue {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
-    private readonly getExecutionTimeoutMs: () => number
+    private readonly getExecutionTimeoutMs: () => number,
+    private readonly mayDispatch: () => boolean = () => true
   ) {}
 
   async enqueueAutofix(
@@ -363,6 +365,7 @@ export class SessionMessageQueue {
   }
 
   async processMessageQueue(): Promise<void> {
+    if (!this.mayDispatch()) return;
     const currentSession = this.repository.getSession();
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
@@ -400,6 +403,7 @@ export class SessionMessageQueue {
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
+    if (!this.mayDispatch()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
@@ -413,8 +417,21 @@ export class SessionMessageQueue {
       }
       return;
     }
-    const sandboxWs = this.wsManager.getSandboxSocket();
-    if (!sandboxWs) {
+    const target = this.wsManager.getSandboxCommandTarget();
+    if (target.kind === "booting") {
+      // A bridge is attached ahead of its boot. Nothing to spawn and nothing
+      // to send: the runtime's `ready` event pumps this queue when the
+      // harness is up, and the lifecycle alarms decide if the boot died.
+      this.log.info("prompt.dispatch", {
+        event: "prompt.dispatch",
+        message_id: message.id,
+        outcome: "deferred",
+        reason: "sandbox_booting",
+        ...sandboxBootPhaseLogFields(target.phase),
+      });
+      return;
+    }
+    if (target.kind === "unavailable") {
       // The provider-auth lookup above is a non-storage await. The socket
       // path re-validates through the processing claim; this path has no
       // claim, so it re-reads what it acts on: a cancel or archive that
@@ -465,6 +482,7 @@ export class SessionMessageQueue {
       return;
     }
 
+    const sandboxWs = target.socket;
     const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
       throw new Error(`Missing prompt author ${message.author_id}`);
@@ -502,6 +520,7 @@ export class SessionMessageQueue {
       ),
     };
 
+    if (!this.mayDispatch()) return;
     const claimed = this.messageRepository.startMessageProcessing(
       message.id,
       now,
@@ -523,6 +542,7 @@ export class SessionMessageQueue {
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();
       this.sandboxLifecycle.updateLastActivity(now);
+      this.sandboxLifecycle.onPromptDispatched();
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
       const deadline = now + this.getExecutionTimeoutMs();
@@ -572,6 +592,23 @@ export class SessionMessageQueue {
     this.broadcastPromptQueue();
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
+  }
+
+  /**
+   * Fail one pending prompt, the one a sandbox boot that gave up was going to
+   * run. Named by id, not by queue position: the caller identified it before
+   * the lifecycle work that may have yielded, and a prompt cancelled or
+   * dispatched in the meantime is left alone. Later prompts stay pending and
+   * dispatch on the user's next spawn, the same way a failed turn leaves the
+   * queue today. Does not pump the queue — the caller has just failed the
+   * sandbox, and the next spawn is the user's to start.
+   */
+  async failPendingMessage(messageId: string, error: string): Promise<void> {
+    const message = this.messageRepository.getMessageById(messageId);
+    if (!message || message.status !== "pending") return;
+    if (!this.failMessage(message, error, Date.now(), "pending")) return;
+    this.broadcastPromptQueue();
+    await this.sessionStatus.reconcileAfterExecution(false);
   }
 
   /**
@@ -669,9 +706,6 @@ export class SessionMessageQueue {
         scmEmail: enrichment.email,
         scmLogin: enrichment.login,
         scmUserId: enrichment.userId,
-        scmAccessTokenEncrypted: enrichment.accessTokenEncrypted,
-        scmRefreshTokenEncrypted: enrichment.refreshTokenEncrypted,
-        scmTokenExpiresAt: enrichment.tokenExpiresAt,
       });
       participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
     }

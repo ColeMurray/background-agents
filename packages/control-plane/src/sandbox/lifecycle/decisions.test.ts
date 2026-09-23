@@ -12,11 +12,15 @@ import {
   evaluateInactivityTimeout,
   evaluateHeartbeatHealth,
   evaluateConnectingTimeout,
+  evaluateBootBudget,
+  resolveBootBudgetTimeoutMs,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
   isSnapshotRuntimeCompatible,
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  DEFAULT_BOOT_BUDGET_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
@@ -45,6 +49,18 @@ describe("isSandboxReconnectBlockedStatus", () => {
 });
 
 // ==================== Circuit Breaker Tests ====================
+
+describe("DEFAULT_CIRCUIT_BREAKER_CONFIG", () => {
+  it("keeps the window longer than one watchdog cycle so consecutive boot timeouts accumulate", () => {
+    // A boot that overruns the connect watchdog fails one cycle later, and the
+    // next attempt waits out the spawn cooldown first. If the window were
+    // shorter than that cadence, every timeout would land in a fresh window
+    // and the breaker could never open on them.
+    const slowestCadenceMs =
+      DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs + DEFAULT_SPAWN_CONFIG.cooldownMs;
+    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG.windowMs).toBeGreaterThan(slowestCadenceMs);
+  });
+});
 
 describe("evaluateCircuitBreaker", () => {
   const config: CircuitBreakerConfig = {
@@ -192,7 +208,7 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("restore");
   });
 
-  it("spawns fresh instead of restoring a snapshot below the runtime floor", () => {
+  it("holds instead of discarding a snapshot below the runtime floor", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "stopped",
@@ -204,13 +220,13 @@ describe("evaluateSpawnDecision", () => {
 
     const decision = evaluateSpawnDecision(state, config, now, false);
 
-    expect(decision.action).toBe("spawn");
-    if (decision.action === "spawn") {
+    expect(decision.action).toBe("hold");
+    if (decision.action === "hold") {
       expect(decision.reason).toContain(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`);
     }
   });
 
-  it("spawns fresh when the snapshot predates runtime-version recording", () => {
+  it("holds when the snapshot predates runtime-version recording", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "stopped",
@@ -222,8 +238,8 @@ describe("evaluateSpawnDecision", () => {
 
     const decision = evaluateSpawnDecision(state, config, now, false);
 
-    expect(decision.action).toBe("spawn");
-    if (decision.action === "spawn") {
+    expect(decision.action).toBe("hold");
+    if (decision.action === "hold") {
       expect(decision.reason).toContain("unknown");
     }
   });
@@ -687,10 +703,7 @@ describe("evaluateInactivityTimeout", () => {
 
     const decision = evaluateInactivityTimeout(state, config, now);
 
-    expect(decision.action).toBe("timeout");
-    if (decision.action === "timeout") {
-      expect(decision.shouldSnapshot).toBe(true);
-    }
+    expect(decision).toEqual({ action: "timeout" });
   });
 
   it('returns "extend" when threshold exceeded but clients connected', () => {
@@ -703,11 +716,7 @@ describe("evaluateInactivityTimeout", () => {
 
     const decision = evaluateInactivityTimeout(state, config, now);
 
-    expect(decision.action).toBe("extend");
-    if (decision.action === "extend") {
-      expect(decision.extensionMs).toBe(config.extensionMs);
-      expect(decision.shouldWarn).toBe(true);
-    }
+    expect(decision).toEqual({ action: "extend", extensionMs: config.extensionMs });
   });
 
   it('returns "schedule" with correct remaining time', () => {
@@ -785,8 +794,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(null, config, now);
 
-    expect(health.isStale).toBe(false);
-    expect(health.ageMs).toBeUndefined();
+    expect(health).toEqual({ isStale: false });
   });
 
   it("returns not stale when heartbeat is recent", () => {
@@ -795,8 +803,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(false);
-    expect(health.ageMs).toBeUndefined();
+    expect(health).toEqual({ isStale: false });
   });
 
   it("returns stale when heartbeat exceeds timeout", () => {
@@ -805,8 +812,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(true);
-    expect(health.ageMs).toBe(100000);
+    expect(health).toEqual({ isStale: true, ageMs: 100000 });
   });
 
   it("returns correct age in milliseconds", () => {
@@ -816,8 +822,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(true);
-    expect(health.ageMs).toBe(ageMs);
+    expect(health).toEqual({ isStale: true, ageMs });
   });
 
   it("handles boundary timing (exactly at timeout)", () => {
@@ -836,8 +841,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(true);
-    expect(health.ageMs).toBe(config.timeoutMs + 1);
+    expect(health).toEqual({ isStale: true, ageMs: config.timeoutMs + 1 });
   });
 });
 
@@ -951,6 +955,143 @@ describe("connect watchdog and spawn staleness defaults", () => {
     ).toBe(true);
     expect(evaluateSpawnDecision(state, DEFAULT_SPAWN_CONFIG, now, false).action).toBe("spawn");
   });
+});
+
+describe("a generation whose bridge has connected", () => {
+  const booting = (overrides: Partial<SandboxState>): SandboxState => ({
+    status: "connecting",
+    createdAt: Date.now() - (DEFAULT_SPAWN_CONFIG.spawningTimeoutMs + 60_000),
+    snapshotImageId: null,
+    snapshotRuntimeVersion: null,
+    hasActiveWebSocket: false,
+    hasConnected: true,
+    ...overrides,
+  });
+
+  it("is never replaced by age while its bridge is attached", () => {
+    const now = Date.now();
+    const decision = evaluateSpawnDecision(
+      booting({ hasActiveWebSocket: true }),
+      DEFAULT_SPAWN_CONFIG,
+      now,
+      false
+    );
+
+    expect(decision).toEqual({
+      action: "skip",
+      reason: "already connecting with a live bridge",
+    });
+  });
+
+  it("waits for its bridge to reconnect instead of spawning a replacement past the staleness bound", () => {
+    const now = Date.now();
+    const decision = evaluateSpawnDecision(booting({}), DEFAULT_SPAWN_CONFIG, now, false);
+
+    expect(decision.action).toBe("wait");
+  });
+
+  it("still replaces a generation that never connected once the bound has passed", () => {
+    const now = Date.now();
+    const decision = evaluateSpawnDecision(
+      booting({ hasConnected: false }),
+      DEFAULT_SPAWN_CONFIG,
+      now,
+      false
+    );
+
+    expect(decision.action).toBe("spawn");
+  });
+
+  it("is not timed out by the connect watchdog, however long its boot runs", () => {
+    const now = Date.now();
+    const createdAt = now - DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs * 3;
+
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now,
+        true
+      ).isTimedOut
+    ).toBe(false);
+    expect(
+      evaluateConnectingTimeout(
+        "connecting",
+        createdAt,
+        DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+        now,
+        false
+      ).isTimedOut
+    ).toBe(true);
+  });
+});
+
+describe("evaluateBootBudget", () => {
+  const config = { timeoutMs: 1_800_000 };
+
+  it.each(["spawning", "connecting"] as const)("expires a %s row past the budget", (status) => {
+    const now = Date.now();
+    const result = evaluateBootBudget(status, now - config.timeoutMs, config, now);
+
+    expect(result).toEqual({ isExceeded: true, elapsedMs: config.timeoutMs });
+  });
+
+  it("does not expire a boot still inside the budget", () => {
+    const now = Date.now();
+    const result = evaluateBootBudget("connecting", now - config.timeoutMs + 1, config, now);
+
+    expect(result.isExceeded).toBe(false);
+  });
+
+  it.each(["ready", "snapshotting", "failed", "stopped", "stale", "pending"] as const)(
+    "never applies to a %s row",
+    (status) => {
+      const now = Date.now();
+      expect(evaluateBootBudget(status, now - config.timeoutMs * 2, config, now)).toEqual({
+        isExceeded: false,
+        elapsedMs: 0,
+      });
+    }
+  );
+
+  it("outlasts the connect watchdog, since both are measured from the same origin", () => {
+    expect(DEFAULT_BOOT_BUDGET_CONFIG.timeoutMs).toBeGreaterThan(
+      DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs
+    );
+  });
+});
+
+describe("resolveBootBudgetTimeoutMs", () => {
+  const bounds = { connectingTimeoutMs: 240_000, defaultTimeoutMs: 1_800_000 };
+
+  it("uses the default, without complaint, when the knob is unset", () => {
+    expect(resolveBootBudgetTimeoutMs(undefined, bounds)).toEqual({
+      timeoutMs: 1_800_000,
+      rejectedValue: null,
+    });
+    expect(resolveBootBudgetTimeoutMs("", bounds)).toEqual({
+      timeoutMs: 1_800_000,
+      rejectedValue: null,
+    });
+  });
+
+  it("accepts a positive integer above the connect watchdog", () => {
+    expect(resolveBootBudgetTimeoutMs("600000", bounds)).toEqual({
+      timeoutMs: 600_000,
+      rejectedValue: null,
+    });
+  });
+
+  it.each(["abc", "1000junk", "0", "-5", "1.5", "240000", "1e6", "9007199254740993"])(
+    "falls back to the default and names the rejected value for %s",
+    (raw) => {
+      expect(resolveBootBudgetTimeoutMs(raw, bounds)).toEqual({
+        timeoutMs: 1_800_000,
+        rejectedValue: raw,
+      });
+    }
+  );
 });
 
 // ==================== Warm Decision Tests ====================

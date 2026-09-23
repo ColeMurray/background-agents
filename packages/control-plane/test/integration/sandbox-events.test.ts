@@ -180,7 +180,6 @@ describe("POST /internal/sandbox-event", () => {
       body: JSON.stringify({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "running",
         timestamp: Date.now() / 1000,
       }),
     });
@@ -214,7 +213,6 @@ describe("POST /internal/sandbox-event", () => {
       body: JSON.stringify({
         type: "heartbeat",
         sandboxId: "sb-1",
-        status: "running",
         timestamp: Date.now() / 1000,
       }),
     });

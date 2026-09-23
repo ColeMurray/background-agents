@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { SqlDatabase } from "../db/sql-database";
+import type { Job } from "../jobs";
+import { createTestEnv } from "../router.test-support";
 import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
 import type { ImageBuildScope } from "./model";
@@ -12,7 +14,7 @@ import type { ImageBuildWorkflow } from "./workflow";
 
 function harness(
   options: {
-    provider?: "modal" | null;
+    provider?: "modal" | "daytona" | null;
     sourceControl?: SourceControlProvider | null;
     env?: Env;
   } = {}
@@ -83,6 +85,8 @@ function harness(
       },
     ]),
     deleteSupersededImage: vi.fn(async () => true),
+    listUnboundSourceIntents: vi.fn(async () => []),
+    listUnresolvedOperations: vi.fn(async () => []),
     finalization: {
       clearSessionCleanup: clearProviderSessionCleanup,
     },
@@ -115,7 +119,7 @@ function harness(
     })
   );
   const scheduler = new ImageBuildScheduler(
-    options.env ?? ({} as Env),
+    options.env ?? createTestEnv(),
     {} as SqlDatabase,
     options.provider === undefined ? "modal" : options.provider,
     store as unknown as ImageBuildStore,
@@ -302,7 +306,7 @@ describe("ImageBuildScheduler", () => {
   it("republishes persisted artifacts left behind by exhausted Queue delivery", async () => {
     const send = vi.fn(async () => undefined);
     const { scheduler, listRecoverableFinalizations } = harness({
-      env: { JOBS: { send } } as unknown as Env,
+      env: createTestEnv({ JOBS: { send } }),
     });
     listRecoverableFinalizations.mockResolvedValue([
       {
@@ -322,11 +326,13 @@ describe("ImageBuildScheduler", () => {
   });
 
   it("republishes every recoverable finalization and contains a publish failure", async () => {
-    const send = vi.fn(async ({ payload }: { payload: { buildId: string } }) => {
-      if (payload.buildId === "build-05") throw new Error("queue unavailable");
+    const send = vi.fn(async (job: Job) => {
+      if (job.kind === "image_build.finalize" && job.payload.buildId === "build-05") {
+        throw new Error("queue unavailable");
+      }
     });
     const { scheduler, listRecoverableFinalizations } = harness({
-      env: { JOBS: { send } } as unknown as Env,
+      env: createTestEnv({ JOBS: { send } }),
     });
     const recoverable = Array.from({ length: 21 }, (_, index) => ({
       id: `build-${String(index + 1).padStart(2, "0")}`,
@@ -344,5 +350,37 @@ describe("ImageBuildScheduler", () => {
       kind: "image_build.finalize",
       payload: { version: 1, buildId: "build-21", completionHash: "21".repeat(32) },
     });
+  });
+});
+
+describe("ImageBuildScheduler admission", () => {
+  it("keeps every maintenance phase running while new builds are paused", async () => {
+    const { scheduler, store, listScopes, workflow } = harness({
+      provider: "daytona",
+      env: createTestEnv({ SANDBOX_PROVIDER: "daytona" }),
+    });
+
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.admissionOpen).toBe(false);
+    // No new builds...
+    expect(listScopes).not.toHaveBeenCalled();
+    expect(workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+    // ...but everything that reclaims what already exists still runs.
+    expect(stats.staleMarked).toBe(1);
+    expect(stats.cleanupAttempted).toBe(2);
+    expect(store.deleteOldFailedBuilds).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles scopes again once admission opens", async () => {
+    const { scheduler, listScopes } = harness({
+      provider: "daytona",
+      env: createTestEnv({ SANDBOX_PROVIDER: "daytona", DAYTONA_PREBUILDS_ENABLED: "true" }),
+    });
+
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.admissionOpen).toBe(true);
+    expect(listScopes).toHaveBeenCalled();
   });
 });

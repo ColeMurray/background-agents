@@ -44,3 +44,13 @@ variable "secret_names" {
   type        = set(string)
   default     = null
 }
+
+variable "github_deploy" {
+  description = "Lets one GitHub Actions environment deploy this stack over OIDC, so no AWS access key is stored in the repository. Null creates no role and the environment is deployed by hand. `oidc_provider_arn` reuses an existing account-wide provider -- leave it null in whichever environment is applied first, then pass that one's `github_oidc_provider_arn` output here."
+  type = object({
+    repository        = string
+    environment       = string
+    oidc_provider_arn = optional(string)
+  })
+  default = null
+}

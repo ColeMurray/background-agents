@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toUiArtifact } from "./artifact-metadata";
+import { toUiArtifact, toUiArtifactMetadata } from "./artifact-metadata";
 
 describe("toUiArtifact", () => {
   it("maps PR metadata and derives prState from tracked lifecycle over the legacy key", () => {
@@ -109,5 +109,44 @@ describe("toUiArtifact", () => {
       createdAt: 100,
     });
     expect(artifact.metadata).toBeUndefined();
+  });
+
+  it("narrows sandbox event artifact metadata before rendering media cards", () => {
+    expect(
+      toUiArtifactMetadata({
+        caption: "Login flow",
+        sourceUrl: "https://example.com/login",
+        mimeType: "image/png",
+        sizeBytes: 1234,
+        viewport: { width: 1280, height: 720 },
+      })
+    ).toEqual(
+      expect.objectContaining({
+        caption: "Login flow",
+        sourceUrl: "https://example.com/login",
+        mimeType: "image/png",
+        sizeBytes: 1234,
+        viewport: { width: 1280, height: 720 },
+      })
+    );
+
+    expect(
+      toUiArtifactMetadata({
+        caption: 42,
+        sourceUrl: null,
+        mimeType: "text/html",
+        sizeBytes: "1234",
+        viewport: { width: "1280", height: 720 },
+      })
+    ).toEqual(
+      expect.objectContaining({
+        caption: undefined,
+        sourceUrl: undefined,
+        mimeType: undefined,
+        sizeBytes: undefined,
+        viewport: undefined,
+      })
+    );
+    expect(toUiArtifactMetadata(null)).toBeUndefined();
   });
 });

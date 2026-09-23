@@ -43,6 +43,7 @@ function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {
     failure_reason: null,
     scheduled_at: 0,
     started_at: null,
+    execution_deadline_at: null,
     completed_at: null,
     created_at: 0,
     repo_owner: "acme",

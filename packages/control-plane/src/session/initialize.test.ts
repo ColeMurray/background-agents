@@ -27,9 +27,6 @@ describe("initializeSession", () => {
     scmName: "Acme Dev",
     scmEmail: "dev@acme.test",
     scmUserId: "scm-1",
-    scmTokenEncrypted: "enc-token",
-    scmRefreshTokenEncrypted: "enc-refresh",
-    scmTokenExpiresAt: 1700000000000,
     parentSessionId: null,
     spawnSource: "user",
     spawnDepth: 0,
@@ -66,10 +63,11 @@ describe("initializeSession", () => {
   let updateStatusMock: ReturnType<typeof vi.fn>;
   let stubFetchMock: ReturnType<typeof vi.fn<(request: Request) => Promise<Response>>>;
 
-  function createEnv() {
+  function createEnv(sandboxProvider?: string) {
     return {
       DB: {} as SqlDatabase,
       SESSION: fakeSessionRuntimeDispatch((request) => stubFetchMock(request)),
+      SANDBOX_PROVIDER: sandboxProvider,
     } as never;
   }
 
@@ -93,6 +91,30 @@ describe("initializeSession", () => {
     expect(createMock.mock.invocationCallOrder[0]).toBeLessThan(
       stubFetchMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it("does not persist settings Daytona cannot honor", async () => {
+    await initializeSession(
+      createEnv("daytona"),
+      {
+        ...baseInput,
+        sandboxSettings: {
+          cpuCores: 2,
+          memoryMib: 4096,
+          sandboxTimeoutMs: 14_400_000,
+          buildTimeoutSeconds: 2400,
+          terminalEnabled: true,
+        },
+      },
+      ctx as never
+    );
+
+    const request = stubFetchMock.mock.calls[0][0];
+    const body = await request.json<{ sandboxSettings: Record<string, unknown> }>();
+    expect(body.sandboxSettings).toEqual({
+      buildTimeoutSeconds: 2400,
+      terminalEnabled: true,
+    });
   });
 
   it("requires exactly one resolved or inherited managed skills manifest", async () => {
@@ -270,9 +292,9 @@ describe("initializeSession", () => {
     expect(body.scmLogin).toBe("acmedev");
     expect(body.scmName).toBe("Acme Dev");
     expect(body.scmEmail).toBe("dev@acme.test");
-    expect(body.scmTokenEncrypted).toBe("enc-token");
-    expect(body.scmRefreshTokenEncrypted).toBe("enc-refresh");
-    expect(body.scmTokenExpiresAt).toBe(1700000000000);
+    expect(body).not.toHaveProperty("scmTokenEncrypted");
+    expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
+    expect(body).not.toHaveProperty("scmTokenExpiresAt");
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
     expect(body.vncEnabled).toBe(true);

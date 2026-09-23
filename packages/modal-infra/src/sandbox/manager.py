@@ -58,6 +58,10 @@ _RESERVED_LAUNCH_ENV_VARS = {
 }
 
 
+class RepositoryImageUnavailableError(RuntimeError):
+    """The selected repository image no longer exists in Modal."""
+
+
 def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
     has_owner = bool(repo_owner)
     has_name = bool(repo_name)
@@ -387,7 +391,10 @@ class SandboxManager:
         if isinstance(spec.source, _BaseImageSource):
             image = base_image
         elif isinstance(spec.source, _RepositoryImageSource):
-            image = modal.Image.from_id(spec.source.image_id)
+            try:
+                image = modal.Image.from_id(spec.source.image_id)
+            except modal.exception.NotFoundError as e:
+                raise RepositoryImageUnavailableError("repository image is unavailable") from e
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = spec.source.sha or ""
         else:
@@ -458,12 +465,17 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
-        sandbox = await modal.Sandbox.create.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",
-            **create_kwargs,
-        )
+        try:
+            sandbox = await modal.Sandbox.create.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",
+                **create_kwargs,
+            )
+        except modal.exception.NotFoundError as e:
+            if isinstance(spec.source, _RepositoryImageSource):
+                raise RepositoryImageUnavailableError("repository image is unavailable") from e
+            raise
         modal_object_id = sandbox.object_id
         (
             code_server_url,
@@ -543,6 +555,7 @@ class SandboxManager:
     async def take_snapshot(
         self,
         handle: SandboxHandle,
+        timeout_seconds: float = SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS,
     ) -> str:
         """
         Take a filesystem snapshot of a sandbox using Modal's native API.
@@ -566,9 +579,12 @@ class SandboxManager:
         """
         start_time = time.time()
 
-        image = await handle.modal_sandbox.snapshot_filesystem.aio(
-            timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
-        )
+        # Modal takes whole seconds. Round down so conversion cannot extend
+        # the caller's deadline, and never pass its unbounded zero sentinel.
+        snapshot_timeout_seconds = min(int(timeout_seconds), SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        if snapshot_timeout_seconds <= 0:
+            raise TimeoutError("Insufficient time remains for a filesystem snapshot")
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(timeout=snapshot_timeout_seconds)
 
         # The image object_id is the unique identifier for this snapshot
         # Modal automatically stores the image and it persists indefinitely
@@ -584,6 +600,15 @@ class SandboxManager:
         )
 
         return image_id
+
+    async def stop_sandbox(self, sandbox_id: str) -> None:
+        """Terminate a provider sandbox by its immutable Modal object id."""
+        try:
+            sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+            await sandbox.terminate.aio(wait=True)
+        except modal.exception.NotFoundError:
+            # Already absent is the terminal state requested by stop.
+            return
 
     async def get_sandbox_by_id(self, sandbox_id: str) -> SandboxHandle | None:
         """

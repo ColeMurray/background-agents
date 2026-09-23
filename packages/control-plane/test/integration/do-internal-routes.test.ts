@@ -101,10 +101,9 @@ describe("DO internal sub-session routes", () => {
       expect(context.promptAuthor).toBeDefined();
       expect(context.promptAuthor.userId).toBe("user-1");
       expect(context.promptAuthor.scmLogin).toBe("acmedev");
-      // Encrypted token fields may be null in tests (no SCM token provided at init)
-      expect(context.promptAuthor).toHaveProperty("scmAccessTokenEncrypted");
-      expect(context.promptAuthor).toHaveProperty("scmRefreshTokenEncrypted");
-      expect(context.promptAuthor).toHaveProperty("scmTokenExpiresAt");
+      expect(context.promptAuthor).not.toHaveProperty("scmAccessTokenEncrypted");
+      expect(context.promptAuthor).not.toHaveProperty("scmRefreshTokenEncrypted");
+      expect(context.promptAuthor).not.toHaveProperty("scmTokenExpiresAt");
     });
 
     it("returns 404 when session is not initialized", async () => {

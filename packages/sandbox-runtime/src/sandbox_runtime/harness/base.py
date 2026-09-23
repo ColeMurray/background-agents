@@ -8,9 +8,9 @@ The seam has two halves with one owner each:
 - ``AgentHarness`` is the bridge half. It runs prompts against the vendor and
   yields the runtime-neutral bridge events the control plane understands.
 
-The bridge owns terminalisation: a harness never emits ``execution_complete``.
-It yields events and returns a ``TurnOutcome``; the bridge emits exactly one
-terminal event per prompt from that outcome.
+The runtime ``ActivitySupervisor`` owns terminal selection and delivery: a
+harness never emits ``execution_complete``. It yields events and returns a
+``TurnOutcome`` for the supervisor to settle exactly once.
 """
 
 from __future__ import annotations
@@ -73,11 +73,15 @@ class HarnessPrompt:
     reasoning_effort: str | None = None
     attachments: Sequence[HydratedSessionAttachment] = ()
     author: Mapping[str, Any] = field(default_factory=dict)
+    # What is left of this prompt's budget, when the caller spent part of it
+    # before the turn began (holding the prompt while the sandbox booted).
+    # ``None`` means the harness's configured ``prompt_max_duration_seconds``.
+    max_duration_seconds: float | None = None
 
 
 @dataclass(frozen=True)
 class TurnOutcome:
-    """What one ``run_prompt`` call produced, for the bridge to terminalise."""
+    """What one ``run_prompt`` call produced, for runtime terminal selection."""
 
     success: bool
     error: str | None = None
@@ -149,6 +153,15 @@ class AgentHarness(Protocol):
 
     async def abort(self) -> bool:
         """Best-effort stop of the in-flight turn; ``True`` when a stop was requested."""
+        ...
+
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        """Stop and contain the active turn within ``timeout_seconds``.
+
+        Unlike ``abort``, ``True`` confirms the harness and its owned tool
+        execution are no longer active. Implementations may terminate only
+        their own process domain when a cooperative interrupt is insufficient.
+        """
         ...
 
 

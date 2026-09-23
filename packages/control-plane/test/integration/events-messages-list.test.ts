@@ -220,6 +220,46 @@ describe("GET /internal/events", () => {
     expect(body.events[0]?.type).toBe("warning");
   });
 
+  it("strips legacy output tails from raw boot progress events", async () => {
+    const { stub } = await initSession();
+    await seedEvents(stub, [
+      {
+        id: "evt-legacy-boot-progress",
+        type: "boot_progress",
+        data: JSON.stringify({
+          type: "boot_progress",
+          bootSeq: 3,
+          phase: "setup",
+          status: "failed",
+          detail: "setup hook failed",
+          outputTail: ["legacy secret output"],
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        }),
+        createdAt: Date.now(),
+      },
+    ]);
+
+    const res = await stub.fetch("http://internal/internal/events?type=boot_progress");
+
+    expect(res.status).toBe(200);
+    const body = await res.json<{ events: Array<{ id: string; data: Record<string, unknown> }> }>();
+    expect(body.events).toEqual([
+      expect.objectContaining({
+        id: "evt-legacy-boot-progress",
+        data: {
+          type: "boot_progress",
+          bootSeq: 3,
+          phase: "setup",
+          status: "failed",
+          detail: "setup hook failed",
+          sandboxId: "sandbox-1",
+          timestamp: 123,
+        },
+      }),
+    ]);
+  });
+
   it("filters context compaction events", async () => {
     const { stub } = await initSession();
     const createdAt = Date.now();

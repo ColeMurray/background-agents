@@ -1,39 +1,39 @@
 import { z } from "zod";
-import type { PullRequestSummary, SessionReadState, SessionStatus, SpawnSource } from "./sessions";
-import type { SessionListRepository } from "./repositories";
+import { sessionReadStateSchema, sessionSummaryBaseSchema } from "./sessions";
 
 /** Viewer-specific session row in session inbox page and snapshot payloads. */
-export interface SessionListItem {
-  id: string;
-  title: string | null;
-  repoOwner: string | null;
-  repoName: string | null;
-  baseBranch: string | null;
-  status: SessionStatus;
-  parentSessionId: string | null;
-  spawnSource: SpawnSource;
-  environmentId: string | null;
-  createdAt: number;
-  updatedAt: number;
-  repositories?: SessionListRepository[];
-  pullRequestSummary?: PullRequestSummary;
-  readState: SessionReadState;
-}
+export const sessionInboxSessionSchema = sessionSummaryBaseSchema.extend({
+  readState: sessionReadStateSchema,
+});
+export type SessionInboxSession = z.infer<typeof sessionInboxSessionSchema>;
+/** @deprecated Use SessionInboxSession for this inbox-specific projection. */
+export type SessionListItem = SessionInboxSession;
 
-export const sessionInboxCategorySchema = z.enum(["needs_attention", "in_progress", "finished"]);
+export const SESSION_INBOX_CATEGORIES = ["needs_attention", "in_progress", "finished"] as const;
+export const sessionInboxCategorySchema = z.enum(SESSION_INBOX_CATEGORIES);
 export type SessionInboxCategory = z.infer<typeof sessionInboxCategorySchema>;
 
-export interface SessionInboxItem {
-  rootSession: SessionListItem;
-  descendantSessions: SessionListItem[];
-}
+export const sessionInboxItemSchema = z.object({
+  rootSession: sessionInboxSessionSchema,
+  descendantSessions: z.array(sessionInboxSessionSchema),
+});
+export type SessionInboxItem = z.infer<typeof sessionInboxItemSchema>;
 
-export interface SessionInboxPage {
-  items: SessionInboxItem[];
-  hasMore: boolean;
-  nextCursor: string | null;
-}
+export const sessionInboxPageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    items: z.array(sessionInboxItemSchema),
+    hasMore: z.literal(true),
+    nextCursor: z.string().min(1),
+  }),
+  z.object({
+    items: z.array(sessionInboxItemSchema),
+    hasMore: z.literal(false),
+    nextCursor: z.null(),
+  }),
+]);
+export type SessionInboxPage = z.infer<typeof sessionInboxPageSchema>;
 
-export interface SessionInboxSnapshot {
-  categories: Record<SessionInboxCategory, SessionInboxPage>;
-}
+export const sessionInboxSnapshotSchema = z.object({
+  categories: z.record(sessionInboxCategorySchema, sessionInboxPageSchema),
+});
+export type SessionInboxSnapshot = z.infer<typeof sessionInboxSnapshotSchema>;

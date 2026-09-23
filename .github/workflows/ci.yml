@@ -111,6 +111,9 @@ jobs:
       - name: Test SQL portability check
         run: npm run test:lint-sql-portability
 
+      - name: Test AWS deploy rollback
+        run: npm run test:deploy-aws
+
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 
@@ -119,6 +122,9 @@ jobs:
 
       - name: Test Cloudflare logs CLI
         run: npm run test:cf-logs-cli
+
+      - name: Test Terraform workflow contract
+        run: npm run test:terraform-workflow-contract
 
       - name: Check Prettier formatting
         run: npm run format:check

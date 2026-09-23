@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { githubAutofixAttemptLimitSchema } from "./integrations";
 
+export const MAX_GITHUB_AUTOFIX_PROMPT_BYTES = 200_000;
+export const MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS = 100;
+export const MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS = 4_000;
+
 const repositorySchema = z.object({
   id: z.string().min(1),
   owner: z.string().min(1),
@@ -40,16 +44,66 @@ export const githubAutofixEnvelopeSchema = z.discriminatedUnion("eventType", [
 
 export type GitHubAutofixEnvelope = z.infer<typeof githubAutofixEnvelopeSchema>;
 
+const sourceLineSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable();
+const feedbackBaseSchema = z.object({
+  version: z.literal(1),
+  url: z.url(),
+  body: z.string(),
+});
+const reviewCommentSchema = z
+  .object({
+    url: z.url(),
+    path: z.string(),
+    line: sourceLineSchema,
+    startLine: sourceLineSchema,
+    originalLine: sourceLineSchema,
+    originalStartLine: sourceLineSchema,
+    side: z.enum(["LEFT", "RIGHT"]).nullable(),
+    startSide: z.enum(["LEFT", "RIGHT"]).nullable(),
+    body: z.string(),
+    diffHunk: z.string().max(MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS),
+    diffHunkTruncated: z.boolean(),
+  })
+  .refine(
+    ({ line, startLine, side, startSide }) =>
+      startLine === null ||
+      (line !== null &&
+        (startLine <= line || (startSide !== null && side !== null && startSide !== side))),
+    "Expected startLine to precede line"
+  )
+  .refine(
+    ({ originalLine, originalStartLine, side, startSide }) =>
+      originalStartLine === null ||
+      (originalLine !== null &&
+        (originalStartLine <= originalLine ||
+          (startSide !== null && side !== null && startSide !== side))),
+    "Expected originalStartLine to precede originalLine"
+  );
+const pullRequestCommentFeedbackSchema = feedbackBaseSchema.extend({
+  kind: z.literal("pr_comment"),
+});
+const pullRequestReviewFeedbackSchema = feedbackBaseSchema.extend({
+  kind: z.literal("review"),
+  comments: z.array(reviewCommentSchema).max(MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS),
+});
+
+export const githubAutofixFeedbackSchema = z.discriminatedUnion("kind", [
+  pullRequestCommentFeedbackSchema,
+  pullRequestReviewFeedbackSchema,
+]);
+
 export const githubAutofixOriginSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("pr_comment"),
     authorType: z.literal("human"),
     feedbackUrl: z.url(),
+    feedback: pullRequestCommentFeedbackSchema.optional(),
   }),
   z.object({
     kind: z.literal("review"),
     authorType: z.enum(["human", "bot"]),
     feedbackUrl: z.url(),
+    feedback: pullRequestReviewFeedbackSchema.optional(),
   }),
 ]);
 
@@ -103,5 +157,10 @@ export const githubAutofixSessionResponseSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type GitHubAutofixOrigin = z.infer<typeof githubAutofixOriginSchema>;
+export type GitHubAutofixFeedback = z.infer<typeof githubAutofixFeedbackSchema>;
+export type GitHubAutofixReviewComment = Extract<
+  GitHubAutofixFeedback,
+  { kind: "review" }
+>["comments"][number];
 export type GitHubAutofixSessionCommand = z.infer<typeof githubAutofixSessionCommandSchema>;
 export type GitHubAutofixSessionResponse = z.infer<typeof githubAutofixSessionResponseSchema>;

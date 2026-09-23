@@ -8,7 +8,7 @@ import { normalizeSandboxSettings } from "../../../sandbox/settings";
 import { DEFAULT_BASE_BRANCH } from "../../../repos/default-branch";
 import { validateReasoningEffort } from "../../reasoning-effort";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxRepository } from "../../sandbox-repository";
+import type { SandboxInitializer } from "../../sandbox-ports";
 import type { ParticipantRepository } from "../../participant-repository";
 
 const repositoryRefSchema = z.object({
@@ -88,7 +88,7 @@ type InitRequest = z.infer<typeof initRequestSchema>;
 export class SessionInitHandler {
   constructor(
     private readonly sessionCoreRepository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRepository,
+    private readonly sandboxRepository: SandboxInitializer,
     private readonly participantRepository: ParticipantRepository,
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
@@ -137,6 +137,8 @@ export class SessionInitHandler {
       return Response.json({ sessionId, status: "created" });
     }
 
+    // Current SessionInitInput never sends token fields. Accept them here only
+    // so already-running pre-cutover producers remain readable.
     let encryptedToken = body.scmTokenEncrypted ?? null;
     if (body.scmToken) {
       try {

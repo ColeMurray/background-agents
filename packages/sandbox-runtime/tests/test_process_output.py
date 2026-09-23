@@ -7,7 +7,25 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.process_output import communicate_owned_subprocess, terminate_owned_subprocess
+from sandbox_runtime.process_output import (
+    communicate_owned_subprocess,
+    terminate_owned_subprocess,
+    wait_for_process_exit,
+)
+
+
+async def test_wait_for_process_exit_does_not_wait_for_inherited_pipe_eof():
+    process = MagicMock(returncode=None)
+    wait_forever = asyncio.Event()
+    process.wait = AsyncMock(side_effect=wait_forever.wait)
+
+    async def mark_process_exited():
+        await asyncio.sleep(0)
+        process.returncode = 0
+
+    await asyncio.gather(wait_for_process_exit(process), mark_process_exited())
+
+    process.wait.assert_awaited_once()
 
 
 @pytest.mark.parametrize("returncode", [None, 0])

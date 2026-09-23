@@ -9,6 +9,7 @@ import {
   sessionDiffUploadSchema,
 } from "@open-inspect/shared/types/session-diffs";
 import { SessionInternalPaths } from "../session/contracts";
+import { readBoundedBytes } from "../http/bounded-body";
 import {
   error,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
@@ -26,29 +27,12 @@ function routeId(params: Record<string, string>, name: string): string | null {
 }
 
 async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array | null> {
-  const declaredLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) return null;
-  const reader = request.body?.getReader();
-  if (!reader) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel("body limit exceeded");
-      return null;
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  const result = await readBoundedBytes(
+    request.body,
+    maxBytes,
+    request.headers.get("content-length")
+  );
+  return result.ok ? result.bytes : null;
 }
 
 async function readBoundedJson(

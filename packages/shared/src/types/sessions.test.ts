@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { sandboxStatusSchema, sessionReadActionSchema, sessionReadResultSchema } from "./sessions";
+import {
+  sandboxStatusSchema,
+  sessionReadActionSchema,
+  sessionReadResultSchema,
+  sessionReadStateSchema,
+} from "./sessions";
 import { createSessionRequestSchema } from "./session-api";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
 
 describe("session read contracts", () => {
+  it("requires producers to provide a read-state version", () => {
+    expect(
+      sessionReadStateSchema.safeParse({
+        latestMessageId: "message-1",
+        unread: true,
+      }).success
+    ).toBe(false);
+  });
+
   it("accepts only explicit exact and latest read actions", () => {
     expect(
       sessionReadActionSchema.safeParse({

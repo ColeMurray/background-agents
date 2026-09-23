@@ -1,5 +1,5 @@
 import { createModalClient } from "./client";
-import { createDaytonaRestClient } from "./daytona-rest-client";
+import { createDaytonaRestClient, type DaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
@@ -95,18 +95,33 @@ function createOpenComputerProviderFromEnv(
   });
 }
 
-function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
-  if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY || !env.DAYTONA_BASE_SNAPSHOT) {
+/**
+ * The Daytona transport for one operation, shared by the session provider and
+ * the image-build resources.
+ *
+ * Only creating a sandbox needs a base image. Finalizing and reclaiming what
+ * an earlier configuration created must stay possible after a provider
+ * switch, when no Daytona base snapshot is built any more.
+ */
+export function createDaytonaRestClientFromEnv(
+  env: Env,
+  options: { requireBaseSnapshot: boolean }
+): DaytonaRestClient {
+  if (!env.DAYTONA_API_URL || !env.DAYTONA_API_KEY) {
     throw new Error(
-      "DAYTONA_API_URL, DAYTONA_API_KEY, and DAYTONA_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=daytona"
+      "DAYTONA_API_URL and DAYTONA_API_KEY are required when SANDBOX_PROVIDER=daytona"
     );
   }
+  if (options.requireBaseSnapshot && !env.DAYTONA_BASE_SNAPSHOT) {
+    throw new Error("DAYTONA_BASE_SNAPSHOT is required to create Daytona sandboxes");
+  }
 
-  const client = createDaytonaRestClient({
+  return createDaytonaRestClient({
     apiUrl: env.DAYTONA_API_URL,
     apiKey: env.DAYTONA_API_KEY,
     target: env.DAYTONA_TARGET,
     baseSnapshot: env.DAYTONA_BASE_SNAPSHOT,
+    toolboxApiUrl: env.DAYTONA_TOOLBOX_API_URL,
     autoStopIntervalMinutes: parseNumericEnv(
       "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
       env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES,
@@ -118,11 +133,15 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
       10080
     ),
   });
+}
+
+function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
+  const client = createDaytonaRestClientFromEnv(env, { requireBaseSnapshot: true });
 
   return createDaytonaProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
     gitlabAccessToken: env.GITLAB_ACCESS_TOKEN,
-    sandboxAccessPasswordSecret: env.DAYTONA_API_KEY,
+    sandboxAccessPasswordSecret: client.config.apiKey,
   });
 }
 
@@ -161,12 +180,12 @@ export function createSandboxProviderFromEnv(
 export function createSandboxProviderFromEnv(
   env: Env,
   backend?: SandboxBackendName,
-  options?: { requireOpenComputerTemplate?: boolean }
+  options?: SandboxProviderFactoryOptions
 ): SandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
   backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER),
-  options: { requireOpenComputerTemplate?: boolean } = {}
+  options: SandboxProviderFactoryOptions = {}
 ): SandboxProvider {
   switch (backend) {
     case "daytona":
@@ -182,6 +201,15 @@ export function createSandboxProviderFromEnv(
     case "modal":
       return createModalProviderFromEnv(env);
   }
+}
+
+/**
+ * Configuration a provider needs for the operation at hand, rather than for
+ * every operation it supports. A deployment that has switched providers still
+ * has resources to finalize and reclaim on the old one.
+ */
+interface SandboxProviderFactoryOptions {
+  requireOpenComputerTemplate?: boolean;
 }
 
 function parseNumericEnv(name: string, value: string | undefined, defaultValue: number): number {

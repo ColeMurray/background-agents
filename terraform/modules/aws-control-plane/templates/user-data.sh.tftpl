@@ -208,6 +208,31 @@ esac
 SCRIPT
 chmod 755 /usr/local/bin/open-inspect-fetch-config
 
+# Activating a new deployment, without taking the running stack down first.
+#
+# `systemctl restart` would take it down: the unit's ExecStop drains the stack
+# before ExecStartPre reaches S3, SSM and ECR, so a transient failure in any of
+# them leaves nothing running and nothing to roll back to. Here the fetch and
+# the pull happen while the old containers are still serving, and `up -d`
+# recreates only what changed. Anything that fails before that line changes
+# nothing at all, which is what makes a failed deploy a no-op rather than an
+# outage -- and what lets a rollback be the same command with the parameter put
+# back.
+#
+# Only the two steps are here. The activation itself is `deploy.sh`, which comes
+# down from S3 with the compose files, because this file cannot: the instance
+# ignores `user_data_base64`, so whatever cloud-init writes is what the host has
+# for its lifetime. A deploy therefore never assumes an instance is running a
+# particular revision of this template -- it runs the two steps itself.
+cat >/usr/local/bin/open-inspect-deploy <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+/usr/local/bin/open-inspect-fetch-config
+exec bash /opt/open-inspect/deploy.sh
+SCRIPT
+chmod 755 /usr/local/bin/open-inspect-deploy
+
 cat >/etc/open-inspect.conf <<CONF
 AWS_REGION=${region}
 CONFIG_BUCKET=${config_bucket}

@@ -1,4 +1,4 @@
-"""Resilient decoding for child-process output streams."""
+"""Child-process lifecycle helpers and resilient output decoding."""
 
 from __future__ import annotations
 
@@ -9,9 +9,25 @@ import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
+
+
+async def wait_for_process_exit(process: asyncio.subprocess.Process) -> int:
+    """Wait for the process leader without waiting for inherited output pipes to close."""
+    wait_task = asyncio.create_task(process.wait())
+    try:
+        await asyncio.sleep(0)
+        while process.returncode is None:
+            if wait_task.done():
+                return wait_task.result()
+            await asyncio.sleep(0.01)
+        return process.returncode
+    finally:
+        if not wait_task.done():
+            wait_task.cancel()
+        await asyncio.gather(wait_task, return_exceptions=True)
 
 
 async def terminate_owned_subprocess(
@@ -41,7 +57,44 @@ async def terminate_owned_subprocess(
     finally:
         # The leader may have exited while descendants still hold its output pipes.
         send_signal(signal.SIGKILL)
-        await asyncio.shield(process.wait())
+        await asyncio.shield(wait_for_process_exit(process))
+
+
+async def finish_cancellation_cleanup[ResultT](task: asyncio.Task[ResultT]) -> ResultT:
+    """Finish an independent cleanup task despite repeated caller cancellation."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
+async def spawn_owned_subprocess(
+    process_awaitable: Awaitable[asyncio.subprocess.Process],
+    *,
+    kill_process_group: Callable[[int, int], None] = os.killpg,
+) -> asyncio.subprocess.Process:
+    """Create a subprocess or clean it up before propagating cancellation."""
+
+    spawn_task = asyncio.ensure_future(process_awaitable)
+    try:
+        return await asyncio.shield(spawn_task)
+    except asyncio.CancelledError:
+
+        async def cleanup_spawned_process() -> None:
+            try:
+                process = await spawn_task
+            except (asyncio.CancelledError, Exception):
+                return
+            await terminate_owned_subprocess(
+                process,
+                kill_process_group=kill_process_group,
+            )
+
+        cleanup_task = asyncio.create_task(cleanup_spawned_process())
+        await finish_cancellation_cleanup(cleanup_task)
+        raise
 
 
 async def communicate_owned_subprocess(

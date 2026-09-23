@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Static checks for the two AWS deployment artifacts nothing else parses.
+# Static checks for the AWS deployment artifacts nothing else parses.
 #
 # `terraform validate` reads the module's HCL but never renders its user-data
-# template, and the compose smoke boots docker-compose.smoke.yml rather than the
-# AWS overlay. A mistake in either would first be seen as a control plane that
+# template, the compose smoke boots docker-compose.smoke.yml rather than the AWS
+# overlay, and the deploy script only ever runs in a CI job against a live
+# instance. A mistake in any of them would first be seen as a control plane that
 # does not come up.
 #
 #   scripts/check-aws-stack.sh
@@ -44,15 +45,30 @@ rendered = reference.sub(lambda m: stubs[m.group(1)], source).replace("$${", "${
 open(sys.argv[2], "w").write(rendered)
 PY
 
-bash -n "$RENDERED"
+# Use shellcheck if it is installed, otherwise the same thing in a container --
+# the checks a CI runner and a laptop run should not differ. The wording matters:
+# a comment starting with "shellcheck" is read as a directive, and one that does
+# not parse is an error that stops the rest of the file being checked at all.
+lint_shell() {
+  bash -n "$1"
+  if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck "$1"
+  else
+    docker run --rm -v "$(dirname "$1")":/mnt koalaman/shellcheck:stable "/mnt/$(basename "$1")"
+  fi
+}
 
-if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$RENDERED"
-else
-  docker run --rm -v "$(dirname "$RENDERED")":/mnt koalaman/shellcheck:stable "/mnt/$(basename "$RENDERED")"
-fi
-
+lint_shell "$RENDERED"
 echo "user-data template: syntax and shellcheck clean"
+
+# The deploy scripts are the other things here that only ever run somewhere it is
+# hard to iterate on: a CI job, and an instance reached over SSM.
+lint_shell "$REPO_ROOT/scripts/deploy-aws.sh"
+lint_shell "$REPO_ROOT/terraform/modules/aws-control-plane/files/deploy.sh"
+# And this file, which is the only thing standing between those two and CI: a
+# guard that is not on its own path is one whose own breakage is invisible.
+lint_shell "$REPO_ROOT/scripts/check-aws-stack.sh"
+echo "deploy scripts: syntax and shellcheck clean"
 
 # ---------------------------------------------------------------------------
 # The AWS overlay resolves to the stack the instance is meant to run

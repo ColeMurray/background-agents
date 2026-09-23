@@ -23,6 +23,7 @@ function session(overrides: Partial<SessionRow> = {}): SessionRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     status: "active",
+    status_revision: 1,
     parent_session_id: null,
     spawn_source: "user",
     spawn_depth: 0,

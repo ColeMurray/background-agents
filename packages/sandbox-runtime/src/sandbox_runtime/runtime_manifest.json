@@ -1,9 +1,11 @@
 {
-  "runtimeVersion": "v65-turn-inactivity-timeout",
-  "generation": 65,
+  "runtimeVersion": "v72-claude-opus-5-5",
+  "generation": 72,
   "minimumCompatibleGeneration": 62,
-  "minimumRebuildGeneration": 65,
+  "minimumPreservationGeneration": 71,
+  "minimumRebuildGeneration": 72,
   "harnessMinimumGeneration": {
-    "claude": 64
+    "claude": 72,
+    "opencode": 72
   }
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SharedSlack from "@open-inspect/shared/slack";
+import { makeExecutionContext as makeCtx } from "../test-helpers";
 import type { Env } from "../types";
 
 const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
@@ -59,14 +60,6 @@ function slackRequest(body: string): Request {
     },
     body,
   });
-}
-
-function makeCtx() {
-  return {
-    props: {},
-    waitUntil: vi.fn(),
-    passThroughOnException: vi.fn(),
-  } as any;
 }
 
 describe("POST /events deduplication", () => {

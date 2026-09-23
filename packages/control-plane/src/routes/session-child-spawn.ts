@@ -122,11 +122,17 @@ export async function handleSpawnChild(
     return error("Failed to get parent session context", 500);
   }
   const spawnContext = parsedSpawnContext.data;
-  const { sandboxTimeoutMs: _currentTimeoutMs, ...resolvedChildSettingsWithoutTimeout } =
-    resolvedChildSandboxSettings;
+  const {
+    sandboxTimeoutMs: _currentTimeoutMs,
+    finalSnapshotBufferMs: _currentBufferMs,
+    ...resolvedChildSettingsWithoutTimeout
+  } = resolvedChildSandboxSettings;
   const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
   if (spawnContext.sandboxTimeoutMs !== undefined) {
     childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
+  }
+  if (spawnContext.finalSnapshotBufferMs !== undefined) {
+    childSandboxSettings.finalSnapshotBufferMs = spawnContext.finalSnapshotBufferMs;
   }
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
@@ -263,9 +269,6 @@ export async function handleSpawnChild(
     scmName: spawnContext.promptAuthor.scmName,
     scmEmail: spawnContext.promptAuthor.scmEmail,
     scmUserId: spawnContext.promptAuthor.scmUserId,
-    scmTokenEncrypted: spawnContext.promptAuthor.scmAccessTokenEncrypted,
-    scmRefreshTokenEncrypted: spawnContext.promptAuthor.scmRefreshTokenEncrypted,
-    scmTokenExpiresAt: spawnContext.promptAuthor.scmTokenExpiresAt,
     codeServerEnabled: childCodeServerEnabled,
     vncEnabled: childVncEnabled,
     sandboxSettings: childSandboxSettings,

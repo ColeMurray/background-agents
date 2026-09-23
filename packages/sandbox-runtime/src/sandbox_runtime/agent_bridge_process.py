@@ -23,9 +23,18 @@ class AgentBridgeProcess:
         self.session_id = config.session_id
         self.harness = config.harness
         self._process: asyncio.subprocess.Process | None = None
+        self._early_connect = False
 
-    async def start(self) -> None:
-        self.log.info("bridge.start")
+    async def start(self, early_connect: bool | None = None) -> None:
+        """Spawn the bridge; ``early_connect`` sticks, so a restart keeps the mode.
+
+        In early mode the bridge connects to the control plane before the
+        repository boots and attaches its harness when the supervisor reports
+        the harness phase complete (see ``bridge.py``).
+        """
+        if early_connect is not None:
+            self._early_connect = early_connect
+        self.log.info("bridge.start", early_connect=self._early_connect)
         if not self.control_plane_url:
             self.log.info("bridge.skip", reason="no_control_plane_url")
             return
@@ -49,6 +58,7 @@ class AgentBridgeProcess:
             str(OPENCODE_PORT),
             "--harness",
             self.harness.value,
+            *(["--early-connect"] if self._early_connect else []),
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -91,6 +101,12 @@ class AgentBridgeProcess:
                     await asyncio.wait_for(self._process.wait(), timeout=5.0)
                 except TimeoutError:
                     self.log.warn("bridge.stop_timeout")
+
+    async def wait(self) -> int | None:
+        """Block until the bridge process exits; ``None`` when none was started."""
+        if self._process is None:
+            return None
+        return await self._process.wait()
 
     def exit_code(self) -> int | None:
         return self._process.returncode if self._process else None

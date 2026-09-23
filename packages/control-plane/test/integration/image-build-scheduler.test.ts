@@ -5,8 +5,7 @@ import { ImageBuildStore } from "../../src/db/image-builds";
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
 import { IMAGE_BUILD_SCHEDULER_CRON, ImageBuildScheduler } from "../../src/image-builds/scheduler";
 import type { ImageBuildWorkflow } from "../../src/image-builds/workflow";
-import type { WorkerBindings } from "../../src/cloudflare/platform";
-import type { Env } from "../../src/types";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers";
 
@@ -17,7 +16,7 @@ describe("image build scheduler integration", () => {
     await expect(
       worker.scheduled(
         { cron: IMAGE_BUILD_SCHEDULER_CRON } as ScheduledEvent,
-        { DB: env.DB } as unknown as WorkerBindings,
+        env,
         createExecutionContext()
       )
     ).resolves.toBeUndefined();
@@ -55,7 +54,7 @@ describe("image build scheduler integration", () => {
     const send = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      { JOBS: { send } } as unknown as Env,
+      { ...createCloudflareEnv(env), JOBS: { send } },
       env.DB,
       null,
       store,
@@ -109,7 +108,7 @@ describe("image build scheduler integration", () => {
     const send = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      { JOBS: { send } } as unknown as Env,
+      { ...createCloudflareEnv(env), JOBS: { send } },
       env.DB,
       null,
       store,
@@ -142,7 +141,7 @@ describe("image build scheduler integration", () => {
     const cleanupFailedBuild = vi.fn(async () => undefined);
     const workflow = {} as unknown as ImageBuildWorkflow;
     const scheduler = new ImageBuildScheduler(
-      {} as Env,
+      createCloudflareEnv(env),
       env.DB,
       null,
       store,

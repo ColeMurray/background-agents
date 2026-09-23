@@ -8,10 +8,13 @@
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
+import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   createVncAccess,
+  signalUntilDeadline,
   type ImageBuildProviderTriggerConfig,
   type SandboxProvider,
   type SandboxProviderCapabilities,
@@ -21,6 +24,8 @@ import {
   type RestoreResult,
   type SnapshotConfig,
   type SnapshotResult,
+  type StopConfig,
+  type StopResult,
 } from "../provider";
 
 interface StartModalImageBuildConfig {
@@ -86,11 +91,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: true,
+    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,
-    supportsExplicitStop: false,
+    supportsExplicitStop: true,
   };
 
   constructor(private readonly client: ModalClient) {}
@@ -99,6 +104,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Create a new sandbox via Modal API.
    */
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    const observedAtMs = Date.now();
+    const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
       const result = await this.client.createSandbox(
         {
@@ -115,7 +122,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           userEnvVars: config.userEnvVars,
           prebuiltImageId: config.prebuiltImageId,
           prebuiltImageSha: config.prebuiltImageSha,
-          timeoutSeconds: config.timeoutSeconds,
+          timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
           vncEnabled: config.vncEnabled,
@@ -131,6 +138,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
         createdAt: result.createdAt,
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: observedAtMs + timeoutSeconds * 1000,
+          observedAtMs,
+          source: "conservative_start_bound",
+        },
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
         vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
@@ -138,6 +151,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
+      if (config.prebuiltImageId && error instanceof ModalApiError && error.status === 410) {
+        throw new PrebuiltImageUnavailableError("Modal prebuilt image is unavailable", error);
+      }
       throw this.classifyError("Failed to create sandbox", error);
     }
   }
@@ -146,6 +162,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Restore a sandbox from a filesystem snapshot.
    */
   async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
+    const observedAtMs = Date.now();
+    const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
       const result = await this.client.restoreSandbox(
         {
@@ -160,7 +178,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
-          timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+          timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
           vncEnabled: config.vncEnabled,
@@ -172,22 +190,21 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         config.correlation
       );
 
-      if (result.success) {
-        return {
-          success: true,
-          sandboxId: result.sandboxId,
-          providerObjectId: result.modalObjectId,
-          codeServerUrl: result.codeServerUrl,
-          codeServerPassword: result.codeServerPassword,
-          vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
-          ttydUrl: result.ttydUrl,
-          tunnelUrls: result.tunnelUrls,
-        };
-      }
-
       return {
-        success: false,
-        error: result.error || "Unknown restore error",
+        success: true,
+        sandboxId: result.sandboxId,
+        providerObjectId: result.modalObjectId,
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: observedAtMs + timeoutSeconds * 1000,
+          observedAtMs,
+          source: "conservative_start_bound",
+        },
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
+        ttydUrl: result.ttydUrl,
+        tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {
@@ -212,21 +229,15 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         {
           providerObjectId: config.providerObjectId,
           sessionId: config.sessionId,
-          signal: config.signal,
+          signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
+          deadlineAtMs: config.deadlineAtMs,
         },
         config.correlation
       );
 
-      if (result.success && result.imageId) {
-        return {
-          success: true,
-          imageId: result.imageId,
-        };
-      }
-
       return {
-        success: false,
-        error: result.error || "Unknown snapshot error",
+        success: true,
+        imageId: result.imageId,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {
@@ -243,6 +254,24 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
+  async stopSandbox(config: StopConfig): Promise<StopResult> {
+    try {
+      const signal = signalUntilDeadline(config.deadlineAtMs, config.signal);
+      await this.client.stopSandbox(
+        {
+          providerObjectId: config.providerObjectId,
+          sessionId: config.sessionId,
+          signal,
+        },
+        config.correlation
+      );
+      return { success: true };
+    } catch (error) {
+      if (error instanceof ModalApiError && error.status === 404) return { success: true };
+      throw this.classifyError("Failed to stop Modal sandbox", error);
+    }
+  }
+
   async snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult> {
     try {
       const result = await this.client.snapshotBuildSandbox(
@@ -253,13 +282,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         },
         config.correlation
       );
-      if (result.success && result.imageId) {
-        return { success: true, imageId: result.imageId };
-      }
-      return {
-        success: false,
-        error: result.error || "Unknown image build snapshot error",
-      };
+      return { success: true, imageId: result.imageId };
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(

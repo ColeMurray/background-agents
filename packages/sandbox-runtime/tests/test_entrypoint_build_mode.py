@@ -15,7 +15,7 @@ from sandbox_runtime.repository_sync import (
     RepositorySyncStatus,
 )
 from sandbox_runtime.runtime_config import BootMode
-from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
+from sandbox_runtime.supervisor import BootExecutionCancelled
 
 
 @pytest.fixture(autouse=True)
@@ -140,10 +140,32 @@ class TestImageBuildMode:
         supervisor.shutdown_event.set()
         operation_factory = MagicMock()
 
-        with pytest.raises(ImageBuildExecutionCancelled):
+        with pytest.raises(BootExecutionCancelled):
             await supervisor._run_until_shutdown(operation_factory)
 
         operation_factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_wins_when_operation_succeeds_in_same_turn(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def operation():
+            supervisor.shutdown_event.set()
+            return "complete"
+
+        with pytest.raises(BootExecutionCancelled):
+            await supervisor._run_until_shutdown(operation)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_wins_when_operation_fails_in_same_turn(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def operation():
+            supervisor.shutdown_event.set()
+            raise RuntimeError("racing failure")
+
+        with pytest.raises(BootExecutionCancelled):
+            await supervisor._run_until_shutdown(operation)
 
     @pytest.mark.asyncio
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
@@ -975,7 +997,7 @@ class TestSnapshotRestoreMode:
         with (
             patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False),
             patch(
-                "sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
@@ -996,7 +1018,11 @@ class TestSnapshotRestoreMode:
         assert startup_call.kwargs["git_sync_success"] is False
         supervisor.harness_process.start.assert_called_once()
         # The warning is queued for the bridge to forward as a sandbox event.
-        warning_lines = (tmp_path / "warnings.jsonl").read_text().splitlines()
+        warning_lines = [
+            line
+            for line in (tmp_path / "warnings.jsonl").read_text().splitlines()
+            if json.loads(line)["kind"] == "warning"
+        ]
         assert len(warning_lines) == 1
         assert '"scope": "sync"' in warning_lines[0]
 

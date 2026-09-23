@@ -48,12 +48,14 @@ export type SessionRepositoryState = z.infer<typeof sessionRepositoryStateSchema
  * repoOwner/repoName columns). Control-plane's SessionIndexRepository aliases
  * this so the wire shape has a single home.
  */
-export interface SessionListRepository {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  baseBranch: string;
-}
+export const sessionListRepositorySchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+  repoId: z.number().nullable(),
+  baseBranch: z.string(),
+});
+
+export type SessionListRepository = z.infer<typeof sessionListRepositorySchema>;
 
 /**
  * Whether a PR artifact belongs to a given session repository. Artifacts written

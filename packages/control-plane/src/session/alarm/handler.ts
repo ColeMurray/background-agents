@@ -1,6 +1,6 @@
 import type { Logger } from "../../logger";
 import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
-import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
+import type { SandboxAlarm } from "../../sandbox/lifecycle/ports";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SessionMessageQueue } from "../message-queue";
 import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
@@ -8,13 +8,14 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
 
 export interface AlarmHandlerDeps {
+  preserveBeforeWatchdogs?: () => Promise<"continue" | "hold_watchdogs">;
   repository: MessageRepository;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failPendingMessage">;
   executionStop: Pick<
     ExecutionStopCoordinator,
     "recoverStopConfirmationTimeout" | "resumeAfterSandboxTermination"
   >;
-  lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
+  lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
   /** Resolved per use so it honors settings persisted after construction. */
@@ -38,6 +39,9 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
+      // Graceful shutdown must not wait behind a remote index projection or a
+      // generic stop timeout. Recheck below if projection I/O crosses D.
+      await deps.preserveBeforeWatchdogs?.();
       let projectionFailure: { error: unknown } | undefined;
       try {
         await deps.terminalMessageProjection.flushPending();
@@ -45,6 +49,10 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // A malformed unread projection must not prevent lifecycle recovery.
         // Rethrow after recovery so transient storage failures still retry.
         projectionFailure = { error };
+      }
+      if ((await deps.preserveBeforeWatchdogs?.()) === "hold_watchdogs") {
+        if (projectionFailure) throw projectionFailure.error;
+        return;
       }
       await deps.executionStop.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
@@ -76,12 +84,25 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         }
       }
 
+      // Identified before lifecycle handling, which may yield on provider
+      // I/O: the head can change in that gap, and the prompt a boot was for
+      // is the one that was waiting when the alarm fired.
+      const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
       if (lifecycleResult !== "no_action") {
         await deps.messageQueue.failStuckProcessingMessage();
       }
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
+      }
+      if (
+        bootPrompt &&
+        typeof lifecycleResult === "object" &&
+        lifecycleResult.kind === "boot_budget_exceeded"
+      ) {
+        // The boot was for that prompt; it fails with the same words the user
+        // sees, and nothing re-drives it onto a fresh sandbox.
+        await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
       }
       if (projectionFailure) throw projectionFailure.error;
     },

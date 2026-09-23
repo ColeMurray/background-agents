@@ -21,6 +21,7 @@ from typing import Annotated, Any, Self
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
+from modal.exception import TimeoutError as ModalTimeoutError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
@@ -398,6 +399,7 @@ async def api_create_sandbox(
         from .sandbox.manager import (
             DEFAULT_SANDBOX_TIMEOUT_SECONDS,
             DEFAULT_VNC_ENABLED,
+            RepositoryImageUnavailableError,
             SandboxConfig,
             SandboxManager,
         )
@@ -434,7 +436,10 @@ async def api_create_sandbox(
             ),
         )
 
-        handle = await manager.create_sandbox(config)
+        try:
+            handle = await manager.create_sandbox(config)
+        except RepositoryImageUnavailableError as e:
+            raise HTTPException(status_code=410, detail="Repository image unavailable") from e
 
         return {
             "success": True,
@@ -514,7 +519,19 @@ async def api_snapshot_sandbox(
         if not handle:
             raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
 
-        image_id = await manager.take_snapshot(handle)
+        deadline_at_ms = request.get("deadline_at_ms")
+        if deadline_at_ms is not None:
+            if isinstance(deadline_at_ms, bool) or not isinstance(deadline_at_ms, (int, float)):
+                raise HTTPException(status_code=400, detail="deadline_at_ms must be a number")
+            timeout_seconds = (deadline_at_ms / 1000) - time.time()
+            if timeout_seconds <= 0:
+                raise HTTPException(status_code=408, detail="snapshot deadline expired")
+            try:
+                image_id = await manager.take_snapshot(handle, timeout_seconds=timeout_seconds)
+            except (TimeoutError, ModalTimeoutError) as exc:
+                raise HTTPException(status_code=408, detail="snapshot deadline expired") from exc
+        else:
+            image_id = await manager.take_snapshot(handle)
 
         return {
             "success": True,
@@ -523,6 +540,34 @@ async def api_snapshot_sandbox(
                 "sandbox_id": sandbox_id,
             },
         }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_stop_sandbox(
+    request: dict[str, Any],
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict[str, Any]:
+    """Explicitly terminate a session sandbox through the authenticated API."""
+    sandbox_id = request.get("sandbox_id")
+    async with _execute_endpoint(
+        endpoint_name="api_stop_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id or sandbox_id,
+    ):
+        if not isinstance(sandbox_id, str) or not sandbox_id:
+            raise HTTPException(status_code=400, detail="sandbox_id is required")
+        from .sandbox.manager import SandboxManager
+
+        await SandboxManager().stop_sandbox(sandbox_id)
+        return {"success": True, "data": {"terminated": True}}
 
 
 @app.function(image=function_image, secrets=[internal_api_secret])

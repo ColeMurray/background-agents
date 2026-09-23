@@ -54,7 +54,7 @@ function terraformControlPlaneConsumers(): TerraformConsumer[] {
   const bindings = new Map(
     [
       ...controlPlaneModule.matchAll(
-        /binding_name\s*=\s*"(\w+)"\s*\n\s*queue_name\s*=\s*cloudflare_queue\.(\w+)(?:\[0\])?\.queue_name/g
+        /^\s*(\w+)\s*=\s*\{\s*\n\s*queue_name\s*=\s*cloudflare_queue\.(\w+)(?:\[0\])?\.queue_name/gm
       ),
     ].map((match) => [match[2]!, match[1]!])
   );
@@ -173,6 +173,21 @@ describe("createQueueJobs", () => {
 
     expect(finalization.send).toHaveBeenCalledWith(FINALIZE_PAYLOAD);
     expect(autofix.send).not.toHaveBeenCalled();
+  });
+
+  it("defers a delayed send in the whole seconds a Queue accepts", async () => {
+    const finalization = { send: vi.fn(async () => undefined) };
+    const jobs = createQueueJobs({
+      IMAGE_BUILD_FINALIZATION_QUEUE: finalization as unknown as Queue<unknown>,
+    });
+
+    await jobs.send(
+      { kind: "image_build.finalize", payload: FINALIZE_PAYLOAD },
+      { delayMs: 30_500 }
+    );
+
+    // Rounded up: a delay must never come back sooner than asked.
+    expect(finalization.send).toHaveBeenCalledWith(FINALIZE_PAYLOAD, { delaySeconds: 31 });
   });
 
   it("rejects a kind whose queue this deployment does not bind", async () => {

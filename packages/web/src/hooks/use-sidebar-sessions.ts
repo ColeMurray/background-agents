@@ -8,8 +8,8 @@ import type {
   SessionInboxCategory,
   SessionInboxItem,
   SessionInboxPage,
+  SessionInboxSession,
   SessionInboxSnapshot,
-  SessionListItem,
 } from "@open-inspect/shared/types/session-inbox";
 import {
   applySessionInboxItemReadState,
@@ -19,6 +19,8 @@ import {
   isSessionInboxItemFullyRead,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
+  parseSessionInboxPage,
+  parseSessionInboxSnapshot,
   sessionInboxDestinationCategory,
 } from "@/lib/session-inbox-api";
 import {
@@ -31,7 +33,7 @@ import {
 const VISIBLE_INBOX_POLL_MS = 30_000;
 const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
 
-export type SessionItem = SessionListItem;
+export type SessionItem = SessionInboxSession;
 type SessionCreatorFilter = "all" | "mine";
 type PaginationKey = ReturnType<typeof buildSessionInboxKey>;
 
@@ -93,7 +95,7 @@ function useCategoryPagination(
     paginationRequest
       ? () => {
           if (!fetcher) throw new Error("Missing SWR fetcher");
-          return fetcher(paginationRequest.key) as Promise<SessionInboxPage>;
+          return Promise.resolve(fetcher(paginationRequest.key)).then(parseSessionInboxPage);
         }
       : null,
     { shouldRetryOnError: false }
@@ -179,7 +181,7 @@ function useCategoryPagination(
 
 export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
-  const { mutate: mutateCache } = useSWRConfig();
+  const { fetcher, mutate: mutateCache } = useSWRConfig();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
     useState<SessionCreatorFilter | null>(null);
 
@@ -212,13 +214,17 @@ export function useSidebarSessions() {
     error: snapshotError,
     isLoading,
     mutate: refreshSnapshot,
-  } = useSWR<SessionInboxSnapshot>(snapshotKey, {
-    refreshInterval: () =>
-      typeof document !== "undefined" && document.visibilityState === "visible"
-        ? VISIBLE_INBOX_POLL_MS
-        : 0,
-    refreshWhenHidden: false,
-  });
+  } = useSWR<SessionInboxSnapshot>(
+    snapshotKey,
+    fetcher ? (key) => Promise.resolve(fetcher(key)).then(parseSessionInboxSnapshot) : null,
+    {
+      refreshInterval: () =>
+        typeof document !== "undefined" && document.visibilityState === "visible"
+          ? VISIBLE_INBOX_POLL_MS
+          : 0,
+      refreshWhenHidden: false,
+    }
+  );
   const userId = authSession?.user.id ?? null;
   const paginationFilterIdentity = JSON.stringify([userId, mine]);
   const nextPageSequence = useRef(0);

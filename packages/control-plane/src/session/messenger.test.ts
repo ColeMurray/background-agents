@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SandboxDeliveryUnavailableError, SessionMessengerImpl } from "./messenger";
+import type { SandboxCommandTarget } from "./websocket-manager";
 
 function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boolean } = {}) {
   const clientA = { readyState: WebSocket.OPEN, url: "ws://client-a" } as WebSocket;
@@ -15,7 +16,10 @@ function harness(overrides: { sandboxSocket?: WebSocket | null; sendResult?: boo
         fn(clientB);
       }
     ),
-    getSandboxSocket: vi.fn(() => sandbox),
+    getSandboxCommandTarget: vi.fn(
+      (): SandboxCommandTarget =>
+        sandbox ? { kind: "dispatch", socket: sandbox } : { kind: "unavailable" }
+    ),
     send: vi.fn(() => overrides.sendResult ?? true),
   };
   return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientA, clientB, sandbox };
@@ -70,6 +74,17 @@ describe("SessionMessengerImpl", () => {
     await messenger.sendToSandbox({ type: "refresh_diff" });
 
     expect(wsManager.send).toHaveBeenCalledWith(sandbox, { type: "refresh_diff" });
+  });
+
+  it("rejects delivery to a bridge that is attached but still booting", async () => {
+    // The registry withholds a booting sandbox's socket from operational
+    // commands; refresh_diff and stop take their unavailable branches.
+    const { messenger, wsManager } = harness({ sandboxSocket: null });
+    wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting", phase: null });
+
+    await expect(messenger.sendToSandbox({ type: "refresh_diff" })).rejects.toBeInstanceOf(
+      SandboxDeliveryUnavailableError
+    );
   });
 
   it("rejects with SandboxDeliveryUnavailableError when no sandbox is connected", async () => {

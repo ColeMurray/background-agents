@@ -1,16 +1,20 @@
 import {
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
+  harnessIdSchema,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import type {
-  PullRequestSummary,
-  SessionReadAction,
-  SessionReadResult,
-  SessionReadState,
-  SessionStatus,
-  SpawnSource,
+import {
+  sessionStatusSchema,
+  spawnSourceSchema,
+  type PullRequestSummary,
+  type SessionReadAction,
+  type SessionReadResult,
+  type SessionReadState,
+  type SessionStatus,
+  type SpawnSource,
 } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 import {
   DEFAULT_SESSION_LIST_LIMIT,
   DEFAULT_SESSION_LIST_OFFSET,
@@ -27,7 +31,9 @@ import {
   type SessionModelProviderAuthInput,
 } from "../model-provider-accounts/provider-auth-contracts";
 import { bulkInsertStatements } from "./bulk-insert";
+import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
+import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import {
   SessionInboxStore,
   type ListSessionInboxOptions,
@@ -110,32 +116,34 @@ export interface SessionEntry {
   providerAuth?: SessionModelProviderAuthInput[];
 }
 
-interface SessionRow {
-  id: string;
-  title: string | null;
-  repo_owner: string | null;
-  repo_name: string | null;
-  harness: HarnessId;
-  model: string;
-  reasoning_effort: string | null;
-  base_branch: string | null;
-  status: SessionStatus;
-  parent_session_id: string | null;
-  root_session_id: string | null;
-  spawn_source: SpawnSource;
-  spawn_depth: number;
-  automation_id: string | null;
-  automation_run_id: string | null;
-  scm_login: string | null;
-  user_id: string | null;
-  total_cost: number;
-  active_duration_ms: number;
-  message_count: number;
-  pr_count: number;
-  environment_id: string | null;
-  created_at: number;
-  updated_at: number;
-}
+const sessionRowSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repo_owner: z.string().nullable(),
+  repo_name: z.string().nullable(),
+  harness: harnessIdSchema.catch(DEFAULT_HARNESS),
+  model: z.string(),
+  reasoning_effort: z.string().nullable(),
+  base_branch: z.string().nullable(),
+  status: sessionStatusSchema,
+  parent_session_id: z.string().nullable(),
+  root_session_id: z.string().nullable(),
+  spawn_source: spawnSourceSchema,
+  spawn_depth: z.number(),
+  automation_id: z.string().nullable(),
+  automation_run_id: z.string().nullable(),
+  scm_login: z.string().nullable(),
+  user_id: z.string().nullable(),
+  total_cost: z.number(),
+  active_duration_ms: z.number(),
+  message_count: z.number(),
+  pr_count: z.number(),
+  environment_id: z.string().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+
+type SessionRow = z.infer<typeof sessionRowSchema>;
 
 interface SessionModelProviderAuthRow {
   provider: string;
@@ -146,11 +154,7 @@ interface SessionModelProviderAuthRow {
 }
 
 /** Filters, pagination, and viewer read state for a session list query. */
-export interface ListSessionsOptions {
-  status?: SessionStatus;
-  excludeStatus?: SessionStatus;
-  excludeAutomationLineage?: boolean;
-  createdByUserIds?: readonly string[];
+export interface ListSessionsOptions extends SessionListFilters {
   limit?: number;
   offset?: number;
   viewerUserId?: string;
@@ -190,6 +194,13 @@ function toEntry(row: SessionRow): SessionEntry {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseSessionRow(row: unknown): SessionRow | null {
+  if (row === null || row === undefined) return null;
+  const parsed = sessionRowSchema.safeParse(row);
+  if (!parsed.success) throw new Error("Malformed persisted session index row");
+  return parsed.data;
 }
 
 function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
@@ -441,12 +452,10 @@ export class SessionIndexStore {
   }
 
   async get(id: string): Promise<SessionEntry | null> {
-    const result = await this.db
-      .prepare("SELECT * FROM sessions WHERE id = ?")
-      .bind(id)
-      .first<SessionRow>();
+    const result = await this.db.prepare("SELECT * FROM sessions WHERE id = ?").bind(id).first();
 
-    return result ? toEntry(result) : null;
+    const row = parseSessionRow(result);
+    return row ? toEntry(row) : null;
   }
 
   private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {
@@ -522,43 +531,14 @@ export class SessionIndexStore {
   /** List sessions with optional viewer-specific read state. */
   async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
     const {
-      status,
-      excludeStatus,
-      excludeAutomationLineage,
-      createdByUserIds,
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
     } = options;
+    const { where, params } = buildSessionListPredicates(options);
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (status) {
-      conditions.push("status = ?");
-      params.push(status);
-    }
-
-    if (excludeStatus) {
-      conditions.push("status != ?");
-      params.push(excludeStatus);
-    }
-
-    if (excludeAutomationLineage) {
-      // The "Mine" view excludes sessions no human initiated in the app.
-      // github-bot sessions are attributed to the webhook sender (the verified
-      // actor), but auto reviews and review-request handling are bot-initiated,
-      // so they are lineage-excluded alongside automation runs.
-      conditions.push("automation_id IS NULL AND spawn_source NOT IN ('automation', 'github-bot')");
-    }
-
-    if (createdByUserIds?.length) {
-      conditions.push(`user_id IN (${createdByUserIds.map(() => "?").join(", ")})`);
-      params.push(...createdByUserIds);
-    }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    // `id DESC` breaks updated_at ties so offset pages never overlap or skip.
+    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`;
     const pageParams = [...params, limit + 1, offset];
     const result = viewerUserId
       ? await this.db
@@ -571,7 +551,7 @@ export class SessionIndexStore {
              LEFT JOIN session_read_states read_state
                ON read_state.session_id = paged_sessions.id
               AND read_state.user_id = viewer.id
-             ORDER BY paged_sessions.updated_at DESC`
+             ORDER BY paged_sessions.updated_at DESC, paged_sessions.id DESC`
           )
           .bind(...pageParams, viewerUserId)
           .all<ViewerSessionRow>()
@@ -735,23 +715,17 @@ export class SessionIndexStore {
     return row ? readStateFromRow(row) : null;
   }
 
-  async updateTitleIfNewer(id: string, title: string, updatedAt: number): Promise<boolean> {
+  async updateTitle(id: string, title: string, updatedAt: number): Promise<boolean> {
     const result = await this.db
-      .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND updated_at <= ?")
-      .bind(title, updatedAt, id, updatedAt)
+      .prepare("UPDATE sessions SET title = ?, updated_at = MAX(updated_at, ?) WHERE id = ?")
+      .bind(title, updatedAt, id)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
   }
 
   async updateStatus(id: string, status: SessionStatus, updatedAt = Date.now()): Promise<boolean> {
-    // Protect against out-of-order async writes by only applying monotonic updated_at values.
-    const result = await this.db
-      .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND updated_at <= ?")
-      .bind(status, updatedAt, id, updatedAt)
-      .run();
-
-    return (result.meta?.changes ?? 0) > 0;
+    return new SessionStatusProjectionStore(this.db).updateUnclaimed(id, status, updatedAt);
   }
 
   async updateMetrics(
@@ -780,7 +754,7 @@ export class SessionIndexStore {
    * so a row still sitting there long after its last update was abandoned before
    * any work started. Ordered oldest-first, which drains a backlog only while
    * every visited row leaves this set — see `archiveOrphanedDraft` and
-   * `repairStatus` for the two cases where that had to be made true.
+   * the runtime's status projection for the two cases where that had to be made true.
    */
   async listAbandonedDraftSessionIds(staleBefore: number, limit: number): Promise<string[]> {
     const result = await this.db
@@ -805,35 +779,7 @@ export class SessionIndexStore {
    * session between the sweep's read and this write is left alone.
    */
   async archiveOrphanedDraft(id: string): Promise<boolean> {
-    const result = await this.db
-      .prepare(
-        "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'created'"
-      )
-      .bind(Date.now(), id)
-      .run();
-
-    return (result.meta?.changes ?? 0) > 0;
-  }
-
-  /**
-   * Correct a draft status projection that drifted away from its Durable Object.
-   *
-   * Deliberately not `updateStatus`, which carries an `updated_at` and refuses
-   * writes that would move it backwards. That guard keeps concurrent transitions
-   * ordered, but it silently drops a repair: the Durable Object sends its own
-   * timestamp, which is behind D1's whenever `touchUpdatedAt` has run, so the
-   * write matches no rows and reports success as `false`. This repair asserts
-   * only the stale shape the draft sweep selected: D1 still says `created`, and
-   * the Durable Object says otherwise. Only that status column is written,
-   * leaving `updated_at` to keep meaning "last real activity".
-   */
-  async repairStatus(id: string, status: SessionStatus): Promise<boolean> {
-    const result = await this.db
-      .prepare("UPDATE sessions SET status = ? WHERE id = ? AND status = 'created' AND status != ?")
-      .bind(status, id, status)
-      .run();
-
-    return (result.meta?.changes ?? 0) > 0;
+    return new SessionStatusProjectionStore(this.db).archiveOrphanedDraft(id);
   }
 
   async touchUpdatedAt(id: string): Promise<boolean> {

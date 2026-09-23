@@ -49,11 +49,11 @@ const QUERY_PATTERNS = {
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
   SELECT_EXISTS: /^SELECT 1 AS ok FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
-  SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
+  SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC, id DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
   UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
-  UPDATE_TITLE_IF_NEWER:
-    /^UPDATE sessions SET title = \?, updated_at = \? WHERE id = \? AND updated_at <= \?$/,
+  UPDATE_TITLE:
+    /^UPDATE sessions SET title = \?, updated_at = MAX\(updated_at, \?\) WHERE id = \?$/,
   UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
@@ -75,6 +75,12 @@ class FakeD1Database {
   prepare(query: string) {
     this.preparedQueries.push(normalizeQuery(query));
     return new FakePreparedStatement(this, query);
+  }
+
+  updateRawSessionRow(id: string, updates: Record<string, unknown>) {
+    const row = this.rows.get(id);
+    if (!row) throw new Error(`Missing session row: ${id}`);
+    Object.assign(row as Record<string, unknown>, updates);
   }
 
   async batch(statements: FakePreparedStatement[]) {
@@ -285,12 +291,12 @@ class FakeD1Database {
       return { meta: { changes: 0 } };
     }
 
-    if (QUERY_PATTERNS.UPDATE_TITLE_IF_NEWER.test(normalized)) {
-      const [title, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
+    if (QUERY_PATTERNS.UPDATE_TITLE.test(normalized)) {
+      const [title, updatedAt, id] = args as [string, number, string];
       const row = this.rows.get(id);
-      if (row && row.updated_at <= maxUpdatedAt) {
+      if (row) {
         row.title = title;
-        row.updated_at = updatedAt;
+        row.updated_at = Math.max(row.updated_at, updatedAt);
         return { meta: { changes: 1 } };
       }
       return { meta: { changes: 0 } };
@@ -627,6 +633,23 @@ describe("SessionIndexStore", () => {
       expect(result?.id).toBe("test-id");
     });
 
+    it.each([
+      ["status", { status: "unknown" }],
+      ["spawn source", { spawn_source: "cron" }],
+    ])("rejects a persisted session row with invalid %s", async (_field, updates) => {
+      await store.create(makeSession());
+      db.updateRawSessionRow("test-id", updates);
+
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
+    });
+
+    it("rejects a partial persisted session row", async () => {
+      await store.create(makeSession());
+      db.updateRawSessionRow("test-id", { model: undefined });
+
+      await expect(store.get("test-id")).rejects.toThrow("Malformed persisted session index row");
+    });
+
     it("returns null when not found", async () => {
       const result = await store.get("nonexistent");
       expect(result).toBeNull();
@@ -818,11 +841,11 @@ describe("SessionIndexStore", () => {
     });
   });
 
-  describe("updateTitleIfNewer", () => {
+  describe("updateTitle", () => {
     it("updates the title when the write is current", async () => {
       await store.create(makeSession({ updatedAt: 1000 }));
 
-      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 2000);
+      const updated = await store.updateTitle("test-id", "Generated Title", 2000);
       expect(updated).toBe(true);
 
       const session = await store.get("test-id");
@@ -830,14 +853,14 @@ describe("SessionIndexStore", () => {
       expect(session?.updatedAt).toBe(2000);
     });
 
-    it("ignores stale title writes when a newer update already exists", async () => {
+    it("updates the title without lowering newer activity recency", async () => {
       await store.create(makeSession({ title: "Manual Title", updatedAt: 2000 }));
 
-      const updated = await store.updateTitleIfNewer("test-id", "Generated Title", 1500);
-      expect(updated).toBe(false);
+      const updated = await store.updateTitle("test-id", "Generated Title", 1500);
+      expect(updated).toBe(true);
 
       const session = await store.get("test-id");
-      expect(session?.title).toBe("Manual Title");
+      expect(session?.title).toBe("Generated Title");
       expect(session?.updatedAt).toBe(2000);
     });
   });

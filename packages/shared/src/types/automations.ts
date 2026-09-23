@@ -41,6 +41,15 @@ export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 /** Maximum length of an automation's instruction prompt. */
 export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
 
+/** Maximum length of an automation's name. */
+export const MAX_AUTOMATION_NAME_LENGTH = 200;
+
+/** Largest page `GET /automations` serves; larger limits are refused. */
+export const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
+
+/** Page size `GET /automations` serves when the client sends no limit. */
+export const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
+
 /**
  * Validate target-count rules shared by automation clients and the API.
  * Repository-scoped triggers bind to exactly one repository and no

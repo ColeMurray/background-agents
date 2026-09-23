@@ -12,9 +12,29 @@
 
 import type { SlackThreadMessage } from "./client";
 
-/** Slack `ts` values are `<seconds>.<microseconds>` strings; compare numerically. */
-function tsValue(ts: string): number {
-  return Number.parseFloat(ts);
+const SLACK_TIMESTAMP_PATTERN = /^(\d+)\.(\d+)$/;
+
+function timestampParts(ts: string): [seconds: string, fraction: string] {
+  const match = SLACK_TIMESTAMP_PATTERN.exec(ts);
+  if (!match) throw new TypeError(`Invalid Slack timestamp: ${ts}`);
+  return [match[1]!.replace(/^0+(?=\d)/, ""), match[2]!];
+}
+
+/** Compare Slack decimal timestamps exactly, without IEEE-754 precision loss. */
+export function compareSlackTimestamps(left: string, right: string): number {
+  const [leftSeconds, leftFraction] = timestampParts(left);
+  const [rightSeconds, rightFraction] = timestampParts(right);
+
+  if (leftSeconds.length !== rightSeconds.length) {
+    return leftSeconds.length < rightSeconds.length ? -1 : 1;
+  }
+  if (leftSeconds !== rightSeconds) return leftSeconds < rightSeconds ? -1 : 1;
+
+  const fractionLength = Math.max(leftFraction.length, rightFraction.length);
+  const normalizedLeft = leftFraction.padEnd(fractionLength, "0");
+  const normalizedRight = rightFraction.padEnd(fractionLength, "0");
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft < normalizedRight ? -1 : 1;
 }
 
 export interface ThreadWindowOptions {
@@ -55,8 +75,8 @@ export function selectThreadWindow(
   const eligible = messages.filter((message) => {
     if (excludeTs && message.ts === excludeTs) return false;
     if (excludeBots && message.bot_id) return false;
-    if (beforeTs && tsValue(message.ts) >= tsValue(beforeTs)) return false;
-    if (sinceTs && tsValue(message.ts) <= tsValue(sinceTs)) return false;
+    if (beforeTs && compareSlackTimestamps(message.ts, beforeTs) >= 0) return false;
+    if (sinceTs && compareSlackTimestamps(message.ts, sinceTs) <= 0) return false;
     return true;
   });
 

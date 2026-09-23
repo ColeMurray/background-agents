@@ -1,7 +1,7 @@
 "use client";
 
 import { toast } from "sonner";
-import { MODEL_OPTIONS } from "@open-inspect/shared/models";
+import { MODEL_OPTIONS, type ValidModel } from "@open-inspect/shared/models";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -12,19 +12,14 @@ export function ModelsSettings() {
     loading,
     error,
     saving,
-    saveEnabledModels,
+    updateModels,
   } = useEnabledModels();
   const enabledModels = new Set(storedEnabledModels);
 
-  const toggleModel = (modelId: string) => {
-    const next = new Set(enabledModels);
-    if (next.has(modelId)) {
-      if (next.size <= 1) return;
-      next.delete(modelId);
-    } else {
-      next.add(modelId);
-    }
-    void savePreferences(next);
+  const toggleModel = (modelId: ValidModel) => {
+    const enabled = !enabledModels.has(modelId);
+    if (!enabled && enabledModels.size <= 1) return;
+    void savePreferences([{ modelId, enabled }]);
   };
 
   const toggleCategory = (category: (typeof MODEL_OPTIONS)[number], enable: boolean) => {
@@ -37,12 +32,14 @@ export function ModelsSettings() {
       }
     }
     if (next.size === 0) return;
-    void savePreferences(next);
+    void savePreferences(
+      category.models.map((model) => ({ modelId: model.id, enabled: next.has(model.id) }))
+    );
   };
 
-  const savePreferences = async (next: Set<string>) => {
+  const savePreferences = async (changes: Parameters<typeof updateModels>[0]) => {
     try {
-      await saveEnabledModels(Array.from(next));
+      await updateModels(changes);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save preferences");
     }
@@ -87,7 +84,6 @@ export function ModelsSettings() {
                   type="button"
                   variant="subtle"
                   size="xs"
-                  disabled={saving}
                   onClick={() => toggleCategory(group, !allEnabled)}
                   className="text-accent hover:text-accent/80"
                 >
@@ -112,7 +108,6 @@ export function ModelsSettings() {
                       <Switch
                         id={`model-toggle-${model.id}`}
                         checked={isEnabled}
-                        disabled={saving}
                         onCheckedChange={() => toggleModel(model.id)}
                       />
                     </label>

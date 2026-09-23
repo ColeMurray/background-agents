@@ -87,7 +87,7 @@ export async function resolveSandboxSettings(
     try {
       const store = new IntegrationSettingsStore(db);
       const globalSettings = await store.getGlobal("sandbox");
-      return (globalSettings?.defaults ?? {}) as SandboxSettings;
+      return globalSettings?.defaults ?? {};
     } catch (e) {
       logger.warn("Failed to resolve global sandbox settings, using defaults", {
         error: e instanceof Error ? e.message : String(e),

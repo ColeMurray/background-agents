@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
+import { SANDBOX_ERROR_BODY_MAX_BYTES } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
@@ -42,8 +43,6 @@ const participantsResponseSchema = z.object({
     })
   ),
 });
-
-const SANDBOX_ERROR_BODY_MAX_BYTES = 2 * 1024;
 
 type SessionParams = { id: string };
 type ProxyHandler = (

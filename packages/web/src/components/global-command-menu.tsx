@@ -7,7 +7,9 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { matchesSearchTerms } from "@/lib/search";
-import { BranchIcon, PlusIcon } from "@/components/ui/icons";
+import { BranchIcon, PlusIcon, SearchIcon } from "@/components/ui/icons";
+import { buildSessionsHref } from "@/lib/session-discovery";
+import { MAX_SESSION_LIST_SEARCH_LENGTH } from "@open-inspect/shared/session-list-query";
 import { AppIcon } from "@/components/ui/app-icon";
 import { APP_DESTINATIONS } from "@/components/app-destinations";
 import { getSettingsGroups } from "@/components/settings/settings-registry";
@@ -48,8 +50,45 @@ function buildSessionUrl(session: SessionListItem): string {
   return query ? `/session/${session.id}?${query}` : `/session/${session.id}`;
 }
 
+/** Item value of the exhaustive-search handoff; it matches every search. */
+const SEARCH_ALL_SESSIONS_VALUE = "search all sessions";
+
 function filterCommandItem(value: string, search: string, keywords?: string[]): number {
+  // The handoff is an answer to any query the recent set cannot satisfy, so it
+  // is a real, counted, keyboard-reachable result for every search. Groups tie
+  // on score in insertion order, so it stays after genuine recent matches.
+  if (value === SEARCH_ALL_SESSIONS_VALUE) return 1;
   return matchesSearchTerms(`${value} ${keywords?.join(" ") ?? ""}`, search) ? 1 : 0;
+}
+
+/**
+ * The exhaustive-search handoff. The menu only searches the fetched recent
+ * set, so this item matches any typed text and carries it to the Sessions
+ * page, which searches full history server-side.
+ */
+function SearchAllSessionsItem({ onSelect }: { onSelect: (href: string) => void }) {
+  const search = useCommandState((state) => state.search);
+  const href = buildSessionsHref({ q: search });
+
+  return (
+    <CommandItem
+      value={SEARCH_ALL_SESSIONS_VALUE}
+      onSelect={() => onSelect(href)}
+      className="items-start"
+    >
+      <span aria-hidden="true" className="mt-0.5 shrink-0">
+        <SearchIcon className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate">Search all sessions</div>
+        <div className="truncate text-xs text-muted-foreground">
+          {search.trim()
+            ? `Search full history for "${search.trim()}"`
+            : "Archived and older sessions, with filters"}
+        </div>
+      </div>
+    </CommandItem>
+  );
 }
 
 function CommandMenuFooter() {
@@ -135,7 +174,10 @@ export function GlobalCommandMenu({
         Search and jump to sessions, settings, automations, and other destinations.
       </DialogDescription>
       <Command filter={filterCommandItem} label="Search commands, settings, and sessions">
-        <CommandInput placeholder="Search sessions, settings, and commands..." />
+        <CommandInput
+          placeholder="Quick search · recent sessions, settings, and commands"
+          maxLength={MAX_SESSION_LIST_SEARCH_LENGTH}
+        />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
 
@@ -188,7 +230,7 @@ export function GlobalCommandMenu({
           {searchableSessions.length > 0 && (
             <>
               <CommandSeparator />
-              <CommandGroup heading="Sessions">
+              <CommandGroup heading="Recent sessions">
                 {searchableSessions.map((session) => {
                   const repoLabel = formatRepoLabel(session.repoOwner, session.repoName);
                   const sessionTitle = session.title || repoLabel;
@@ -210,6 +252,15 @@ export function GlobalCommandMenu({
                     </CommandItem>
                   );
                 })}
+              </CommandGroup>
+            </>
+          )}
+
+          {hasPermission("sessions.read") && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="All sessions">
+                <SearchAllSessionsItem onSelect={(href) => handleSelect(() => onNavigate(href))} />
               </CommandGroup>
             </>
           )}

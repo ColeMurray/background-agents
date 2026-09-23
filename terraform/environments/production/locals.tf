@@ -54,8 +54,8 @@ locals {
 
   # Exactly one provider binding for the classifier bots.
   classifier_secret_bindings = (local.classifier_uses_openai
-    ? [{ name = "OPENAI_API_KEY", value = var.classification_openai_api_key }]
-    : [{ name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key }]
+    ? { OPENAI_API_KEY = { value = var.classification_openai_api_key } }
+    : { ANTHROPIC_API_KEY = { value = var.anthropic_api_key } }
   )
 
   # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays

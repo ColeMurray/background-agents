@@ -16,6 +16,8 @@ snapshot setup, not runtime operations.
 - `DAYTONA_API_URL`
 - `DAYTONA_TARGET`
 - `DAYTONA_BASE_SNAPSHOT` (required)
+- `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB` (required) — memory reserved by sandboxes created from the
+  snapshot
 
 ## Usage
 

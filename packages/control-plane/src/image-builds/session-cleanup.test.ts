@@ -114,4 +114,29 @@ describe("ImageBuildSessionCleanup", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the obligation when the provider has not finished tearing the session down", async () => {
+    const { cleanup, adapter, clearSessionCleanup } = harness();
+    adapter.cleanupFailedBuild.mockRejectedValue(
+      new Error("Daytona build sandbox is still being destroyed")
+    );
+
+    await expect(
+      cleanup.run(
+        {
+          id: "build-failed",
+          provider: "daytona",
+          provider_image_id: null,
+          provider_session_id: "session-1",
+          provider_session_cleanup_pending: 1,
+          error_message: "setup failed",
+        },
+        correlation
+      )
+    ).rejects.toThrow(/still being destroyed/);
+
+    // Acceptance is not reclamation on an asynchronous provider: the flag
+    // stays set so the next pass asks again.
+    expect(clearSessionCleanup).not.toHaveBeenCalled();
+  });
 });
