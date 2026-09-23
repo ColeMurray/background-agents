@@ -13,6 +13,13 @@ shared or reloaded. The command menu now labels its results as recent sessions a
 all sessions**, carrying typed text to the page; the sidebar's Archived shortcut opens the archived
 view, with archive management still under Settings → Data Controls. The Inbox is unchanged.
 
+**Clearer audit log outcomes.** Authorization decisions in the workspace audit log now show
+**Allowed** or **Denied** with the recorded HTTP response (for example, HTTP 409 Conflict) instead
+of a green **Applied** badge, because admitting a request does not prove the change took effect.
+**Applied**, **No change**, and **Rejected** are reserved for events recorded by the operation
+itself. Older rows without a recorded status show the decision with the response marked as not
+recorded; stored audit data is unchanged.
+
 **Claude Opus 5.5.** Adds `anthropic/claude-opus-5-5` to the model picker and integrations, with
 adaptive thinking controls from low through max. The Claude Agent harness now uses
 `claude-agent-sdk` 0.2.158, whose bundled Claude Code release natively supports Opus 5.5.

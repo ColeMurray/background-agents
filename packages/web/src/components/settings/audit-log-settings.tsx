@@ -5,24 +5,59 @@ import type { AuditEvent, AuditOperationResult } from "@open-inspect/shared/type
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuditEvents } from "@/hooks/use-audit-events";
+import {
+  formatHttpStatus,
+  presentAuditEvent,
+  type AuditEventPresentation,
+} from "@/lib/audit-event-presentation";
 import { formatRelativeTime } from "@/lib/time";
 
-const OUTCOMES: Record<AuditOperationResult, { label: string; className: string }> = {
+interface BadgeTreatment {
+  label: string;
+  className: string;
+}
+
+const OPERATION_OUTCOMES: Record<AuditOperationResult, BadgeTreatment> = {
   applied: { label: "Applied", className: "bg-success-muted text-success" },
   no_op: { label: "No change", className: "bg-muted text-muted-foreground" },
   denied: { label: "Denied", className: "bg-destructive-muted text-destructive" },
   rejected: { label: "Rejected", className: "bg-warning-muted text-warning" },
 };
 
-const ACTION_LABELS: Record<string, string> = {
-  "authorization.request_allowed": "Request authorized",
-  "authorization.request_denied": "Request denied",
-  "workspace.member_role_updated": "Member role updated",
-  "workspace.member_status_updated": "Member status updated",
+// An allowed decision is informational: admission does not prove the operation succeeded.
+const AUTHORIZATION_DECISIONS: Record<"allowed" | "denied", BadgeTreatment> = {
+  allowed: { label: "Allowed", className: "bg-info-muted text-info" },
+  denied: { label: "Denied", className: "bg-destructive-muted text-destructive" },
 };
 
+const UNCLASSIFIED: BadgeTreatment = {
+  label: "Unclassified",
+  className: "bg-muted text-muted-foreground",
+};
+
+const ACTION_LABELS = new Map<string, string>([
+  ["authorization.request_allowed", "Authorization allowed"],
+  ["authorization.request_denied", "Authorization denied"],
+  ["workspace.member_role_updated", "Member role updated"],
+  ["workspace.member_status_updated", "Member status updated"],
+  ["workspace.default_role_assigned", "Default role assigned"],
+  ["workspace.owner_bootstrapped", "Owner bootstrapped"],
+  ["workspace.user_merged", "Users merged"],
+]);
+
 function auditActionLabel(action: string): string {
-  return ACTION_LABELS[action] ?? action;
+  return ACTION_LABELS.get(action) ?? action;
+}
+
+function badgeTreatment(presentation: AuditEventPresentation): BadgeTreatment {
+  switch (presentation.kind) {
+    case "authorization":
+      return AUTHORIZATION_DECISIONS[presentation.decision];
+    case "unclassified-authorization":
+      return UNCLASSIFIED;
+    case "operation":
+      return OPERATION_OUTCOMES[presentation.result];
+  }
 }
 
 function actorSummary(event: AuditEvent): string {
@@ -44,7 +79,8 @@ function resourceSummary(event: AuditEvent): string {
 }
 
 function AuditEventCard({ event }: { event: AuditEvent }) {
-  const outcome = OUTCOMES[event.operationResult];
+  const presentation = presentAuditEvent(event);
+  const badge = badgeTreatment(presentation);
   const localTimestamp = new Date(event.occurredAt).toLocaleString();
 
   return (
@@ -63,7 +99,7 @@ function AuditEventCard({ event }: { event: AuditEvent }) {
               {localTimestamp} / {formatRelativeTime(event.occurredAt)}
             </time>
           </div>
-          <Badge className={`w-fit shrink-0 ${outcome.className}`}>{outcome.label}</Badge>
+          <Badge className={`w-fit shrink-0 ${badge.className}`}>{badge.label}</Badge>
         </div>
 
         <dl className="mt-3 grid min-w-0 gap-x-5 gap-y-2 text-xs sm:grid-cols-2">
@@ -83,6 +119,16 @@ function AuditEventCard({ event }: { event: AuditEvent }) {
             <dt className="text-muted-foreground">Reason</dt>
             <dd className="break-words font-mono text-foreground">{event.reasonCode}</dd>
           </div>
+          {presentation.kind !== "operation" && (
+            <div className="min-w-0">
+              <dt className="text-muted-foreground">HTTP response</dt>
+              <dd className="break-words font-mono text-foreground">
+                {presentation.httpStatus === null
+                  ? "Not recorded"
+                  : formatHttpStatus(presentation.httpStatus)}
+              </dd>
+            </div>
+          )}
         </dl>
 
         <details className="mt-3 text-xs">
@@ -95,6 +141,7 @@ function AuditEventCard({ event }: { event: AuditEvent }) {
                 eventId: event.id,
                 action: event.action,
                 principalKind: event.principalKind,
+                operationResult: event.operationResult,
                 metadata: event.metadata,
               },
               null,
@@ -135,8 +182,13 @@ export function AuditLogSettings() {
       >
         Audit log
       </h2>
-      <p className="mb-6 text-sm text-muted-foreground">
+      <p className="mb-2 text-sm text-muted-foreground">
         Review workspace operations and authorization decisions. Events are shown newest first.
+      </p>
+      <p className="mb-6 text-sm text-muted-foreground">
+        Authorization decisions record whether a request was allowed or denied and the HTTP response
+        it returned. They do not confirm that the requested change took effect. Applied, No change,
+        and Rejected are recorded only by the operation that made or refused the change.
       </p>
 
       {audit.error && audit.events.length > 0 && (

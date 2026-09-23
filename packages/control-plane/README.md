@@ -220,6 +220,31 @@ An invocation's status is **derived from its child runs, never stored**: no chil
 any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
 `failed` (none completed), `partial_failed` (a mix), or `skipped` (all skipped).
 
+### Audit Events
+
+| Endpoint        | Method | Description                                                    |
+| --------------- | ------ | -------------------------------------------------------------- |
+| `/audit-events` | GET    | Newest-first, cursor-paginated events (`workspace.audit.read`) |
+
+Each event has an `action`, a stored `operationResult` (`applied`, `no_op`, `denied`, or
+`rejected`), and structured `metadata`. What a row proves depends on who wrote it:
+
+- **Authorization decisions** (`authorization.request_allowed`, `authorization.request_denied`) are
+  written by route admission. With `metadata.schema = "authorization_decision.v1"` they also record
+  `httpMethod`, `httpPath`, `httpStatus`, and the evaluated `requirements`. They prove only that the
+  request was allowed or denied and which HTTP status it returned. An allowed request may still fail
+  validation (400), conflict (409), or fail downstream (500), and even a 2xx does not prove that a
+  domain change or asynchronous work (a sandbox, job, or external effect) completed. Their
+  `operationResult` encodes the decision (`applied` for allowed, `denied` for denied) and must not
+  be read as a domain outcome. Rows written before the schema existed carry `{ "legacy": true }`
+  metadata and have no recorded status.
+- **Operation events** (for example `workspace.member_role_updated`) are written by the operation
+  owner alongside the change, so their `operationResult` is the domain outcome.
+
+A feature that needs "operation completed" evidence must emit its own event from the owning
+transaction or workflow, correlated by request ID. That evidence is never inferred from admission or
+from an HTTP 2xx.
+
 ## WebSocket Protocol
 
 ### Client → Server Messages

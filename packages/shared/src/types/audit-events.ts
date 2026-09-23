@@ -10,7 +10,15 @@ export const auditEventTimestampSchema = z
   .safe()
   .max(MAX_AUDIT_EVENT_TIMESTAMP_MS);
 
-/** Outcomes recorded for workspace operations and authorization decisions. */
+/**
+ * Stored result for workspace operations and authorization decisions.
+ *
+ * For events written by an operation owner (for example `workspace.member_role_updated`), this is
+ * the domain outcome. For `authorization.request_allowed` / `authorization.request_denied`, it only
+ * encodes the admission decision: `applied` there means "allowed", not that the operation
+ * succeeded. Classify those rows by `action`; `metadata.httpStatus` (schema
+ * `authorization_decision.v1`) holds the response status when recorded.
+ */
 export const auditOperationResultSchema = z.enum(["applied", "no_op", "denied", "rejected"]);
 
 /** Principal categories currently emitted by the control plane. */

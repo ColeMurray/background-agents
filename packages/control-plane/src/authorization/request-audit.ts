@@ -37,6 +37,16 @@ export function shouldAuditAllowedDecision(
   return decision.auditAllowed;
 }
 
+/**
+ * Records a route admission decision and the HTTP status the request returned.
+ *
+ * The event proves only that the request was allowed or denied and how the route responded. It
+ * does not prove that any domain change or asynchronous work completed, even on a 2xx: the stored
+ * `operation_result` of `applied` for an allowed request is the historical encoding of admission,
+ * not a domain outcome. Readers must classify these rows by `action` and `httpStatus`. Evidence
+ * that an operation completed must come from an event written by the operation owner, correlated
+ * by request ID.
+ */
 export async function auditRouteAuthorizationDecision(input: {
   ctx: RequestContext;
   method: string;
