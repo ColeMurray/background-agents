@@ -1,3 +1,4 @@
+import { normalizeOptionalRepositoryPair } from "@open-inspect/shared/types/repositories";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { LIKE_ESCAPE_CLAUSE, likeContains, likePrefix } from "./like-pattern";
 
@@ -13,7 +14,7 @@ export interface SessionListFilters {
    * bound, never interpolated, and LIKE metacharacters match literally.
    */
   search?: string;
-  /** Sessions whose member set (or scalar primary) includes this repository. */
+  /** Sessions whose member set (or scalar primary) includes this repository; identifiers are normalized here. */
   repository?: { repoOwner: string; repoName: string };
   environmentId?: string;
   /** Exact persisted `spawn_source`; see `SessionListQuery.origin`. */
@@ -28,16 +29,19 @@ export interface SessionListPredicates {
 }
 
 /**
- * Repository membership over `sessions`: the scalar primary serves sessions
- * that predate `session_repositories`, and the member table serves every
- * position of a multi-repository session. Binds owner, name, owner, name.
+ * Repository membership over `sessions` by exact, normalized identity: the
+ * scalar primary (via `idx_sessions_repo`) or any member row (via
+ * `idx_session_repositories_repo`), so SQLite serves the filter as a
+ * multi-index OR over the candidate set instead of walking history. Both
+ * columns have been written trimmed and lowercased since #859; sessions from
+ * before that with mixed-case scalar identifiers are deliberately not
+ * matched here (search still finds them, as LIKE folds ASCII case).
+ * Binds owner, name, owner, name.
  */
-export const REPOSITORY_MEMBERSHIP_SQL = `((LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
-  OR EXISTS (
-    SELECT 1 FROM session_repositories sr
-    WHERE sr.session_id = sessions.id
-      AND LOWER(sr.repo_owner) = LOWER(?)
-      AND LOWER(sr.repo_name) = LOWER(?)
+const REPOSITORY_MEMBERSHIP_SQL = `((repo_owner = ? AND repo_name = ?)
+  OR sessions.id IN (
+    SELECT session_id FROM session_repositories
+    WHERE repo_owner = ? AND repo_name = ?
   ))`;
 
 /** The `WHERE` clause and bindings for a filtered walk of `sessions`. */
@@ -88,13 +92,14 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
     params.push(spawnSource);
   }
 
-  if (repository) {
+  const normalizedRepository = repository ? normalizeOptionalRepositoryPair(repository) : null;
+  if (normalizedRepository) {
     conditions.push(REPOSITORY_MEMBERSHIP_SQL);
     params.push(
-      repository.repoOwner,
-      repository.repoName,
-      repository.repoOwner,
-      repository.repoName
+      normalizedRepository.repoOwner,
+      normalizedRepository.repoName,
+      normalizedRepository.repoOwner,
+      normalizedRepository.repoName
     );
   }
 

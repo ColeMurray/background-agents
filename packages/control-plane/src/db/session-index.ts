@@ -33,11 +33,7 @@ import {
 import { bulkInsertStatements } from "./bulk-insert";
 import { SessionStatusProjectionStore } from "./session-status-projection-store";
 import { attachSessionListMetadata } from "./session-list-metadata";
-import {
-  buildSessionListPredicates,
-  REPOSITORY_MEMBERSHIP_SQL,
-  type SessionListFilters,
-} from "./session-list-predicates";
+import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import {
   SessionInboxStore,
   type ListSessionInboxOptions,
@@ -515,7 +511,16 @@ export class SessionIndexStore {
     const row = await this.db
       .prepare(
         `SELECT 1 AS ok FROM sessions
-         WHERE id = ? AND ${REPOSITORY_MEMBERSHIP_SQL}`
+         WHERE id = ?
+           AND (
+             (LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?))
+             OR EXISTS (
+               SELECT 1 FROM session_repositories sr
+               WHERE sr.session_id = sessions.id
+                 AND LOWER(sr.repo_owner) = LOWER(?)
+                 AND LOWER(sr.repo_name) = LOWER(?)
+             )
+           )`
       )
       .bind(sessionId, repoOwner, repoName, repoOwner, repoName)
       .first<{ ok: number }>();

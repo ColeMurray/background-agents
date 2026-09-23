@@ -23,15 +23,15 @@ describe("buildSessionListPredicates", () => {
     expect(params).toEqual(["active", "archived", "alice", "bob", "env-1", "agent"]);
   });
 
-  it("matches a repository through the scalar primary or any member row", () => {
+  it("matches a repository by normalized identity through the scalar primary or any member row", () => {
     const { where, params } = buildSessionListPredicates({
-      repository: { repoOwner: "Acme", repoName: "Web-App" },
+      repository: { repoOwner: " Acme ", repoName: "Web-App" },
     });
-    expect(collapse(where)).toContain(
-      "LOWER(repo_owner) = LOWER(?) AND LOWER(repo_name) = LOWER(?)"
+    expect(collapse(where)).toBe(
+      "WHERE ((repo_owner = ? AND repo_name = ?) OR sessions.id IN ( SELECT session_id FROM session_repositories WHERE repo_owner = ? AND repo_name = ? ))"
     );
-    expect(collapse(where)).toContain("EXISTS ( SELECT 1 FROM session_repositories sr");
-    expect(params).toEqual(["Acme", "Web-App", "Acme", "Web-App"]);
+    expect(where).not.toContain("LOWER(");
+    expect(params).toEqual(["acme", "web-app", "acme", "web-app"]);
   });
 
   it("binds escaped LIKE patterns for title, id prefix, and repository labels", () => {

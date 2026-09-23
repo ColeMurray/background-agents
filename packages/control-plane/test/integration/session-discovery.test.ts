@@ -183,9 +183,10 @@ describe("session discovery search (D1)", () => {
     await expect(listIds(store, { search: "partner/sdk" })).resolves.toEqual(["multi"]);
     await expect(listIds(store, { search: "acme/billing" })).resolves.toEqual(["multi", "legacy"]);
 
-    // Filter: third member, second member, and legacy scalar, case-insensitively.
+    // Filter: third member, second member, and scalar primary; the input is
+    // normalized to the stored (trimmed, lowercased) identity.
     await expect(
-      listIds(store, { repository: { repoOwner: "Partner", repoName: "SDK" } })
+      listIds(store, { repository: { repoOwner: " Partner", repoName: "SDK " } })
     ).resolves.toEqual(["multi"]);
     await expect(
       listIds(store, { repository: { repoOwner: "acme", repoName: "billing-service" } })
@@ -420,7 +421,8 @@ describe("session discovery search (D1)", () => {
     const explain = async (
       options: ListSessionsOptions,
       bindings: unknown[],
-      label: string
+      label: string,
+      { sortsCandidates = false }: { sortsCandidates?: boolean } = {}
     ): Promise<string> => {
       preparedQueries.length = 0;
       await store.list(options);
@@ -432,8 +434,14 @@ describe("session discovery search (D1)", () => {
         .all<{ detail: string }>();
       const details = plan.results.map(({ detail }) => detail).join("\n");
       console.info(`[session-discovery] ${label} query plan:\n${details}`);
-      // Only the id tie-breaker may need a sort; the walk itself is index-ordered.
-      expect(details).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/);
+      // An unfiltered or search-only walk is index-ordered and only the id
+      // tie-breaker may need a sort. A repository filter instead collects its
+      // candidates from the repository indexes and sorts that bounded set.
+      if (sortsCandidates) {
+        expect(details).toMatch(/USE TEMP B-TREE FOR ORDER BY/);
+      } else {
+        expect(details).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/);
+      }
       return details;
     };
 
@@ -444,9 +452,10 @@ describe("session discovery search (D1)", () => {
     );
     expect(searchPlan).toMatch(/SCAN sessions USING INDEX idx_sessions_updated_at/);
 
-    // A repository nobody uses walks the whole ordered history (LOWER() keeps
-    // legacy mixed-case rows matching but costs the repository indexes); see
-    // the timings recorded by the 5,000-session test.
+    // The repository filter is served by the repository indexes as a
+    // multi-index OR over the candidate set, so a repository nobody uses
+    // costs an index probe, not a walk of history; the candidates are then
+    // sorted for the page.
     const noMatchRepositoryPlan = await explain(
       {
         excludeStatus: "archived",
@@ -454,9 +463,13 @@ describe("session discovery search (D1)", () => {
         viewerUserId: ALICE,
       },
       ["archived", "nobody", "nothing", "nobody", "nothing", 51, 0, ALICE],
-      "no-match repository"
+      "no-match repository",
+      { sortsCandidates: true }
     );
-    expect(noMatchRepositoryPlan).toMatch(/SCAN sessions USING INDEX idx_sessions_updated_at/);
+    expect(noMatchRepositoryPlan).toMatch(/MULTI-INDEX OR/);
+    expect(noMatchRepositoryPlan).toMatch(/SEARCH sessions USING INDEX idx_sessions_repo/);
+    expect(noMatchRepositoryPlan).toMatch(/USING COVERING INDEX idx_session_repositories_repo/);
+    expect(noMatchRepositoryPlan).not.toMatch(/SCAN sessions/);
 
     const composedPlan = await explain(
       {
@@ -487,6 +500,9 @@ describe("session discovery search (D1)", () => {
       ],
       "composed"
     );
+    // With a creator, the planner keeps the ordered per-user walk and probes
+    // the repository member index once as a precomputed list.
     expect(composedPlan).toMatch(/SEARCH sessions USING INDEX idx_sessions_user_updated_at/);
+    expect(composedPlan).toMatch(/USING COVERING INDEX idx_session_repositories_repo/);
   });
 });
