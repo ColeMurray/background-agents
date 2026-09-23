@@ -38,9 +38,6 @@ export function requireTargetPermissions(
   return null;
 }
 
-/** Maximum name length. */
-export const MAX_NAME_LENGTH = 200;
-
 export const createAutomationBodySchema = createAutomationRequestSchema.extend({
   // Bot-asserted actor display fields are cosmetic only; identity enforcement
   // still runs against the raw pre-Zod body before these parsed values are used.

@@ -20,7 +20,8 @@ notification controls and safety notes are covered near the end.
    @Open-Inspect fix the failing checkout tests in acme/web
    ```
 3. In a DM with the bot, send the request directly. You do not need to mention the bot in DMs.
-4. If Open-Inspect asks which repository to use, choose one from the dropdown.
+4. If Open-Inspect asks which target to use, choose a repository, environment, or **No repository**
+   from the dropdown.
 5. Use **View Session** to open the full web session while the agent works.
 6. Reply in the same Slack thread to continue the same session.
 
@@ -35,7 +36,7 @@ notification controls and safety notes are covered near the end.
 | Continue a session          | Reply in the same Slack thread                                             |
 | Send images to the agent    | Attach PNG, JPEG, WebP, or GIF images to an interactive request            |
 | Forward a message           | Share another Slack message with the bot; text, images, and source travel  |
-| Pick the repository         | Let Open-Inspect infer it, or choose from a dropdown when it is unsure     |
+| Pick the session target     | Use a repository, environment, or empty sandbox                            |
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
 | Review generated media      | Optionally attach charts, screenshots, and small recordings to the thread  |
@@ -71,13 +72,12 @@ repository name when the request could apply to more than one repo:
 @Open-Inspect update the billing docs in acme/api
 ```
 
-Open-Inspect chooses from repositories available to this Open-Inspect deployment, using the message,
-Slack channel context, and recent thread context. It picks a repository in this order: if only one
-repository is available, it uses that one; if your message contains a configured
-[routing-rule keyword](#routing-rules), it routes to that keyword's repository; if an administrator
-has associated the Slack channel with exactly one repository, that repository is used; otherwise it
-infers the repository from your message. When the match is unclear, Open-Inspect asks you to choose
-from candidate repositories in the Slack thread.
+Open-Inspect chooses from repositories and environments available to this deployment, using the
+message, Slack channel context, and recent thread context. A configured
+[routing-rule keyword](#routing-rules) takes precedence, followed by a single channel association.
+Otherwise the classifier chooses the best target for the request, including **No repository** when
+the task does not require a codebase. When the match is unclear, Open-Inspect asks you to choose a
+repository, environment, or **No repository** in the Slack thread.
 
 ### From a DM
 
@@ -90,6 +90,31 @@ Can you investigate the flaky login test in acme/web?
 DMs do not need an `@mention`. If you include one anyway, Open-Inspect strips it before sending the
 request to the agent.
 
+### Model and reasoning overrides
+
+Start a DM or `@mention` request with `!model` or `!reasoning` to override your App Home defaults:
+
+```text
+@Open-Inspect !model anthropic/claude-sonnet-4-6 !reasoning max investigate the flaky test
+```
+
+Where you use the flags decides how long they last:
+
+- **On a request that starts a session**, they become that session's defaults. Every follow-up in
+  the thread keeps running on them until the thread ends, so you only have to pick the model once
+  per task. The "Starting work..." acknowledgement names the model when it is not your App Home
+  default.
+- **On a follow-up in an existing session thread**, they apply to that one request and leave the
+  session's defaults alone.
+
+A running session's defaults cannot be changed. Naming your App Home model on a follow-up runs that
+one request on it and leaves the session where it is; to go back to your defaults for good, start a
+new session in a new thread.
+
+Both flags accept a space or colon before their value, such as `!model:openai/gpt-5.6-sol` and
+`!reasoning:high`. Any flags must appear together at the start of the request. Models must be
+enabled under **Settings > Models**, and reasoning values must be supported by the selected model.
+
 To continue a session that started from a DM, reply in the Slack thread created for that DM request.
 Sending a new top-level DM is treated as a new request and may start repository selection again.
 
@@ -100,14 +125,20 @@ interactive thread follow-up. You can include instructions with the images or se
 example, attach a screenshot and ask Open-Inspect to fix the visible error. Open-Inspect forwards at
 most six images per message, and each image must be no larger than 10 MiB.
 
-If Open-Inspect asks you to choose a repository or environment, make the selection normally. The bot
-retrieves the original message's images after you choose and forwards them with the saved request.
-If only some images can be read, the remaining images and any message text still reach the agent,
-and the bot posts a warning in the thread. If an image-only request loses every image, no empty
-session or follow-up is sent.
+If Open-Inspect asks you to choose a target, make the selection normally. The bot retrieves the
+original message's images after you choose and forwards them with the saved request. If only some
+images can be read, the remaining images and any message text still reach the agent, and the bot
+posts a warning in the thread. If an image-only request loses every image, no empty session or
+follow-up is sent.
 
 This feature requires the Slack app's `files:read` bot scope and a reinstall after adding the scope.
 Remote files hosted outside Slack and non-image attachments are not forwarded.
+
+Interactive requests also retain files from the recent Slack thread context. A supported image on an
+earlier selected message is forwarded through the same protected attachment path; file-only messages
+remain visible through URL-free metadata in the message's JSON context record even when their file
+type is unsupported or the image cannot be retrieved. Images on the current request take priority
+within the six-image prompt limit, followed by deduplicated images from earlier context.
 
 ### With forwarded messages
 
@@ -127,15 +158,15 @@ Forward several messages at once and each is quoted separately, up to ten per re
 message's text is truncated at 4,000 characters. Link previews are skipped, since the message text
 already carries the link.
 
-### Repository dropdowns
+### Target dropdowns
 
-Repository dropdowns are tied to the pending Slack thread, not to a personal GitHub repository list.
-They show candidate repositories that the Open-Inspect deployment can access. Open-Inspect keeps the
-original request for one hour; after a repository is selected, the session starts with that original
-request and thread context.
+Target dropdowns are tied to the pending Slack thread, not to a personal GitHub repository list.
+They show accessible repositories and environments plus **No repository**, which starts with an
+empty sandbox. Open-Inspect keeps the original request for one hour; after a target is selected, the
+session starts with that original request and thread context.
 
-In shared channels, the original requester should choose the repository. If the dropdown has
-expired, send the request again and include the repository name, such as `owner/repo`.
+In shared channels, only the original requester can choose the target. If the dropdown has expired,
+send the request again and name the repository, environment, or that no repository is needed.
 
 ### Routing rules
 
@@ -186,10 +217,14 @@ thread, no mention is needed. Watched-channel automation threads are text-only, 
 [Channel Message Triggers](#channel-message-triggers).
 
 Open-Inspect keeps the Slack thread connected to the session for about 7 days. If you reply after
-that mapping expires, or if you reply outside the thread, the bot may start repository selection
-again and create a new session.
+that mapping expires, or if you reply outside the thread, the bot may start target selection again
+and create a new session.
 
-For follow-ups, Open-Inspect includes recent thread context with the new prompt. It also adds an
+For follow-ups, Open-Inspect includes up to ten recent thread messages posted after the preceding
+prompt and strictly before the new request. Replies that arrive while Slack history is being fetched
+are not exposed to the earlier turn; they remain eligible for a later follow-up. Earlier messages
+are encoded as untrusted JSON records with speaker and timestamp provenance; file-only messages keep
+URL-free metadata, and supported images are forwarded as described above. Open-Inspect also adds an
 eyes reaction while the follow-up is being processed, then removes it when the completion reply is
 posted.
 
@@ -197,10 +232,8 @@ posted.
 
 ## What Gets Posted Back
 
-When a request is accepted, Open-Inspect posts a working reply in the Slack thread and then adds a
-link to the web session once it exists. For confident repository matches, the working reply may
-include a **View Session** button. Every session also gets a session-started reply with a **View
-progress** link.
+When a request is accepted, Open-Inspect posts a working reply in the Slack thread and adds a **View
+Session** button once the web session exists.
 
 The web session is the best place to watch live output, inspect files, or take over.
 
@@ -209,7 +242,7 @@ When the agent finishes, Slack receives a completion reply with:
 - The agent's final response, shortened if it is too long for Slack
 - Created artifacts such as pull requests or branches
 - A few key tool actions, such as edits or commands
-- The final status, model, repository, and reasoning effort when available
+- The final status, model, session target, and reasoning effort when available
 - A **View Session** button
 
 If the agent created a manual-PR branch and no PR artifact is already present, Slack may also show a
@@ -240,7 +273,9 @@ Branch preference priority is:
 3. Repository default branch
 
 These preferences are per Slack user. They affect new Slack sessions; follow-ups in an existing
-Slack thread continue the existing session.
+Slack thread continue the existing session. A leading `!model` or `!reasoning` flag overrides the
+corresponding setting for the session it starts, or for a single follow-up request, without changing
+these preferences.
 
 ---
 
@@ -292,11 +327,13 @@ in a watched channel — without `@mentioning` the bot. This is distinct from th
 `@mention` flow: it is driven by [automations](../AUTOMATIONS.md#slack-message-triggers) with
 keyword, substring, or regex conditions.
 
-Slack Message automations ingest message text only. A message that carries an attachment does start
-an automation, but on its text alone — the attachment itself is not forwarded, so an image-only
-message with no text starts nothing. Attachments on automation thread replies are likewise not
-forwarded to the session, and the body of a forwarded message is not read. Use an interactive DM or
-`@mention` when the agent needs an image or a forwarded message.
+Slack Message automations ingest triggering-message text only. A triggering message that carries an
+attachment starts an automation on its text alone — the attachment itself is not forwarded, so an
+image-only trigger starts nothing. Attachments on automation thread replies are likewise not sent as
+bytes, and the body of a forwarded message is not read. When an earlier message selected for thread
+context has files, URL-free file metadata is retained in that context so the message does not
+disappear; supported images are explicitly marked as not forwarded by automations. Use an
+interactive DM or `@mention` when the agent needs image bytes or a forwarded message.
 
 When the triggering message is a **reply**, the agent also receives the thread it was posted in, so
 it can read the reply in context rather than as an isolated sentence. The thread is read only once a
@@ -304,12 +341,13 @@ run has actually been admitted — never for messages that match no automation, 
 continue an existing session, or for firings dropped as concurrent or duplicate — and once per
 message however many automations match it. Top-level messages have no thread to read.
 
-The context contains up to 20 earlier messages total; on long threads, the opening message is
-preserved alongside the most recent replies. Each message is truncated to 1,024 characters, and its
-speaker record identifies people, apps, and the bot's own earlier turns without relying on a display
-name alone. It is passed as JSON and labelled untrusted: Slack text is written by people who may not
-be asking the agent anything, so it is presented as a record of the conversation rather than as
-instructions. If Slack cannot be read, the run starts with no thread history rather than failing.
+The context contains up to 20 messages posted strictly before the trigger; on long threads, the
+opening message is preserved alongside the most recent replies. Each message is truncated to 1,024
+characters, and its record includes the Slack timestamp plus a speaker identity for people, apps,
+and the bot's own earlier turns without relying on a display name alone. It is passed as JSON and
+labelled untrusted: Slack text is written by people who may not be asking the agent anything, so it
+is presented as a record of the conversation rather than as instructions. If Slack cannot be read,
+the run starts with no thread history rather than failing.
 
 ### Slack app setup
 
@@ -403,10 +441,10 @@ If setup was just changed, confirm the Slack app event subscriptions and interac
 The Slack app needs the direct message event subscription configured. Once that is set up, send the
 bot a plain DM with your request. No `@mention` is required.
 
-### Open-Inspect asks which repository to use
+### Open-Inspect asks which target to use
 
-Choose a repository from the dropdown, or resend the request with the repository name included. The
-dropdown expires after one hour.
+Choose a repository, environment, or **No repository** from the dropdown, or resend the request with
+the intended target included. The dropdown expires after one hour.
 
 ### A follow-up started a new session
 

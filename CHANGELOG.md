@@ -2,6 +2,67 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 23, 2026
+
+**Claude Opus 5.5.** Adds `anthropic/claude-opus-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max. The Claude Agent harness now uses
+`claude-agent-sdk` 0.2.158, whose bundled Claude Code release natively supports Opus 5.5.
+
+## September 21, 2026
+
+**Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from
+low through xhigh. `xai/grok-4.6` now also offers xhigh, which it supported but the catalog did not
+expose. The **xAI / SuperGrok** group stays opt-in — enable the model under **Settings > Models**.
+See [Available models](docs/AVAILABLE_MODELS.md#xai--supergrok).
+
+## September 20, 2026
+
+**Graceful sandbox shutdown and recovery.** Sandboxes approaching their provider lifetime now stop
+admitting new work, preserve the filesystem, and confirm retirement before expiry, reserving a
+configurable **Final snapshot buffer** set globally or per repository and environment. Sessions show
+shutdown and recovery progress: work queued at a clean prompt boundary restores automatically into a
+new generation, while an interrupted prompt fails once and, after state is saved, queued work waits
+for **Resume queued work** — the interrupted prompt is never replayed automatically. A failed or
+uncertain shutdown stays held rather than falling back to a fresh checkout, offering retry or
+restore only when the server authorizes it.
+
+**Provider-aware sandbox settings.** The per-session CPU, memory, and session-timeout controls are
+now hidden when the configured provider cannot honor them. Daytona sandboxes inherit CPU and memory
+from their snapshot and take no per-session lifetime, so all three are hidden with an explanation
+while its image build timeout stays configurable, and stored values a provider cannot apply are
+stripped before a session starts instead of blocking the spawn.
+
+## September 19, 2026
+
+**Prebuilt images for Daytona.** Daytona joins the image-prebuild subsystem: it can build repository
+and environment snapshots, start sessions from them, and reclaim sources and snapshots afterwards.
+The feature is opt-in behind `DAYTONA_PREBUILDS_ENABLED` and off by default. Admission gates exactly
+two things — starting a build and selecting a prebuilt image for a fresh session — so while it is
+closed a manual rebuild returns 503, save hooks do nothing, and the cron skips new builds while
+finalization, status, and cleanup keep running. None of this has been exercised against a live
+Daytona deployment; the gates an operator should pass before opening admission are listed in
+[Image prebuilds](docs/IMAGE_PREBUILD.md#verification-gates).
+
+**Slack model flags set session defaults.** A `!model` or `!reasoning` flag on the message that
+opens a session now becomes that session's default for every following turn, instead of applying
+only to the first prompt. Flags on a follow-up still apply to that one request. The "Starting
+work..." acknowledgement names the resulting defaults whenever they differ from your App Home
+preferences.
+
+## September 17, 2026
+
+**Repository-less Slack sessions.** The Slack target classifier can start suitable work in an empty
+sandbox, while uncertain requests use a target picker that also exposes **No repository**. Session
+startup messages now use concise target-neutral copy.
+
+**Sandbox boot progress.** The sandbox runtime now connects to the control plane before it clones
+the repository, so a session shows each boot step as it runs: Cloning repository, Running setup.sh,
+Starting services, Installing skills, Starting agent, with the repository named in multi-repository
+sessions. Failure reports retain phase, repository, and error metadata, while hook stdout and stderr
+are discarded rather than collected or shown. Long setup scripts no longer trip the four-minute
+connect timeout; a boot may take up to `SANDBOX_BOOT_TIMEOUT_MS` (30 minutes by default). See
+[How Open-Inspect Works](docs/HOW_IT_WORKS.md#fresh-start-no-snapshot).
+
 ## September 14, 2026
 
 **OpenCode Go models.** Adds 27 opt-in `opencode-go/*` models to Settings > Models for OpenCode

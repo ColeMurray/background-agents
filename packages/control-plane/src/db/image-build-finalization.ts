@@ -28,6 +28,26 @@ const callbackTokenRowSchema = z.object({
 
 type CallbackTokenRow = z.infer<typeof callbackTokenRowSchema>;
 
+const imageBuildFinalizationRowSchema = z.object({
+  id: z.string(),
+  provider: imageBuildProviderSchema,
+  status: imageBuildStatusSchema,
+  provider_image_id: z.string().nullable(),
+  provider_session_id: z.string().nullable(),
+  completion_hash: z.string().nullable(),
+  repository_shas: z.string(),
+  runtime_version: z.string(),
+  build_duration_seconds: z.number().nullable(),
+  error_message: z.string().nullable(),
+  finalization_lease_token: z.string().nullable(),
+  finalization_lease_expires_at: z.number().nullable(),
+  provider_session_cleanup_pending: z.number().nullable(),
+  callback_token_used_at: z.number().nullable(),
+  provider_operation_ref: z.string().nullable(),
+  provider_operation_deadline_at: z.number().nullable(),
+  created_at: z.number(),
+});
+
 /** Result of atomically consuming or replaying a callback completion. */
 export type ImageBuildCompletionAcceptance = "accepted" | "replayed" | "rejected";
 
@@ -48,6 +68,11 @@ export interface ImageBuildFinalizationRow {
   finalization_lease_expires_at: number | null;
   provider_session_cleanup_pending: number | null;
   callback_token_used_at: number | null;
+  /** Unique provider name reserved for this build's artifact operation. */
+  provider_operation_ref: string | null;
+  /** Fixed wall-clock deadline (ms) for that operation; never extended by a retry. */
+  provider_operation_deadline_at: number | null;
+  created_at: number;
 }
 
 /** D1 operations owned by callback acceptance and Queue finalization. */
@@ -224,16 +249,21 @@ export class ImageBuildFinalizationStore {
 
   /** Reads the durable state used by a Queue delivery or cleanup retry. */
   async getBuild(buildId: string): Promise<ImageBuildFinalizationRow | null> {
-    return this.db
+    const row = await this.db
       .prepare(
         `SELECT id, provider, status, provider_image_id, provider_session_id,
                 completion_hash, repository_shas, runtime_version, build_duration_seconds,
                 error_message, finalization_lease_token, finalization_lease_expires_at,
-                provider_session_cleanup_pending, callback_token_used_at
+                provider_session_cleanup_pending, callback_token_used_at,
+                provider_operation_ref, provider_operation_deadline_at, created_at
          FROM image_builds WHERE id = ?`
       )
       .bind(buildId)
-      .first<ImageBuildFinalizationRow>();
+      .first();
+    if (row === null) return null;
+    const parsed = imageBuildFinalizationRowSchema.safeParse(row);
+    if (!parsed.success) throw new Error(`Malformed image build finalization row: ${buildId}`);
+    return parsed.data;
   }
 
   /**
@@ -268,6 +298,10 @@ export class ImageBuildFinalizationStore {
   /**
    * Fences a provider artifact to the exact build, completion, session, and
    * lease that created it before any ready-state transition is attempted.
+   *
+   * Recording the artifact also retires the operation reference: the build's
+   * obligation is now the artifact id, which the reaper already owns, so the
+   * two never describe the same resource at once.
    */
   async recordArtifact(params: {
     buildId: string;
@@ -279,13 +313,65 @@ export class ImageBuildFinalizationStore {
   }): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE image_builds SET provider_image_id = ?
+        `UPDATE image_builds
+         SET provider_image_id = ?,
+             provider_operation_ref = NULL,
+             provider_operation_deadline_at = NULL
          WHERE id = ? AND provider = ? AND provider_session_id = ?
            AND status = 'building' AND completion_hash = ?
            AND finalization_lease_token = ? AND provider_image_id IS NULL`
       )
       .bind(
         params.providerImageId,
+        params.buildId,
+        params.provider,
+        params.providerSessionId,
+        params.completionHash,
+        params.leaseToken
+      )
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Reserves the unique provider name this build's artifact operation will be
+   * submitted under, together with the fixed deadline by which it must
+   * settle.
+   *
+   * The predicates make the reservation the right to submit: only the holder
+   * of the current lease, on a still-building row bound to the exact provider
+   * session and completion, with no operation already reserved and no
+   * artifact already fenced, can take it. Everything downstream therefore
+   * reconciles the reserved name rather than submitting a second operation —
+   * a reservation is an intent, not evidence the provider accepted anything,
+   * and an intent that never became an artifact costs one rebuild rather than
+   * an untracked resource.
+   *
+   * The deadline is written once and never extended by a retry, so a stream
+   * of redeliveries cannot keep an operation alive past the lifetime of the
+   * source that must outlive it.
+   */
+  async reserveProviderOperation(params: {
+    buildId: string;
+    provider: ImageBuildProvider;
+    providerSessionId: string;
+    completionHash: string;
+    leaseToken: string;
+    ref: string;
+    deadlineAt: number;
+  }): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE image_builds
+         SET provider_operation_ref = ?, provider_operation_deadline_at = ?
+         WHERE id = ? AND provider = ? AND provider_session_id = ?
+           AND status = 'building' AND completion_hash = ?
+           AND finalization_lease_token = ?
+           AND provider_operation_ref IS NULL AND provider_image_id IS NULL`
+      )
+      .bind(
+        params.ref,
+        params.deadlineAt,
         params.buildId,
         params.provider,
         params.providerSessionId,
@@ -347,7 +433,9 @@ export class ImageBuildFinalizationStore {
              status = CASE WHEN status = 'building' THEN 'failed' ELSE status END,
              error_message = CASE WHEN status = 'building' THEN ? ELSE error_message END,
              finalization_lease_token = NULL,
-             finalization_lease_expires_at = NULL
+             finalization_lease_expires_at = NULL,
+             provider_operation_ref = NULL,
+             provider_operation_deadline_at = NULL
          WHERE id = ? AND provider = ? AND provider_session_id = ?
            AND completion_hash = ? AND provider_image_id IS NULL
            AND status IN ('building', 'failed', 'superseded')`
@@ -367,7 +455,9 @@ export class ImageBuildFinalizationStore {
   /**
    * Clears an idempotent teardown obligation for the exact provider session.
    * Failed builds drop their now-useless session id; image-bearing rows retain
-   * it because provider artifact deletion may require that provenance.
+   * it because provider artifact deletion may require that provenance, and so
+   * do rows with an unresolved operation: the reserved name is only ours if
+   * the snapshot found under it names this sandbox as its source.
    */
   async clearSessionCleanup(params: {
     buildId: string;
@@ -379,7 +469,7 @@ export class ImageBuildFinalizationStore {
         `UPDATE image_builds
          SET provider_session_cleanup_pending = 0,
              provider_session_id = CASE
-               WHEN provider_image_id IS NULL THEN NULL
+               WHEN provider_image_id IS NULL AND provider_operation_ref IS NULL THEN NULL
                ELSE provider_session_id
              END
          WHERE id = ? AND provider = ? AND provider_session_id = ?

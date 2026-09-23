@@ -34,6 +34,10 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from ..attachment_processor import (
+    MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+    AttachmentProcessor,
+)
 from ..credentials.provider_credential_client import (
     RuntimeCredentialClient,
     RuntimeCredentialDenied,
@@ -103,6 +107,23 @@ TASK_TOOL_NAME: Final = "task"
 # emits; external servers keep theirs so the timeline can name the server.
 OI_TOOL_PREFIX: Final = f"mcp__{OI_TOOL_SERVER_NAME}__"
 MAX_RECONNECTS_PER_SESSION: Final = 3
+# The CLI writes one NDJSON message per stdout line, and the SDK transport
+# fails the turn when a single line outgrows its buffer, so the ceiling has to
+# cover the largest line the runtime can produce. ``_user_messages`` inlines
+# every attachment on a prompt as base64 and the CLI echoes that message back,
+# which makes the whole per-message attachment budget one line. Derive the
+# ceiling from that budget rather than pick a round number: the SDK's 1MiB
+# default breaks on an ordinary screenshot, and any fixed value silently
+# falls behind when the attachment limits move.
+# Each attachment is encoded on its own, so the padding is per attachment too.
+_ATTACHMENT_BASE64_BYTES: Final = MAX_SESSION_ATTACHMENTS_PER_MESSAGE * (
+    (AttachmentProcessor.MAX_IMAGE_BYTES + 2) // 3 * 4
+)
+# Room for the JSON envelope, the prompt text beside the image blocks, and
+# tool-result lines that carry images the runtime never sized.
+_STDOUT_MESSAGE_HEADROOM_BYTES: Final = 16 * 1024 * 1024
+# Bounds one line; the transport only buffers what actually arrives.
+MAX_STDOUT_MESSAGE_BYTES: Final = _ATTACHMENT_BASE64_BYTES + _STDOUT_MESSAGE_HEADROOM_BYTES
 AUTHENTICATION_FAILED_MESSAGE: Final = (
     "Anthropic rejected this session's credential. Reconnect the Claude account in "
     "Settings (or check ANTHROPIC_API_KEY) and start a new session."
@@ -295,6 +316,7 @@ class ClaudeHarness:
         self.credential: ClaudeCredential | None = None
         self.wrapper_path: Path | None = None
         self._client: SdkClient | None = None
+        self._client_lifecycle_lock = asyncio.Lock()
         self._connected_model: str | None = None
         self._connected_effort: str | None = None
         self._resume_on_connect = False
@@ -405,6 +427,7 @@ class ClaudeHarness:
             "setting_sources": ["user", "project"],
             "include_partial_messages": True,
             "forward_subagent_text": False,
+            "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
             **reasoning_options(model, reasoning_effort),
         }
         if self._resume_on_connect:
@@ -415,6 +438,10 @@ class ClaudeHarness:
         return build_options(**kwargs)
 
     async def _ensure_client(self, model: str, reasoning_effort: str | None) -> SdkClient:
+        async with self._client_lifecycle_lock:
+            return await self._ensure_client_locked(model, reasoning_effort)
+
+    async def _ensure_client_locked(self, model: str, reasoning_effort: str | None) -> SdkClient:
         same_shape = (
             self._client is not None
             and self._connected_model == model
@@ -432,7 +459,8 @@ class ClaudeHarness:
                     "The Claude agent process failed repeatedly for this session; "
                     "start a new session."
                 )
-        await self._disconnect()
+        if not await self._disconnect_locked():
+            raise RuntimeError("The previous Claude agent process could not be disconnected.")
         options = self.build_options(model, reasoning_effort)
         factory = self._client_factory or _default_client_factory
         client = factory(options)
@@ -456,13 +484,21 @@ class ClaudeHarness:
         return client
 
     async def _disconnect(self) -> None:
-        client, self._client = self._client, None
+        async with self._client_lifecycle_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self) -> bool:
+        client = self._client
         if client is None:
-            return
+            return True
         try:
             await client.disconnect()
         except Exception as error:
             self.log.warn("claude.disconnect_error", exc=error)
+            return False
+        if self._client is client:
+            self._client = None
+        return True
 
     # --- prompt ------------------------------------------------------------
 
@@ -532,10 +568,16 @@ class ClaudeHarness:
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Prompt exceeded max duration of {max_duration:.0f}s.")
         except _InactivityTimeout:
+            timeout_seconds = self.limits.inactivity_timeout_seconds
+            self.log.error(
+                "claude.inactivity_timeout",
+                message_id=prompt.message_id,
+                timeout_s=timeout_seconds,
+            )
             await self._interrupt_within_budget()
             self._needs_reconnect = True
             return TurnOutcome.failed(
-                f"Claude agent produced no output for {self.limits.inactivity_timeout_seconds:.0f}s."
+                f"Claude agent produced no output for {timeout_seconds:.0f}s."
             )
         except Exception as error:
             self.log.error("claude.turn_error", exc=error, message_id=prompt.message_id)
@@ -585,7 +627,6 @@ class ClaudeHarness:
                 await self._disconnect()
         except TimeoutError:
             self.log.warn("claude.disconnect_timeout", timeout_s=budget)
-            self._client = None
         return False
 
     async def _interrupt_quietly(self) -> bool:
@@ -608,6 +649,47 @@ class ClaudeHarness:
         # The bridge awaits this inline on its command loop, so a hung
         # interrupt would stall every later command; bound it like cleanup.
         return await self._interrupt_within_budget()
+
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        """Contain the SDK-owned Claude child, escalating to disconnect.
+
+        An interrupt acknowledgement is only a request, so shutdown preparation also
+        disconnects the client. The SDK transport owns and reaps the Claude
+        subprocess; unrelated sandbox services are left running.
+        """
+        self._interrupted = True
+        self._needs_reconnect = True
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout_seconds, 0.0)
+        interrupt_deadline = min(
+            deadline,
+            loop.time() + max(timeout_seconds / 2, 0.0),
+        )
+        try:
+            async with asyncio.timeout_at(deadline), self._client_lifecycle_lock:
+                client = self._client
+                if client is None:
+                    return True
+                try:
+                    async with asyncio.timeout_at(interrupt_deadline):
+                        await client.interrupt()
+                except TimeoutError:
+                    self.log.warn(
+                        "claude.preservation_interrupt_timeout",
+                        timeout_s=timeout_seconds / 2,
+                    )
+                except Exception as error:
+                    self.log.warn("claude.interrupt_error", exc=error)
+                await client.disconnect()
+                if self._client is client:
+                    self._client = None
+                return True
+        except TimeoutError:
+            self.log.warn("claude.preservation_stop_timeout", timeout_s=timeout_seconds)
+            return False
+        except Exception as error:
+            self.log.warn("claude.preservation_disconnect_error", exc=error)
+            return False
 
     async def _user_messages(self, prompt: HarnessPrompt) -> AsyncIterator[dict[str, Any]]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]

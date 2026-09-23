@@ -47,11 +47,11 @@ class TestExecutionCompleteCostReport:
             reported.set()
             await asyncio.Event().wait()
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
         bridge.diff_refresh = Mock()
         await bridge._handle_command({"type": "prompt", **_prompt_command()})
         await asyncio.wait_for(reported.wait(), timeout=1)
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         assert task is not None
         await bridge._handle_stop()
         await task
@@ -80,11 +80,9 @@ class TestExecutionCompleteCostReport:
                 "messageCostUsd": 0.75,
             }
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
 
-        await bridge._handle_prompt(_prompt_command())
-
-        completion = _completion(bridge)
+        completion = await bridge._handle_prompt(_prompt_command())
         assert completion["success"] is True
         assert completion["messageCostUsd"] == 0.75
 
@@ -94,11 +92,9 @@ class TestExecutionCompleteCostReport:
             yield {"type": "step_finish", "messageId": "msg-1", "cost": 0.5, "messageCostUsd": 0.5}
             yield {"type": "error", "messageId": "msg-1", "error": "boom"}
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
 
-        await bridge._handle_prompt(_prompt_command())
-
-        completion = _completion(bridge)
+        completion = await bridge._handle_prompt(_prompt_command())
         assert completion["success"] is False
         assert completion["messageCostUsd"] == 0.5
 
@@ -107,8 +103,8 @@ class TestExecutionCompleteCostReport:
         async def stream(*_args, **_kwargs):
             yield {"type": "token", "messageId": "msg-1", "content": "hi"}
 
-        bridge.harness = ScriptedHarness(stream)
+        bridge.boot_attach.harness = ScriptedHarness(stream)
 
-        await bridge._handle_prompt(_prompt_command())
+        completion = await bridge._handle_prompt(_prompt_command())
 
-        assert "messageCostUsd" not in _completion(bridge)
+        assert "messageCostUsd" not in completion

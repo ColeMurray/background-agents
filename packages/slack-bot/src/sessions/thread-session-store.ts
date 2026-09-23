@@ -1,4 +1,5 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { compareSlackTimestamps } from "@open-inspect/shared/slack";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
@@ -100,7 +101,7 @@ export async function advanceLastPromptTs(
 ): Promise<void> {
   const current = await lookupThreadSession(env, channel, threadTs);
   if (!current) return;
-  if (current.lastPromptTs && parseFloat(current.lastPromptTs) >= parseFloat(promptTs)) return;
+  if (current.lastPromptTs && compareSlackTimestamps(current.lastPromptTs, promptTs) >= 0) return;
   await storeThreadSession(env, channel, threadTs, { ...current, lastPromptTs: promptTs });
 }
 

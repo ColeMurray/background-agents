@@ -106,9 +106,10 @@ function createMockRepository() {
     createdAt: number;
     authorizationExpiresAt: number;
   }> = [];
+  const getSandbox = vi.fn(() => sandboxRow);
 
   const repo = {
-    getSandbox: () => sandboxRow,
+    getSandbox,
     setActiveSocketId: (socketId: string) => {
       // Like the UPDATE it stands in for: nothing to write without a row.
       if (sandboxRow) sandboxRow.active_socket_id = socketId;
@@ -152,6 +153,7 @@ function createMockRepository() {
 
   return {
     repo,
+    getSandbox,
     mappings,
     upsertCalls,
     setSandbox: (row: SandboxRow | null) => {
@@ -434,6 +436,20 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(manager.isActiveSandboxSocket(ws)).toBe(false);
     });
 
+    it("requires the sandbox id to match even when the socket identity does", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sb-current");
+      mockRepo.setSandbox(row);
+      const ws = createFakeWebSocket();
+
+      manager.acceptAndSetSandboxSocket(ws, "sb-stale");
+
+      expect(row.active_socket_id).toMatch(/^sbws-/);
+      expect(manager.isActiveSandboxSocket(ws)).toBe(false);
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");
+    });
+
     it("is false for every socket once detach has revoked authority", () => {
       const { manager, sockets, mockRepo } = createManager();
       const row = createSandboxRow("sb-1");
@@ -662,7 +678,31 @@ describe("SessionWebSocketManagerImpl", () => {
     });
   });
 
-  describe("getReadySandboxSocket", () => {
+  describe("getSandboxCommandTarget", () => {
+    it("reports unavailable for an attached socket without a sandbox row", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      mockRepo.setSandbox(null);
+
+      expect(manager.getSandboxCommandTarget()).toEqual({ kind: "unavailable" });
+    });
+
+    it.each(["stopped", "failed", "stale"] as const)(
+      "reports unavailable for a lingering %s socket",
+      (status) => {
+        const { manager, mockRepo } = createManager();
+        const row = createSandboxRow("sb-1");
+        row.status = status;
+        mockRepo.setSandbox(row);
+        const ws = createFakeWebSocket();
+        manager.acceptAndSetSandboxSocket(ws, "sb-1");
+
+        expect(manager.getSandboxCommandTarget()).toEqual({ kind: "unavailable" });
+        expect(ws.close).toHaveBeenCalled();
+      }
+    );
+
     it.each(["ready", "snapshotting"] as const)(
       "returns the attached socket while the row is %s",
       (status) => {
@@ -673,7 +713,7 @@ describe("SessionWebSocketManagerImpl", () => {
         const ws = createFakeWebSocket();
         manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
-        expect(manager.getReadySandboxSocket()).toBe(ws);
+        expect(manager.getSandboxCommandTarget()).toEqual({ kind: "dispatch", socket: ws });
       }
     );
 
@@ -683,22 +723,40 @@ describe("SessionWebSocketManagerImpl", () => {
         const { manager, mockRepo } = createManager();
         const row = createSandboxRow("sb-1");
         row.status = status;
+        row.boot_phase = JSON.stringify({
+          phase: "setup",
+          status: "started",
+          bootSeq: 3,
+          repoOwner: "acme",
+          repoName: "api",
+        });
         mockRepo.setSandbox(row);
         const ws = createFakeWebSocket();
         manager.acceptAndSetSandboxSocket(ws, "sb-1");
 
         expect(manager.getSandboxSocket()).toBe(ws);
-        expect(manager.getReadySandboxSocket()).toBeNull();
+        mockRepo.getSandbox.mockClear();
+        expect(manager.getSandboxCommandTarget()).toEqual({
+          kind: "booting",
+          phase: {
+            phase: "setup",
+            status: "started",
+            bootSeq: 3,
+            repoOwner: "acme",
+            repoName: "api",
+          },
+        });
+        expect(mockRepo.getSandbox).toHaveBeenCalledOnce();
         // Withholding is not closing: the bridge stays attached for lifecycle use.
         expect(ws.close).not.toHaveBeenCalled();
       }
     );
 
-    it("returns null when no sandbox socket exists", () => {
+    it("reports unavailable when no sandbox socket exists", () => {
       const { manager, mockRepo } = createManager();
       mockRepo.setSandbox(createSandboxRow("sb-1"));
 
-      expect(manager.getReadySandboxSocket()).toBeNull();
+      expect(manager.getSandboxCommandTarget()).toEqual({ kind: "unavailable" });
     });
   });
 

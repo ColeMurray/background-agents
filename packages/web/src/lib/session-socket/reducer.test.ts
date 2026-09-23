@@ -87,6 +87,42 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  it("hydrates shutdown state from snapshots and replaces it with semantic updates", () => {
+    const saved = {
+      phase: "saved" as const,
+      expiresAtMs: 20_000,
+      drainAtMs: 10_000,
+      savedAtMs: 15_000,
+    };
+    const failed = {
+      phase: "failed" as const,
+      expiresAtMs: 20_000,
+      drainAtMs: 10_000,
+      error: "provider_capture_failed",
+    };
+    const hydrated = createSessionSocketState(
+      createSnapshot({ session: createSessionState({ sandboxPreservation: saved }) })
+    );
+
+    expect(hydrated.sessionState?.sandboxPreservation).toEqual(saved);
+
+    const updated = reduce(
+      hydrated,
+      serverMessage({ type: "sandbox_preservation", preservation: failed })
+    );
+    expect(updated.sessionState?.sandboxPreservation).toEqual(failed);
+
+    const reconnected = reduce(
+      updated,
+      serverMessage(
+        createSubscribedMessage({
+          session: createSessionState({ sandboxPreservation: saved }),
+        })
+      )
+    );
+    expect(reconnected.sessionState?.sandboxPreservation).toEqual(saved);
+  });
+
   it("uses authoritative totals for duplicate steps and final cost repairs", () => {
     const event = {
       type: "step_finish" as const,
@@ -315,7 +351,7 @@ describe("sessionSocketReducer", () => {
       expect(subscribedState().boot).toBeNull();
     });
 
-    it("seeds a failed boot with the tail the snapshot carries", () => {
+    it("seeds a failed boot with the metadata the snapshot carries", () => {
       const state = subscribedState({
         session: createSessionState({ sandboxStatus: "failed" }),
         spawnError: "start hook failed for acme/web-app",
@@ -326,12 +362,19 @@ describe("sessionSocketReducer", () => {
           sandboxId: "sb-1",
           repoOwner: "acme",
           repoName: "web-app",
-          outputTail: ["npm ERR! missing script: dev"],
           detail: "start hook failed for acme/web-app",
         },
       });
 
-      expect(state.boot?.phase?.outputTail).toEqual(["npm ERR! missing script: dev"]);
+      expect(state.boot?.phase).toEqual({
+        phase: "start",
+        status: "failed",
+        bootSeq: 6,
+        sandboxId: "sb-1",
+        repoOwner: "acme",
+        repoName: "web-app",
+        detail: "start hook failed for acme/web-app",
+      });
       expect(state.sandboxError).toBe("start hook failed for acme/web-app");
     });
 
@@ -391,9 +434,7 @@ describe("sessionSocketReducer", () => {
         serverMessage({ type: "sandbox_status", status: "connecting" }),
         {
           type: "events_appended",
-          events: [
-            bootProgress({ bootSeq: 4, phase: "setup", status: "failed", outputTail: ["boom"] }),
-          ],
+          events: [bootProgress({ bootSeq: 4, phase: "setup", status: "failed" })],
         },
         serverMessage({ type: "sandbox_error", error: "setup hook failed" }),
         serverMessage({ type: "sandbox_status", status: "failed" })
@@ -404,7 +445,6 @@ describe("sessionSocketReducer", () => {
         status: "failed",
         bootSeq: 4,
         sandboxId: "sb-1",
-        outputTail: ["boom"],
       });
       expect(failed.sandboxError).toBe("setup hook failed");
     });

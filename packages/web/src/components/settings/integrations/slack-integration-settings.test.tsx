@@ -690,10 +690,7 @@ describe("SlackIntegrationSettings", () => {
       const section = routingSection();
       // Save is disabled until the form is dirty; edit a keyword (keeping it
       // valid) so the only remaining problem is the over-limit count.
-      await user.type(
-        within(section).getAllByRole("textbox", { name: /routing keyword/i })[0],
-        "x"
-      );
+      await user.type(within(section).getAllByLabelText("Routing keyword")[0], "x");
       await user.click(within(section).getByRole("button", { name: /save routing rules/i }));
 
       expect(toastError).toHaveBeenCalledWith(

@@ -108,13 +108,3 @@ export function applyBootProgress(boot: SandboxBoot | null, event: BootProgressE
 export function endBootPhase(boot: SandboxBoot | null): SandboxBoot | null {
   return boot?.phase ? { ...boot, phase: null } : boot;
 }
-
-/** "0.4s", "91.2s", "2m 03s": enough precision to tell a slow step from a fast one. */
-export function formatBootDuration(elapsedMs: number): string {
-  const tenths = Math.round(Math.max(elapsedMs, 0) / 100) / 10;
-  if (tenths < 60) return `${tenths.toFixed(1)}s`;
-  const totalSeconds = Math.round(tenths);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}

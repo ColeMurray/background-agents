@@ -41,6 +41,7 @@ import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
+import { SessionFileLinksProvider } from "@/lib/session-file-links";
 import type {
   SessionDiffFile,
   SessionDiffRepository,
@@ -64,6 +65,7 @@ import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
+import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -94,10 +96,10 @@ export default function SessionPage() {
     canManageBudget,
     isProcessing,
     promptQueue,
-    loadingHistory,
     sendPrompt,
     cancelPrompt,
     stopExecution,
+    recoverShutdown,
     sendTyping,
     reconnect,
     loadOlderEvents,
@@ -284,12 +286,16 @@ export default function SessionPage() {
         : ["session-main"],
     storage: changesLayoutStorage,
   });
-  const openDiff = useCallback((repository: SessionDiffRepository, file: SessionDiffFile) => {
-    const selection = { repositoryPosition: repository.position, path: file.path };
+  const openDiffSelection = useCallback((selection: DiffSelection) => {
     diffReturnFocusRef.current = selection;
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
+  const openDiff = useCallback(
+    (repository: SessionDiffRepository, file: SessionDiffFile) =>
+      openDiffSelection({ repositoryPosition: repository.position, path: file.path }),
+    [openDiffSelection]
+  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -321,18 +327,22 @@ export default function SessionPage() {
             minSize="30%"
             style={{ minHeight: 0, overflow: "clip" }}
           >
-            <SessionTimeline
-              events={events}
-              sessionId={sessionId}
-              currentParticipantId={currentParticipantId}
-              participantProfiles={profiles}
-              isProcessing={isProcessing}
-              promptQueue={promptQueue}
-              loadingHistory={loadingHistory}
-              showSkeleton={false}
-              onLoadOlder={loadOlderEvents}
-              onOpenMedia={setSelectedMediaArtifactId}
-            />
+            <SessionFileLinksProvider
+              manifest={diffState?.current ?? null}
+              onOpen={openDiffSelection}
+            >
+              <SessionTimeline
+                events={events}
+                sessionId={sessionId}
+                currentParticipantId={currentParticipantId}
+                participantProfiles={profiles}
+                isProcessing={isProcessing}
+                promptQueue={promptQueue}
+                showSkeleton={false}
+                onLoadOlder={loadOlderEvents}
+                onOpenMedia={setSelectedMediaArtifactId}
+              />
+            </SessionFileLinksProvider>
           </Panel>
           {showTerminal && (
             <>
@@ -450,6 +460,13 @@ export default function SessionPage() {
         </div>
       )}
 
+      {capabilities.read && (
+        <SandboxShutdownBanner
+          shutdown={sessionState?.sandboxPreservation}
+          onRecover={capabilities.lifecycle && ready ? recoverShutdown : undefined}
+        />
+      )}
+
       {/* Main content */}
       <main className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!isBelowLg ? (
@@ -463,7 +480,6 @@ export default function SessionPage() {
                 participants={profiledParticipants}
                 presenceSynced={presenceSynced}
                 events={events}
-                bootPhases={boot?.timings}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={toggleTerminal}
@@ -500,7 +516,6 @@ export default function SessionPage() {
               participants={profiledParticipants}
               presenceSynced={presenceSynced}
               events={events}
-              bootPhases={boot?.timings}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
               onToggleTerminal={toggleTerminal}
@@ -527,7 +542,6 @@ export default function SessionPage() {
           participants={profiledParticipants}
           presenceSynced={presenceSynced}
           events={events}
-          bootPhases={boot?.timings}
           artifacts={artifacts}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}

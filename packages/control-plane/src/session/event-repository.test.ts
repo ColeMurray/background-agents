@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { EventRepository } from "./event-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
@@ -230,9 +231,9 @@ describe("EventRepository", () => {
     it("returns hasMore and trims overflow", () => {
       const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setRows(query, [
-        { id: "e3", created_at: 5000, type: "token", data: "{}" },
-        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
-        { id: "e1", created_at: 3000, type: "token", data: "{}" },
+        { id: "e3", created_at: 5000, type: "token", data: "{}", message_id: null },
+        { id: "e2", created_at: 4000, type: "tool_call", data: "{}", message_id: null },
+        { id: "e1", created_at: 3000, type: "token", data: "{}", message_id: null },
       ]);
 
       const result = repository.listEventPage({ limit: 2 });
@@ -240,6 +241,60 @@ describe("EventRepository", () => {
       expect(result.hasMore).toBe(true);
       expect(result.events.map((event) => event.id)).toEqual(["e3", "e2"]);
       expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
+    });
+
+    it("parses persisted event rows before returning them", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
+      mock.setRows(query, [
+        {
+          id: "e1",
+          created_at: 3000,
+          type: "provider_specific_event",
+          data: "{}",
+          message_id: "msg-1",
+          timeline_sequence: 7,
+        },
+      ]);
+
+      const result = repository.listEventPage({ limit: 50 });
+
+      expect(result.events).toEqual([
+        {
+          id: "e1",
+          created_at: 3000,
+          type: "provider_specific_event",
+          data: "{}",
+          message_id: "msg-1",
+          timeline_sequence: 7,
+        },
+      ]);
+    });
+
+    it("rejects malformed persisted event rows", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
+      mock.setRows(query, [
+        { id: "e1", created_at: "3000", type: "token", data: "{}", message_id: null },
+      ]);
+
+      expect(() => repository.listEventPage({ limit: 50 })).toThrow(SessionStorageIntegrityError);
+    });
+
+    it("accepts legacy event rows without timeline_sequence", () => {
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
+      mock.setRows(query, [
+        { id: "e1", created_at: 3000, type: "token", data: "{}", message_id: null },
+      ]);
+
+      const result = repository.listEventPage({ limit: 50 });
+
+      expect(result.events[0]).toEqual({
+        id: "e1",
+        created_at: 3000,
+        type: "token",
+        data: "{}",
+        message_id: null,
+      });
+      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 3000, id: "e1" });
     });
   });
 
@@ -283,9 +338,9 @@ describe("EventRepository", () => {
     it("returns ascending events and preserves the descending page cursor", () => {
       const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setRows(query, [
-        { id: "e3", created_at: 5000, type: "token", data: "{}" },
-        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
-        { id: "e1", created_at: 3000, type: "token", data: "{}" },
+        { id: "e3", created_at: 5000, type: "token", data: "{}", message_id: null },
+        { id: "e2", created_at: 4000, type: "tool_call", data: "{}", message_id: null },
+        { id: "e1", created_at: 3000, type: "token", data: "{}", message_id: null },
       ]);
 
       const result = repository.getEventTimelinePage({ limit: 2 });
@@ -298,8 +353,8 @@ describe("EventRepository", () => {
     it("returns hasMore=false when a timeline page fits within the limit", () => {
       const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setRows(query, [
-        { id: "e2", created_at: 4000, type: "token", data: "{}" },
-        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
+        { id: "e2", created_at: 4000, type: "token", data: "{}", message_id: null },
+        { id: "e1", created_at: 3000, type: "tool_call", data: "{}", message_id: null },
       ]);
 
       const result = repository.getEventTimelinePage({ limit: 50 });

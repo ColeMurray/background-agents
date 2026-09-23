@@ -18,6 +18,7 @@ The wrapper carries variable *names* only. Credential values travel through
 from __future__ import annotations
 
 import json
+import math
 import os
 import stat
 import sys
@@ -54,6 +55,59 @@ CLAUDE_POLICY_SETTINGS: Final = json.dumps(
     },
     separators=(",", ":"),
 )
+
+# How long the child may run one Bash call, and therefore how long the SDK
+# stream may legitimately say nothing: it carries no message between a tool
+# call and its result, and no keepalive. Both variables reach the child
+# untouched (the wrapper strips credentials only), so the bridge resolves the
+# ceiling from the same environment the child reads rather than keeping a
+# second copy of the number that can disagree with it.
+BASH_MAX_TIMEOUT_ENV_VAR: Final = "BASH_MAX_TIMEOUT_MS"
+BASH_DEFAULT_TIMEOUT_ENV_VAR: Final = "BASH_DEFAULT_TIMEOUT_MS"
+# The CLI's built-ins, which apply while the environment overrides neither.
+CLI_BASH_MAX_TIMEOUT_SECONDS: Final = 600.0
+CLI_BASH_DEFAULT_TIMEOUT_SECONDS: Final = 120.0
+# Slack over the ceiling, for delivering a large tool result and re-entering
+# the model once the tool returns.
+STREAM_SILENCE_MARGIN_SECONDS: Final = 300.0
+
+
+def bash_timeout_ceiling_seconds(environ: Mapping[str, str] = os.environ) -> float:
+    """The longest single Bash call the child will allow, by the CLI's own rule.
+
+    The CLI takes the larger of its max and default timeouts, each overridable
+    from the environment; a value that does not parse, or is not positive, is
+    ignored in favour of the built-in.
+    """
+    return max(
+        _milliseconds_as_seconds(environ.get(BASH_MAX_TIMEOUT_ENV_VAR))
+        or CLI_BASH_MAX_TIMEOUT_SECONDS,
+        _milliseconds_as_seconds(environ.get(BASH_DEFAULT_TIMEOUT_ENV_VAR))
+        or CLI_BASH_DEFAULT_TIMEOUT_SECONDS,
+    )
+
+
+def stream_silence_budget_seconds(environ: Mapping[str, str] = os.environ) -> float:
+    """How long the SDK stream may say nothing before the turn counts as stuck.
+
+    Every other Claude tool stays well inside the Bash ceiling: MCP calls
+    carry their own wall-clock limit, and a sub-agent's own tool calls keep
+    arriving on this stream while it works.
+    """
+    return bash_timeout_ceiling_seconds(environ) + STREAM_SILENCE_MARGIN_SECONDS
+
+
+def _milliseconds_as_seconds(raw: str | None) -> float | None:
+    """An environment duration in milliseconds, or ``None`` when unusable."""
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value / 1000.0
 
 
 class ClaudeAuthMode(StrEnum):

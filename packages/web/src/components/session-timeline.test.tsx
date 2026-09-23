@@ -194,7 +194,6 @@ const baseTimelineProps = {
   currentParticipantId: null,
   participantProfiles: {},
   isProcessing: false,
-  loadingHistory: false,
   showSkeleton: false,
   onLoadOlder: () => {},
   onOpenMedia: () => {},
@@ -566,7 +565,6 @@ describe("task activity grouping", () => {
         currentParticipantId={null}
         participantProfiles={{}}
         isProcessing={false}
-        loadingHistory={false}
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
@@ -605,7 +603,6 @@ describe("task activity grouping", () => {
         currentParticipantId={null}
         participantProfiles={{}}
         isProcessing={false}
-        loadingHistory={false}
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
@@ -668,7 +665,6 @@ describe("task activity grouping", () => {
         currentParticipantId={null}
         participantProfiles={{}}
         isProcessing={false}
-        loadingHistory={false}
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
@@ -719,7 +715,6 @@ describe("task activity grouping", () => {
         currentParticipantId={null}
         participantProfiles={{}}
         isProcessing={false}
-        loadingHistory={false}
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
@@ -768,7 +763,6 @@ describe("task activity grouping", () => {
         currentParticipantId={null}
         participantProfiles={{}}
         isProcessing={false}
-        loadingHistory={false}
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
@@ -805,7 +799,6 @@ describe("task activity grouping", () => {
       currentParticipantId: null,
       participantProfiles: {},
       isProcessing: false,
-      loadingHistory: false,
       showSkeleton: false,
       onLoadOlder: () => {},
       onOpenMedia: () => {},
@@ -839,7 +832,6 @@ describe("task activity grouping", () => {
         currentParticipantId={null}
         participantProfiles={{}}
         isProcessing={false}
-        loadingHistory={false}
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}

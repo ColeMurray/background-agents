@@ -1,4 +1,4 @@
-"""Resilient decoding for child-process output streams."""
+"""Child-process lifecycle helpers and resilient output decoding."""
 
 from __future__ import annotations
 
@@ -12,72 +12,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
 TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
-PROCESS_OUTPUT_TAIL_BYTES = 64 * 1024
-PROCESS_OUTPUT_SHUTDOWN_SECONDS = 1.0
-
-
-class BoundedOutputCollector:
-    """Continuously drain a stream while retaining only a bounded byte tail."""
-
-    def __init__(
-        self,
-        stream: asyncio.StreamReader,
-        *,
-        max_tail_bytes: int = PROCESS_OUTPUT_TAIL_BYTES,
-    ) -> None:
-        if max_tail_bytes <= 0:
-            raise ValueError("max_tail_bytes must be positive")
-        self._stream = stream
-        self._max_tail_bytes = max_tail_bytes
-        self._tail = bytearray()
-        self._retaining = True
-        self._overflowed = False
-        self.task = asyncio.create_task(self._drain())
-
-    async def _drain(self) -> None:
-        while chunk := await self._stream.read(16 * 1024):
-            if not self._retaining:
-                continue
-            self._tail.extend(chunk)
-            overflow = len(self._tail) - self._max_tail_bytes
-            if overflow > 0:
-                self._overflowed = True
-                del self._tail[:overflow]
-
-    async def wait(self) -> None:
-        """Wait until every writer has closed the stream."""
-        await self.task
-
-    async def shutdown(self) -> None:
-        """Close the stream and bound how long collector cleanup can take."""
-        transport = getattr(self._stream, "_transport", None)
-        if transport is not None:
-            transport.close()
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(self.task),
-                timeout=PROCESS_OUTPUT_SHUTDOWN_SECONDS,
-            )
-        except TimeoutError:
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
-
-    def discard_tail(self) -> None:
-        """Continue draining without retaining output."""
-        self._retaining = False
-        self._tail.clear()
-
-    def tail_lines(self, max_lines: int = 50) -> str:
-        """Decode and return at most the requested final lines.
-
-        Once the window has overflowed, its first line is a fragment cut at
-        an arbitrary byte and is dropped: a fragment of a secret would no
-        longer match the value it is redacted by.
-        """
-        lines = bytes(self._tail).decode(errors="replace").splitlines()
-        if self._overflowed:
-            lines = lines[1:]
-        return "\n".join(lines[-max_lines:])
 
 
 async def wait_for_process_exit(process: asyncio.subprocess.Process) -> int:

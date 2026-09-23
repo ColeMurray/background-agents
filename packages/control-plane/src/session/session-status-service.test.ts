@@ -450,6 +450,33 @@ describe("SessionStatusService.settleFromMessageState", () => {
   });
 });
 
+describe("SessionStatusService.reconcileFromMessageState", () => {
+  it("preserves a completed prompt outcome across an external lifecycle boundary", async () => {
+    const h = harness({ session: createSession({ status: "completed" }) });
+    h.repository.getLatestTerminalMessage.mockReturnValue({ status: "completed" } as MessageRow);
+
+    await h.service.reconcileFromMessageState();
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.statusProjection.project).toHaveBeenCalledWith(
+      "public-session-1",
+      "completed",
+      1,
+      2000
+    );
+  });
+
+  it("preserves a user-selected closed status", async () => {
+    const h = harness({ session: createSession({ status: "archived" }) });
+    h.repository.getLatestTerminalMessage.mockReturnValue({ status: "completed" } as MessageRow);
+
+    await h.service.reconcileFromMessageState();
+
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+});
+
 describe("SessionStatusService.notifyParentOfChildUpdate", () => {
   it("posts the child update to the parent Durable Object", async () => {
     const h = harness();

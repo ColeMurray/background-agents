@@ -12,7 +12,7 @@ import {
 import { hashToken } from "../auth/crypto";
 import type { Logger } from "../logger";
 import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
-import type { SandboxLifecycleManager } from "../sandbox/lifecycle/manager";
+import type { SandboxAttachment } from "../sandbox/lifecycle/ports";
 import type { SourceControlProviderName } from "../source-control";
 import type { BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
@@ -23,9 +23,10 @@ import { getAvatarUrl, type ParticipantService } from "./participant-service";
 import type { PresenceService } from "./presence-service";
 import type { SessionMessageQueue } from "./message-queue";
 import type { SessionMessenger } from "./messenger";
-import type { SandboxRepository } from "./sandbox-repository";
+import type { SandboxStateReader, SandboxRuntimeFacts } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionSnapshotReader } from "./snapshot-reader";
+import type { SandboxRow } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 import { canManageSessionBudget } from "./budget-authorization";
@@ -41,8 +42,8 @@ const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 export interface SessionConnectionAuthenticatorDeps {
   wsManager: SessionWebSocketManager;
   sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
-  lifecycleManager: SandboxLifecycleManager;
+  sandboxRepository: SandboxStateReader & Pick<SandboxRuntimeFacts, "updateSandboxHeartbeat">;
+  lifecycleManager: SandboxAttachment;
   messenger: SessionMessenger;
   backgroundTasks: BackgroundTasks;
   messageQueue: Pick<SessionMessageQueue, "processMessageQueue">;
@@ -63,6 +64,13 @@ type AuthorizationResolution =
   | { kind: "rejected" | "unavailable" };
 
 export type ClientCommandAuthorization = "allowed" | "denied" | "unavailable";
+
+interface SandboxAdmission {
+  sandboxId: string | null;
+  createdAt: number;
+  authTokenHash: string | null;
+  authToken: string | null;
+}
 
 /**
  * The outcome of authenticating a WebSocket upgrade. The session decides;
@@ -136,7 +144,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
 
     // Validate auth token
     const tokenMatches = await isValidSandboxToken(providedToken, sandbox);
-    if (!tokenMatches) {
+    if (!tokenMatches || !sandbox) {
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
@@ -183,15 +191,23 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       return reject("Sandbox is stopped", 410);
     }
     if (
-      currentSandbox?.modal_sandbox_id !== expectedSandboxId ||
-      currentSandbox?.auth_token_hash !== sandbox?.auth_token_hash ||
-      currentSandbox?.auth_token !== sandbox?.auth_token
+      !currentSandbox ||
+      currentSandbox.modal_sandbox_id !== expectedSandboxId ||
+      currentSandbox.created_at !== sandbox.created_at ||
+      currentSandbox.auth_token_hash !== sandbox.auth_token_hash ||
+      currentSandbox.auth_token !== sandbox.auth_token
     ) {
       return reject("Forbidden: Sandbox credentials changed", 403);
     }
 
+    const admission: SandboxAdmission = {
+      sandboxId: currentSandbox.modal_sandbox_id,
+      createdAt: currentSandbox.created_at,
+      authTokenHash: currentSandbox.auth_token_hash,
+      authToken: currentSandbox.auth_token,
+    };
     // The success ws.connect event is emitted once the socket is attached.
-    return accept("sandbox", (ws) => this.attachSandbox(ws, sandboxId, log));
+    return accept("sandbox", (ws) => this.attachSandbox(ws, admission, log));
   }
 
   private attachClient(ws: SessionWebSocket, wsId: string): void {
@@ -204,13 +220,12 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
   }
 
   /**
-   * Prepare, revalidate, commit. The boot-liveness alarm is the one fallible
-   * step, so it runs first: a failure leaves the previous bridge in place and
-   * nothing written, not even the heartbeat. The row is then read again: the
-   * await is a window in which a cancel or a replacement spawn can rotate the
-   * generation, and a socket admitted for the old one must not be adopted by
-   * the new. Everything after that check is synchronous, so the heartbeat,
-   * the socket and the row's move to `connecting` land together.
+   * Revalidate, prepare, revalidate, commit. The row must still match the
+   * generation and credentials authorized before the host handshake. The
+   * boot-liveness alarm is the one fallible step, so it runs before any write;
+   * the row is checked again after that await. Everything after the second
+   * check is synchronous, so the heartbeat, socket and row's move to
+   * `connecting` land together.
    *
    * Attach is not readiness. The bridge connects ahead of the repository
    * boot and the harness, so this neither writes `ready`, stamps activity
@@ -224,45 +239,41 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
    */
   private async attachSandbox(
     ws: SessionWebSocket,
-    sandboxId: string | null,
+    admission: SandboxAdmission,
     log: Logger
   ): Promise<void> {
     const { wsManager, sandboxRepository, lifecycleManager, messenger, backgroundTasks } =
       this.deps;
 
-    const now = Date.now();
-    const readGeneration = () => {
-      const row = sandboxRepository.getSandbox();
-      return row ? { sandboxId: row.modal_sandbox_id, createdAt: row.created_at } : null;
-    };
-    const generation = readGeneration();
-    await lifecycleManager.scheduleDisconnectCheck();
-
-    const current = readGeneration();
-    if (
-      current?.sandboxId !== generation?.sandboxId ||
-      current?.createdAt !== generation?.createdAt
-    ) {
+    const generation = { sandboxId: admission.sandboxId, createdAt: admission.createdAt };
+    const rejectIfReplaced = (): boolean => {
+      const current = sandboxRepository.getSandbox();
+      if (matchesAdmission(current, admission)) return false;
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
         outcome: "generation_replaced",
-        sandbox_id: sandboxId,
-        admitted_sandbox_id: generation?.sandboxId ?? null,
-        current_sandbox_id: current?.sandboxId ?? null,
+        sandbox_id: admission.sandboxId,
+        admitted_sandbox_id: admission.sandboxId,
+        current_sandbox_id: current?.modal_sandbox_id ?? null,
       });
       wsManager.close(ws, 4003, "Sandbox generation replaced");
-      return;
-    }
+      return true;
+    };
+
+    const now = Date.now();
+    if (rejectIfReplaced()) return;
+    await lifecycleManager.scheduleDisconnectCheck();
+    if (rejectIfReplaced()) return;
     sandboxRepository.updateSandboxHeartbeat(now);
 
     // The lifecycle manager publishes access after any pending provider
     // startup has persisted its URLs and credentials.
     const accessIsPersisted = !lifecycleManager.isProviderStartupPending();
-    const { replaced } = wsManager.acceptAndSetSandboxSocket(ws, sandboxId ?? undefined);
+    const { replaced } = wsManager.acceptAndSetSandboxSocket(ws, admission.sandboxId ?? undefined);
     // Notify manager that sandbox connected so it can reset the spawning flag
     lifecycleManager.onSandboxConnected();
-    if (generation) lifecycleManager.onSandboxSocketAttached(generation);
+    lifecycleManager.onSandboxSocketAttached(generation);
     if (accessIsPersisted) {
       messenger.broadcast({ type: "sandbox_access_changed" });
     }
@@ -271,12 +282,12 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       event: "ws.connect",
       ws_type: "sandbox",
       outcome: "success",
-      sandbox_id: sandboxId,
+      sandbox_id: admission.sandboxId,
       replaced_existing: replaced,
       duration_ms: Date.now() - now,
     });
 
-    if (wsManager.getReadySandboxSocket()) {
+    if (wsManager.getSandboxCommandTarget().kind === "dispatch") {
       backgroundTasks.submit(() => this.deps.messageQueue.processMessageQueue(), {
         name: "message_queue.process",
       });
@@ -508,6 +519,16 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     wsManager.setClient(ws, clientInfo);
     return clientInfo;
   }
+}
+
+function matchesAdmission(row: SandboxRow | null, admission: SandboxAdmission): boolean {
+  return (
+    row !== null &&
+    row.modal_sandbox_id === admission.sandboxId &&
+    row.created_at === admission.createdAt &&
+    row.auth_token_hash === admission.authTokenHash &&
+    row.auth_token === admission.authToken
+  );
 }
 
 function reject(body: string, status: number): UpgradeDecision {

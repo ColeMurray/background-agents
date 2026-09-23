@@ -33,7 +33,15 @@
  * job left for a newer build waits quietly instead of being polled for.
  */
 
-import { JOB_KINDS, deliverJob, type Job, type JobDeps, type JobKind, type Jobs } from "../jobs";
+import {
+  JOB_KINDS,
+  deliverJob,
+  type Job,
+  type JobDeps,
+  type JobKind,
+  type Jobs,
+  type JobSendOptions,
+} from "../jobs";
 import type { CorrelationContext, Logger } from "../logger";
 import type { ClaimedJob, JobStore, JobStoreStats } from "./job-store";
 
@@ -97,15 +105,22 @@ export class NodeJobs implements Jobs {
   }
 
   /**
-   * Record the job, runnable at once. Resolves when the row is written: that
-   * is what makes it durable, exactly as a Queue send does on Cloudflare.
-   * The write is synchronous, and `async` is what turns a failed one into a
-   * rejection rather than a throw the Cloudflare adapter would never produce.
+   * Record the job, runnable at once — or after `delayMs`, which is this
+   * host's answer to a Queue send's `delaySeconds`. Resolves when the row is
+   * written: that is what makes it durable, exactly as a Queue send does on
+   * Cloudflare. The write is synchronous, and `async` is what turns a failed
+   * one into a rejection rather than a throw the Cloudflare adapter would
+   * never produce.
    */
-  async send(job: Job): Promise<void> {
+  async send(job: Job, options?: JobSendOptions): Promise<void> {
     const now = this.now();
     this.store.add(
-      { id: this.newId(), kind: job.kind, payload: JSON.stringify(job.payload), runAt: now },
+      {
+        id: this.newId(),
+        kind: job.kind,
+        payload: JSON.stringify(job.payload),
+        runAt: now + (options?.delayMs ?? 0),
+      },
       now
     );
     this.arm();

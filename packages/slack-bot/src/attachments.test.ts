@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
+  preparePromptImageAttachments,
+  slackFileAnnotations,
   toImageAttachments,
   uploadPreparedAttachments,
   type SlackImageAttachment,
@@ -102,6 +104,29 @@ describe("toImageAttachments", () => {
     ]);
     expect(attachment!.downloadUrl).toBe("https://files.slack.com/download/F1");
     expect(attachment!.size).toBe(1024);
+  });
+});
+
+describe("slackFileAnnotations", () => {
+  it("describes supported and unsupported files without exposing private URLs", () => {
+    const annotations = slackFileAnnotations(
+      [
+        pngFile,
+        {
+          id: "F2",
+          name: "report.pdf",
+          mimetype: "application/pdf",
+          url_private: "https://files.slack.com/private/report.pdf",
+        },
+      ],
+      "interactive"
+    ).join("\n");
+
+    expect(annotations).toContain("screenshot.png");
+    expect(annotations).toContain("eligible for secure forwarding");
+    expect(annotations).toContain("report.pdf");
+    expect(annotations).toContain("unsupported or unavailable file");
+    expect(annotations).not.toContain("https://");
   });
 });
 
@@ -222,6 +247,61 @@ describe("prepareImageAttachments", () => {
   });
 });
 
+describe("preparePromptImageAttachments", () => {
+  it("prioritizes current images, deduplicates context, and fills remaining slots", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("denied", { status: 403 }))
+      .mockResolvedValueOnce(imageBytesResponse())
+      .mockResolvedValueOnce(imageBytesResponse());
+    const current = [pngAttachment, { ...pngAttachment, id: "F2", name: "current-2.png" }];
+    const context = [{ ...pngAttachment }, { ...pngAttachment, id: "F3", name: "prior.png" }];
+
+    const prepared = await preparePromptImageAttachments(makeEnv(), current, context);
+
+    expect(prepared.files.map((file) => file.attachment.name)).toEqual([
+      "current-2.png",
+      "prior.png",
+    ]);
+    expect(prepared.dropped).toEqual(["download_failed"]);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("tries later current images after failures before considering context", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("denied", { status: 403 }));
+    for (let i = 0; i < 6; i++) fetchSpy.mockResolvedValueOnce(imageBytesResponse());
+    const current = Array.from({ length: 8 }, (_, i) => ({
+      ...pngAttachment,
+      id: `current-${i}`,
+      name: `current-${i}.png`,
+    }));
+    const context = [{ ...pngAttachment, id: "context", name: "context.png" }];
+
+    const prepared = await preparePromptImageAttachments(makeEnv(), current, context);
+
+    expect(prepared.files.map((file) => file.attachment.name)).toEqual([
+      "current-1.png",
+      "current-2.png",
+      "current-3.png",
+      "current-4.png",
+      "current-5.png",
+      "current-6.png",
+    ]);
+    expect(prepared.dropped).toEqual(["download_failed", "over_cap"]);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("context"))).toBe(false);
+  });
+
+  it("does not report prior-context download failures as current input errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("denied", { status: 403 }));
+
+    const prepared = await preparePromptImageAttachments(makeEnv(), [], [pngAttachment]);
+
+    expect(prepared).toEqual({ files: [], dropped: [] });
+  });
+});
+
 describe("uploadPreparedAttachments", () => {
   it("uploads to the session and returns prompt references", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
@@ -292,6 +372,31 @@ describe("uploadPreparedAttachments", () => {
     expect(result.references).toEqual([]);
     expect(result.dropped).toEqual(["download_failed", "upload_rejected"]);
     expect(result.sessionMissing).toBe(false);
+  });
+
+  it("keeps context upload failures out of user drop notices but detects a stale session", async () => {
+    const controlPlaneFetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await uploadPreparedAttachments(
+      env,
+      "sess-gone",
+      {
+        files: [
+          {
+            attachment: { ...pngAttachment, id: "context", name: "context.png" },
+            bytes: new Uint8Array(16),
+            reportDrop: false,
+          },
+        ],
+        dropped: [],
+      },
+      "slack:U1"
+    );
+
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual([]);
+    expect(result.sessionMissing).toBe(true);
   });
 
   it("counts malformed upload responses as dropped", async () => {

@@ -14,7 +14,7 @@ import type { ImageBuildWorkflow } from "./workflow";
 
 function harness(
   options: {
-    provider?: "modal" | null;
+    provider?: "modal" | "daytona" | null;
     sourceControl?: SourceControlProvider | null;
     env?: Env;
   } = {}
@@ -85,6 +85,8 @@ function harness(
       },
     ]),
     deleteSupersededImage: vi.fn(async () => true),
+    listUnboundSourceIntents: vi.fn(async () => []),
+    listUnresolvedOperations: vi.fn(async () => []),
     finalization: {
       clearSessionCleanup: clearProviderSessionCleanup,
     },
@@ -348,5 +350,37 @@ describe("ImageBuildScheduler", () => {
       kind: "image_build.finalize",
       payload: { version: 1, buildId: "build-21", completionHash: "21".repeat(32) },
     });
+  });
+});
+
+describe("ImageBuildScheduler admission", () => {
+  it("keeps every maintenance phase running while new builds are paused", async () => {
+    const { scheduler, store, listScopes, workflow } = harness({
+      provider: "daytona",
+      env: createTestEnv({ SANDBOX_PROVIDER: "daytona" }),
+    });
+
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.admissionOpen).toBe(false);
+    // No new builds...
+    expect(listScopes).not.toHaveBeenCalled();
+    expect(workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+    // ...but everything that reclaims what already exists still runs.
+    expect(stats.staleMarked).toBe(1);
+    expect(stats.cleanupAttempted).toBe(2);
+    expect(store.deleteOldFailedBuilds).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles scopes again once admission opens", async () => {
+    const { scheduler, listScopes } = harness({
+      provider: "daytona",
+      env: createTestEnv({ SANDBOX_PROVIDER: "daytona", DAYTONA_PREBUILDS_ENABLED: "true" }),
+    });
+
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.admissionOpen).toBe(true);
+    expect(listScopes).toHaveBeenCalled();
   });
 });

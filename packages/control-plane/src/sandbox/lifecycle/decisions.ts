@@ -40,6 +40,28 @@ export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean 
   return status === "stopped" || status === "stale";
 }
 
+export type SandboxCommandAvailability = "dispatch" | "booting" | "unavailable";
+
+/** Classify a known sandbox after transport has resolved its authoritative socket. */
+export function evaluateSandboxCommandAvailability(
+  status: SandboxStatus
+): SandboxCommandAvailability {
+  if (isDeadSandboxStatus(status)) {
+    return "unavailable";
+  }
+  return status === "ready" || status === "snapshotting" ? "dispatch" : "booting";
+}
+
+/** Access and ordinary command eligibility intentionally differ during snapshots in C1. */
+export function isSandboxAccessAvailable(status: SandboxStatus | undefined): boolean {
+  return status === "ready";
+}
+
+/** Preserve cancellation's distinct policy: stale becomes stopped, failed stays failed. */
+export function shouldStopSandboxOnSessionCancel(status: SandboxStatus | undefined): boolean {
+  return status !== undefined && status !== "stopped" && status !== "failed";
+}
+
 // ==================== Circuit Breaker ====================
 
 /**
@@ -244,9 +266,8 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
  *
  * Fails closed, matching image selection: a snapshot whose runtime version was
  * never recorded (taken before this column existed) or does not parse is
- * treated as below the floor. The cost is one fresh spawn — the sandbox's
- * uncommitted filesystem state — after which the next snapshot records its
- * version and restores resume as normal.
+ * treated as below the floor. Incompatibility blocks execution, not retention:
+ * keep the snapshot for operator recovery instead of substituting a clean tree.
  */
 export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
   if (!snapshotRuntimeVersion) return false;
@@ -259,6 +280,7 @@ export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | nul
  */
 export type SpawnAction =
   | { action: "spawn"; reason?: string }
+  | { action: "hold"; reason: string }
   | { action: "resume"; providerObjectId: string }
   | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
@@ -341,9 +363,9 @@ export function evaluateSpawnDecision(
         snapshotRuntimeVersion: state.snapshotRuntimeVersion as string,
       };
     }
-    // Fall through to a fresh spawn rather than booting a retired runtime.
+    // Never substitute a clean filesystem for retained user state.
     return {
-      action: "spawn",
+      action: "hold",
       reason: `snapshot runtime ${state.snapshotRuntimeVersion ?? "unknown"} is below the v${MIN_COMPATIBLE_RUNTIME_VERSION} floor`,
     };
   }
@@ -441,8 +463,8 @@ export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
  * Possible inactivity actions.
  */
 export type InactivityAction =
-  | { action: "timeout"; shouldSnapshot: boolean }
-  | { action: "extend"; extensionMs: number; shouldWarn: boolean }
+  | { action: "timeout" }
+  | { action: "extend"; extensionMs: number }
   | { action: "schedule"; nextCheckMs: number };
 
 /**
@@ -501,12 +523,11 @@ export function evaluateInactivityTimeout(
       return {
         action: "extend",
         extensionMs: config.extensionMs,
-        shouldWarn: true,
       };
     }
 
-    // No clients connected - timeout and snapshot
-    return { action: "timeout", shouldSnapshot: true };
+    // No clients connected - end the idle sandbox.
+    return { action: "timeout" };
   }
 
   // Not yet timed out - schedule next check at remaining time (minimum interval)
@@ -534,12 +555,7 @@ export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
 /**
  * Heartbeat health result.
  */
-export interface HeartbeatHealth {
-  /** Whether the sandbox is considered stale (missed heartbeats) */
-  isStale: boolean;
-  /** Time since last heartbeat in ms (only set if stale) */
-  ageMs?: number;
-}
+export type HeartbeatHealth = { isStale: false } | { isStale: true; ageMs: number };
 
 /**
  * Evaluate heartbeat health.

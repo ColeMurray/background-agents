@@ -79,8 +79,13 @@ modal_environment_web_suffix  = ""
 # Seed the base snapshot with packages/daytona-infra/src/bootstrap.py before enabling.
 daytona_api_url = ""           # e.g., "https://app.daytona.io/api"
 daytona_api_key = ""           # Requires Sandboxes (Read/Write) + Snapshots (Read/Write/Delete)
-daytona_base_snapshot = ""     # Name of the seeded Daytona snapshot
+daytona_base_snapshot = ""     # Prefix for the Terraform-managed Daytona snapshot
+# daytona_base_snapshot_memory_gib = 2 # Memory inherited by sandboxes created from the snapshot
 # daytona_target = ""          # Optional Daytona target name
+# daytona_toolbox_api_url = "" # Optional override; empty uses the proxy each sandbox reports
+# Admits new Daytona prebuilt-image builds and lets fresh sessions boot from one; closing it
+# again is the rollback. Clear the gates in docs/IMAGE_PREBUILD.md#daytona-prebuilds first.
+daytona_prebuilds_enabled = false
 
 # Vercel Sandbox API
 # Only required when sandbox_provider = "vercel"

@@ -13,7 +13,7 @@ import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { postMessage } from "@open-inspect/shared/slack";
 import {
   notifyDroppedAttachments,
-  prepareImageAttachments,
+  preparePromptImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
 
@@ -22,7 +22,7 @@ vi.mock("@open-inspect/shared/slack", () => ({
 }));
 
 vi.mock("../attachments", () => ({
-  prepareImageAttachments: vi.fn(async () => ({ files: [], dropped: [] })),
+  preparePromptImageAttachments: vi.fn(async () => ({ files: [], dropped: [] })),
   notifyDroppedAttachments: vi.fn(async () => {}),
 }));
 
@@ -32,6 +32,7 @@ vi.mock("./prompt-delivery", () => ({
 
 vi.mock("../app-home/models", () => ({
   getAvailableModels: vi.fn(),
+  getAuthoritativeModels: vi.fn(),
 }));
 
 vi.mock("../branch-preferences", () => ({
@@ -98,6 +99,8 @@ const environmentTarget: SlackSessionTarget = {
   },
 };
 
+const noRepositoryTarget: SlackSessionTarget = { kind: "none" };
+
 const actor: SlackActorIdentity = {
   userId: "U123",
   senderLabel: "Display Name (U123)",
@@ -122,7 +125,7 @@ describe("startSessionAndSendPrompt", () => {
     });
     vi.mocked(getUserRepoBranchPreference).mockResolvedValue("repo-override-branch");
     vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
-    vi.mocked(prepareImageAttachments).mockResolvedValue({ files: [], dropped: [] });
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue({ files: [], dropped: [] });
     vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
     vi.mocked(buildThreadSession).mockReturnValue({
       sessionId: "session-1",
@@ -150,7 +153,7 @@ describe("startSessionAndSendPrompt", () => {
         channelDescription: "Build and deploy discussion",
         traceId: "trace-1",
       })
-    ).resolves.toEqual({ sessionId: "session-1" });
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
 
     expect(getResolvedUserPreferences).toHaveBeenCalledWith(env, "U123", {
       defaultModel: "anthropic/claude-sonnet-4-6",
@@ -205,6 +208,170 @@ describe("startSessionAndSendPrompt", () => {
     });
   });
 
+  it("adopts combined model and reasoning flags as the new session's defaults", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Investigate the failing deploy",
+      actor,
+      launchPlan: {
+        sessionDefaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "max",
+        },
+      },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" })
+    );
+    // The session already runs the flagged model, so the prompt carries no
+    // per-turn override of its own.
+    const [, delivered] = vi.mocked(deliverPrompt).mock.calls[0]!;
+    expect(delivered).not.toHaveProperty("model");
+    expect(delivered).not.toHaveProperty("reasoningEffort");
+    expect(delivered.callbackContext).toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "max",
+      })
+    );
+    // Follow-ups in the thread resolve against the flagged model, not the
+    // App Home default the flags replaced.
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      repositoryTarget,
+      "anthropic/claude-sonnet-4-6",
+      "max",
+      undefined
+    );
+  });
+
+  it("keeps a launch plan's prompt overrides off the session's stored defaults", async () => {
+    const env = makeEnv();
+
+    // How a stale-thread recovery launches: the replacement inherits the
+    // thread's defaults while the follow-up's own flags stay one-turn.
+    await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "now add coverage",
+      actor,
+      launchPlan: {
+        sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+        promptOverrides: { model: "openai/gpt-5.4" },
+      },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" })
+    );
+    // "max" is not an effort gpt-5.4 supports, so the session's effort is not
+    // carried onto a prompt running a different model.
+    const [, delivered] = vi.mocked(deliverPrompt).mock.calls[0]!;
+    expect(delivered).toEqual(
+      expect.objectContaining({
+        model: "openai/gpt-5.4",
+        callbackContext: expect.objectContaining({
+          model: "openai/gpt-5.4",
+          reasoningEffort: undefined,
+        }),
+      })
+    );
+    expect(delivered).not.toHaveProperty("reasoningEffort");
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      repositoryTarget,
+      "anthropic/claude-sonnet-4-6",
+      "max",
+      undefined
+    );
+  });
+
+  it("rejects a prompt override whose model is no longer enabled", async () => {
+    const env = makeEnv();
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      { label: "GPT 5.4", value: "openai/gpt-5.4" },
+    ]);
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "now add coverage",
+        actor,
+        launchPlan: {
+          sessionDefaults: { model: "openai/gpt-5.4" },
+          promptOverrides: { model: "anthropic/claude-sonnet-4-6" },
+        },
+      })
+    ).resolves.toBeNull();
+
+    // Rejected before anything exists, so no session is left without a prompt.
+    expect(createSession).not.toHaveBeenCalled();
+    expect(deliverPrompt).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      env.SLACK_BOT_TOKEN,
+      "C123",
+      expect.stringContaining("is not enabled"),
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("revalidates a launch plan's model against the models enabled now", async () => {
+    const env = makeEnv();
+    // A deferred target selection can carry a plan resolved much earlier; the
+    // model it names may have been disabled since.
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      { label: "GPT 5.4", value: "openai/gpt-5.4" },
+    ]);
+
+    const result = await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Investigate the failing deploy",
+      actor,
+      launchPlan: { sessionDefaults: { model: "anthropic/claude-sonnet-4-6" } },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ model: "openai/gpt-5.4" })
+    );
+    expect(result).toEqual(
+      expect.objectContaining({ differsFromUserDefaults: false, sessionId: "session-1" })
+    );
+  });
+
+  it("reports when the session's defaults are not the user's App Home defaults", async () => {
+    const env = makeEnv();
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "Investigate the failing deploy",
+        actor,
+        launchPlan: {
+          sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+        },
+      })
+    ).resolves.toEqual({
+      sessionId: "session-1",
+      sessionDefaults: { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "max" },
+      differsFromUserDefaults: true,
+    });
+  });
+
   it("appends configured session instructions to the first prompt", async () => {
     const env = makeEnv();
     vi.mocked(getSlackSettings).mockResolvedValue({
@@ -253,6 +420,37 @@ describe("startSessionAndSendPrompt", () => {
         content: "Inspect production",
         callbackContext: expect.objectContaining({ repoFullName: "Production Debug" }),
       })
+    );
+  });
+
+  it("launches no-repository sessions without branch preferences", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      target: noRepositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Research this without cloning a repository",
+      actor,
+    });
+
+    expect(getUserRepoBranchPreference).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ target: noRepositoryTarget, branch: undefined })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        callbackContext: expect.objectContaining({ repoFullName: "No repository" }),
+      })
+    );
+    expect(buildThreadSession).toHaveBeenCalledWith(
+      "session-1",
+      noRepositoryTarget,
+      "openai/gpt-5.4",
+      "high",
+      undefined
     );
   });
 
@@ -316,7 +514,15 @@ describe("startSessionAndSendPrompt", () => {
       files: [{ attachment: images[0]!, bytes: new Uint8Array(4) }],
       dropped: ["download_failed" as const],
     };
-    vi.mocked(prepareImageAttachments).mockResolvedValue(prepared);
+    const contextImages: SlackImageAttachment[] = [
+      {
+        id: "F2",
+        name: "earlier.png",
+        mimetype: "image/png",
+        downloadUrl: "https://files.slack.com/earlier.png",
+      },
+    ];
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue(prepared);
     const env = makeEnv();
 
     await expect(
@@ -327,12 +533,18 @@ describe("startSessionAndSendPrompt", () => {
         messageText: "What is wrong in this screenshot?",
         actor,
         images,
+        contextImages,
         traceId: "trace-1",
       })
-    ).resolves.toEqual({ sessionId: "session-1" });
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
 
-    expect(prepareImageAttachments).toHaveBeenCalledWith(env, images, "trace-1");
-    const prepareOrder = vi.mocked(prepareImageAttachments).mock.invocationCallOrder[0]!;
+    expect(preparePromptImageAttachments).toHaveBeenCalledWith(
+      env,
+      images,
+      contextImages,
+      "trace-1"
+    );
+    const prepareOrder = vi.mocked(preparePromptImageAttachments).mock.invocationCallOrder[0]!;
     const createOrder = vi.mocked(createSession).mock.invocationCallOrder[0]!;
     expect(prepareOrder).toBeLessThan(createOrder);
     expect(deliverPrompt).toHaveBeenCalledWith(
@@ -347,7 +559,7 @@ describe("startSessionAndSendPrompt", () => {
   });
 
   it("never creates a session for an image-only request whose images were all lost", async () => {
-    vi.mocked(prepareImageAttachments).mockResolvedValue({
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue({
       files: [],
       dropped: ["download_failed"],
     });
@@ -385,7 +597,7 @@ describe("startSessionAndSendPrompt", () => {
 
   it("posts no extra error when delivery already notified an image-only total loss", async () => {
     vi.mocked(deliverPrompt).mockResolvedValue({ ok: false, reason: "no_images_delivered" });
-    vi.mocked(prepareImageAttachments).mockResolvedValue({
+    vi.mocked(preparePromptImageAttachments).mockResolvedValue({
       files: [
         {
           attachment: {
