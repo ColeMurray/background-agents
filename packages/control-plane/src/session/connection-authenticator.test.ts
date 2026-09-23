@@ -68,7 +68,7 @@ interface Harness {
   wsManager: {
     acceptClientSocket: ReturnType<typeof vi.fn>;
     acceptAndSetSandboxSocket: ReturnType<typeof vi.fn>;
-    getReadySandboxSocket: ReturnType<typeof vi.fn>;
+    getSandboxCommandTarget: ReturnType<typeof vi.fn>;
     enforceAuthTimeout: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   };
@@ -105,7 +105,7 @@ function createHarness(opts: {
   const wsManager = {
     acceptClientSocket: vi.fn(),
     acceptAndSetSandboxSocket: vi.fn(() => ({ replaced: false })),
-    getReadySandboxSocket: vi.fn(() => null as WebSocket | null),
+    getSandboxCommandTarget: vi.fn(() => ({ kind: "unavailable" })),
     enforceAuthTimeout: vi.fn(async () => undefined),
     close: vi.fn(),
   };
@@ -342,7 +342,7 @@ describe("UpgradeDecision.attach", () => {
     // being ready, so a prompt queued while the socket was down must not
     // wait for a user action. Readiness itself is still not re-published.
     const h = createHarness({ sandbox: await sandboxRow({ status: "ready" }) });
-    h.wsManager.getReadySandboxSocket.mockReturnValue(socket);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "dispatch", socket });
 
     await (await accepted(h, sandboxUpgrade())).attach(socket);
 
@@ -382,6 +382,51 @@ describe("UpgradeDecision.attach", () => {
     expect(h.lifecycleManager.onSandboxSocketAttached).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.submitted).toEqual([]);
+  });
+
+  it("rejects a replacement installed after authorization but before attachment", async () => {
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({
+      ...original,
+      modal_sandbox_id: "sb-replacement",
+      auth_token_hash: "replacement-token-hash",
+      created_at: 9000,
+    });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleDisconnectCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("rejects a generation timestamp changed after authorization", async () => {
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({ ...original, created_at: 9000 });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleDisconnectCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+  });
+
+  it("rejects credentials changed after authorization", async () => {
+    const original = await sandboxRow({ status: "spawning" });
+    const h = createHarness({ sandbox: original });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({ ...original, auth_token_hash: "" });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleDisconnectCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
   });
 
   it("closes the socket and commits nothing when the generation rotated while the liveness check was arming", async () => {
@@ -440,11 +485,11 @@ describe("UpgradeDecision.attach", () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
-  it("passes the presented sandbox id through, or undefined when the bridge sent none", async () => {
+  it("passes the authenticated sandbox id through, or undefined when the row has none", async () => {
     const h = createHarness({ sandbox: await sandboxRow({ modal_sandbox_id: null }) });
 
     await (
-      await accepted(h, upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: null }))
+      await accepted(h, upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: "untrusted-id" }))
     ).attach(socket);
 
     expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledWith(socket, undefined);

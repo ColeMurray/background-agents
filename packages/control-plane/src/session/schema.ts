@@ -57,6 +57,10 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
 );`;
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS sandbox_preservation (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  state TEXT NOT NULL
+);
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,                              -- Same as DO ID
@@ -707,7 +711,34 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE sandbox ADD COLUMN fenced INTEGER NOT NULL DEFAULT 0`);
     },
   },
+  {
+    id: 53,
+    description: "Remove persisted boot hook output tails",
+    run: removePersistedHookOutputTails,
+  },
+  {
+    id: 54,
+    description: "Persist final sandbox preservation and expiry fence",
+    run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
+    )`,
+  },
 ];
+
+function removePersistedHookOutputTails(sql: SqlStorage): void {
+  sql.exec(`UPDATE events
+    SET data = CASE
+      WHEN json_valid(data) THEN json_remove(data, '$.outputTail')
+      ELSE data
+    END
+    WHERE type = 'boot_progress' AND instr(data, '"outputTail"') > 0`);
+  sql.exec(`UPDATE sandbox
+    SET boot_phase = CASE
+      WHEN json_valid(boot_phase) THEN json_remove(boot_phase, '$.outputTail')
+      ELSE boot_phase
+    END
+    WHERE boot_phase IS NOT NULL AND instr(boot_phase, '"outputTail"') > 0`);
+}
 
 /**
  * Run a migration statement, only ignoring "column already exists" errors.
@@ -761,5 +792,7 @@ export function applyMigrations(sql: SqlStorage): void {
 export function initSchema(sql: SqlStorage): void {
   sql.exec(SCHEMA_SQL);
   applyMigrations(sql);
+  // Reapply the idempotent scrub so rollback-era writes cannot survive a redeploy.
+  removePersistedHookOutputTails(sql);
   sql.exec(INDEXES_SQL);
 }

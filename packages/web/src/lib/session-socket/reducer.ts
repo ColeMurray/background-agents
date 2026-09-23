@@ -47,9 +47,8 @@ export interface SessionSocketState {
    * The latest sandbox boot: its last reported phase and the durations of
    * its completed phases. Seeded by the snapshot, advanced by live
    * `boot_progress` events. The phase is kept through `failed` so the
-   * failure can name the step and show the script's output tail, and ends
-   * with the boot (ready, or the sandbox gone); the whole boot is dropped
-   * when a fresh attempt starts.
+   * failure can name the step, and ends with the boot (ready, or the sandbox
+   * gone); the whole boot is dropped when a fresh attempt starts.
    */
   boot: SandboxBoot | null;
 }
@@ -292,6 +291,12 @@ function reduceServerMessage(
 
     case "sandbox_dashboard_url":
       return updateSessionState(state, (prev) => ({ ...prev, sandboxDashboardUrl: message.url }));
+
+    case "sandbox_preservation":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        sandboxPreservation: message.preservation,
+      }));
 
     case "artifact_created":
     case "artifact_updated":

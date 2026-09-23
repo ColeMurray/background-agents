@@ -123,6 +123,9 @@ jobs:
       - name: Test Cloudflare logs CLI
         run: npm run test:cf-logs-cli
 
+      - name: Test Terraform workflow contract
+        run: npm run test:terraform-workflow-contract
+
       - name: Check Prettier formatting
         run: npm run format:check
 

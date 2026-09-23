@@ -135,7 +135,7 @@ class TestPromptTaskDecoupling:
 
         # Start a prompt
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "test"})
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         assert task is not None
 
         await prompt_started.wait()
@@ -167,7 +167,7 @@ class TestPromptTaskDecoupling:
         bridge.git_signing.initialize = AsyncMock()
 
         await bridge._handle_command({"type": "prompt", "messageId": "msg-1", "content": "test"})
-        task = bridge._current_prompt_task
+        task = bridge.activity.current_prompt_task
         assert task is not None
 
         await prompt_started.wait()

@@ -66,6 +66,7 @@ type SlackBlockElement = SlackButtonElement | SlackStaticSelectElement | SlackEx
 export type SlackHeaderBlock = { type: "header"; text: SlackPlainText };
 export type SlackSectionBlock = {
   type: "section";
+  block_id?: string;
   text: SlackText;
   expand?: boolean;
   // A section accessory may be a button or a select (the repo clarification

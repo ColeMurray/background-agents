@@ -46,6 +46,9 @@ def build_sandbox_image() -> None:
         app=deployed_app,
         image=modal.Image.from_id(base_image.object_id),
         env=base_image_plan["runtimeEnv"],
+        # The desktop check starts Xvfb, fluxbox and x11vnc at once; without a
+        # CPU request they run on Modal's small default share.
+        cpu=2.0,
         timeout=300,
     )
     try:

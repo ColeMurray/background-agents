@@ -7,7 +7,6 @@ import {
   bootPhaseLabel,
   bootPhaseRepoLabel,
   endBootPhase,
-  formatBootDuration,
   seedSandboxBoot,
 } from "./boot-phase";
 
@@ -54,20 +53,19 @@ describe("seedSandboxBoot", () => {
     ).toBeNull();
   });
 
-  it("takes the snapshot's phase as authoritative and collects that sandbox's timings", () => {
+  it("takes the snapshot's phase metadata as authoritative and collects that sandbox's timings", () => {
     const boot = seedSandboxBoot({
       bootPhase: {
         phase: "start",
         status: "failed",
         bootSeq: 6,
         sandboxId: "sb-2",
-        outputTail: ["npm ERR! missing script: dev"],
         detail: "start hook failed",
       },
       timeline: timeline(
         // An earlier sandbox's boot: its timings are not this boot's.
         bootProgress({ bootSeq: 2, phase: "sync", status: "completed", elapsedMs: 900 }),
-        bootProgress({ bootSeq: 3, phase: "setup", status: "failed", outputTail: ["boom"] }),
+        bootProgress({ bootSeq: 3, phase: "setup", status: "failed" }),
         bootProgress({
           sandboxId: "sb-2",
           bootSeq: 2,
@@ -96,7 +94,6 @@ describe("seedSandboxBoot", () => {
         status: "failed",
         bootSeq: 6,
         sandboxId: "sb-2",
-        outputTail: ["npm ERR! missing script: dev"],
         detail: "start hook failed",
       },
       timings: [
@@ -239,15 +236,5 @@ describe("labels", () => {
     expect(bootPhaseRepoLabel(progress, 2)).toBe("acme/api");
     expect(bootPhaseRepoLabel(progress, 1)).toBeNull();
     expect(bootPhaseRepoLabel({}, 2)).toBeNull();
-  });
-});
-
-describe("formatBootDuration", () => {
-  it("shows tenths under a minute and minutes above", () => {
-    expect(formatBootDuration(420)).toBe("0.4s");
-    expect(formatBootDuration(91_240)).toBe("1m 31s");
-    expect(formatBootDuration(59_960)).toBe("1m 00s");
-    expect(formatBootDuration(125_000)).toBe("2m 05s");
-    expect(formatBootDuration(-5)).toBe("0.0s");
   });
 });

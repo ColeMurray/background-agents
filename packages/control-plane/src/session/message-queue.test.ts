@@ -14,7 +14,7 @@ import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } fro
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
@@ -96,6 +96,7 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     status: "pending",
     error_message: null,
     stop_confirmation_deadline: null,
+    reported_cost_usd: 0,
     created_at: 1000,
     started_at: null,
     completed_at: null,
@@ -135,7 +136,7 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   ).resolves.toBe(fingerprint);
 });
 
-function buildQueue() {
+function buildQueue(mayDispatch: () => boolean = () => true) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
   // the queue is constructed.
@@ -202,7 +203,10 @@ function buildQueue() {
     getSandboxSocket: vi.fn(() => null as WebSocket | null),
     // Mirrors the attached socket unless a test withholds it, the way the
     // registry does while a bridge is attached ahead of its boot.
-    getReadySandboxSocket: vi.fn((): WebSocket | null => wsManager.getSandboxSocket()),
+    getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => {
+      const socket = wsManager.getSandboxSocket();
+      return socket ? { kind: "dispatch", socket } : { kind: "unavailable" };
+    }),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
 
@@ -294,7 +298,8 @@ function buildQueue() {
     "github",
     alarmScheduler,
     executionStop,
-    () => executionTimeoutMs
+    () => executionTimeoutMs,
+    mayDispatch
   );
 
   return {
@@ -680,20 +685,34 @@ describe("SessionMessageQueue", () => {
   it("defers, without spawning, while the bridge is attached but the sandbox is still booting", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-boot" }));
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: WebSocket.OPEN } as WebSocket);
-    h.wsManager.getReadySandboxSocket.mockReturnValue(null);
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({
+      kind: "booting",
+      phase: {
+        phase: "setup",
+        status: "started",
+        bootSeq: 3,
+        repoOwner: "acme",
+        repoName: "repo",
+        detail: "not logged",
+      },
+    });
 
     await h.queue.processMessageQueue();
     await h.backgroundTasks.settle();
 
-    expect(h.log.info).toHaveBeenCalledWith(
-      "prompt.dispatch",
-      expect.objectContaining({
-        message_id: "msg-boot",
-        outcome: "deferred",
-        reason: "sandbox_booting",
-      })
-    );
+    expect(h.log.info).toHaveBeenCalledWith("prompt.dispatch", {
+      event: "prompt.dispatch",
+      message_id: "msg-boot",
+      outcome: "deferred",
+      reason: "sandbox_booting",
+      boot_seq: 3,
+      phase: "setup",
+      phase_status: "started",
+      repo_owner: "acme",
+      repo_name: "repo",
+      elapsed_ms: null,
+      warning: false,
+    });
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
@@ -1848,6 +1867,50 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
     expect(h.repository.getNextPendingMessage).toHaveBeenCalled();
+  });
+
+  it("retains the stop marker and does not advance the queue when the retirement fence rejects", async () => {
+    const h = buildQueue();
+    const deadline = Date.now() - 1;
+    h.repository.markMessageAwaitingStopConfirmation("msg-stopped", deadline);
+    h.sandboxLifecycle.terminateUnresponsiveSandbox.mockRejectedValue(
+      new Error("retirement fence unavailable")
+    );
+
+    await expect(h.executionStop.recoverStopConfirmationTimeout()).rejects.toThrow(
+      "retirement fence unavailable"
+    );
+
+    expect(h.repository.getMessageAwaitingStopConfirmation()).toEqual({
+      id: "msg-stopped",
+      deadline,
+    });
+    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not recover an expired stop while dispatch is held", async () => {
+    let dispatchAllowed = false;
+    const mayDispatch = vi.fn(() => dispatchAllowed);
+    const h = buildQueue(mayDispatch);
+    h.repository.markMessageAwaitingStopConfirmation("msg-stopped", Date.now() - 1);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+
+    dispatchAllowed = true;
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_confirmation_timeout"
+    );
+    expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-stopped");
+    expect(mayDispatch.mock.invocationCallOrder[1]).toBeLessThan(
+      h.sandboxLifecycle.terminateUnresponsiveSandbox.mock.invocationCallOrder[0]
+    );
   });
 
   it("re-arms a future stop confirmation deadline when an earlier alarm fired", async () => {

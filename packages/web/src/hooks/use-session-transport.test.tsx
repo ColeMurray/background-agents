@@ -115,6 +115,23 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
+  it("reports a synchronous send refusal after the socket starts closing", async () => {
+    const { result, socket } = await openSocket();
+    socket.readyState = FakeWebSocket.CLOSING;
+
+    expect(result.current.send({ type: "recover_preservation" })).toBe(false);
+    expect(socket.sentMessages).toHaveLength(1);
+  });
+
+  it("reports a synchronous socket send exception", async () => {
+    const { result, socket } = await openSocket();
+    vi.spyOn(socket, "send").mockImplementation(() => {
+      throw new Error("socket closed during send");
+    });
+
+    expect(result.current.send({ type: "recover_preservation" })).toBe(false);
+  });
+
   it("does not fetch a token or open a socket when transport is disabled", async () => {
     const { result } = renderHook(() =>
       useSessionTransport("session-1", { onMessage, onClose }, false)
@@ -167,6 +184,41 @@ describe("useSessionTransport", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith({ type: "pong", timestamp: 5 });
+  });
+
+  it("strips a legacy output tail before forwarding a live boot phase", async () => {
+    const { socket } = await openSocket();
+
+    act(() => {
+      socket.receiveRaw(
+        JSON.stringify({
+          type: "sandbox_event",
+          event: {
+            type: "boot_progress",
+            bootSeq: 3,
+            phase: "setup",
+            status: "failed",
+            detail: "setup hook failed",
+            outputTail: ["legacy secret output"],
+            sandboxId: "sandbox-1",
+            timestamp: 123,
+          },
+        })
+      );
+    });
+
+    expect(onMessage).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: {
+        type: "boot_progress",
+        bootSeq: 3,
+        phase: "setup",
+        status: "failed",
+        detail: "setup hook failed",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      },
+    });
   });
 
   it.each([JSON.stringify({ type: "not_a_message" }), "not json"])(

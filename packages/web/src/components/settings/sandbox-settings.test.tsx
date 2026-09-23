@@ -12,6 +12,12 @@ import {
   DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
+import {
+  parseSandboxGlobalSettingsResponse,
+  sandboxEnvironmentSettingsResponseSchema,
+  sandboxGlobalSettingsResponseSchema,
+  sandboxRepoSettingsResponseSchema,
+} from "./sandbox-settings-schema";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -80,8 +86,60 @@ function renderWithSWR(fallbackData: unknown) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   reposMock.repos = [];
   reposMock.loading = false;
+});
+
+describe("sandbox settings response schemas", () => {
+  it("parses valid global responses including nullable fields", () => {
+    const parsed = sandboxGlobalSettingsResponseSchema.safeParse({
+      integrationId: "sandbox",
+      settings: { defaults: { tunnelPorts: [3000] }, enabledRepos: null },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success ? parsed.data.settings?.enabledRepos : undefined).toBeNull();
+    expect(
+      parseSandboxGlobalSettingsResponse({ integrationId: "sandbox", settings: null })
+    ).toEqual({
+      integrationId: "sandbox",
+      settings: null,
+    });
+  });
+
+  it("rejects malformed global responses", () => {
+    expect(
+      sandboxGlobalSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        settings: { defaults: { tunnelPorts: ["3000"] } },
+      }).success
+    ).toBe(false);
+    expect(parseSandboxGlobalSettingsResponse({ integrationId: "github", settings: null })).toBe(
+      undefined
+    );
+  });
+
+  it("parses valid scoped responses and rejects partial scoped responses", () => {
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        repo: "acme/app",
+        settings: null,
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxEnvironmentSettingsResponseSchema.safeParse({
+        integrationId: "sandbox",
+        environmentId: "env_123",
+        settings: { sandboxTimeoutMs: 7_200_000 },
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxRepoSettingsResponseSchema.safeParse({ integrationId: "sandbox", settings: null })
+        .success
+    ).toBe(false);
+  });
 });
 
 describe("SandboxSettingsPage — tunnel ports editor", () => {
@@ -104,6 +162,70 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     for (const name of ["Service Ports", "Tunnel Ports", "Child Sessions", "Resources"]) {
       expect(screen.getByRole("group", { name })).toBeInTheDocument();
     }
+  });
+
+  it("hides unsupported Daytona controls and preserves stored intent when saving", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", "daytona");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: {
+                defaults: {
+                  cpuCores: 2,
+                  memoryMib: 4096,
+                  sandboxTimeoutMs: 7_200_000,
+                  finalSnapshotBufferMs: 900_000,
+                  buildTimeoutSeconds: 2400,
+                },
+              },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    expect(screen.queryByLabelText("CPU cores")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Memory (MiB)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Session Timeout (minutes)")).not.toBeInTheDocument();
+    const finalSnapshotBuffer = screen.getByLabelText("Final snapshot buffer (minutes)");
+    expect(finalSnapshotBuffer).toHaveValue(15);
+    expect(screen.getByLabelText("Image Build Timeout")).toHaveValue(2400);
+    expect(
+      screen.getByText(/Per-session CPU and memory overrides are unavailable for daytona/)
+    ).toBeInTheDocument();
+
+    await user.clear(finalSnapshotBuffer);
+    await user.type(finalSnapshotBuffer, "20");
+    await user.click(screen.getByLabelText("Web Terminal"));
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+      const body = JSON.parse(String(request?.body));
+      expect(body.settings.defaults).toMatchObject({
+        terminalEnabled: true,
+        buildTimeoutSeconds: 2400,
+        cpuCores: 2,
+        memoryMib: 4096,
+        sandboxTimeoutMs: 7_200_000,
+        finalSnapshotBufferMs: 1_200_000,
+      });
+    });
   });
 
   it("displays session timeout in minutes and saves milliseconds", async () => {

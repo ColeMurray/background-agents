@@ -122,11 +122,17 @@ export async function handleSpawnChild(
     return error("Failed to get parent session context", 500);
   }
   const spawnContext = parsedSpawnContext.data;
-  const { sandboxTimeoutMs: _currentTimeoutMs, ...resolvedChildSettingsWithoutTimeout } =
-    resolvedChildSandboxSettings;
+  const {
+    sandboxTimeoutMs: _currentTimeoutMs,
+    finalSnapshotBufferMs: _currentBufferMs,
+    ...resolvedChildSettingsWithoutTimeout
+  } = resolvedChildSandboxSettings;
   const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
   if (spawnContext.sandboxTimeoutMs !== undefined) {
     childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
+  }
+  if (spawnContext.finalSnapshotBufferMs !== undefined) {
+    childSandboxSettings.finalSnapshotBufferMs = spawnContext.finalSnapshotBufferMs;
   }
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;

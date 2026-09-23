@@ -146,6 +146,10 @@
       "import": "./dist/types/sandbox-events.js",
       "types": "./dist/types/sandbox-events.d.ts"
     },
+    "./types/sandbox-shutdown": {
+      "import": "./dist/types/sandbox-shutdown.js",
+      "types": "./dist/types/sandbox-shutdown.d.ts"
+    },
     "./types/sessions": {
       "import": "./dist/types/sessions.js",
       "types": "./dist/types/sessions.d.ts"

@@ -1,16 +1,20 @@
 import {
   DEFAULT_HARNESS,
   getValidHarnessOrDefault,
+  harnessIdSchema,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import type {
-  PullRequestSummary,
-  SessionReadAction,
-  SessionReadResult,
-  SessionReadState,
-  SessionStatus,
-  SpawnSource,
+import {
+  sessionStatusSchema,
+  spawnSourceSchema,
+  type PullRequestSummary,
+  type SessionReadAction,
+  type SessionReadResult,
+  type SessionReadState,
+  type SessionStatus,
+  type SpawnSource,
 } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 import {
   DEFAULT_SESSION_LIST_LIMIT,
   DEFAULT_SESSION_LIST_OFFSET,
@@ -111,32 +115,34 @@ export interface SessionEntry {
   providerAuth?: SessionModelProviderAuthInput[];
 }
 
-interface SessionRow {
-  id: string;
-  title: string | null;
-  repo_owner: string | null;
-  repo_name: string | null;
-  harness: HarnessId;
-  model: string;
-  reasoning_effort: string | null;
-  base_branch: string | null;
-  status: SessionStatus;
-  parent_session_id: string | null;
-  root_session_id: string | null;
-  spawn_source: SpawnSource;
-  spawn_depth: number;
-  automation_id: string | null;
-  automation_run_id: string | null;
-  scm_login: string | null;
-  user_id: string | null;
-  total_cost: number;
-  active_duration_ms: number;
-  message_count: number;
-  pr_count: number;
-  environment_id: string | null;
-  created_at: number;
-  updated_at: number;
-}
+const sessionRowSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repo_owner: z.string().nullable(),
+  repo_name: z.string().nullable(),
+  harness: harnessIdSchema.catch(DEFAULT_HARNESS),
+  model: z.string(),
+  reasoning_effort: z.string().nullable(),
+  base_branch: z.string().nullable(),
+  status: sessionStatusSchema,
+  parent_session_id: z.string().nullable(),
+  root_session_id: z.string().nullable(),
+  spawn_source: spawnSourceSchema,
+  spawn_depth: z.number(),
+  automation_id: z.string().nullable(),
+  automation_run_id: z.string().nullable(),
+  scm_login: z.string().nullable(),
+  user_id: z.string().nullable(),
+  total_cost: z.number(),
+  active_duration_ms: z.number(),
+  message_count: z.number(),
+  pr_count: z.number(),
+  environment_id: z.string().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+
+type SessionRow = z.infer<typeof sessionRowSchema>;
 
 interface SessionModelProviderAuthRow {
   provider: string;
@@ -191,6 +197,13 @@ function toEntry(row: SessionRow): SessionEntry {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseSessionRow(row: unknown): SessionRow | null {
+  if (row === null || row === undefined) return null;
+  const parsed = sessionRowSchema.safeParse(row);
+  if (!parsed.success) throw new Error("Malformed persisted session index row");
+  return parsed.data;
 }
 
 function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
@@ -442,12 +455,10 @@ export class SessionIndexStore {
   }
 
   async get(id: string): Promise<SessionEntry | null> {
-    const result = await this.db
-      .prepare("SELECT * FROM sessions WHERE id = ?")
-      .bind(id)
-      .first<SessionRow>();
+    const result = await this.db.prepare("SELECT * FROM sessions WHERE id = ?").bind(id).first();
 
-    return result ? toEntry(result) : null;
+    const row = parseSessionRow(result);
+    return row ? toEntry(row) : null;
   }
 
   private async getProviderAuth(sessionId: string): Promise<SessionModelProviderAuthInput[]> {

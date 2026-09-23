@@ -68,6 +68,11 @@ For manual deployment, use the returned reference in the provider's existing con
 assume building alone redirects sessions. Roll back using a previous known-good configuration and
 retained artifact. Do not delete artifacts still referenced by sessions or prepared images.
 
+The `filesystem` phase also runs `opencode models --refresh` for the runtime user, so sessions
+without a prepared image still see models newer than the pinned OpenCode release. It is best-effort:
+a failure leaves OpenCode's built-in catalog in use. Prepared repository and environment images
+refresh the catalog on every build.
+
 **Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
 existing repository/environment image-build workflow to rebuild them after dependency-only updates
 when needed. Runtime version reporting, compatibility floors, and saved-session behavior are

@@ -22,6 +22,7 @@ import type {
   CreateImageBuildSandboxResponse,
   StartImageBuildSandboxRequest,
   TerminateImageBuildSandboxRequest,
+  StopSandboxRequest,
 } from "../client";
 
 // ==================== Mock Factories ====================
@@ -37,6 +38,7 @@ function createMockModalClient(
     ) => Promise<CreateImageBuildSandboxResponse>;
     startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
     terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
+    stopSandbox: (req: StopSandboxRequest) => Promise<void>;
   }> = {}
 ): ModalClient {
   return {
@@ -70,6 +72,7 @@ function createMockModalClient(
     ),
     startImageBuildSandbox: vi.fn(async () => undefined),
     terminateImageBuildSandbox: vi.fn(async () => undefined),
+    stopSandbox: vi.fn(async () => undefined),
     ...overrides,
   } as unknown as ModalClient;
 }
@@ -89,6 +92,46 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  it("returns a conservative pre-request lifetime and propagates final deadlines", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client);
+      const created = await provider.createSandbox({ ...testConfig, timeoutSeconds: 1200 });
+      expect(created.lifetime).toEqual({
+        kind: "finite",
+        expiresAtMs: Date.parse("2030-01-01T00:20:00.000Z"),
+        observedAtMs: Date.parse("2030-01-01T00:00:00.000Z"),
+        source: "conservative_start_bound",
+      });
+
+      const deadlineAtMs = Date.now() + 30_000;
+      await provider.takeSnapshot({
+        providerObjectId: "modal-obj-123",
+        sessionId: "test-session",
+        reason: "final_preservation",
+        deadlineAtMs,
+      });
+      expect(client.snapshotSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ deadlineAtMs, signal: expect.any(AbortSignal) }),
+        undefined
+      );
+      await provider.stopSandbox({
+        providerObjectId: "modal-obj-123",
+        sessionId: "test-session",
+        reason: "final_preservation",
+        intent: "preserve",
+        deadlineAtMs,
+      });
+      expect(client.stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        undefined
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   describe("capabilities", () => {
     it("reports correct capabilities", () => {
       const client = createMockModalClient();

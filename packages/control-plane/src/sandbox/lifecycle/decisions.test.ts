@@ -208,7 +208,7 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("restore");
   });
 
-  it("spawns fresh instead of restoring a snapshot below the runtime floor", () => {
+  it("holds instead of discarding a snapshot below the runtime floor", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "stopped",
@@ -220,13 +220,13 @@ describe("evaluateSpawnDecision", () => {
 
     const decision = evaluateSpawnDecision(state, config, now, false);
 
-    expect(decision.action).toBe("spawn");
-    if (decision.action === "spawn") {
+    expect(decision.action).toBe("hold");
+    if (decision.action === "hold") {
       expect(decision.reason).toContain(`v${MIN_COMPATIBLE_RUNTIME_VERSION - 1}-retired`);
     }
   });
 
-  it("spawns fresh when the snapshot predates runtime-version recording", () => {
+  it("holds when the snapshot predates runtime-version recording", () => {
     const now = Date.now();
     const state: SandboxState = {
       status: "stopped",
@@ -238,8 +238,8 @@ describe("evaluateSpawnDecision", () => {
 
     const decision = evaluateSpawnDecision(state, config, now, false);
 
-    expect(decision.action).toBe("spawn");
-    if (decision.action === "spawn") {
+    expect(decision.action).toBe("hold");
+    if (decision.action === "hold") {
       expect(decision.reason).toContain("unknown");
     }
   });
@@ -703,10 +703,7 @@ describe("evaluateInactivityTimeout", () => {
 
     const decision = evaluateInactivityTimeout(state, config, now);
 
-    expect(decision.action).toBe("timeout");
-    if (decision.action === "timeout") {
-      expect(decision.shouldSnapshot).toBe(true);
-    }
+    expect(decision).toEqual({ action: "timeout" });
   });
 
   it('returns "extend" when threshold exceeded but clients connected', () => {
@@ -719,11 +716,7 @@ describe("evaluateInactivityTimeout", () => {
 
     const decision = evaluateInactivityTimeout(state, config, now);
 
-    expect(decision.action).toBe("extend");
-    if (decision.action === "extend") {
-      expect(decision.extensionMs).toBe(config.extensionMs);
-      expect(decision.shouldWarn).toBe(true);
-    }
+    expect(decision).toEqual({ action: "extend", extensionMs: config.extensionMs });
   });
 
   it('returns "schedule" with correct remaining time', () => {
@@ -801,8 +794,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(null, config, now);
 
-    expect(health.isStale).toBe(false);
-    expect(health.ageMs).toBeUndefined();
+    expect(health).toEqual({ isStale: false });
   });
 
   it("returns not stale when heartbeat is recent", () => {
@@ -811,8 +803,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(false);
-    expect(health.ageMs).toBeUndefined();
+    expect(health).toEqual({ isStale: false });
   });
 
   it("returns stale when heartbeat exceeds timeout", () => {
@@ -821,8 +812,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(true);
-    expect(health.ageMs).toBe(100000);
+    expect(health).toEqual({ isStale: true, ageMs: 100000 });
   });
 
   it("returns correct age in milliseconds", () => {
@@ -832,8 +822,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(true);
-    expect(health.ageMs).toBe(ageMs);
+    expect(health).toEqual({ isStale: true, ageMs });
   });
 
   it("handles boundary timing (exactly at timeout)", () => {
@@ -852,8 +841,7 @@ describe("evaluateHeartbeatHealth", () => {
 
     const health = evaluateHeartbeatHealth(lastHeartbeat, config, now);
 
-    expect(health.isStale).toBe(true);
-    expect(health.ageMs).toBe(config.timeoutMs + 1);
+    expect(health).toEqual({ isStale: true, ageMs: config.timeoutMs + 1 });
   });
 });
 

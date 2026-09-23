@@ -43,6 +43,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -162,7 +163,8 @@ export class SessionMessageQueue {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
-    private readonly getExecutionTimeoutMs: () => number
+    private readonly getExecutionTimeoutMs: () => number,
+    private readonly mayDispatch: () => boolean = () => true
   ) {}
 
   async enqueueAutofix(
@@ -363,6 +365,7 @@ export class SessionMessageQueue {
   }
 
   async processMessageQueue(): Promise<void> {
+    if (!this.mayDispatch()) return;
     const currentSession = this.repository.getSession();
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
@@ -400,6 +403,7 @@ export class SessionMessageQueue {
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
+    if (!this.mayDispatch()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
@@ -413,8 +417,8 @@ export class SessionMessageQueue {
       }
       return;
     }
-    const sandboxWs = this.wsManager.getReadySandboxSocket();
-    if (!sandboxWs && this.wsManager.getSandboxSocket()) {
+    const target = this.wsManager.getSandboxCommandTarget();
+    if (target.kind === "booting") {
       // A bridge is attached ahead of its boot. Nothing to spawn and nothing
       // to send: the runtime's `ready` event pumps this queue when the
       // harness is up, and the lifecycle alarms decide if the boot died.
@@ -423,10 +427,11 @@ export class SessionMessageQueue {
         message_id: message.id,
         outcome: "deferred",
         reason: "sandbox_booting",
+        ...sandboxBootPhaseLogFields(target.phase),
       });
       return;
     }
-    if (!sandboxWs) {
+    if (target.kind === "unavailable") {
       // The provider-auth lookup above is a non-storage await. The socket
       // path re-validates through the processing claim; this path has no
       // claim, so it re-reads what it acts on: a cancel or archive that
@@ -477,6 +482,7 @@ export class SessionMessageQueue {
       return;
     }
 
+    const sandboxWs = target.socket;
     const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
       throw new Error(`Missing prompt author ${message.author_id}`);
@@ -514,6 +520,7 @@ export class SessionMessageQueue {
       ),
     };
 
+    if (!this.mayDispatch()) return;
     const claimed = this.messageRepository.startMessageProcessing(
       message.id,
       now,

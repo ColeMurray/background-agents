@@ -2,12 +2,17 @@ import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
+  excludeOtherProviderBuilds,
   excludeSupersededBuilds,
   imageBuildsEnabledReposResponseSchema,
   imageBuildsEnabledResponseSchema,
   imageBuildsStatusResponseSchema,
 } from "@/lib/image-builds";
-import { REPO_IMAGES_UNSUPPORTED_MESSAGE, supportsRepoImages } from "@/lib/sandbox-provider";
+import {
+  getPublicSandboxProvider,
+  REPO_IMAGES_UNSUPPORTED_MESSAGE,
+  supportsRepoImages,
+} from "@/lib/sandbox-provider";
 
 /**
  * Unified image-build feed: every prebuild-enabled scope plus the cross-scope
@@ -57,9 +62,13 @@ export async function GET() {
     // Persisted repo flags, unlike units, never drop a scope on a transient
     // resolution failure — the settings toggles read these.
     const enabledRepos = parsedEnabledRepos.data.repos;
-    const images = excludeSupersededBuilds(parsedStatus.data.images);
+    const images = excludeOtherProviderBuilds(
+      excludeSupersededBuilds(parsedStatus.data.images),
+      getPublicSandboxProvider()
+    );
+    const admission = parsedEnabled.data.admission;
 
-    return NextResponse.json({ units, enabledRepos, images });
+    return NextResponse.json({ units, enabledRepos, images, ...(admission ? { admission } : {}) });
   } catch (error) {
     console.error("Failed to fetch image builds:", error);
     return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 500 });

@@ -2,8 +2,12 @@
  * Type definitions for the Slack bot.
  */
 
-import type { SlackCompletionJob } from "../completion/job";
+import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import type { SlackCompletionJob } from "./completion/job";
+// targets.ts is a pure leaf (types + policy functions, no I/O), so the types
+// barrel can depend on it without a cycle.
+import type { SlackSessionTarget } from "./targets";
 
 interface SlackCompletionQueue {
   send(message: SlackCompletionJob, options?: { contentType?: "json" }): Promise<unknown>;
@@ -57,16 +61,11 @@ export interface ThreadContext {
   previousMessages?: string[];
 }
 
-import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
-// targets.ts is a pure leaf (types + policy functions, no I/O), so the types
-// barrel can depend on it without a cycle.
-import type { SlackSessionTarget } from "../targets";
-
 /**
  * Result of target classification. Unlike the shared repo-only
  * `ClassificationResult` (still used by the Linear bot), the Slack bot
- * classifies to a {@link SlackSessionTarget} — a repository or a saved
- * environment — because routing rules can name either.
+ * classifies to a {@link SlackSessionTarget}: a repository, a saved
+ * environment, or no repository.
  */
 export interface ClassificationResult {
   target: SlackSessionTarget | null;
@@ -74,20 +73,34 @@ export interface ClassificationResult {
   reasoning: string;
   alternatives?: SlackSessionTarget[];
   needsClarification: boolean;
+  source: "routing_rule" | "channel_association" | "llm";
 }
 
-export type { SlackSessionTarget } from "../targets";
+export type { SlackSessionTarget } from "./targets";
 
-export type { SlackInteractionPayload } from "../interaction-payload";
+/**
+ * The two payloads Slack posts to this worker. Both are inferred from the zod
+ * schema that guards their route, so the schema stays at the trust boundary
+ * and the type is reachable from the barrel.
+ */
+export type { SlackInteractionPayload } from "./interaction-payload";
+export type { SlackEventPayload } from "./events/payload";
+
+/**
+ * Hands a promise to the runtime to finish after the response is sent.
+ * Slack expects an ack within 3 seconds, so every handler that does real work
+ * returns immediately and defers it through one of these.
+ */
+export type BackgroundTaskScheduler = (promise: Promise<void>) => void;
 
 /**
  * Thread-to-session mapping stored in KV for conversation continuity.
  */
 export interface ThreadSession {
   sessionId: string;
-  /** Session-target id: the repo id ("owner/name") or environment id ("env_…"). */
+  /** Session-target id: a repo id, environment id, or the no-repository sentinel. */
   repoId: string;
-  /** Session-target display label: the repo fullName or environment name. */
+  /** Session-target display label, including `No repository` for an empty sandbox. */
   repoFullName: string;
   model: string;
   reasoningEffort?: string;

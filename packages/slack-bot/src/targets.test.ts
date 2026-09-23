@@ -4,6 +4,8 @@ import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import {
   branchPreferenceRepo,
   buildSessionTargetRequestFields,
+  NO_REPOSITORY_TARGET_LABEL,
+  NO_REPOSITORY_TARGET_VALUE,
   parseTargetValue,
   targetId,
   targetLabel,
@@ -34,9 +36,10 @@ const ENVIRONMENT: Environment = {
 
 const repoTarget: SlackSessionTarget = { kind: "repository", repo: REPO };
 const environmentTarget: SlackSessionTarget = { kind: "environment", environment: ENVIRONMENT };
+const noRepositoryTarget: SlackSessionTarget = { kind: "none" };
 
 describe("target values", () => {
-  it("round-trips repository and environment values", () => {
+  it("round-trips repository, environment, and no-repository values", () => {
     expect(parseTargetValue(targetValue(repoTarget))).toEqual({
       kind: "repository",
       repoId: "acme/web",
@@ -45,6 +48,8 @@ describe("target values", () => {
       kind: "environment",
       environmentId: "env_abc123",
     });
+    expect(targetValue(noRepositoryTarget)).toBe(NO_REPOSITORY_TARGET_VALUE);
+    expect(parseTargetValue(targetValue(noRepositoryTarget))).toEqual({ kind: "none" });
   });
 
   it("treats bare values as repository ids (messages posted before environments)", () => {
@@ -61,6 +66,7 @@ describe("targetLabel", () => {
     };
     // Stored records carry the raw name; mrkdwn render sites escape it.
     expect(targetLabel(hostile)).toBe("<!channel> & co");
+    expect(targetLabel(noRepositoryTarget)).toBe(NO_REPOSITORY_TARGET_LABEL);
   });
 });
 
@@ -68,6 +74,7 @@ describe("targetId", () => {
   it("returns the repo id or environment id", () => {
     expect(targetId(repoTarget)).toBe("acme/web");
     expect(targetId(environmentTarget)).toBe("env_abc123");
+    expect(targetId(noRepositoryTarget)).toBe(NO_REPOSITORY_TARGET_VALUE);
   });
 });
 
@@ -85,11 +92,19 @@ describe("buildSessionTargetRequestFields", () => {
       environmentId: "env_abc123",
     });
   });
+
+  it("builds explicit null repository fields for no-repository sessions", () => {
+    expect(buildSessionTargetRequestFields(noRepositoryTarget, "ignored")).toEqual({
+      repoOwner: null,
+      repoName: null,
+    });
+  });
 });
 
 describe("branchPreferenceRepo", () => {
-  it("returns the repo for repository targets and null for environments", () => {
+  it("returns the repo only for repository targets", () => {
     expect(branchPreferenceRepo(repoTarget)).toBe(REPO);
     expect(branchPreferenceRepo(environmentTarget)).toBeNull();
+    expect(branchPreferenceRepo(noRepositoryTarget)).toBeNull();
   });
 });
