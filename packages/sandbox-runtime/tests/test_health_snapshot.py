@@ -3,7 +3,9 @@ from sandbox_runtime import health_snapshot
 
 def test_reads_available_linux_resource_counters(tmp_path, monkeypatch):
     files = {
-        "_MEMINFO": "MemTotal: 4096000 kB\nMemAvailable: 1536000 kB\n",
+        "_MEMINFO": "MemTotal: 4096000 kB\nMemAvailable: 1536000 kB\nSwapTotal: 2048000 kB\nSwapFree: 1024000 kB\n",
+        "_LOADAVG": "1.25 0.80 0.40 3/250 1234\n",
+        "_VMSTAT": "pgscan_kswapd 50\npgscan_direct 12\nallocstall_normal 2\npgmajfault 7\npswpout 5\noom_kill 1\nunrelated 99\n",
         "_SELF_STATUS": "Name:\tpython\nVmRSS:\t102400 kB\nThreads:\t8\n",
         "_CGROUP_MEMORY_CURRENT": "2147483648\n",
         "_CGROUP_MEMORY_MAX": "4294967296\n",
@@ -22,6 +24,16 @@ def test_reads_available_linux_resource_counters(tmp_path, monkeypatch):
 
     assert health_snapshot.read_health_snapshot() == {
         "memory_available_mib": 1500,
+        "swap_total_mib": 2000,
+        "swap_free_mib": 1000,
+        "load_avg_1m": 1.25,
+        "runnable_processes": 3,
+        "vmstat_pgscan_kswapd": 50,
+        "vmstat_pgscan_direct": 12,
+        "vmstat_allocstall_normal": 2,
+        "vmstat_pgmajfault": 7,
+        "vmstat_pswpout": 5,
+        "vmstat_oom_kill": 1,
         "memory_psi_some_avg10": 12.5,
         "cpu_psi_some_avg10": 0.25,
         "io_psi_some_avg10": 1.75,
@@ -37,6 +49,8 @@ def test_reads_available_linux_resource_counters(tmp_path, monkeypatch):
 def test_missing_or_unlimited_counters_are_omitted(tmp_path, monkeypatch):
     for name in (
         "_MEMINFO",
+        "_LOADAVG",
+        "_VMSTAT",
         "_SELF_STATUS",
         "_CGROUP_MEMORY_CURRENT",
         "_CGROUP_MEMORY_EVENTS",
