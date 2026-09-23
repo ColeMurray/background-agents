@@ -524,6 +524,7 @@ class OpenCodePromptStream:
             self._log.error(
                 "bridge.session_error",
                 error_msg=self._extract_error_message(error),
+                error_name=error.get("name") if isinstance(error, dict) else None,
                 deduped=error_event is None,
             )
             return _StreamStep(

@@ -1738,7 +1738,11 @@ export class SandboxLifecycleManager
       event: "sandbox.heartbeat_stale",
       last_heartbeat_ms: ageMs,
       threshold_ms: this.config.heartbeat.timeoutMs,
+      detection_lag_ms: Math.max(0, ageMs - this.config.heartbeat.timeoutMs),
       sandbox_status: ctx.sandbox.status,
+      provider_object_id: ctx.providerObjectId,
+      connected_clients: ctx.connectedClients,
+      is_booting: isBooting,
     });
     this.storage.updateSandboxStatus("stale");
     // A bridge that connected and then died mid-boot is a boot failure

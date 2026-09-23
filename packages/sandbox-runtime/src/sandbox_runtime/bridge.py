@@ -65,6 +65,7 @@ from .harness import (
     build_agent_harness,
     parse_harness_id,
 )
+from .health_snapshot import read_health_snapshot
 from .log_config import configure_logging, get_logger
 from .prompt_budgets import resolve_prompt_limits
 from .push_operation import PushOperation, PushRejected, PushRequest
@@ -349,6 +350,7 @@ class AgentBridge:
                     self.log.warn(
                         "bridge.connect_error",
                         detail=error_str,
+                        **read_health_snapshot(),
                     )
 
                 if self.shutdown_event.is_set():
@@ -435,7 +437,13 @@ class AgentBridge:
         if connection_fields is None:
             return
         log_method = getattr(self.log, level)
-        log_method("bridge.disconnect", reason=reason, **connection_fields, **fields)
+        log_method(
+            "bridge.disconnect",
+            reason=reason,
+            **connection_fields,
+            **fields,
+            **read_health_snapshot(),
+        )
 
     def _is_fatal_connection_error(self, error_str: str) -> bool:
         """Check if a connection error is fatal and shouldn't trigger retry.
@@ -565,11 +573,40 @@ class AgentBridge:
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
+        heartbeat_count = 0
+        last_tick = time.monotonic()
+        last_delivered: float | None = None
         while not self.shutdown_event.is_set():
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
-
+            tick = time.monotonic()
+            tick_delay_ms = max(0, int((tick - last_tick - self.HEARTBEAT_INTERVAL) * 1000))
+            last_tick = tick
+            delivered = False
             if self.ws and self.ws.state == State.OPEN:
-                await self._send_event(self._heartbeat_event())
+                delivered = await self._send_event(self._heartbeat_event())
+                if delivered:
+                    last_delivered = time.monotonic()
+
+            heartbeat_count += 1
+            if (
+                heartbeat_count == 1
+                or heartbeat_count % 4 == 0
+                or tick_delay_ms >= 30_000
+                or not delivered
+            ):
+                self.log.info(
+                    "bridge.health",
+                    heartbeat_delivered=delivered,
+                    heartbeat_tick_delay_ms=tick_delay_ms,
+                    last_heartbeat_delivered_ago_ms=(
+                        int((time.monotonic() - last_delivered) * 1000)
+                        if last_delivered is not None
+                        else None
+                    ),
+                    websocket_open=self.ws is not None and self.ws.state == State.OPEN,
+                    prompt_active=self.activity.current_prompt_task is not None,
+                    **read_health_snapshot(),
+                )
 
     async def _end_run(self) -> None:
         """End the run loop from outside it.

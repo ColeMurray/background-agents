@@ -492,6 +492,16 @@ class SandboxManager:
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
 
+        log.info(
+            "sandbox.launch_config",
+            sandbox_id=sandbox_id,
+            backend=docker.backend,
+            cpu_cores=docker.cpu_cores,
+            memory_mib=docker.memory_mib,
+            timeout_seconds=config.timeout_seconds,
+            image_source=type(spec.source).__name__,
+        )
+
         repository_image = isinstance(spec.source, _RepositoryImageSource)
         if docker.enabled:
             sandbox, adopted = await self._launch_docker_sandbox(

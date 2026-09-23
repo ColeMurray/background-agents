@@ -143,7 +143,7 @@ describe("evaluateAlarmPolicy", () => {
         evaluateAlarmPolicy(row({ status: "ready", last_heartbeat: now - ageMs }), config, now, 0)
       ).toEqual(
         offsetMs <= 0
-          ? healthy
+          ? { outcome: "healthy", nextCheckMs: Math.max(1, -offsetMs + 1) }
           : {
               outcome: "heartbeat_stale",
               ageMs,
@@ -161,7 +161,7 @@ describe("evaluateAlarmPolicy", () => {
 
   it.each<[number | null, number, AlarmFinding]>([
     [null, 0, healthy],
-    [now - 300_000, 0, { outcome: "healthy", nextCheckMs: 300_000 }],
+    [now - 300_000, 0, { outcome: "healthy", nextCheckMs: 90_001 }],
     [now - 599_999, 0, healthy],
     [now - 600_000, 0, { outcome: "inactivity_timeout" }],
     [now - 600_001, 0, { outcome: "inactivity_timeout" }],
@@ -182,6 +182,17 @@ describe("evaluateAlarmPolicy", () => {
         clients
       )
     ).toEqual(expected);
+  });
+
+  it("checks heartbeat before the ten-minute inactivity deadline", () => {
+    expect(
+      evaluateAlarmPolicy(
+        row({ status: "ready", last_heartbeat: now - 30_000, last_activity: now }),
+        config,
+        now,
+        0
+      )
+    ).toEqual({ outcome: "healthy", nextCheckMs: 60_001 });
   });
 
   it.each(["pending", "snapshotting"] as const)("does not stop an idle %s row", (status) => {
