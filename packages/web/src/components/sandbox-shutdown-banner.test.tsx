@@ -232,6 +232,7 @@ describe("SandboxShutdownBanner", () => {
 
       expect(screen.queryByRole("button", { name: "Retry shutdown" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Restore saved state" })).not.toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("start a new session");
     }
   );
 

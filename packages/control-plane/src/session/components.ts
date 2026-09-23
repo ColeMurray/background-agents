@@ -23,6 +23,7 @@
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -502,7 +503,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     executionStop,
     getExecutionTimeoutMs,
-    () => lifecycleManager.mayProcessQueuedWork()
+    () => lifecycleManager.mayProcessQueuedWork(),
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
   );
 
   // Tier 7 — services over the queue and lifecycle.

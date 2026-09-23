@@ -29,3 +29,13 @@ export const sandboxShutdownSchema = z.object({
 });
 
 export type SandboxShutdownState = z.infer<typeof sandboxShutdownSchema>;
+
+/** Failed/unknown shutdowns hold work until an explicit recovery succeeds. */
+export function sandboxPromptBlockReason(
+  state: SandboxShutdownState | null | undefined
+): string | null {
+  if (state?.phase !== "failed" && state?.phase !== "unknown") return null;
+  return state.availableRecoveryActions?.length
+    ? "New prompts are blocked until the sandbox is recovered. Use an available recovery action to continue."
+    : "New prompts are blocked. No recovery action is currently available; start a new session to continue. Unsaved changes may be missing.";
+}

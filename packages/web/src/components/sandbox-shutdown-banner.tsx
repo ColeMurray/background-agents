@@ -6,6 +6,7 @@ import type {
   ShutdownRecoveryAction,
 } from "@open-inspect/shared/types/sandbox-shutdown";
 import { cn } from "@/lib/utils";
+import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 import type { ShutdownRecoveryResult } from "@/hooks/use-session-socket";
 
 const PHASE_MESSAGES: Record<Exclude<SandboxShutdownState["phase"], "running">, string> = {
@@ -81,6 +82,9 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
         </span>
       )}
       {detail && <span className="ml-2">{detail}</span>}
+      {isError && recoveryActions.length === 0 && (
+        <span className="ml-2">{sandboxPromptBlockReason(shutdown)}</span>
+      )}
       {shutdown.phase === "failed" && canRetry && onRecover && (
         <button
           type="button"

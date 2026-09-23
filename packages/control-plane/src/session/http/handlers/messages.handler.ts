@@ -15,6 +15,7 @@ import {
   HarnessModelIncompatibleError,
   PromptRequestConflictError,
   SessionNotPromptableError,
+  SandboxPromptBlockedError,
 } from "../../message-queue";
 
 /**
@@ -41,6 +42,12 @@ export class MessagesHandler {
       }
       if (error instanceof SessionNotPromptableError) {
         return Response.json({ error: error.message }, { status: 409 });
+      }
+      if (error instanceof SandboxPromptBlockedError) {
+        return Response.json(
+          { error: error.message, code: "SANDBOX_RECOVERY_REQUIRED" },
+          { status: 409 }
+        );
       }
       if (error instanceof BudgetExhaustedError) {
         return Response.json({ error: error.message, code: "BUDGET_EXHAUSTED" }, { status: 409 });

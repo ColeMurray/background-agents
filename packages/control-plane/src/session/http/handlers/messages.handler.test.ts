@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
+import { SandboxPromptBlockedError } from "../../message-queue";
 import type { MessageService } from "../../services/message.service";
 
 function createHandler() {
@@ -29,6 +30,26 @@ function createHandler() {
 }
 
 describe("MessagesHandler", () => {
+  it("returns a recoverable 409 when sandbox safety blocks prompt admission", async () => {
+    const { handler, messageService, log } = createHandler();
+    vi.mocked(messageService.enqueuePrompt).mockRejectedValue(
+      new SandboxPromptBlockedError("Start a new session to continue.")
+    );
+
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue", authorId: "user-1", source: "web" }),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      code: "SANDBOX_RECOVERY_REQUIRED",
+      error: "Start a new session to continue.",
+    });
+  });
   it("enqueues prompt and returns queued response", async () => {
     const { handler, messageService, log } = createHandler();
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
