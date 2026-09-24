@@ -2,7 +2,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
+import type {
+  SandboxShutdownState,
+  ShutdownRecoveryAction,
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import { SandboxShutdownBanner as Banner } from "./sandbox-shutdown-banner";
 
 const acceptedRecovery = () =>
@@ -104,37 +107,47 @@ describe("SandboxShutdownBanner", () => {
     }
   );
 
-  it("clears the paused-continuation banner once the resumed sandbox is restoring", () => {
+  it("clears the paused-continuation banner through resume and the restore that follows", async () => {
     const onRecover = acceptedRecovery();
-    const { container, rerender } = render(
+    const paused: SandboxShutdownState = {
+      phase: "saved",
+      reason: "sandbox_lifetime_expiring",
+      expiresAtMs: 2,
+      drainAtMs: 1,
+      savedAtMs: 1,
+      hasRecoveryPoint: true,
+      continuationPaused: true,
+      availableRecoveryActions: ["restore_saved"],
+    };
+    const { container, rerender } = render(<Banner shutdown={paused} onRecover={onRecover} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume queued work" }));
+    await waitFor(() => expect(onRecover).toHaveBeenCalledWith("restore_saved"));
+
+    // recover() clears the pause and keeps the saved phase, which no longer offers an action.
+    rerender(
       <Banner
-        shutdown={{
-          phase: "saved",
-          expiresAtMs: 2,
-          drainAtMs: 1,
-          hasRecoveryPoint: true,
-          continuationPaused: true,
-          availableRecoveryActions: ["restore_saved"],
-        }}
+        shutdown={{ ...paused, continuationPaused: false, availableRecoveryActions: [] }}
         onRecover={onRecover}
       />
     );
-    expect(screen.getByRole("button", { name: "Resume queued work" })).toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
 
+    // reserveStartup() then starts a fresh record for the restoring generation.
     rerender(
       <Banner
         shutdown={{
           phase: "restoring",
-          expiresAtMs: 2,
-          drainAtMs: 1,
+          expiresAtMs: null,
+          drainAtMs: null,
+          savedAtMs: 1,
           hasRecoveryPoint: true,
-          continuationPaused: true,
-          availableRecoveryActions: ["restore_saved"],
+          continuationPaused: false,
+          availableRecoveryActions: [],
         }}
         onRecover={onRecover}
       />
     );
-
     expect(container).toBeEmptyDOMElement();
   });
 

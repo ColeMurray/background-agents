@@ -31,8 +31,9 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
   const { phase } = shutdown;
   const isError = phase === "failed" || phase === "unknown";
   const isContinuationPaused = phase === "saved" && shutdown.continuationPaused === true;
-  // Routine stops, saves, and restores are already reported by the sandbox status. The banner
-  // is reserved for failures and for an interrupted sandbox that holds queued work.
+  // Routine stops, saves, and restores are reported by the header's sandbox status, which
+  // projects graceful-stop phases onto it. The banner is reserved for failures and for an
+  // interrupted sandbox that holds queued work.
   if (!isError && !isContinuationPaused) return null;
 
   const recoveryActions = shutdown.availableRecoveryActions ?? [];
