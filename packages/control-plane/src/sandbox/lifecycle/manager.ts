@@ -899,7 +899,7 @@ export class SandboxLifecycleManager
         });
         return;
       }
-      await this.retainRejectedAllocation(error, generation);
+      await this.handleRejectedStartupAllocation(error, generation);
       const errorMessage = error instanceof Error ? error.message : "Failed to spawn sandbox";
       this.log.error("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -1299,7 +1299,7 @@ export class SandboxLifecycleManager
         });
         return;
       }
-      await this.retainRejectedAllocation(error, generation);
+      await this.handleRejectedStartupAllocation(error, generation);
       const errorMessage = error instanceof Error ? error.message : "Failed to restore sandbox";
       this.log.error("Sandbox restore completed", {
         event: "sandbox.restore",
@@ -2099,7 +2099,7 @@ export class SandboxLifecycleManager
   async handleShutdownAlarm(): Promise<"continue" | "hold_watchdogs"> {
     const rejected = this.storage.getSandbox();
     if (rejected?.startup_rejected && rejected.modal_object_id) {
-      await this.cleanupRejectedAllocation(
+      await this.attemptRejectedStartupCleanup(
         { sandboxId: rejected.modal_sandbox_id, createdAt: rejected.created_at },
         rejected.modal_object_id
       );
@@ -2269,13 +2269,14 @@ export class SandboxLifecycleManager
     this.storage.updateSandboxModalObjectId(reference);
   }
 
-  private async retainRejectedAllocation(
+  private async handleRejectedStartupAllocation(
     error: unknown,
     generation: SandboxGeneration | null
   ): Promise<void> {
     if (!(error instanceof SandboxLaunchRejectedError) || !generation) return;
-    // Keep the rejected handle on this generation so restart/replacement retries retirement.
-    // It is not a successful startup and receives no access credentials or readiness signal.
+    // A rejected launch may already have connected. Fence its credentials and retain
+    // its provider ID before termination so a failed stop or DO restart cannot
+    // accept the allocation or lose the cleanup obligation.
     const rejection = this.storage.rejectProviderStartup(generation, error.providerObjectId);
     if (rejection === "superseded") {
       await this.destroyLateProviderResult(error.providerObjectId ?? undefined);
@@ -2289,22 +2290,22 @@ export class SandboxLifecycleManager
       this.recordSpawnFailure(Date.now(), generation.createdAt);
     }
     if (error.providerObjectId)
-      await this.cleanupRejectedAllocation(generation, error.providerObjectId);
+      await this.attemptRejectedStartupCleanup(generation, error.providerObjectId);
   }
 
-  async rearmRejectedAllocationCleanup(): Promise<void> {
+  async rearmRejectedStartupCleanupAlarm(): Promise<void> {
     const row = this.storage.getSandbox();
     if (row?.startup_rejected && row.modal_object_id) {
       await this.alarmScheduler.schedule(Date.now() + REJECTED_ALLOCATION_CLEANUP_RETRY_MS);
     }
   }
 
-  private async cleanupRejectedAllocation(
+  private async attemptRejectedStartupCleanup(
     generation: SandboxGeneration,
     providerObjectId: string
   ): Promise<void> {
     // Persist the next attempt before provider I/O so an eviction cannot lose cleanup.
-    await this.rearmRejectedAllocationCleanup();
+    await this.rearmRejectedStartupCleanupAlarm();
     if (!(await this.destroyLateProviderResult(providerObjectId))) return;
     const row = this.storage.getSandbox();
     if (

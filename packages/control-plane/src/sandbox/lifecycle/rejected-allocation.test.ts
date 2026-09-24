@@ -175,7 +175,7 @@ describe("rejected provider allocation", () => {
         lifecycleManager: restarted.manager,
         terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
       } as never);
-      await restarted.manager.rearmRejectedAllocationCleanup();
+      await restarted.manager.rearmRejectedStartupCleanupAlarm();
       expect(restarted.alarmScheduler.schedule).toHaveBeenCalled();
       await handler.handle();
       expect(sandbox.modal_object_id).toBe("sb-rejected");

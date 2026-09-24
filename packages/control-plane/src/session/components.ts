@@ -976,7 +976,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           async () => {
             await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
-            await lifecycleManager.rearmRejectedAllocationCleanup();
+            await lifecycleManager.rearmRejectedStartupCleanupAlarm();
             await terminalMessageProjection.rearm();
           },
           {

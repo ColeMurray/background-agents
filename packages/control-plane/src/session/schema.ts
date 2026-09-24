@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
-  startup_rejected INTEGER NOT NULL DEFAULT 0,        -- rejected allocation retains a cleanup obligation
+  startup_rejected INTEGER NOT NULL DEFAULT 0,        -- rejected startup retains a cleanup obligation
   created_at INTEGER NOT NULL
 );
 
