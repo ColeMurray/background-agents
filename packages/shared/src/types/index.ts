@@ -228,8 +228,16 @@ export {
   auditEventMetadataSchema,
   auditEventSchema,
   auditEventListResponseSchema,
+  AUTHORIZATION_DECISION_ACTIONS,
+  AUDIT_OPERATION_ACTIONS,
+  AUTHORIZATION_DECISION_METADATA_SCHEMA,
+  authorizationDecisionMetadataV1Schema,
+  interpretAuditEvent,
 } from "./audit-events";
 export type {
+  AuditEventInterpretation,
+  AuditOperationAction,
+  AuthorizationDecisionMetadataV1,
   AuditOperationResult,
   AuditPrincipalKind,
   AuditEventMetadata,

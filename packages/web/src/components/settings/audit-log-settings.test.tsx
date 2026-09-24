@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,10 +30,9 @@ Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   value: scrollIntoView,
 });
 
-function createEvent(
-  operationResult: "applied" | "no_op" | "denied" | "rejected",
-  overrides: Record<string, unknown> = {}
-) {
+type OperationResult = "applied" | "no_op" | "denied" | "rejected";
+
+function createEvent(operationResult: OperationResult, overrides: Record<string, unknown> = {}) {
   return {
     id: `event-${operationResult}`,
     occurredAt: 1_700_000_000_000,
@@ -50,6 +49,40 @@ function createEvent(
     metadata: { before: { roleId: "role-old" }, after: { roleId: "role-new" } },
     ...overrides,
   };
+}
+
+function createAuthorizationEvent(
+  action: string,
+  operationResult: OperationResult,
+  metadata: Record<string, unknown>
+) {
+  return createEvent(operationResult, {
+    id: `event-${action}-${operationResult}-${String(metadata.httpStatus)}`,
+    action,
+    resourceType: "http_route",
+    resourceId: "/workspace/members/user-2/role",
+    targetUserIdSnapshot: null,
+    reasonCode: action === "authorization.request_allowed" ? "authorization_allowed" : "forbidden",
+    metadata,
+  });
+}
+
+function decisionMetadata(httpStatus: unknown) {
+  return {
+    schema: "authorization_decision.v1",
+    httpMethod: "PUT",
+    httpPath: "/workspace/members/user-2/role",
+    httpStatus,
+    requirements: [{ kind: "permission", permission: "workspace.members.manage" }],
+    requestId: "request-id",
+    traceId: "trace-id",
+  };
+}
+
+function renderSingle(event: Record<string, unknown>) {
+  hook.events = [event];
+  render(<AuditLogSettings />);
+  return within(screen.getByRole("article"));
 }
 
 beforeEach(() => {
@@ -76,18 +109,27 @@ describe("AuditLogSettings", () => {
       createEvent("applied"),
       createEvent("no_op"),
       createEvent("denied"),
-      createEvent("rejected", {
+      createEvent("rejected", { actorServiceSnapshot: "github-bot" }),
+      createEvent("applied", {
+        id: "event-unknown",
+        requestId: "request-unknown",
         action: "future_namespace.custom_action",
-        actorServiceSnapshot: "github-bot",
       }),
     ];
     const { container } = render(<AuditLogSettings />);
 
     expect(screen.getByRole("heading", { name: "Audit log" })).toBeInTheDocument();
-    expect(screen.getAllByRole("article")).toHaveLength(4);
-    for (const label of ["Applied", "No change", "Denied", "Rejected"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(5);
+    for (const [label, className] of [
+      ["Applied", "text-success"],
+      ["No change", "text-muted-foreground"],
+      ["Denied", "text-destructive"],
+      ["Rejected", "text-warning"],
+      ["Unrecognized", "text-muted-foreground"],
+    ]) {
+      expect(screen.getByText(label)).toHaveClass(className);
     }
+    expect(screen.queryByText("HTTP response")).not.toBeInTheDocument();
     expect(screen.getAllByText(/actor-snapshot-id/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/resource-snapshot-id/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/target-snapshot-id/).length).toBeGreaterThan(0);
@@ -193,5 +235,54 @@ describe("AuditLogSettings", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Audit log" })).toHaveFocus());
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+  });
+
+  it("explains what an authorization decision does and does not prove", () => {
+    render(<AuditLogSettings />);
+
+    expect(
+      screen.getByText(/They do not confirm that the requested change took effect/)
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["authorization.request_allowed", "applied", 409, "Allowed", "text-info", "HTTP 409 Conflict"],
+    [
+      "authorization.request_denied",
+      "denied",
+      403,
+      "Denied",
+      "text-destructive",
+      "HTTP 403 Forbidden",
+    ],
+  ] as const)(
+    "renders %s as a decision with its HTTP response, not a domain outcome",
+    (action, result, status, label, className, response) => {
+      const card = renderSingle(createAuthorizationEvent(action, result, decisionMetadata(status)));
+
+      expect(card.getByText(label)).toHaveClass(className);
+      expect(card.queryByText("Applied")).not.toBeInTheDocument();
+      expect(card.getByText(response)).toBeVisible();
+    }
+  );
+
+  it("shows a legacy decision without fabricating a response", () => {
+    const card = renderSingle(
+      createAuthorizationEvent("authorization.request_allowed", "applied", { legacy: true })
+    );
+
+    expect(card.getByText("Allowed")).toBeInTheDocument();
+    expect(card.getByText("Not recorded")).toBeInTheDocument();
+  });
+
+  it("keeps the raw operation result and metadata inspectable", async () => {
+    const card = renderSingle(
+      createAuthorizationEvent("authorization.request_allowed", "applied", decisionMetadata(409))
+    );
+
+    await userEvent.click(card.getByText("Structured details"));
+    const details = card.getByText(/"operationResult": "applied"/);
+    expect(details).toBeVisible();
+    expect(details).toHaveTextContent('"httpStatus": 409');
   });
 });
