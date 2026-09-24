@@ -16,6 +16,10 @@ from sandbox_runtime.git_signer import GitSignerError, run_signer
 
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBaM0ggz8RWOz0lq3xs+vNPvnuWs0SS30txpSJTb357p"
 FINGERPRINT = "SHA256:Cu64KulDfH7B8Mu37+JWepAJ1m59o159Y8RPj5Ta1XM"
+# pytest's `pythonpath` setting only reaches this process; child processes
+# inherit PYTHONPATH (sandbox images set PYTHONPATH=/app), so prepend the
+# checkout's src to make them run the code under test.
+CHECKOUT_SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 def _run(*args: str, cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -493,6 +497,9 @@ def test_real_git_commit_signs_through_production_cli_and_verifies(tmp_path: Pat
         _run("git", "add", "change.txt", cwd=repository)
         environment = {
             **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                filter(None, [str(CHECKOUT_SRC), os.environ.get("PYTHONPATH")])
+            ),
             "CONTROL_PLANE_URL": f"http://127.0.0.1:{server.server_port}",
             "SANDBOX_AUTH_TOKEN": "sandbox-token",
             "SESSION_CONFIG": json.dumps({"sessionId": "session-1"}),
