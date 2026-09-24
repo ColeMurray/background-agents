@@ -158,6 +158,72 @@ function preparedEvent(
 describe("SandboxShutdownCoordinator", () => {
   beforeEach(() => vi.restoreAllMocks());
 
+  it("commits a VM image before retiring its retained source", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true as const,
+      imageId: "vm-image",
+      sourceStopped: false,
+      sourceObjectId: "sb-immutable",
+    }));
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        name: "modal-vm",
+        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("execution_complete");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: {
+        artifactId: "vm-image",
+        provider: "modal-vm",
+        sourceObjectId: "sb-immutable",
+      },
+    });
+    expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledWith(
+      GENERATION.sandboxId,
+      "vm-image",
+      "runtime-1"
+    );
+    expect(f.deps.sandbox.recordSandboxSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      stopSandbox.mock.invocationCallOrder[0]
+    );
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "sb-immutable" })
+    );
+  });
+
+  it("holds a lost VM capture response without retiring the source", async () => {
+    const takeSnapshot = vi.fn(async () => {
+      throw new Error("capture response lost");
+    });
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        name: "modal-vm",
+        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("execution_complete");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    await f.shutdown.handleAlarm();
+
+    expect(f.store.value).toMatchObject({ phase: "unknown" });
+    expect(stopSandbox).not.toHaveBeenCalled();
+  });
+
   it("distinguishes unmanaged and held shutdown requests", async () => {
     const f = fixture();
 

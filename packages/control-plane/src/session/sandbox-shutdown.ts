@@ -805,6 +805,7 @@ export class SandboxShutdownCoordinator {
       };
       let artifactId = state.providerObjectId;
       let sourceStopped = retained;
+      let sourceObjectId: string | undefined;
       if (retained) {
         if (!provider.stopSandbox) throw new Error("Provider cannot preserve-stop this sandbox");
         const result = await this.bounded(state.captureByMs!, (signal) =>
@@ -821,37 +822,15 @@ export class SandboxShutdownCoordinator {
         );
         artifactId = result.imageId;
         sourceStopped = result.sourceStopped;
+        sourceObjectId = result.sourceObjectId;
       }
       if (!this.owns(capturing)) return;
-      const receipt = {
-        kind: retained ? ("retained" as const) : ("snapshot" as const),
+      const retiring = this.commitCaptureReceipt(
+        capturing,
         artifactId,
-        provider: provider.name,
-        savedAtMs: this.now(),
-        runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
-      };
-      const retiring: ShutdownRecord = {
-        ...capturing,
-        phase: "retiring",
-        receipt,
-        savedAtMs: receipt.savedAtMs,
-      };
-      // Receipt and legacy projection describe the same capture. Either both
-      // commit for this generation or neither may authorize source retirement.
-      this.deps.session.transaction(() => {
-        if (!this.owns(capturing)) throw new Error("Snapshot generation was superseded");
-        if (
-          !retained &&
-          !this.deps.sandbox.recordSandboxSnapshot(
-            state.generation.sandboxId,
-            artifactId,
-            receipt.runtimeVersion
-          )
-        )
-          throw new Error("Snapshot generation was superseded");
-        this.deps.store.write(retiring);
-      });
-      this.announce(retiring);
+        retained ? "retained" : "snapshot",
+        sourceObjectId
+      );
       if (sourceStopped) this.finish(retiring);
       else await this.retire(retiring);
     } catch (error) {
@@ -866,6 +845,46 @@ export class SandboxShutdownCoordinator {
     } finally {
       this.activeOperation = null;
     }
+  }
+
+  private commitCaptureReceipt(
+    state: ShutdownRecord,
+    artifactId: string,
+    kind: "retained" | "snapshot",
+    sourceObjectId?: string
+  ): ShutdownRecord {
+    const receipt = {
+      kind,
+      artifactId,
+      ...(sourceObjectId ? { sourceObjectId } : {}),
+      provider: this.deps.provider.name,
+      savedAtMs: this.now(),
+      runtimeVersion: this.deps.sandbox.getSandbox()?.runtime_version ?? null,
+    };
+    const retiring: ShutdownRecord = {
+      ...state,
+      phase: "retiring",
+      error: undefined,
+      receipt,
+      savedAtMs: receipt.savedAtMs,
+    };
+    // Receipt and legacy projection describe the same capture. Either both
+    // commit for this generation or neither may authorize source retirement.
+    this.deps.session.transaction(() => {
+      if (!this.owns(state)) throw new Error("Snapshot generation was superseded");
+      if (
+        kind === "snapshot" &&
+        !this.deps.sandbox.recordSandboxSnapshot(
+          state.generation.sandboxId,
+          artifactId,
+          receipt.runtimeVersion
+        )
+      )
+        throw new Error("Snapshot generation was superseded");
+      this.deps.store.write(retiring);
+    });
+    this.announce(retiring);
+    return retiring;
   }
 
   private async retire(state: ShutdownRecord): Promise<void> {
@@ -884,7 +903,7 @@ export class SandboxShutdownCoordinator {
       await this.deps.alarm.schedule(deadlineAtMs);
       const result = await this.bounded(deadlineAtMs, (signal) =>
         this.deps.provider.stopSandbox!({
-          providerObjectId: state.providerObjectId!,
+          providerObjectId: state.receipt!.sourceObjectId ?? state.providerObjectId!,
           sessionId: session.session_name || session.id,
           reason: state.reason!,
           intent: state.receipt!.kind === "snapshot" ? "destroy" : "preserve",
@@ -997,7 +1016,7 @@ export class SandboxShutdownCoordinator {
     sessionId: string,
     reason: string,
     deadlineAtMs: number
-  ): Promise<{ imageId: string; sourceStopped: boolean }> {
+  ): Promise<{ imageId: string; sourceStopped: boolean; sourceObjectId?: string }> {
     if (!this.deps.provider.takeSnapshot) throw new Error("Provider has no snapshot operation");
     const result = await this.bounded(deadlineAtMs, (signal) =>
       this.deps.provider.takeSnapshot!({
@@ -1010,6 +1029,10 @@ export class SandboxShutdownCoordinator {
     );
     if (!result.success || !result.imageId)
       throw new Error(result.error ?? "Provider snapshot result is unknown");
-    return { imageId: result.imageId, sourceStopped: result.sourceStopped === true };
+    return {
+      imageId: result.imageId,
+      sourceStopped: result.sourceStopped === true,
+      sourceObjectId: result.sourceObjectId,
+    };
   }
 }

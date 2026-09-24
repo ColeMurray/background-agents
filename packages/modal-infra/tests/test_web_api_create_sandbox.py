@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox import manager as manager_module
+from src.sandbox.launch_policy import DockerImageUnavailableError, InvalidDockerSettingsError
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, RepositoryImageUnavailableError
 
 
@@ -39,6 +40,7 @@ def _patch_manager(
                 vnc_password=vnc_password,
                 ttyd_url=None,
                 tunnel_urls=None,
+                sandbox_backend="modal",
             )
 
     monkeypatch.setattr(manager_module, "SandboxManager", FakeManager)
@@ -64,6 +66,7 @@ def _patch_restore_manager(
                 vnc_password=vnc_password,
                 ttyd_url=None,
                 tunnel_urls=None,
+                sandbox_backend="modal",
             )
 
     monkeypatch.setattr(manager_module, "SandboxManager", FakeManager)
@@ -796,3 +799,72 @@ def test_session_config_helper_ignores_null_wire_values():
     assert config.provider == "anthropic"
     assert config.model == "claude-sonnet-4-6"
     assert config.branch is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "payload", "captured_key", "config_reader"),
+    [
+        (
+            _call_create_sandbox,
+            CREATE_REQUEST,
+            "config",
+            lambda captured: (captured["config"].settings, captured["config"].retire_sandbox_id),
+        ),
+        (
+            _call_restore_sandbox,
+            RESTORE_REQUEST,
+            "restore",
+            lambda captured: (
+                captured["restore"]["settings"],
+                captured["restore"]["retire_sandbox_id"],
+            ),
+        ),
+    ],
+)
+async def test_sandbox_requests_forward_docker_settings_and_report_the_launch(
+    monkeypatch, call, payload, captured_key, config_reader
+):
+    _patch_auth(monkeypatch)
+    captured: dict = {}
+    if captured_key == "config":
+        _patch_manager(monkeypatch, captured)
+    else:
+        _patch_restore_manager(monkeypatch, captured)
+    settings = {"cpuCores": 2, "memoryMib": 4096}
+
+    result = await call(
+        {**payload, "sandbox_settings": settings, "retire_sandbox_id": "sandbox-prior"}
+    )
+
+    assert config_reader(captured) == (settings, "sandbox-prior")
+    # The fake handle launched standard; the response reports what actually happened.
+    assert result["data"]["sandbox_backend"] == "modal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status", "detail"),
+    [
+        (
+            InvalidDockerSettingsError("dockerEnabled must be a boolean"),
+            400,
+            "dockerEnabled must be a boolean",
+        ),
+        (DockerImageUnavailableError("not provisioned"), 501, "docker_not_available"),
+    ],
+)
+async def test_docker_launch_errors_map_to_actionable_statuses(monkeypatch, error, status, detail):
+    _patch_auth(monkeypatch)
+
+    class FailingManager:
+        async def create_sandbox(self, config):
+            raise error
+
+    monkeypatch.setattr(manager_module, "SandboxManager", FailingManager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(CREATE_REQUEST)
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.detail == detail

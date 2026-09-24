@@ -2,6 +2,7 @@
  * Public sandbox backend helpers for the web app.
  */
 
+import { IMAGE_BUILD_PROVIDER_IDS } from "@open-inspect/shared/types/image-builds";
 import {
   isSandboxProviderName,
   supportsConfigurableSandboxResources as providerSupportsConfigurableSandboxResources,
@@ -12,18 +13,11 @@ import {
 export type PublicSandboxProvider = SandboxProviderName;
 
 /**
- * Backends that can build and boot prebuilt repo/environment images. Mirrors
- * IMAGE_BUILD_PROVIDERS in the control plane's image-builds/provider-policy.ts —
- * a provider gains image-build support in both places or neither.
- */
-const REPO_IMAGE_PROVIDERS = ["modal", "vercel", "opencomputer", "e2b", "daytona"] as const;
-
-/**
  * The single 501 body every image-build route answers with when the deployment's
  * provider has no image support. Derived from the list so adding a provider
  * cannot leave a stale message behind.
  */
-export const REPO_IMAGES_UNSUPPORTED_MESSAGE = `Image builds are only available when SANDBOX_PROVIDER=${formatProviderList(REPO_IMAGE_PROVIDERS)}`;
+export const REPO_IMAGES_UNSUPPORTED_MESSAGE = `Image builds are only available when SANDBOX_PROVIDER=${formatProviderList(IMAGE_BUILD_PROVIDER_IDS)}`;
 
 export function getPublicSandboxProvider(): PublicSandboxProvider {
   const rawValue = process.env.NEXT_PUBLIC_SANDBOX_PROVIDER ?? process.env.SANDBOX_PROVIDER;
@@ -40,7 +34,7 @@ export function getPublicSandboxProvider(): PublicSandboxProvider {
 }
 
 export function supportsRepoImages(): boolean {
-  return (REPO_IMAGE_PROVIDERS as readonly string[]).includes(getPublicSandboxProvider());
+  return (IMAGE_BUILD_PROVIDER_IDS as readonly string[]).includes(getPublicSandboxProvider());
 }
 
 export function supportsConfigurableSandboxResources(): boolean {
@@ -53,7 +47,7 @@ export function supportsConfigurableSandboxTimeout(): boolean {
 
 /** The providers named in the unsupported-provider copy, in display order. */
 export function getRepoImageProviders(): readonly PublicSandboxProvider[] {
-  return REPO_IMAGE_PROVIDERS;
+  return IMAGE_BUILD_PROVIDER_IDS;
 }
 
 function isPublicSandboxProvider(value: string): value is PublicSandboxProvider {

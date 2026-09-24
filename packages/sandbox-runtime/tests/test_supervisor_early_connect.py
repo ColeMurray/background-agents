@@ -101,6 +101,47 @@ def _lines() -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+@pytest.mark.asyncio
+async def test_supervisor_health_pulses_independently_of_bridge(tmp_path, monkeypatch):
+    supervisor = _supervisor(tmp_path, [])
+    supervisor.HEALTH_INTERVAL = 0
+    supervisor.agent_bridge.diagnostic_snapshot.return_value = {
+        "bridge_running": True,
+        "bridge_rss_mib": 150,
+    }
+    monkeypatch.setattr(
+        "sandbox_runtime.supervisor.read_health_snapshot",
+        lambda: {"memory_available_mib": 1000},
+    )
+    monkeypatch.setattr(
+        "sandbox_runtime.supervisor.read_top_processes",
+        lambda: [{"pid": 123, "name": "node", "rss_mib": 512}],
+    )
+
+    def record(event, **_fields):
+        if event == "supervisor.health":
+            supervisor.shutdown_event.set()
+
+    supervisor.log.info.side_effect = record
+    await supervisor._health_loop()
+
+    fields = next(
+        call.kwargs
+        for call in supervisor.log.info.call_args_list
+        if call.args[0] == "supervisor.health"
+    )
+    assert fields["bridge_running"] is True
+    assert fields["bridge_rss_mib"] == 150
+    assert fields["memory_available_mib"] == 1000
+    assert fields["supervisor_sleep_lag_ms"] >= 0
+    pressure = next(
+        call.kwargs
+        for call in supervisor.log.info.call_args_list
+        if call.args[0] == "supervisor.resource_pressure"
+    )
+    assert pressure["top_processes"] == [{"pid": 123, "name": "node", "rss_mib": 512}]
+
+
 @pytest.fixture(autouse=True)
 def _fresh_boot(monkeypatch):
     for name in ("IMAGE_BUILD_MODE", "RESTORED_FROM_SNAPSHOT", "FROM_REPO_IMAGE"):
@@ -578,6 +619,30 @@ class TestAgentBridgeProcessEarlyConnect:
         process._process = child
 
         assert await process.wait() == 3
+
+    def test_diagnostic_snapshot_reads_bridge_process_state(self, tmp_path, monkeypatch):
+        process = self._process(
+            {
+                "SANDBOX_ID": "sandbox-1",
+                "CONTROL_PLANE_URL": "https://cp.example.com",
+                "SANDBOX_AUTH_TOKEN": "tok",
+                "SESSION_CONFIG": LEGACY_SESSION_CONFIG,
+            }
+        )
+        child = MagicMock(pid=123, returncode=None)
+        process._process = child
+        status = tmp_path / "status"
+        status.write_text("State:\tS (sleeping)\nVmRSS:\t153600 kB\nThreads:\t4\n")
+        monkeypatch.setattr("sandbox_runtime.agent_bridge_process.Path", lambda _path: status)
+
+        assert process.diagnostic_snapshot() == {
+            "bridge_pid": 123,
+            "bridge_running": True,
+            "bridge_exit_code": None,
+            "bridge_process_state": "S",
+            "bridge_rss_mib": 150,
+            "bridge_threads": 4,
+        }
 
 
 class TestRuntimeConfigFlag:

@@ -54,6 +54,33 @@ class TestIsFatalConnectionError:
     def test_empty_string_is_not_fatal(self, bridge):
         assert bridge._is_fatal_connection_error("") is False
 
+    @pytest.mark.asyncio
+    async def test_heartbeat_reports_send_time_separately_from_sleep_lag(self, bridge, monkeypatch):
+        bridge.HEARTBEAT_INTERVAL = 0
+        bridge.ws = SimpleNamespace(state=State.OPEN)
+        bridge.log = MagicMock()
+        ticks = iter((100.0, 100.125, 100.125, 100.375, 100.375, 100.375))
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.time", SimpleNamespace(monotonic=lambda: next(ticks))
+        )
+        bridge._heartbeat_event = lambda: {"type": "heartbeat"}
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.read_health_snapshot", lambda: {"memory_available_mib": 1000}
+        )
+
+        async def slow_send(_event):
+            bridge.shutdown_event.set()
+            return True
+
+        bridge._send_event = slow_send
+        await bridge._heartbeat_loop()
+
+        fields = bridge.log.info.call_args.kwargs
+        assert fields["heartbeat_write_succeeded"] is True
+        assert fields["heartbeat_send_duration_ms"] == 250
+        assert fields["heartbeat_sleep_lag_ms"] == 125
+        assert fields["memory_available_mib"] == 1000
+
     def test_connection_aggregate_fields_track_lifetime_and_reconnects(self, bridge):
         bridge._reconnect_attempt_count = 2
 
@@ -98,6 +125,9 @@ class TestIsFatalConnectionError:
             "sandbox_runtime.bridge.websockets.connect",
             lambda *_args, **_kwargs: ConnectionContext(ws),
         )
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.read_health_snapshot", lambda: {"memory_available_mib": 1500}
+        )
         bridge.log = MagicMock()
         bridge._send_event = AsyncMock(side_effect=asyncio.CancelledError)
 
@@ -114,6 +144,7 @@ class TestIsFatalConnectionError:
             connection_count=1,
             reconnect_count=0,
             reconnect_attempt_count=0,
+            memory_available_mib=1500,
         )
 
     @pytest.mark.asyncio

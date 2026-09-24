@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
 import { ChildSessionsHandler } from "./child-sessions.handler";
-import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
+import {
+  PromptQueueFullError,
+  SandboxPromptBlockedError,
+  SessionNotPromptableError,
+} from "../../message-queue";
 import type { ParticipantRow, SessionRow } from "../../types";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
@@ -232,6 +236,23 @@ describe("ChildSessionsHandler", () => {
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toEqual({
         error: "Cannot prompt a archived session",
+      });
+    });
+
+    it("maps a sandbox safety hold to 409", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      enqueuePrompt.mockRejectedValue(new SandboxPromptBlockedError("Start a new session."));
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "Start a new session.",
+        code: "SANDBOX_RECOVERY_REQUIRED",
       });
     });
   });

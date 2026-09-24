@@ -82,6 +82,17 @@ export function evaluateAlarmPolicy(
     case "extend":
       return { outcome: "inactivity_warning", extensionMs: inactivity.extensionMs };
     case "schedule":
-      return { outcome: "healthy", nextCheckMs: inactivity.nextCheckMs };
+      // The inactivity deadline can be ten minutes away. A bridge that stops
+      // heartbeating just after this alarm must still be noticed at 90s.
+      return {
+        outcome: "healthy",
+        nextCheckMs:
+          sandbox.last_heartbeat === null
+            ? inactivity.nextCheckMs
+            : Math.min(
+                inactivity.nextCheckMs,
+                Math.max(1, sandbox.last_heartbeat + config.heartbeat.timeoutMs + 1 - now)
+              ),
+      };
   }
 }

@@ -97,6 +97,7 @@ export function createMockSandbox(
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
+    startup_rejected: 0,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -162,6 +163,23 @@ export function createMockStorage(
         return true;
       }
     ),
+    rejectProviderStartup: vi.fn((generation, providerObjectId) => {
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt
+      )
+        return "superseded";
+      sandbox.modal_object_id = providerObjectId;
+      const failed = ["spawning", "connecting", "ready"].includes(sandbox.status);
+      if (failed) sandbox.status = "failed";
+      sandbox.fenced = 1;
+      sandbox.startup_rejected = 1;
+      sandbox.auth_token_hash = "";
+      sandbox.auth_token = null;
+      sandbox.active_socket_id = "";
+      return failed ? "failed" : "retained";
+    }),
     commitProviderStartup: vi.fn((generation, providerObjectId, allowFailedSelfHeal) => {
       calls.push("commitProviderStartup");
       if (
@@ -184,6 +202,7 @@ export function createMockStorage(
       calls.push("updateSandboxForSpawn");
       if (sandbox) {
         sandbox.status = data.status;
+        sandbox.startup_rejected = 0;
         sandbox.created_at = data.createdAt;
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;

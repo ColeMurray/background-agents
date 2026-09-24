@@ -213,6 +213,7 @@ export const sandboxRowSchema = z.object({
    * cannot self-heal the way a watchdog-failed one may.
    */
   fenced: z.number(),
+  startup_rejected: z.number().default(0),
   created_at: z.number(),
 });
 

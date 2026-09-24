@@ -170,6 +170,31 @@ export class SandboxRepository {
     return (result.rowsWritten ?? 0) > 0;
   }
 
+  /** Persist cleanup responsibility while permanently revoking a rejected generation. */
+  rejectProviderStartup(
+    generation: { sandboxId: string | null; createdAt: number },
+    providerObjectId: string | null
+  ): "failed" | "retained" | "superseded" {
+    const assignments = `modal_object_id = ?, fenced = 1, startup_rejected = 1,
+         auth_token_hash = '', auth_token = NULL, active_socket_id = ''`;
+    const identity = `id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`;
+    const args = [providerObjectId, generation.sandboxId, generation.createdAt];
+    const failed = this.sql
+      .exec(
+        `UPDATE sandbox SET ${assignments}, status = 'failed'
+       WHERE ${identity} AND status IN ('spawning', 'connecting', 'ready')
+       RETURNING id`,
+        ...args
+      )
+      .toArray();
+    if (failed.length) return "failed";
+    const retained = this.sql
+      .exec(`UPDATE sandbox SET ${assignments} WHERE ${identity} RETURNING id`, ...args)
+      .toArray();
+    return retained.length ? "retained" : "superseded";
+  }
+
   commitProviderStartup(
     generation: { sandboxId: string | null; createdAt: number },
     providerObjectId: string | null,
@@ -287,7 +312,7 @@ export class SandboxRepository {
          active_socket_id = '',
          boot_phase = NULL,
          boot_seq = NULL,
-         fenced = 0
+         fenced = 0, startup_rejected = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -342,7 +367,7 @@ export class SandboxRepository {
          last_heartbeat = NULL,
          boot_phase = NULL,
          boot_seq = NULL,
-         fenced = 0
+         fenced = 0, startup_rejected = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt

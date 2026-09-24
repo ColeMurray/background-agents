@@ -59,8 +59,8 @@ variable "modal_token_id" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_token_id) > 0
-    error_message = "modal_token_id must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_token_id) > 0
+    error_message = "modal_token_id must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -71,8 +71,8 @@ variable "modal_token_secret" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_token_secret) > 0
-    error_message = "modal_token_secret must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_token_secret) > 0
+    error_message = "modal_token_secret must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -82,8 +82,8 @@ variable "modal_workspace" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_workspace) > 0
-    error_message = "modal_workspace must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_workspace) > 0
+    error_message = "modal_workspace must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -93,8 +93,8 @@ variable "modal_environment" {
   default     = "main"
 
   validation {
-    condition     = var.sandbox_provider != "modal" || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
-    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -104,8 +104,8 @@ variable "modal_environment_web_suffix" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
-    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
+    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -443,8 +443,8 @@ variable "modal_api_secret" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_api_secret) > 0
-    error_message = "modal_api_secret must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_api_secret) > 0
+    error_message = "modal_api_secret must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -674,13 +674,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
+    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
   }
 }
 

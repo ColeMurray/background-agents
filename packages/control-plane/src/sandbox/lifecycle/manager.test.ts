@@ -22,6 +22,7 @@ import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -386,7 +387,7 @@ describe("final graceful shutdown lifecycle integration", () => {
   });
 
   it("routes destructive ordinary snapshots through confirmed graceful shutdown", async () => {
-    const f = fixture(createMockProvider({ capabilities: { snapshotStopsSandbox: true } }));
+    const f = fixture(createMockProvider({ capabilities: { snapshotRequiresShutdown: true } }));
     await f.manager.triggerSnapshot("execution_complete");
     expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("execution_complete");
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
@@ -395,7 +396,7 @@ describe("final graceful shutdown lifecycle integration", () => {
   it("does not fall through to a destructive checkpoint when shutdown declines it", async () => {
     const sandbox = createMockSandbox({ status: "ready" });
     const f = fixture(
-      createMockProvider({ capabilities: { snapshotStopsSandbox: true } }),
+      createMockProvider({ capabilities: { snapshotRequiresShutdown: true } }),
       sandbox
     );
     f.shutdown.requestShutdown.mockResolvedValue("held");
@@ -2879,7 +2880,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider({
-        capabilities: { snapshotStopsSandbox: true },
+        capabilities: { snapshotRequiresShutdown: true },
         takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
       });
       const shutdown = createCheckpointShutdown(provider, storage, broadcaster);
@@ -4998,27 +4999,33 @@ describe("status writes after a provider await (COL-99)", () => {
     }
   });
 
-  it("counts an attempt once when the watchdog fails it before the provider rejects it", async () => {
-    // The connect alarm is armed at reservation, before the provider call,
-    // so it can fail the attempt while createSandbox() is still pending. The
-    // provider's later rejection is the same attempt, not a second failure.
-    vi.useFakeTimers();
-    try {
-      const sandbox = createMockSandbox({ status: "failed" });
-      const h = harness(sandbox, async () => {
-        vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
-        await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
-        throw new SandboxProviderError("quota exceeded", "permanent");
-      });
+  it.each([
+    new SandboxProviderError("quota exceeded", "permanent"),
+    new SandboxLaunchRejectedError("incompatible", "sb-rejected"),
+  ])(
+    "counts an attempt once when the watchdog fails it before the provider rejects it (%s)",
+    async (error) => {
+      // The connect alarm is armed at reservation, before the provider call,
+      // so it can fail the attempt while createSandbox() is still pending. The
+      // provider's later rejection is the same attempt, not a second failure.
+      vi.useFakeTimers();
+      try {
+        const sandbox = createMockSandbox({ status: "failed" });
+        const h = harness(sandbox, async () => {
+          vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
+          await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
+          throw error;
+        });
 
-      await h.manager.spawnSandbox();
+        await h.manager.spawnSandbox();
 
-      expect(sandbox.status).toBe("failed");
-      expect(sandbox.spawn_failure_count).toBe(1);
-    } finally {
-      vi.useRealTimers();
+        expect(sandbox.status).toBe("failed");
+        expect(sandbox.spawn_failure_count).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
 
   it("leaves a sandbox whose bridge attached during the provider call booting when the call then fails", async () => {
     // The bridge now connects ahead of its boot, so a provider error that

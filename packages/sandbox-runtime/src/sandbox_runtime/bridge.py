@@ -46,9 +46,11 @@ from .attachment_processor import (
 from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
+    DOCKER_ENABLED_ENV_VAR,
     REPO_MANIFEST_FILE_PATH,
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
+from .docker_control import request as request_docker_preparation
 from .event_forwarder import BufferedEventForwarder
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
@@ -63,6 +65,7 @@ from .harness import (
     build_agent_harness,
     parse_harness_id,
 )
+from .health_snapshot import read_health_snapshot
 from .log_config import configure_logging, get_logger
 from .prompt_budgets import resolve_prompt_limits
 from .push_operation import PushOperation, PushRejected, PushRequest
@@ -347,6 +350,7 @@ class AgentBridge:
                     self.log.warn(
                         "bridge.connect_error",
                         detail=error_str,
+                        **read_health_snapshot(),
                     )
 
                 if self.shutdown_event.is_set():
@@ -433,7 +437,13 @@ class AgentBridge:
         if connection_fields is None:
             return
         log_method = getattr(self.log, level)
-        log_method("bridge.disconnect", reason=reason, **connection_fields, **fields)
+        log_method(
+            "bridge.disconnect",
+            reason=reason,
+            **connection_fields,
+            **fields,
+            **read_health_snapshot(),
+        )
 
     def _is_fatal_connection_error(self, error_str: str) -> bool:
         """Check if a connection error is fatal and shouldn't trigger retry.
@@ -563,11 +573,44 @@ class AgentBridge:
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
+        heartbeat_count = 0
+        last_written: float | None = None
         while not self.shutdown_event.is_set():
+            expected_wake = time.monotonic() + self.HEARTBEAT_INTERVAL
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
-
+            sleep_lag_ms = max(0, int((time.monotonic() - expected_wake) * 1000))
+            write_succeeded = False
+            send_duration_ms: int | None = None
             if self.ws and self.ws.state == State.OPEN:
-                await self._send_event(self._heartbeat_event())
+                send_started = time.monotonic()
+                # This confirms the local WebSocket write, not control-plane receipt.
+                write_succeeded = await self._send_event(self._heartbeat_event())
+                send_duration_ms = int((time.monotonic() - send_started) * 1000)
+                if write_succeeded:
+                    last_written = time.monotonic()
+
+            heartbeat_count += 1
+            if (
+                heartbeat_count == 1
+                or heartbeat_count % 4 == 0
+                or sleep_lag_ms >= 5_000
+                or (send_duration_ms is not None and send_duration_ms >= 5_000)
+                or not write_succeeded
+            ):
+                self.log.info(
+                    "bridge.health",
+                    heartbeat_write_succeeded=write_succeeded,
+                    heartbeat_sleep_lag_ms=sleep_lag_ms,
+                    heartbeat_send_duration_ms=send_duration_ms,
+                    last_heartbeat_write_ago_ms=(
+                        int((time.monotonic() - last_written) * 1000)
+                        if last_written is not None
+                        else None
+                    ),
+                    websocket_open=self.ws is not None and self.ws.state == State.OPEN,
+                    prompt_active=self.activity.current_prompt_task is not None,
+                    **read_health_snapshot(),
+                )
 
     async def _end_run(self) -> None:
         """End the run loop from outside it.
@@ -882,6 +925,8 @@ class AgentBridge:
 
         async def persist_session() -> None:
             await self._persist_rotated_session_id(self._require_harness(), strict=True)
+            if os.environ.get(DOCKER_ENABLED_ENV_VAR) == "true":
+                await request_docker_preparation("prepare")
 
         result = await self.shutdown_preparation.prepare(
             cmd,

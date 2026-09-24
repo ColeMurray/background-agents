@@ -7,6 +7,7 @@ import { SessionStorageIntegrityError } from "./types";
 const receiptSchema = z.object({
   kind: z.enum(["snapshot", "retained"]),
   artifactId: z.string().min(1),
+  sourceObjectId: z.string().min(1).optional(),
   provider: z.string(),
   savedAtMs: z.number(),
   runtimeVersion: z.string().nullable(),

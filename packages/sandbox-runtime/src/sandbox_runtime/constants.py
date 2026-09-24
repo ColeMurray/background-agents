@@ -3,6 +3,10 @@
 # Provider-selected directory for standalone runtime commands. OpenComputer uses
 # the sandbox user's bin directory; providers with writable images use /usr/local/bin.
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
+
+# Trusted launch signal: the provider sets it to "true" only for a sandbox it
+# launched on a Docker-capable runtime. User env vars can never set it.
+DOCKER_ENABLED_ENV_VAR = "OPENINSPECT_DOCKER_ENABLED"
 DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
 
 # Sandbox lifetime and the env contract used to pass it to the bridge.

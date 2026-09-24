@@ -149,7 +149,8 @@ Create an R2 API Token:
 
 ### Modal
 
-> Only required when `sandbox_provider = "modal"`.
+> Only required when `sandbox_provider` is `modal` or `modal-vm`. Select `modal-vm` for
+> Docker-capable VMs; see [Modal VM setup](MODAL_DOCKER.md).
 
 1. Go to [Modal Settings](https://modal.com/settings)
 2. **Create a new API token**: Settings -> API Tokens -> New Token

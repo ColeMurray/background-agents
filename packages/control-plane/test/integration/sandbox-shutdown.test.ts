@@ -77,6 +77,64 @@ async function readShutdown(stub: DurableObjectStub): Promise<Record<string, unk
 }
 
 describe("sandbox graceful shutdown wiring", () => {
+  it("holds an interrupted legacy VM capture without recapture or retirement", async () => {
+    const { stub } = await initNamedSession(`vm-capture-receipt-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET modal_object_id = 'sb-captured'");
+    });
+    const now = Date.now();
+    await seedShutdown(stub, {
+      phase: "capturing",
+      provider: "modal-vm",
+      providerObjectId: "sb-captured",
+      operationId: "lost-terminal-capture",
+      captureReceiptPending: true,
+      stopByMs: now - 120_000,
+      captureByMs: now - 60_000,
+      retireByMs: now - 30_000,
+      generationReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+    });
+    const evidence = await runInSessionDO(stub, async (instance, durableState) => {
+      let captureCount = 0;
+      let stopCount = 0;
+      const provider: SandboxProvider = {
+        name: "modal-vm",
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: true,
+          snapshotRequiresShutdown: true,
+          supportsRestore: true,
+          supportsExplicitStop: true,
+        },
+        createSandbox: async () => {
+          throw new Error("must not create");
+        },
+        takeSnapshot: async () => {
+          captureCount++;
+          throw new Error("must not recapture");
+        },
+        stopSandbox: async () => {
+          stopCount++;
+          return { success: true };
+        },
+      };
+      const restarted = realLifecycleHarness(instance, durableState, provider);
+      await restarted.manager.handleShutdownAlarm();
+      return { captureCount, stopCount, snapshot: restarted.manager.shutdownSnapshot() };
+    });
+    expect(evidence).toMatchObject({
+      captureCount: 0,
+      stopCount: 0,
+      snapshot: { phase: "unknown", hasRecoveryPoint: false },
+    });
+    expect(await queryDO(stub, "SELECT snapshot_image_id FROM sandbox")).toEqual([
+      { snapshot_image_id: null },
+    ]);
+  });
+
   it("preserves a completed session status when shutdown begins between prompts", async () => {
     const name = `shutdown-completed-status-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -476,7 +534,7 @@ describe("sandbox graceful shutdown wiring", () => {
           supportsRestore: true,
           supportsExplicitStop: true,
           supportsPersistentResume: false,
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
         },
         createSandbox: async () => {
           throw new Error("not used by inactivity regression");

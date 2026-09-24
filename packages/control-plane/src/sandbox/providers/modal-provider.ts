@@ -6,13 +6,15 @@
  */
 
 import { ModalApiError } from "../client";
-import type { ModalClient } from "../client";
+import type { ModalClient, ModalBackend, CreateImageBuildSandboxResponse } from "../client";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../../logger";
 import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/integrations";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
   createVncAccess,
   signalUntilDeadline,
   type ImageBuildProviderTriggerConfig,
@@ -37,6 +39,7 @@ interface StartModalImageBuildConfig {
 
 /** Modal extends the shared trigger contract with explicit SCM clone identity. */
 export interface ModalImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
+  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
   cloneHost?: string;
   cloneUsername?: string;
 }
@@ -76,7 +79,7 @@ export interface ModalImageBuildProvider {
  * @example
  * ```typescript
  * const client = createModalClient(secret, workspace, environmentWebSuffix);
- * const provider = new ModalSandboxProvider(client);
+ * const provider = new ModalSandboxProvider(client, "modal");
  *
  * try {
  *   const result = await provider.createSandbox(config);
@@ -88,17 +91,30 @@ export interface ModalImageBuildProvider {
  * ```
  */
 export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildProvider {
-  readonly name = "modal";
+  readonly name: ModalBackend;
 
-  readonly capabilities: SandboxProviderCapabilities = {
-    supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
-    supportsSnapshots: true,
-    supportsRestore: true,
-    supportsPersistentResume: false,
-    supportsExplicitStop: true,
-  };
+  readonly capabilities: SandboxProviderCapabilities;
 
-  constructor(private readonly client: ModalClient) {}
+  pendingSandboxReference(sessionId: string, sandboxId: string): string | undefined {
+    return this.name === "modal-vm"
+      ? `modal-vm-session:${JSON.stringify([sessionId, sandboxId])}`
+      : undefined;
+  }
+
+  constructor(
+    private readonly client: ModalClient,
+    backend: ModalBackend
+  ) {
+    this.name = backend;
+    this.capabilities = {
+      supportsSandboxTimeout: supportsConfigurableSandboxTimeout(this.name),
+      supportsSnapshots: true,
+      snapshotRequiresShutdown: backend === "modal-vm",
+      supportsRestore: true,
+      supportsPersistentResume: false,
+      supportsExplicitStop: true,
+    };
+  }
 
   /**
    * Create a new sandbox via Modal API.
@@ -129,11 +145,14 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          sandboxBackend: this.name,
+          retireSandboxId: config.retireSandboxId,
           repositories: config.repositories,
         },
         config.correlation
       );
 
+      this.confirmSessionLaunch(result);
       return {
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
@@ -185,11 +204,14 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
+          sandboxBackend: this.name,
+          retireSandboxId: config.retireSandboxId,
           repositories: config.repositories,
         },
         config.correlation
       );
 
+      this.confirmSessionLaunch(result);
       return {
         success: true,
         sandboxId: result.sandboxId,
@@ -225,19 +247,46 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   async takeSnapshot(config: SnapshotConfig): Promise<SnapshotResult> {
     try {
-      const result = await this.client.snapshotSandbox(
-        {
-          providerObjectId: config.providerObjectId,
-          sessionId: config.sessionId,
-          signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
-          deadlineAtMs: config.deadlineAtMs,
-        },
-        config.correlation
-      );
+      const request = {
+        providerObjectId: config.providerObjectId,
+        sessionId: config.sessionId,
+        sandboxBackend: this.name,
+        signal: signalUntilDeadline(config.deadlineAtMs, config.signal),
+        deadlineAtMs: config.deadlineAtMs,
+      };
+      let result;
+      try {
+        result = await this.client.snapshotSandbox(request, config.correlation);
+      } catch (error) {
+        // The VM capture endpoint leaves the source alive until the control
+        // plane commits the image. Docker preparation is idempotent, so a
+        // lost response can safely retry the capture.
+        if (
+          this.name !== "modal-vm" ||
+          request.signal?.aborted ||
+          (error instanceof ModalApiError && error.status < 500)
+        )
+          throw error;
+        result = await this.client.snapshotSandbox(request, config.correlation);
+      }
 
+      if (this.name === "modal-vm") {
+        if (result.sourceStopped !== false)
+          throw new SandboxProviderError(
+            "Modal VM capture did not confirm source retention",
+            "permanent"
+          );
+        if (!result.sourceObjectId)
+          throw new SandboxProviderError(
+            "Modal VM capture did not confirm its source ID",
+            "permanent"
+          );
+      }
       return {
         success: true,
         imageId: result.imageId,
+        sourceStopped: result.sourceStopped === true,
+        sourceObjectId: result.sourceObjectId,
       };
     } catch (error) {
       if (error instanceof ModalApiError) {
@@ -298,10 +347,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
 
   private async createImageBuildSandbox(
     config: ModalImageBuildTriggerConfig
-  ): Promise<{ providerSessionId: string }> {
+  ): Promise<CreateImageBuildSandboxResponse> {
     try {
       return await this.client.createImageBuildSandbox(
         {
+          sandboxBackend: this.name,
+          resources: config.resources,
           scopeKind: config.scopeKind,
           scopeId: config.scopeId,
           buildId: config.buildId,
@@ -330,9 +381,34 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
+  private assertBackend(result: { sandboxBackend?: unknown }): void {
+    // Pre-backend Modal endpoints only created the standard sandbox and did not echo its backend.
+    const legacyStandard = this.name === "modal" && result.sandboxBackend === undefined;
+    if (result.sandboxBackend === this.name || legacyStandard) return;
+    throw new SandboxProviderError(
+      `Modal deployment did not confirm the ${this.name} backend; deploy compatible Modal endpoints`,
+      "permanent"
+    );
+  }
+
+  private confirmSessionLaunch(result: { modalObjectId?: string; sandboxBackend?: unknown }): void {
+    try {
+      this.assertBackend(result);
+    } catch (error) {
+      // The lifecycle must persist and fence this generation before any cleanup await.
+      throw new SandboxLaunchRejectedError(
+        error instanceof Error ? error.message : "Incompatible Modal allocation",
+        result.modalObjectId ?? null,
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
   async triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void> {
     const created = await this.createImageBuildSandbox(config);
+    // Persist the handle for cleanup before checking compatibility. Binding does not start work.
     await config.onProviderSessionCreated(created.providerSessionId);
+    this.assertBackend(created);
     await this.startImageBuildSandbox({
       buildId: config.buildId,
       providerSessionId: created.providerSessionId,
@@ -392,6 +468,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Classify an error as transient or permanent for circuit breaker handling.
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
+    if (error instanceof SandboxProviderError) return error;
     if (SandboxProviderError.isTransientNetworkError(error)) {
       return new SandboxProviderError(
         `${message}: ${error instanceof Error ? error.message : String(error)}`,
@@ -432,6 +509,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
  * @param client - ModalClient instance for API calls
  * @returns ModalSandboxProvider instance
  */
-export function createModalProvider(client: ModalClient): ModalSandboxProvider {
-  return new ModalSandboxProvider(client);
+export function createModalProvider(
+  client: ModalClient,
+  backend: ModalBackend
+): ModalSandboxProvider {
+  return new ModalSandboxProvider(client, backend);
 }

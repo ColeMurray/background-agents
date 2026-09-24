@@ -8,7 +8,16 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import deploy
+import modal
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def deployed_vm_reference(monkeypatch):
+    function = Mock()
+    function.remote.return_value = None
+    monkeypatch.setattr(deploy.modal.Function, "from_name", Mock(return_value=function))
+    return function
 
 
 def test_deployment_rejects_missing_image_without_opt_in(monkeypatch, tmp_path) -> None:
@@ -108,7 +117,11 @@ assert 'src.app' not in sys.modules
     assert result.returncode == 0, result.stderr
 
 
-def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("prior_vm_image", [None, "im-existing-vm"])
+def test_build_sandbox_image_eagerly_builds_against_deployed_app(
+    monkeypatch, tmp_path, deployed_vm_reference, prior_vm_image
+) -> None:
+    deployed_vm_reference.remote.return_value = prior_vm_image
     deployed_app = object()
     lookup = Mock(return_value=deployed_app)
     build = Mock()
@@ -136,10 +149,25 @@ def test_build_sandbox_image_eagerly_builds_against_deployed_app(monkeypatch, tm
     assert create.call_args.kwargs["env"] is plan["runtimeEnv"]
     assert create.call_args.kwargs["cpu"] == 2.0
     sandbox.terminate.assert_called_once()
-    assert json.loads((tmp_path / "selected.json").read_text()) == {
+    expected = {
         "imageId": "im-verified",
         "buildHash": "packed-recipe",
     }
+    if prior_vm_image:
+        expected["dockerImageId"] = prior_vm_image
+    assert json.loads((tmp_path / "selected.json").read_text()) == expected
+    assert create.call_count == 1  # Reverse cutover retains capability without another VM build.
+
+
+def test_reverse_cutover_fails_closed_if_existing_capability_cannot_be_read(deployed_vm_reference):
+    deployed_vm_reference.remote.side_effect = RuntimeError("lookup unavailable")
+    with pytest.raises(RuntimeError, match="lookup unavailable"):
+        deploy._deployed_vm_image()
+
+
+def test_first_deployment_has_no_vm_capability(deployed_vm_reference):
+    deployed_vm_reference.remote.side_effect = modal.exception.NotFoundError("not deployed")
+    assert deploy._deployed_vm_image() is None
 
 
 def test_local_base_image_retains_its_packed_plan(monkeypatch, tmp_path) -> None:
@@ -243,3 +271,124 @@ def test_src_modal_deploy_builds_sandbox_image_before_app_deploy(tmp_path: Path)
         "run python deploy.py --build-sandbox-image",
         "run modal deploy -m src",
     ]
+
+
+def _verifying_sandbox(*, exit_codes: list[int]) -> Mock:
+    sandbox = Mock()
+    processes = []
+    for code in exit_codes:
+        process = Mock(returncode=code)
+        process.stdout.read.return_value = ""
+        process.stderr.read.return_value = "boom"
+        processes.append(process)
+    sandbox.exec.side_effect = processes
+    return sandbox
+
+
+@pytest.mark.parametrize("docker_verification_passes", [True, False])
+def test_docker_image_is_built_and_verified_on_the_vm_after_the_default_is_published(
+    monkeypatch, tmp_path, docker_verification_passes
+) -> None:
+    deployed_app = object()
+    monkeypatch.setattr(deploy.modal.App, "lookup", Mock(return_value=deployed_app))
+    monkeypatch.setattr(deploy, "base_image", Mock(build=Mock(), object_id="im-default"))
+    docker_build = Mock()
+    monkeypatch.setattr(deploy, "docker_image", Mock(build=docker_build, object_id="im-docker"))
+    plan = {"buildHash": "packed-recipe", "runtimeEnv": {"PACKED_PLAN": "true"}}
+    monkeypatch.setattr(deploy, "base_image_plan", plan)
+    default_sandbox = _verifying_sandbox(exit_codes=[0])
+    docker_sandbox = _verifying_sandbox(exit_codes=[0, 0 if docker_verification_passes else 1])
+    create = Mock(side_effect=[default_sandbox, docker_sandbox])
+    monkeypatch.setattr(deploy.modal.Sandbox, "create", create)
+    record_path = tmp_path / "selected.json"
+    monkeypatch.setattr(deploy, "image_reference_path", lambda: record_path)
+    monkeypatch.setenv("OPENINSPECT_IMAGE_RESULT", str(tmp_path / "candidate.json"))
+
+    if docker_verification_passes:
+        deploy.build_sandbox_image(with_docker=True)
+    else:
+        with pytest.raises(RuntimeError, match="verification failed"):
+            deploy.build_sandbox_image(with_docker=True)
+
+    docker_build.assert_called_once_with(deployed_app)
+    assert "experimental_options" not in create.call_args_list[0].kwargs
+    vm_kwargs = create.call_args_list[1].kwargs
+    assert vm_kwargs["experimental_options"] == {"vm_runtime": True}
+    assert (vm_kwargs["cpu"], vm_kwargs["memory"]) == (2, 4096)
+    assert [call.args[1] for call in docker_sandbox.exec.call_args_list] == [
+        "/app/verify/smoke_test.py",
+        "/app/verify/docker_smoke.py",
+    ][: len(docker_sandbox.exec.call_args_list)]
+    default_sandbox.terminate.assert_called_once()
+    docker_sandbox.terminate.assert_called_once()
+    record = json.loads(record_path.read_text())
+    expected = {"imageId": "im-default", "buildHash": "packed-recipe"}
+    if docker_verification_passes:
+        expected["dockerImageId"] = "im-docker"
+    # A failed Docker variant never disturbs the verified default reference.
+    assert record == expected
+
+
+def test_deployed_environment_carries_the_docker_image_when_provisioned(
+    monkeypatch, tmp_path
+) -> None:
+    from src.images import base
+
+    record_path = tmp_path / "built.json"
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "image_reference_path", lambda: record_path)
+    monkeypatch.setattr(
+        base, "local_image_plan", lambda: (tmp_path, {"buildHash": "current-recipe"})
+    )
+    monkeypatch.delenv("BUILD_MODAL_VM_IMAGE", raising=False)
+
+    record_path.write_text(json.dumps({"buildHash": "current-recipe", "imageId": "im-built"}))
+    assert base.deployed_image_environment() == {base.IMAGE_ID_ENV: "im-built"}
+
+    record_path.write_text(
+        json.dumps(
+            {"buildHash": "current-recipe", "imageId": "im-built", "dockerImageId": "im-docker"}
+        )
+    )
+    assert base.deployed_image_environment() == {
+        base.IMAGE_ID_ENV: "im-built",
+        base.DOCKER_IMAGE_ID_ENV: "im-docker",
+    }
+
+    record_path.write_text(json.dumps({"buildHash": "current-recipe", "imageId": "im-built"}))
+    monkeypatch.setenv("BUILD_MODAL_VM_IMAGE", "true")
+    with pytest.raises(RuntimeError, match="Docker sandbox image"):
+        base.deployed_image_environment()
+
+
+def test_docker_image_is_absent_in_a_deployment_that_never_provisioned_it(monkeypatch) -> None:
+    from src.images import base
+
+    monkeypatch.setattr(base.modal, "is_local", lambda: False)
+    monkeypatch.delenv(base.DOCKER_IMAGE_ID_ENV, raising=False)
+    assert base._define_docker_image() is None
+
+    monkeypatch.setenv(base.DOCKER_IMAGE_ID_ENV, "im-docker")
+    monkeypatch.setattr(base.modal.Image, "from_id", Mock(return_value="docker-image"))
+    assert base._define_docker_image() == "docker-image"
+
+
+def test_local_docker_image_is_the_default_image_plus_the_docker_phase(monkeypatch) -> None:
+    from src.images import base
+
+    image = Mock()
+    monkeypatch.setattr(base.modal, "is_local", lambda: True)
+    monkeypatch.setattr(base, "base_image", image)
+
+    base._define_docker_image()
+
+    image.run_commands.assert_called_once_with(
+        "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh docker"
+    )
+
+
+def test_docker_verification_resources_match_backend_defaults() -> None:
+    from src.sandbox.launch_policy import VM_DEFAULT_CPU_CORES, VM_DEFAULT_MEMORY_MIB
+
+    assert deploy.DOCKER_VERIFICATION_CPU_CORES == VM_DEFAULT_CPU_CORES
+    assert deploy.DOCKER_VERIFICATION_MEMORY_MIB == VM_DEFAULT_MEMORY_MIB
