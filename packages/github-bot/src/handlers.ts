@@ -2,6 +2,7 @@ import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/reposit
 import {
   createSessionResponseSchema,
   sendPromptResponseSchema,
+  type GitHubReviewCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { signedControlPlaneFetch } from "./internal-auth";
@@ -107,10 +108,14 @@ async function sendPrompt(
   env: Env,
   traceId: string,
   sessionId: string,
-  params: { content: string; authorId: string }
+  params: { content: string; authorId: string; callbackContext?: GitHubReviewCallbackContext }
 ): Promise<string> {
   const url = `https://internal/sessions/${sessionId}/prompt`;
-  const bodyText = JSON.stringify({ content: params.content, source: "github" });
+  const bodyText = JSON.stringify({
+    content: params.content,
+    source: "github",
+    ...(params.callbackContext ? { callbackContext: params.callbackContext } : {}),
+  });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",
     url,
@@ -232,15 +237,31 @@ async function closeOutSupersededHeadStatus(
   );
 }
 
+/**
+ * Deliver a review prompt with a callback context naming the commit its "pending" status sits on,
+ * so the session's end comes back to `/callbacks/complete` however the agent stops — including the
+ * endings (timeout, cancel, a lost sandbox) that never reach the prompt's own close-out step.
+ */
 async function sendReviewPrompt(
   env: Env,
   traceId: string,
   sessionId: string,
-  params: { content: string; authorId: string },
+  params: { content: string; authorId: string; prNumber: number },
   statusTarget: ReviewStatusTarget
 ): Promise<string> {
+  const callbackContext: GitHubReviewCallbackContext = {
+    source: "github",
+    owner: statusTarget.owner,
+    repo: statusTarget.repo,
+    prNumber: params.prNumber,
+    headSha: statusTarget.headSha,
+  };
   try {
-    return await sendPrompt(env, traceId, sessionId, params);
+    return await sendPrompt(env, traceId, sessionId, {
+      content: params.content,
+      authorId: params.authorId,
+      callbackContext,
+    });
   } catch (error) {
     await postReviewStatus(statusTarget, {
       state: "error",
@@ -463,6 +484,7 @@ export async function handleReviewRequested(
         {
           content: prompt,
           authorId: `github:${payload.sender.id}`,
+          prNumber: pr.number,
         },
         statusTarget
       );
@@ -648,6 +670,7 @@ export async function handlePullRequestReviewTrigger(
         {
           content: prompt,
           authorId: `github:${sender.id}`,
+          prNumber: pr.number,
         },
         statusTarget
       );

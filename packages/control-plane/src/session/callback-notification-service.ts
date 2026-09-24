@@ -1,8 +1,8 @@
 /**
- * CallbackNotificationService - Slack/Linear bot callback notifications.
+ * CallbackNotificationService - Slack/Linear/GitHub bot callback notifications.
  *
  * Extracted from SessionDO to reduce its size. Handles:
- * - Notifying originating clients (Slack, Linear) on execution completion
+ * - Notifying originating clients (Slack, Linear, GitHub reviews) on execution completion
  * - Throttled tool-call progress callbacks
  * - HMAC payload signing for callback authentication
  */
@@ -10,6 +10,7 @@
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
   automationCallbackContextSchema,
+  githubReviewCompletionCallbackPayloadSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
   SLACK_ACTIVITY_REFRESH_KIND,
@@ -39,8 +40,10 @@ export interface CallbackServiceEnv {
   // destination's own.
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SLACK_BOT?: FetchClient;
   LINEAR_BOT?: FetchClient;
+  GITHUB_BOT?: FetchClient;
 }
 
 export type AutomationRunCompletionHandler = (completion: AutomationRunCompletion) => Promise<void>;
@@ -150,17 +153,23 @@ export class CallbackNotificationService {
    * Where a non-automation callback goes and which key signs it — one
    * decision, so destination and signing key cannot diverge (the CP signs
    * with the DESTINATION bot's secret). Automation callbacks
-   * are routed to the automation scheduler before this is consulted. Non-linear
-   * sources default to the slack bot for backward compatibility (web
-   * sources, etc.).
+   * are routed to the automation scheduler before this is consulted. Sources
+   * other than linear and github default to the slack bot for backward
+   * compatibility (web sources, etc.).
    */
   private resolveCallbackRoute(source: string | null): {
     binding: FetchClient | undefined;
     secret: string | undefined;
   } {
-    const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";
+    const destination: CallbackDestination =
+      source === "linear" ? "linear-bot" : source === "github" ? "github-bot" : "slack-bot";
+    const bindings: Record<CallbackDestination, FetchClient | undefined> = {
+      "slack-bot": this.env.SLACK_BOT,
+      "linear-bot": this.env.LINEAR_BOT,
+      "github-bot": this.env.GITHUB_BOT,
+    };
     return {
-      binding: destination === "linear-bot" ? this.env.LINEAR_BOT : this.env.SLACK_BOT,
+      binding: bindings[destination],
       secret: callbackSigningSecret(this.env, destination),
     };
   }
@@ -273,7 +282,9 @@ export class CallbackNotificationService {
       const parsedCallback =
         source === "linear"
           ? linearCompletionCallbackPayloadSchema.safeParse(callbackData)
-          : undefined;
+          : source === "github"
+            ? githubReviewCompletionCallbackPayloadSchema.safeParse(callbackData)
+            : undefined;
       if (parsedCallback && !parsedCallback.success) {
         result.rejectReason = "invalid_payload";
         return;
@@ -545,15 +556,15 @@ export class CallbackNotificationService {
     }
     const source = message.source ?? null;
 
-    // Automation runs have no tool-call progress consumer. Skip rather than
-    // spam best-effort bot callbacks.
-    if (source === "automation") {
+    // Automation runs and GitHub reviews have no tool-call progress consumer.
+    // Skip rather than spam best-effort bot callbacks.
+    if (source === "automation" || source === "github") {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
         source,
         tool,
         outcome: "skipped",
-        skip_reason: "automation_no_consumer",
+        skip_reason: `${source}_no_consumer`,
       });
       return;
     }

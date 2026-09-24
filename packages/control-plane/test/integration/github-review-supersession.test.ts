@@ -8,8 +8,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { handleReviewOwnership } from "../../src/routes/github-reviews";
+import type { RequestContext } from "../../src/routes/shared";
+import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, sqlDatabase } from "./helpers";
 
 const GITHUB_BOT_ACTOR = "github:90001";
 
@@ -233,5 +236,101 @@ describe("GitHub review supersession (claim -> fenced create -> sweep)", () => {
       }
     );
     expect(sweepFromWrongService.status).toBe(403);
+  });
+});
+
+describe("GitHub review close-out (a turn ended; who writes the terminal status)", () => {
+  beforeEach(cleanD1Tables);
+
+  function closeOut(sessionId: string, service: "github-bot" | "slack-bot" = "github-bot") {
+    return serviceFetch("https://test.local/internal/github-reviews/close-out", {
+      method: "POST",
+      service,
+      body: JSON.stringify({ sessionId }),
+    });
+  }
+
+  async function createLatestReview(repoId: number, prNumber: number, headSha: string) {
+    const generation = await claimGeneration(repoId, prNumber);
+    const create = await createReviewSession({ repoId, prNumber, generation, headSha });
+    expect(create.status).toBe(201);
+    return (await create.json<CreateSessionResponse>()).sessionId;
+  }
+
+  /** The agent's own submission fence, run against the real D1 exactly as its route runs it. */
+  function agentOwnershipCheck(sessionId: string): Promise<Response> {
+    const ctx = {
+      db: sqlDatabase(env.DB),
+      metrics: {},
+      request_id: "request-id",
+      trace_id: "trace-id",
+      executionCtx: { submit: () => {} },
+      principal: { kind: "sandbox", sessionId },
+    } as unknown as RequestContext;
+    return handleReviewOwnership(
+      new Request(`https://test.local/sessions/${sessionId}/review-ownership`),
+      env as unknown as Env,
+      { id: sessionId },
+      ctx
+    );
+  }
+
+  it("grants the latest review's close-out once, and fences its agent out of any later publish", async () => {
+    const sessionId = await createLatestReview(616161, 5, "sha-a");
+
+    expect((await closeOut(sessionId)).status).toBe(204);
+
+    const rows = await env.DB.prepare("SELECT session_id FROM github_review_sessions").all<{
+      session_id: string;
+    }>();
+    expect(rows.results).toEqual([]);
+    // An agent that wakes after its turn was failed can no longer take the lease.
+    expect((await agentOwnershipCheck(sessionId)).status).toBe(409);
+    // A redelivered completion finds nothing left to own.
+    expect((await closeOut(sessionId)).status).toBe(409);
+  });
+
+  it("declines a superseded review, leaving the successor's fence intact", async () => {
+    const repoId = 626262;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-b");
+
+    expect((await closeOut(sessionA)).status).toBe(409);
+
+    const rows = await env.DB.prepare(
+      "SELECT session_id FROM github_review_sessions WHERE repo_id = ? AND pr_number = ? ORDER BY generation"
+    )
+      .bind(repoId, prNumber)
+      .all<{ session_id: string }>();
+    expect(rows.results).toEqual([{ session_id: sessionA }, { session_id: sessionB }]);
+    expect((await agentOwnershipCheck(sessionB)).status).toBe(204);
+  });
+
+  it("defers while the session holds a live submission lease, and grants once it has expired", async () => {
+    const repoId = 636363;
+    const prNumber = 7;
+    const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+
+    expect((await agentOwnershipCheck(sessionId)).status).toBe(204);
+    expect((await closeOut(sessionId)).status).toBe(409);
+
+    await env.DB.prepare(
+      "UPDATE github_review_state SET lease_expires_at = ? WHERE repo_id = ? AND pr_number = ?"
+    )
+      .bind(Date.now() - 1, repoId, prNumber)
+      .run();
+    expect((await closeOut(sessionId)).status).toBe(204);
+  });
+
+  it("rejects a close-out from any caller other than the github-bot service", async () => {
+    const sessionId = await createLatestReview(646464, 8, "sha-a");
+
+    expect((await closeOut(sessionId, "slack-bot")).status).toBe(403);
+
+    const rows = await env.DB.prepare("SELECT session_id FROM github_review_sessions").all<{
+      session_id: string;
+    }>();
+    expect(rows.results).toEqual([{ session_id: sessionId }]);
   });
 });

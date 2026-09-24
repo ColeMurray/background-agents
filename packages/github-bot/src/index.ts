@@ -31,7 +31,10 @@ import {
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { isSignedCallbackPayload, verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import { githubReviewCompletionCallbackSchema } from "@open-inspect/shared/types/session-api";
 import { toAutofixEnvelope } from "./autofix-ingress";
+import { closeOutEndedReview } from "./review-close-out";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -48,6 +51,55 @@ function ttlSecondsFromMs(ttlMs: number): number {
 }
 
 app.get("/health", (c) => c.json({ status: "healthy", service: "open-inspect-github-bot" }));
+
+/**
+ * The control plane's completion callback for a review session, sent whenever its turn ends. The
+ * close-out runs after the acknowledgment: a redelivery could not help it, because the first
+ * attempt's close-out claim already fences every later one.
+ */
+app.post("/callbacks/complete", async (c) => {
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  const log = createLogger("callback", { trace_id: traceId }, parseLogLevel(c.env.LOG_LEVEL));
+
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    log.warn("callback.complete_rejected", { reject_reason: "invalid_json" });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  const parsed = githubReviewCompletionCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    log.warn("callback.complete_rejected", { reject_reason: "invalid_payload" });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  if (!(await verifyCallbackFromControlPlane(payload, c.env))) {
+    log.warn("callback.complete_rejected", {
+      reject_reason: "invalid_signature",
+      session_id: parsed.data.sessionId,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  c.executionCtx.waitUntil(
+    closeOutEndedReview(c.env, log, parsed.data, traceId).then(
+      (outcome) =>
+        log.info("callback.complete_handled", {
+          session_id: parsed.data.sessionId,
+          message_id: parsed.data.messageId,
+          outcome,
+        }),
+      (error) =>
+        log.error("callback.complete_handled", {
+          session_id: parsed.data.sessionId,
+          message_id: parsed.data.messageId,
+          outcome: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+        })
+    )
+  );
+  return c.json({ ok: true });
+});
 
 app.post("/webhooks/github", async (c) => {
   const log = createLogger("webhook", {}, parseLogLevel(c.env.LOG_LEVEL));

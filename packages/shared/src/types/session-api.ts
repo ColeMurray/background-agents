@@ -134,10 +134,41 @@ export const automationCallbackContextSchema = z.object({
 
 export type AutomationCallbackContext = z.infer<typeof automationCallbackContextSchema>;
 
+/**
+ * Attached by the github-bot to a review prompt so the review's end — however it ends — comes
+ * back to the bot that wrote its "pending" commit status. It names the commit that status sits on.
+ */
+export const githubReviewCallbackContextSchema = z.strictObject({
+  source: z.literal("github"),
+  owner: nonEmptyStringSchema,
+  repo: nonEmptyStringSchema,
+  prNumber: z.number().int().positive(),
+  headSha: nonEmptyStringSchema,
+});
+
+export type GitHubReviewCallbackContext = z.infer<typeof githubReviewCallbackContextSchema>;
+
+export const githubReviewCompletionCallbackPayloadSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  messageId: nonEmptyStringSchema,
+  success: z.boolean(),
+  error: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: githubReviewCallbackContextSchema,
+});
+
+export const githubReviewCompletionCallbackSchema =
+  githubReviewCompletionCallbackPayloadSchema.extend({
+    signature: nonEmptyStringSchema,
+  });
+
+export type GitHubReviewCompletionCallback = z.infer<typeof githubReviewCompletionCallbackSchema>;
+
 export const callbackContextSchema = z.union([
   slackCallbackContextSchema,
   linearCallbackContextSchema,
   automationCallbackContextSchema,
+  githubReviewCallbackContextSchema,
 ]);
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;

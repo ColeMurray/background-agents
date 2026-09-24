@@ -46,9 +46,11 @@ strict cross-region lock.
 
 Key design decisions:
 
-- **Unidirectional service binding**: The bot calls the control plane to create sessions and send
-  prompts. There is no reverse binding — the agent posts results to GitHub directly from the
-  sandbox.
+- **Results from the sandbox, endings from the control plane**: The bot calls the control plane to
+  create sessions and send prompts, and the agent posts results to GitHub directly from the sandbox.
+  The one call back is the control plane's `GITHUB_BOT` binding to `POST /callbacks/complete`, sent
+  when a review session's turn ends, so the bot can close out a status the agent never replaced (see
+  [Review Close-Out](#review-close-out)).
 - **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Delivery
   dedupe is handled separately in KV using `X-GitHub-Delivery`.
 - **No PR context fetching**: The bot only uses metadata already in the webhook payload. The agent
@@ -61,7 +63,8 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 **Two-phase deployment** (same pattern as the Slack bot):
 
 1. Deploy with `enable_service_bindings = false` (creates the worker)
-2. Set `enable_service_bindings = true` and apply again (adds the `CONTROL_PLANE` binding)
+2. Set `enable_service_bindings = true` and apply again (adds the `CONTROL_PLANE` binding, and the
+   control plane's `GITHUB_BOT` binding back to this worker)
 
 ### Environment Bindings
 
@@ -165,6 +168,9 @@ people to request the GitHub App bot through the PR reviewer picker.
 4. Post a pending `open-inspect` status on `pull_request.head.sha`.
 5. Send the code review prompt, which posts the successful status after the review.
 
+In both review flows, a review that ends without replacing its pending status is closed out by the
+bot (see [Review Close-Out](#review-close-out)).
+
 **Issue Comment:**
 
 1. Check `issue.pull_request` exists — ignore non-PR comments
@@ -174,6 +180,25 @@ people to request the GitHub App bot through the PR reviewer picker.
 
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,
 `diffHunk`, and `commentId` for thread-specific context and reply threading.
+
+### Review Close-Out
+
+A review prompt carries a `github` callback context naming the PR and the head SHA its pending
+status sits on. When the session's turn ends — published, timed out as stuck, cancelled, or lost its
+sandbox — the control plane signs a completion callback with this bot's `SERVICE_AUTH_SECRET` and
+sends it to `POST /callbacks/complete`. The bot acknowledges it, then:
+
+1. Claims the close-out from the control plane (`POST /internal/github-reviews/close-out`). It is
+   granted only while the session is still its PR's latest review and holds no live submission
+   lease, and granting it deletes the session's fence row, so the agent can no longer acquire the
+   lease and publish afterwards. A declined claim writes nothing: a successor owns the status.
+2. Reads the commit's combined status; anything but a still-pending `open-inspect` is left alone.
+3. Leaves a merged or closed PR alone.
+4. Posts `error` with `Review did not finish: <the session's reason>`, or "Review did not publish"
+   for a turn that ended successfully without replacing the status.
+
+A session that never processes its prompt produces no completion, and a callback that fails both
+delivery attempts is not retried; those statuses stay pending.
 
 ### Session Target
 

@@ -353,6 +353,14 @@ describe("handlePullRequestReviewTrigger", () => {
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("repos/acme/widgets/statuses/abc123");
     expect(promptBody.content).toContain('-f target_url="$review_url"');
+    // The review's end comes back to the bot, naming the commit its pending status sits on.
+    expect(promptBody.callbackContext).toEqual({
+      source: "github",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 42,
+      headSha: "abc123",
+    });
 
     expect(log.info).toHaveBeenCalledWith(
       "session.created",
@@ -809,6 +817,13 @@ describe("handleReviewRequested", () => {
     expect(promptBody.content).toContain("Pull Request #42");
     expect(promptBody.content).toContain("acme/widgets");
     expect(promptBody.content).toContain("gh pr diff 42");
+    expect(promptBody.callbackContext).toEqual({
+      source: "github",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 42,
+      headSha: "abc123",
+    });
 
     // Verify logging
     expect(log.info).toHaveBeenCalledWith(

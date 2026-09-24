@@ -17,6 +17,15 @@ const installationTokenResponseSchema = z.object({
   token: z.string(),
 });
 
+const combinedStatusResponseSchema = z.object({
+  statuses: z.array(z.object({ context: z.string(), state: z.string() })),
+});
+
+/** Largest page the combined status endpoint serves; one page holds every context a commit has. */
+const COMBINED_STATUS_PAGE_SIZE = 100;
+/** GitHub rejects a commit status description longer than this. */
+export const COMMIT_STATUS_DESCRIPTION_MAX_CHARS = 140;
+
 export const REVIEW_STATUS_CONTEXT = "open-inspect";
 export const REVIEW_PENDING_DESCRIPTION = "Review in progress";
 export const REVIEW_COMPLETED_DESCRIPTION = "Review completed";
@@ -24,6 +33,18 @@ export const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
 export const REVIEW_STALE_DESCRIPTION = "Review skipped: PR changed before submission";
 /** Terminal status for the head a newer push replaced, so its pending status does not outlive it. */
 export const REVIEW_SUPERSEDED_DESCRIPTION = "Superseded by a newer commit";
+/**
+ * Terminal status for a review session that ended without publishing its verdict and left no
+ * reason of its own. "Pending" is written when a review starts, so an ending that never replaces it
+ * would leave the status pending forever: indistinguishable from a review still in progress.
+ */
+export const REVIEW_NOT_PUBLISHED_DESCRIPTION = "Review did not publish — push again to retry";
+/**
+ * Prefix of the terminal status for a review whose session ended without finishing — timed out,
+ * cancelled, or lost its sandbox. The session's own reason follows it, so the commit says the
+ * review process died rather than that the review found a problem.
+ */
+export const REVIEW_DID_NOT_FINISH_PREFIX = "Review did not finish: ";
 
 export interface GitHubAppConfig {
   appId: string;
@@ -241,6 +262,49 @@ export async function postCommitStatus(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+export type ReviewStatusStateResult =
+  | { ok: true; state: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Read the current state of the review's own status context on a commit, or null when the commit
+ * carries none. Uses the combined status endpoint, which reports only the latest status per
+ * context — `/statuses` lists every write, so a verdict can fall off its first page.
+ */
+export async function getReviewStatusState(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<ReviewStatusStateResult> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/status?per_page=${COMBINED_STATUS_PAGE_SIZE}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
+      }
+    );
+    if (!response.ok) {
+      return { ok: false, error: `GitHub API returned ${response.status}` };
+    }
+    const parsed = combinedStatusResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return { ok: false, error: "invalid response" };
+    }
+    const status = parsed.data.statuses.find((s) => s.context === REVIEW_STATUS_CONTEXT);
+    return { ok: true, state: status?.state ?? null };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

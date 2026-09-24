@@ -122,6 +122,8 @@ export interface Platform {
   SLACK_BOT?: FetchClient;
   /** The linear-bot service, when deployed. */
   LINEAR_BOT?: FetchClient;
+  /** The github-bot service, when deployed: receives review completion callbacks. */
+  GITHUB_BOT?: FetchClient;
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;
   AUTOFIX_DLQ?: QueueMetricsSource;

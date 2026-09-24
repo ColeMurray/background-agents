@@ -6,10 +6,10 @@
  * (repoId, prNumber) before creating a review session, then — once its own
  * session is admitted — sweeps every session from an older generation:
  * cancelling the stale session's DO and its active descendants so at most
- * one review session per PR is ever running. The claim, release-claim, and
- * sweep routes are gated to the github-bot service principal; the
- * review-ownership pair is the review agent's own submission-lease boundary
- * and is gated to the calling session's sandbox principal.
+ * one review session per PR is ever running. The claim, release-claim,
+ * sweep, and close-out routes are gated to the github-bot service principal;
+ * the review-ownership pair is the review agent's own submission-lease
+ * boundary and is gated to the calling session's sandbox principal.
  */
 
 import { Hono } from "hono";
@@ -45,6 +45,10 @@ const sweepRequestSchema = z.object({
   repoId: z.number().int().positive(),
   prNumber: z.number().int().positive(),
   generation: z.number().int().positive(),
+});
+
+const closeOutRequestSchema = z.object({
+  sessionId: z.string().trim().min(1),
 });
 
 interface StaleReviewSessionRow {
@@ -303,6 +307,62 @@ export async function handleSweepStaleReviews(
 }
 
 /**
+ * POST /internal/github-reviews/close-out
+ * Called by the github-bot when a review session's turn has ended, however it
+ * ended, before it replaces a still-pending commit status. Deletes the
+ * session's fence row in one statement, and only while:
+ *
+ * - the session is still the latest claimed generation for its PR, so a
+ *   successor's own "pending" status is never touched; and
+ * - the session does not hold an unexpired submission lease, so a write chain
+ *   still in flight is never overwritten.
+ *
+ * Deleting the row is the fence: the agent's ownership check requires it, so
+ * an agent that wakes after its turn was failed can no longer acquire the lease
+ * and publish over the close-out. 204 means the caller now owns the terminal
+ * status write; 409 means it must write nothing.
+ */
+export async function handleCloseOutReview(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
+  const parsed = await parseBody(request, closeOutRequestSchema, "Invalid close-out request body");
+  if (parsed instanceof Response) return parsed;
+  const { sessionId } = parsed;
+
+  const row = await ctx.db
+    .prepare(
+      `DELETE FROM github_review_sessions
+       WHERE session_id = ?
+         AND EXISTS (
+           SELECT 1 FROM github_review_state st
+           WHERE st.repo_id = github_review_sessions.repo_id
+             AND st.pr_number = github_review_sessions.pr_number
+             AND st.latest_generation = github_review_sessions.generation
+             AND (
+               st.lease_session_id IS NULL
+               OR st.lease_session_id != ?
+               OR st.lease_expires_at < ?
+             )
+         )
+       RETURNING session_id`
+    )
+    .bind(sessionId, sessionId, Date.now())
+    .first<{ session_id: string }>();
+
+  if (row) return new Response(null, { status: 204 });
+  logger.info("review_close_out.declined", {
+    event: "review_close_out.declined",
+    session_id: sessionId,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+  return error("Review close-out not owned", 409);
+}
+
+/**
  * POST /sessions/:id/review-ownership
  * Sandbox-token-authenticated ownership check and lease acquisition: the
  * review agent calls this
@@ -452,6 +512,12 @@ githubReviewRoutes.post(
   "/internal/github-reviews/sweep",
   admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("github-bot") }),
   (c) => dispatchSession(c, handleSweepStaleReviews)
+);
+
+githubReviewRoutes.post(
+  "/internal/github-reviews/close-out",
+  admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("github-bot") }),
+  (c) => dispatch(c, handleCloseOutReview)
 );
 
 // Submission-boundary fence, called by the review agent from the sandbox.
