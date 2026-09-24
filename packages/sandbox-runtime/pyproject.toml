@@ -31,6 +31,9 @@ packages = ["src/sandbox_runtime"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Test this checkout even when PYTHONPATH points at an installed runtime
+# (sandbox images set PYTHONPATH=/app).
+pythonpath = ["src"]
 
 [tool.ruff]
 extend = "../../ruff.toml"
