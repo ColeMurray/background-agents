@@ -21,16 +21,24 @@ describe("SandboxShutdownBanner", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it.each([
-    ["draining", "Stopping the prompt"],
-    ["prepared", "Prompt stopped"],
-    ["capturing", "Saving final sandbox state"],
-    ["retiring", "Confirming sandbox shutdown"],
-    ["restoring", "Restoring the saved sandbox state"],
-  ] as const)("shows the %s phase", (phase, text) => {
-    render(<Banner shutdown={{ phase, expiresAtMs: 2, drainAtMs: 1 }} />);
-    expect(screen.getByRole("status")).toHaveTextContent(text);
-  });
+  it.each(["draining", "prepared", "capturing", "retiring", "restoring"] as const)(
+    "stays silent during a routine %s phase",
+    (phase) => {
+      const { container } = render(
+        <Banner
+          shutdown={{
+            phase,
+            expiresAtMs: 2,
+            drainAtMs: 1,
+            reason: "inactivity_timeout",
+            hasRecoveryPoint: true,
+          }}
+          onRecover={acceptedRecovery()}
+        />
+      );
+      expect(container).toBeEmptyDOMElement();
+    }
+  );
 
   it("offers to resume queued work after an active prompt was interrupted and saved", () => {
     const onRecover = acceptedRecovery();
@@ -96,9 +104,9 @@ describe("SandboxShutdownBanner", () => {
     }
   );
 
-  it("clears the paused-continuation action when newer state no longer requires it", () => {
+  it("clears the paused-continuation banner once the resumed sandbox is restoring", () => {
     const onRecover = acceptedRecovery();
-    const { rerender } = render(
+    const { container, rerender } = render(
       <Banner
         shutdown={{
           phase: "saved",
@@ -127,8 +135,7 @@ describe("SandboxShutdownBanner", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: "Resume queued work" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Restoring the saved sandbox state");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows paused-continuation information without an action when recovery is unavailable", () => {
