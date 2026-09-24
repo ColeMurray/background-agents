@@ -31,6 +31,7 @@
 
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
 import { ensurePrivateDirectory } from "./private-paths";
 import { openPrivateSqliteFile } from "./sqlite-file";
 
@@ -38,6 +39,13 @@ interface SessionDeadline {
   sessionId: string;
   deadline: number;
 }
+
+const nullableDeadlineRowSchema = z.object({ deadline: z.number().nullable() });
+const nullableLeaseRowSchema = z.object({ lease_expires_at: z.number().nullable() });
+const claimedDeadlineRowSchema = z.object({
+  in_flight: z.number(),
+  failures: z.number().int().nonnegative(),
+});
 
 export interface ClaimedDeadline {
   deadline: number;
@@ -246,8 +254,8 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
   };
   return {
     get: (sessionId) => {
-      const row = read.get(sessionId) as { deadline: number | null } | undefined;
-      return row?.deadline ?? null;
+      const parsed = nullableDeadlineRowSchema.safeParse(read.get(sessionId));
+      return parsed.success ? parsed.data.deadline : null;
     },
     set: (sessionId, deadline) => {
       arm.run(sessionId, deadline);
@@ -259,15 +267,17 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
       disarm.run(sessionId);
     },
     earliest: (excluding = []) => armedRows("", [], excluding, 1)[0] ?? null,
-    earliestLease: () =>
-      (soonestLease.get() as { lease_expires_at: number | null }).lease_expires_at,
+    earliestLease: () => {
+      const parsed = nullableLeaseRowSchema.safeParse(soonestLease.get());
+      return parsed.success ? parsed.data.lease_expires_at : null;
+    },
     due: (now, excluding, limit) => armedRows(" AND deadline <= ?", [now], excluding, limit),
     claim: (sessionId, leaseUntil) => {
       const token = crypto.randomUUID();
-      const row = claimRow.get(token, leaseUntil, sessionId) as
-        | { in_flight: number; failures: number }
-        | undefined;
-      return row === undefined ? null : { deadline: row.in_flight, failures: row.failures, token };
+      const parsed = claimedDeadlineRowSchema.safeParse(claimRow.get(token, leaseUntil, sessionId));
+      return parsed.success
+        ? { deadline: parsed.data.in_flight, failures: parsed.data.failures, token }
+        : null;
     },
     complete: (sessionId, token) => {
       // Dropping first keeps the row's CHECK true: clearing `in_flight` on a
