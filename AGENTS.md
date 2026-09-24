@@ -76,6 +76,14 @@ cd packages/modal-infra && ruff check --fix && ruff format
 
 ## Testing
 
+For frontend verification without OAuth or production credentials, use the
+[authenticated local preview](docs/verification/authenticated-preview.md):
+`npm run preview -- --browser agent-browser`. Keep its foreground process alive through your
+terminal's persistent session handle, use its named browser context, and stop that owned process
+when finished. Any other browser, including a person's own, signs in with the per-persona sign-in
+links it prints. `npm run test:preview` runs the preview's contract tests and its real-stack browser
+regressions. Do not invent a login bypass, copy production cookies, or mock first-party APIs.
+
 All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
 
 ### Test file locations
