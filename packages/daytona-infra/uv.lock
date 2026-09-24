@@ -327,7 +327,7 @@ wheels = [
 
 [[package]]
 name = "daytona"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -355,14 +355,14 @@ dependencies = [
     { name = "urllib3" },
     { name = "wsproto" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/72/c9/b67f876a9682721910428278a4459285c4096631ca68730286618334ef3c/daytona-0.211.2.tar.gz", hash = "sha256:2f105243448019f3fb31abd3c46bcdd539ebafcc5580185a95ad492bd270e9a0", size = 190959, upload-time = "2026-09-08T09:38:08.44Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/c1/0b4deda1467ce6a26b98612401829b808a4100ccf45f6ec503badde8d766/daytona-0.216.1.tar.gz", hash = "sha256:f6eca7d358911ef23fb093195e0ff34d7f7477071878092e9367aae2ed961d4c", size = 192579, upload-time = "2026-09-23T14:13:37.099Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/59/24add8b4467d2046eb40c43ceaa0f63f8d84b73a68a483da9fd909700c4d/daytona-0.211.2-py3-none-any.whl", hash = "sha256:ff7fba02a7accba3ac3a8521fd29f3533822d36bcdb572178be82a8cadbd3a25", size = 228486, upload-time = "2026-09-08T09:38:09.584Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/3a/7b91dc8435e345a6a6d18f8cadf503d1f41d6fce48b326f9778087355ff5/daytona-0.216.1-py3-none-any.whl", hash = "sha256:517b85170f87dbe26de0c6451b698f5a053c64c4f296dc56658c6addf3f17f48", size = 229945, upload-time = "2026-09-23T14:13:38.176Z" },
 ]
 
 [[package]]
 name = "daytona-analytics-api-client"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -370,14 +370,14 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/06/ca/127aad66b9f1c647243b36f95fc2b8a7e4e99cc2cc81b4b5af64b0f30048/daytona_analytics_api_client-0.211.2.tar.gz", hash = "sha256:dbc50885997c1a18cd6c0c12259e6ef091c9bd69bc6263ac189df2b0f387867d", size = 30096, upload-time = "2026-09-08T09:37:37.363Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/d0/a819de28983a01a18b85d5b1a4f9c5c73bd02bbde62cac48169e4ad9c9e4/daytona_analytics_api_client-0.216.1.tar.gz", hash = "sha256:e30e431b3199b02b38f24b970653ae412a82d1f179407c738b14aa8761787407", size = 30085, upload-time = "2026-09-23T14:12:54.26Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/2f/e155830024abc2595a00ec36fd702db0af2f09ac2f8aca87d72c8c7bc00c/daytona_analytics_api_client-0.211.2-py3-none-any.whl", hash = "sha256:c9111e98dc8a996bc9222bc14cb69b004fae77bcd692d18c59a6ed8998726ff5", size = 45013, upload-time = "2026-09-08T09:37:38.979Z" },
+    { url = "https://files.pythonhosted.org/packages/21/6e/cf0a73538159bf2c3049d389f5460b1ec4dd2dab7e8880c26da32bcf1276/daytona_analytics_api_client-0.216.1-py3-none-any.whl", hash = "sha256:0a14ef549b783c8c95bd9cd5dfa4233dd8812a90874c52777aab90c8e3db643d", size = 45011, upload-time = "2026-09-23T14:12:55.753Z" },
 ]
 
 [[package]]
 name = "daytona-analytics-api-client-async"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -386,14 +386,14 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/de/1e/51779eb593d46255e7c6cf998c825ded822af607716f384610229ef47c92/daytona_analytics_api_client_async-0.211.2.tar.gz", hash = "sha256:9ef9e0cf4a0a2ff388d90604ea8e8aa98dc839ed4e0a4242cd6c025de6618169", size = 30109, upload-time = "2026-09-08T09:37:38.991Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/27/02a6a3c59e2040d67d8ead8c7c9090589eacd121a7d0946dba16f20a2e27/daytona_analytics_api_client_async-0.216.1.tar.gz", hash = "sha256:5e75b78002ec0f12991eeed7fe2a082356446f2fe44606bee1b27a54d634035b", size = 30121, upload-time = "2026-09-23T14:12:51.185Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/6d/7ee32aaf57e3f548f1c22720b9c5948e57937478ef6c0c6d73b74804ba90/daytona_analytics_api_client_async-0.211.2-py3-none-any.whl", hash = "sha256:86b82b9ffae81b009d00579839d53461725b67defe9069a87670b3cac7d53d23", size = 45281, upload-time = "2026-09-08T09:37:40.155Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/01/e1f53edba43a5bbbef41e35432fa5f120bc8610316ca87ca1a2ff6be286c/daytona_analytics_api_client_async-0.216.1-py3-none-any.whl", hash = "sha256:21ddd306a4777ee2ef377dcce01e589fcc72852ce8aa49e31c2261e9b75ea2a8", size = 45282, upload-time = "2026-09-23T14:12:52.815Z" },
 ]
 
 [[package]]
 name = "daytona-api-client"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -401,14 +401,14 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/33/3411725cb07b60138528ceb78202861f53fb7227dfe2d43e5e2e8c1e9fee/daytona_api_client-0.211.2.tar.gz", hash = "sha256:04dd00626167308678362cf5dcd36b1c7e544e17a5430413aa80e04ba135f8b7", size = 141795, upload-time = "2026-09-08T09:37:33.494Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/b6/0ae7addc2e671cb4ed9ae4385dc6d08473d839a0880ec7b6e0a628290370/daytona_api_client-0.216.1.tar.gz", hash = "sha256:49f5a5b30fb3eb5587ecbb1d611384aa01815683d7563cd0d2fffcd5874db900", size = 133215, upload-time = "2026-09-23T14:12:57.221Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/7b/da59ab3fb3b9cdc3cbdff6cb712e6f1cf0569ea257fd6bdc0c11bedfe484/daytona_api_client-0.211.2-py3-none-any.whl", hash = "sha256:ec83259b6c5e3d64a379292246ccb955580fe0ed0bb99c0b684b80d2a8370739", size = 356131, upload-time = "2026-09-08T09:37:35.29Z" },
+    { url = "https://files.pythonhosted.org/packages/79/19/536e1e129cd40547d0330e745f2c350e4d1bd040f3fc4726524caac92cef/daytona_api_client-0.216.1-py3-none-any.whl", hash = "sha256:b79353a521e4a8ac7366dba32d361c7c9a8dab97645b99a1f9bfd66f24ee98e7", size = 343393, upload-time = "2026-09-23T14:12:58.404Z" },
 ]
 
 [[package]]
 name = "daytona-api-client-async"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -417,14 +417,14 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/bb/8411f4829967337f2d7e5add637e3851503a96fb1f5c1cc3216a0d52723e/daytona_api_client_async-0.211.2.tar.gz", hash = "sha256:5fa8f5f6860de038053b4f4bb2e7b84b3ba1517937af5d3c04ee5bbc4154148f", size = 142199, upload-time = "2026-09-08T09:37:34.046Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/9f/076c028b56b6d090f72b2f01110f07a8e9806706ab7c854ff8d9bc14692d/daytona_api_client_async-0.216.1.tar.gz", hash = "sha256:25ecc7164c62421cd9074309d2a3a07aadb3884032179782d39e195d0328eefc", size = 133750, upload-time = "2026-09-23T14:12:51.067Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/75/8a00679e5e416b2be9d81d2463b819a34e77989e3117a59e1b131d464700/daytona_api_client_async-0.211.2-py3-none-any.whl", hash = "sha256:3aba0aeeac257006882d708419d481b2a6d3180195b97753b15718548e9d1766", size = 358959, upload-time = "2026-09-08T09:37:36.075Z" },
+    { url = "https://files.pythonhosted.org/packages/28/29/7f16000361e2a21ebc19d9ce00c2104a1ba906d48915c1c38772178ac4eb/daytona_api_client_async-0.216.1-py3-none-any.whl", hash = "sha256:17d2bb87b9546ec762ea88a7370fb6b959ccba0d90b59a8d7e9dd86cf9143388", size = 346156, upload-time = "2026-09-23T14:12:52.411Z" },
 ]
 
 [[package]]
 name = "daytona-toolbox-api-client"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -432,14 +432,14 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/c2/84a0cd37876af978f738b12a73069071439fbc5da89b0ebcf17565c33f7b/daytona_toolbox_api_client-0.211.2.tar.gz", hash = "sha256:a9546aec78eccd82a3551840a1e0ebaae9251f8ac131c6e8cd976e1905e9a825", size = 88102, upload-time = "2026-09-08T09:37:33.367Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/74/e9d43d7427467ecf2c877486856fc971d6bd26b107b00fc562bc2626f077/daytona_toolbox_api_client-0.216.1.tar.gz", hash = "sha256:0ff94b786cfe74984b4186b4e0ad0ac3241baf1ce81f5293ad620aa947076805", size = 88162, upload-time = "2026-09-23T14:12:51.294Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f6/0f/cc3bd754a453851f51fc3db78ba7741879c61936612de743ead6fae1ef9e/daytona_toolbox_api_client-0.211.2-py3-none-any.whl", hash = "sha256:9290339c6c8f856fda06dbe0673fbf94705d1e81c898963e5f6c5c3d333f4a92", size = 252416, upload-time = "2026-09-08T09:37:34.554Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/af/f7774347dc15af79a4164da3338852bb38be5a1b10dfdeb96a3c30a721d9/daytona_toolbox_api_client-0.216.1-py3-none-any.whl", hash = "sha256:1da2e3423f6930aec614e9e59e80759fc259ee6771446e82bb9da804fb49e4e2", size = 252417, upload-time = "2026-09-23T14:12:54.654Z" },
 ]
 
 [[package]]
 name = "daytona-toolbox-api-client-async"
-version = "0.211.2"
+version = "0.216.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -448,9 +448,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/89/27a2e778c2cc3d3a3ceb69388c2c64c593e09d7cbb2dc1bb3c6881954db3/daytona_toolbox_api_client_async-0.211.2.tar.gz", hash = "sha256:6e2f89d66942b5f6f9fb5363ab77db14db2550dbead8c0c070e93fc057bdad6e", size = 82015, upload-time = "2026-09-08T09:37:38.128Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/3d/32cf41e9b8478ebc81b7d82dcddd79f894af801c57190c3f8cd761467d51/daytona_toolbox_api_client_async-0.216.1.tar.gz", hash = "sha256:2539411e4d04f89af5a6e7b6fe1d9f45d8ee43bb1a15f73013545a3cbaa83f0c", size = 82048, upload-time = "2026-09-23T14:13:00.02Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/5d/d966cdbba564ad7d2232b28e49943986111ae0a0092bea01ce3a83ea0cfa/daytona_toolbox_api_client_async-0.211.2-py3-none-any.whl", hash = "sha256:661022b75333a330fb17c64698a3218bd1698aa5b8dab2d8589fbff511c3e823", size = 250907, upload-time = "2026-09-08T09:37:39.708Z" },
+    { url = "https://files.pythonhosted.org/packages/05/31/2080ff8c0ee61d0d9db4e8e2b7d38fec344d90bb7798d74dbd72afe7eaae/daytona_toolbox_api_client_async-0.216.1-py3-none-any.whl", hash = "sha256:57ff39ac0f88fbeb21615f04d96eb8a4dd5d9a615cf074ea347029e7ac4c121e", size = 250906, upload-time = "2026-09-23T14:13:01.234Z" },
 ]
 
 [[package]]
@@ -784,7 +784,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "daytona", specifier = "==0.211.2" }]
+requires-dist = [{ name = "daytona", specifier = "==0.216.1" }]
 
 [[package]]
 name = "opentelemetry-api"
@@ -1247,11 +1247,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.7.0"
+version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/05/b17359e1cefb4f909b5e40b1b90a496d987258916dbbf88e842c729f510e/urllib3-2.8.0.tar.gz", hash = "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63", size = 458972, upload-time = "2026-09-15T19:29:36.253Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
+    { url = "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl", hash = "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", size = 135717, upload-time = "2026-09-15T19:29:34.577Z" },
 ]
 
 [[package]]
