@@ -190,10 +190,6 @@ class ModalBuildSessionService:
             raise RuntimeError("Build allocation ownership mismatch")
         return sandbox
 
-    async def recover(self, *, build_id: str, sandbox_backend: ModalBackend) -> str | None:
-        sandbox = await self._find(build_id, sandbox_backend)
-        return sandbox.object_id if sandbox is not None else None
-
     async def start(
         self,
         *,

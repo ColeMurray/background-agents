@@ -54,7 +54,6 @@ describe("Modal backend images over real D1", () => {
         .mockResolvedValue({ providerSessionId: "sb-legacy", sandboxBackend: undefined }),
       startImageBuildSandbox: vi.fn(),
       terminateImageBuildSandbox: vi.fn().mockRejectedValue(new Error("provider unreachable")),
-      recoverImageBuildSandbox: vi.fn(),
     };
     const factory = {
       create: () =>

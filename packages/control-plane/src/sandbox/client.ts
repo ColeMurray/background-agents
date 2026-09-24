@@ -327,7 +327,6 @@ export class ModalClient {
   private restoreSandboxUrl: string;
   private stopSandboxUrl: string;
   private createImageBuildSandboxUrl: string;
-  private recoverImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
   private secret: string;
@@ -376,7 +375,6 @@ export class ModalClient {
     this.restoreSandboxUrl = url("api-restore-sandbox");
     this.stopSandboxUrl = url("api-stop-sandbox");
     this.createImageBuildSandboxUrl = url("api-create-build-sandbox");
-    this.recoverImageBuildSandboxUrl = url("api-recover-build-sandbox");
     this.startImageBuildSandboxUrl = url("api-start-build-sandbox");
     this.terminateImageBuildSandboxUrl = url("api-terminate-build-sandbox");
   }
@@ -709,30 +707,6 @@ export class ModalClient {
         outcome,
       });
     }
-  }
-
-  async recoverImageBuildSandbox(
-    buildId: string,
-    sandboxBackend: ModalBackend,
-    correlation?: CorrelationContext,
-    signal?: AbortSignal
-  ): Promise<{ providerSessionId: string } | null> {
-    const response = await this.postJson(
-      this.recoverImageBuildSandboxUrl,
-      "recoverImageBuildSandbox",
-      MODAL_CLEANUP_REQUEST_DEADLINE_MS,
-      { build_id: buildId, sandbox_backend: sandboxBackend },
-      z.object({
-        success: z.literal(true),
-        data: z.object({ provider_session_id: z.string().min(1).nullable() }),
-      }),
-      correlation,
-      signal,
-      () => {}
-    );
-    return response.data.provider_session_id
-      ? { providerSessionId: response.data.provider_session_id }
-      : null;
   }
 
   async startImageBuildSandbox(

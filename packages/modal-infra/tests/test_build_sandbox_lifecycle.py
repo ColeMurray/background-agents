@@ -443,8 +443,6 @@ async def test_build_create_retry_adopts_only_owned_backend_allocation(monkeypat
     monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_name", lookup)
     monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
     service = ModalBuildSessionService()
-    recovered = await service.recover(build_id="build-1", sandbox_backend="modal-vm")
-    assert recovered == "sb-existing"
     launch = await service.create(
         build_id="build-1",
         sandbox_backend="modal-vm",
@@ -454,9 +452,17 @@ async def test_build_create_retry_adopts_only_owned_backend_allocation(monkeypat
         callback_url="https://cp.test/complete",
         failure_callback_url="https://cp.test/failed",
     )
-    assert launch.provider_session_id == recovered
+    assert launch.provider_session_id == "sb-existing"
     create.aio.assert_not_awaited()
     tags["openinspect_backend"] = "modal"
     with pytest.raises(RuntimeError, match="ownership"):
-        await service.recover(build_id="build-1", sandbox_backend="modal-vm")
+        await service.create(
+            build_id="build-1",
+            sandbox_backend="modal-vm",
+            scope_kind="repo",
+            scope_id="acme/repo",
+            repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            callback_url="https://cp.test/complete",
+            failure_callback_url="https://cp.test/failed",
+        )
     create.aio.assert_not_awaited()

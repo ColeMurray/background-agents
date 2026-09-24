@@ -86,11 +86,6 @@ class CreateBuildSandboxRequest(_ModalRequestModel):
     sandbox_backend: ModalBackend = "modal"
 
 
-class RecoverBuildSandboxRequest(_ModalRequestModel):
-    build_id: NonEmptyString
-    sandbox_backend: ModalBackend
-
-
 class StartBuildSandboxRequest(_ModalRequestModel):
     build_id: NonEmptyString
     provider_session_id: NonEmptyString
@@ -1017,28 +1012,3 @@ def _validated_build_repositories(
         }
         for repository in repositories
     ]
-
-
-@app.function(image=function_image, secrets=[internal_api_secret])
-@fastapi_endpoint(method="POST")
-async def api_recover_build_sandbox(
-    request: dict[str, object],
-    authorization: str | None = Header(None),
-    x_trace_id: str | None = Header(None),
-    x_request_id: str | None = Header(None),
-) -> dict[str, Any]:
-    """Recover an owned build source whose create response was lost."""
-    async with _execute_endpoint(
-        endpoint_name="api_recover_build_sandbox",
-        authorization=authorization,
-        trace_id=x_trace_id,
-        request_id=x_request_id,
-        build_id=request.get("build_id"),
-    ):
-        from .sandbox.build_session import ModalBuildSessionService
-
-        parsed = _parse_request(RecoverBuildSandboxRequest, request)
-        source_id = await ModalBuildSessionService().recover(
-            build_id=parsed.build_id, sandbox_backend=parsed.sandbox_backend
-        )
-        return {"success": True, "data": {"provider_session_id": source_id}}

@@ -60,11 +60,6 @@ export interface SnapshotModalImageBuildConfig {
 }
 
 export interface ModalImageBuildProvider {
-  recoverImageBuildSandbox?(
-    buildId: string,
-    correlation?: CorrelationContext,
-    signal?: AbortSignal
-  ): Promise<{ providerSessionId: string } | null>;
   triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void>;
   terminateImageBuildSandbox(config: TerminateModalImageBuildConfig): Promise<void>;
   snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult>;
@@ -413,14 +408,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         error instanceof Error ? error : undefined
       );
     }
-  }
-
-  recoverImageBuildSandbox(
-    buildId: string,
-    correlation?: CorrelationContext,
-    signal?: AbortSignal
-  ): Promise<{ providerSessionId: string } | null> {
-    return this.client.recoverImageBuildSandbox(buildId, this.name, correlation, signal);
   }
 
   async triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void> {
