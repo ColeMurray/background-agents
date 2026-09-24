@@ -39,7 +39,6 @@ const createSandboxModalResponseSchema = z.object({
     sandbox_id: z.string(),
     modal_object_id: z.string().nullable().optional(),
     sandbox_backend: z.unknown().optional(),
-    docker_enabled: z.unknown().optional(),
     created_at: z.number(),
     code_server_url: z.string().nullable().optional(),
     code_server_password: z.string().nullable().optional(),
@@ -56,7 +55,6 @@ const restoreSandboxModalResponseSchema = z.object({
     sandbox_id: z.string().min(1),
     modal_object_id: z.string().nullable().optional(),
     sandbox_backend: z.unknown().optional(),
-    docker_enabled: z.unknown().optional(),
     code_server_url: z.string().nullable().optional(),
     code_server_password: z.string().nullable().optional(),
     vnc_url: z.string().nullable().optional(),
@@ -81,7 +79,6 @@ const createImageBuildSandboxModalResponseSchema = z.object({
     // Non-empty: the previous hand-rolled check rejected a blank id.
     provider_session_id: z.string().min(1),
     sandbox_backend: z.unknown().optional(),
-    docker_enabled: z.unknown().optional(),
   }),
 });
 
@@ -180,7 +177,6 @@ export interface CreateSandboxRequest {
 export interface CreateSandboxResponse {
   /** Validated by the provider after retaining the allocation handle. */
   sandboxBackend?: unknown;
-  legacyDockerEnabled?: unknown;
   sandboxId: string;
   modalObjectId?: string; // Modal's internal object ID for snapshot API
   createdAt: number;
@@ -220,7 +216,6 @@ export interface RestoreSandboxRequest {
 export interface RestoreSandboxResponse {
   /** Validated by the provider after retaining the allocation handle. */
   sandboxBackend?: unknown;
-  legacyDockerEnabled?: unknown;
   sandboxId: string;
   modalObjectId?: string;
   codeServerUrl?: string;
@@ -282,7 +277,6 @@ export interface CreateImageBuildSandboxRequest {
 export interface CreateImageBuildSandboxResponse {
   /** Validated by the provider after retaining the allocation handle. */
   sandboxBackend?: unknown;
-  legacyDockerEnabled?: unknown;
   providerSessionId: string;
 }
 
@@ -454,7 +448,6 @@ export class ModalClient {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
         sandboxBackend: result.data.sandbox_backend,
-        legacyDockerEnabled: result.data.docker_enabled,
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
@@ -521,7 +514,6 @@ export class ModalClient {
         sandboxId: result.data.sandbox_id,
         modalObjectId: result.data.modal_object_id ?? undefined,
         sandboxBackend: result.data.sandbox_backend,
-        legacyDockerEnabled: result.data.docker_enabled,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
         vncUrl: result.data.vnc_url ?? undefined,
@@ -691,7 +683,6 @@ export class ModalClient {
       return {
         providerSessionId: result.data.provider_session_id,
         sandboxBackend: result.data.sandbox_backend,
-        legacyDockerEnabled: result.data.docker_enabled,
       };
     } finally {
       log.info("modal.request", {

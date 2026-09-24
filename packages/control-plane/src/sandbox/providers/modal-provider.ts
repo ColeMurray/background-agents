@@ -381,11 +381,9 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
-  private assertBackend(result: { sandboxBackend?: unknown; legacyDockerEnabled?: unknown }): void {
-    const legacyStandard =
-      this.name === "modal" &&
-      result.sandboxBackend === undefined &&
-      (result.legacyDockerEnabled === undefined || result.legacyDockerEnabled === false);
+  private assertBackend(result: { sandboxBackend?: unknown }): void {
+    // Pre-backend Modal endpoints only created the standard sandbox and did not echo its backend.
+    const legacyStandard = this.name === "modal" && result.sandboxBackend === undefined;
     if (result.sandboxBackend === this.name || legacyStandard) return;
     throw new SandboxProviderError(
       `Modal deployment did not confirm the ${this.name} backend; deploy compatible Modal endpoints`,
@@ -393,11 +391,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     );
   }
 
-  private confirmSessionLaunch(result: {
-    modalObjectId?: string;
-    sandboxBackend?: unknown;
-    legacyDockerEnabled?: unknown;
-  }): void {
+  private confirmSessionLaunch(result: { modalObjectId?: string; sandboxBackend?: unknown }): void {
     try {
       this.assertBackend(result);
     } catch (error) {

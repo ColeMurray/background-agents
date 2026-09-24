@@ -106,6 +106,21 @@ describe("distinct Modal backend identities", () => {
     }
   );
 
+  it("accepts older standard Modal responses without a backend echo", async () => {
+    const { client } = fixture(undefined);
+    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal");
+    await expect(provider.createSandbox(config)).resolves.toMatchObject({
+      providerObjectId: "sb-1",
+    });
+    await expect(
+      provider.restoreFromSnapshot({ ...config, snapshotImageId: "im-1" })
+    ).resolves.toMatchObject({ providerObjectId: "sb-1" });
+    const bind = vi.fn().mockResolvedValue(undefined);
+    await provider.triggerImageBuild({ ...build, onProviderSessionCreated: bind });
+    expect(bind).toHaveBeenCalledWith("sb-1");
+    expect(client.startImageBuildSandbox).toHaveBeenCalledOnce();
+  });
+
   it("carries the rejected session allocation ID for lifecycle-owned cleanup", async () => {
     const { provider, client } = fixture("modal");
     client.stopSandbox.mockRejectedValue(new Error("unreachable"));
