@@ -71,12 +71,13 @@ export function buildCodeReviewPrompt(params: {
     : "Use APPROVE if the code looks good, REQUEST_CHANGES if changes are needed,\n   or COMMENT for general feedback.";
   const repositoryPath = encodeRepositoryPathSegments({ repoOwner: owner, repoName: repo });
   // Chained with `&&` into the review POST so a failed fetch stops before it:
-  // a review must never be submitted under the wrong identity.
+  // a review must never be submitted under the wrong identity. curl's output
+  // is captured on its own so its exit status, not the parser's, gates the POST.
   const reviewTokenFetch = hasReviewerApp
     ? `session_id="$(printf '%s' "$SESSION_CONFIG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" && \\
-   review_token="$(curl -fsS -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
-     "$CONTROL_PLANE_URL/sessions/$session_id/review-token" \\
-     | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')" && \\
+   review_token_response="$(curl -fsS -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
+     "$CONTROL_PLANE_URL/sessions/$session_id/review-token")" && \\
+   review_token="$(printf '%s' "$review_token_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')" && \\
    `
     : "";
   const reviewTokenPrefix = hasReviewerApp ? 'GH_TOKEN="$review_token" ' : "";

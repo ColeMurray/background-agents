@@ -114,7 +114,8 @@ the sandbox-authenticated `GET /sessions/:id/review-token` route. The bot receiv
 `GITHUB_REVIEWER_USERNAME`; the prompt fetches the token before the review POST and sets `GH_TOKEN`
 for that command alone. Other calls retain their existing credential. No reviewer App means no token
 fetch and a self-authored PR still gets `COMMENT`. The same self-review check applies to the
-reviewer App if it authored the PR.
+reviewer App if it authored the PR. With a reviewer login set, any token-fetch failure (including
+the route's 404 when the control plane lacks some reviewer credential) stops the review.
 
 ### Sandbox Prerequisites
 

@@ -84,14 +84,16 @@ Set all four Terraform values together, or leave all four empty:
 
 The three credentials are control-plane bindings (`GITHUB_REVIEWER_APP_*`); the login is a GitHub
 bot binding (`GITHUB_REVIEWER_USERNAME`). For non-Terraform deployments, configure the same four
-values on their respective services. A login without credentials makes token fetching fail, while
+values on their respective services. A login without all three credentials stops every review, while
 credentials without the login leave reviews on the main App's identity.
 
 The agent fetches a short-lived installation token from `GET /sessions/:id/review-token` using its
 sandbox token immediately before submitting the review. The route authenticates the caller against
 that session and returns `Cache-Control: no-store`. Only the review POST uses this credential; other
 GitHub calls retain their existing credential. With no reviewer App configured, the endpoint returns
-404 and the prompt omits the token fetch.
+404 and the prompt omits the token fetch. When the GitHub bot has a reviewer login, any token-fetch
+failure, including that 404 from missing or partial reviewer credentials, stops the review rather
+than submit it under another identity.
 
 ---
 

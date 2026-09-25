@@ -1,5 +1,55 @@
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "../src/prompts";
+
+/**
+ * Runs the prompt's review-submission command (token fetch through the POST's
+ * heredoc) under bash, with `curl` and `gh` replaced by stubs that record their
+ * calls. `curl` exits with `curlExit`, printing a valid token body first unless
+ * that is 22: `curl -f` withholds the body of an HTTP error.
+ */
+function runReviewSubmission(prompt: string, curlExit: number) {
+  const start = prompt.indexOf('session_id="');
+  const heredocEnd = "\nJSON\n";
+  const end = prompt.indexOf(heredocEnd, start) + heredocEnd.length;
+  const command = prompt.slice(start, end);
+
+  const dir = mkdtempSync(join(tmpdir(), "review-submission-"));
+  try {
+    const curlLog = join(dir, "curl.log");
+    const ghLog = join(dir, "gh.log");
+    const body = curlExit === 22 ? "" : `printf '{"token":"reviewer-token"}'\n`;
+    writeFileSync(
+      join(dir, "curl"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > '${curlLog}'\n${body}exit ${curlExit}\n`
+    );
+    writeFileSync(join(dir, "gh"), `#!/bin/sh\nprintf '%s %s' "$GH_TOKEN" "$*" > '${ghLog}'\n`);
+    chmodSync(join(dir, "curl"), 0o755);
+    chmodSync(join(dir, "gh"), 0o755);
+
+    // --norc: bash sources ~/.bashrc when its stdin is a socket, as Node's is.
+    const result = spawnSync("bash", ["--norc", "--noprofile", "-c", command], {
+      env: {
+        HOME: dir,
+        PATH: `${dir}:${process.env.PATH}`,
+        SESSION_CONFIG: '{"session_id":"sess-1"}',
+        CONTROL_PLANE_URL: "https://cp.test",
+        SANDBOX_AUTH_TOKEN: "sandbox-token",
+      },
+      encoding: "utf8",
+    });
+    return {
+      status: result.status,
+      curlArgs: existsSync(curlLog) ? readFileSync(curlLog, "utf8") : null,
+      ghCall: existsSync(ghLog) ? readFileSync(ghLog, "utf8") : null,
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("buildCodeReviewPrompt", () => {
   const baseParams = {
@@ -81,14 +131,30 @@ describe("buildCodeReviewPrompt", () => {
     expect(prompt).not.toContain("COMMENT|APPROVE|REQUEST_CHANGES");
   });
 
-  it("authenticates the review POST as the reviewer App when one submits reviews", () => {
+  describe("with a reviewer App", () => {
     const prompt = buildCodeReviewPrompt({ ...baseParams, hasReviewerApp: true });
 
-    expect(prompt).toContain("/sessions/$session_id/review-token");
-    expect(prompt).toContain('GH_TOKEN="$review_token" gh api repos/acme/widgets/pulls/42/reviews');
-    // The fetch is chained into the POST, so a failure stops before the write.
-    expect(prompt).toContain('review_token="$(curl -fsS');
-    expect(prompt).toMatch(/review-token"[\s\S]*&& \\\n {3}GH_TOKEN="\$review_token" gh api/);
+    it("submits the review with the reviewer App's token", () => {
+      const run = runReviewSubmission(prompt, 0);
+
+      expect(run.status).toBe(0);
+      expect(run.curlArgs).toContain("Authorization: Bearer sandbox-token");
+      expect(run.curlArgs).toContain("https://cp.test/sessions/sess-1/review-token");
+      expect(run.ghCall).toBe(
+        "reviewer-token api repos/acme/widgets/pulls/42/reviews --method POST --input -"
+      );
+    });
+
+    // 22 is curl -f's exit on an HTTP error such as the 404 from a control
+    // plane without reviewer credentials; 18 is a transfer cut short after a
+    // complete body arrived. Neither may fall through to another identity.
+    it.each([22, 18])("does not submit the review when curl exits %i", (curlExit) => {
+      const run = runReviewSubmission(prompt, curlExit);
+
+      expect(run.curlArgs).not.toBeNull();
+      expect(run.status).not.toBe(0);
+      expect(run.ghCall).toBeNull();
+    });
   });
 
   it("leaves the review POST on the default credential without a reviewer App", () => {
