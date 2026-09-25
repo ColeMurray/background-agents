@@ -3,10 +3,11 @@
  *
  * Runs against a booted stack (see `scripts/compose-smoke.sh`) and drives one
  * session the way a caller does: create it, store and read back an attachment,
- * mint a WebSocket token, subscribe a client socket, send a prompt, and wait for
- * the stand-in sandbox's reply to arrive back on that socket. Every call is a signed HTTP request against the
- * published API, so this exercises the container's real routing, admission,
- * persistence, and both WebSocket roles without reaching into its database.
+ * mint a WebSocket token, subscribe a client socket, send a prompt, and wait
+ * for the stand-in sandbox's reply to arrive back on that socket. Every call is
+ * a signed HTTP request against the published API, so this exercises the
+ * container's real routing, admission, persistence, and both WebSocket roles
+ * without reaching into its database.
  *
  * Reads CONTROL_PLANE_URL, FAKE_MODAL_URL, SERVICE_AUTH_SECRET_SLACK_BOT.
  */
