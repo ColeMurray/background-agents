@@ -6,7 +6,7 @@ The control plane does not consume build hashes or dependency inventories.
 
 ## Update dependencies
 
-From the repository root, with Python 3.12+, uv 0.9.7, Node 22+, and npm installed:
+From the repository root, with Python 3.12+, uv 0.9.7, Node 24+, and npm installed:
 
 ```bash
 # Edit toolchain.json, or sandbox-runtime/pyproject.toml for runtime dependencies.
@@ -67,6 +67,11 @@ Vercel/OpenComputer retain their existing manual-reference overrides.
 For manual deployment, use the returned reference in the provider's existing configuration; do not
 assume building alone redirects sessions. Roll back using a previous known-good configuration and
 retained artifact. Do not delete artifacts still referenced by sessions or prepared images.
+
+The `filesystem` phase also runs `opencode models --refresh` for the runtime user, so sessions
+without a prepared image still see models newer than the pinned OpenCode release. It is best-effort:
+a failure leaves OpenCode's built-in catalog in use. Prepared repository and environment images
+refresh the catalog on every build.
 
 **Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
 existing repository/environment image-build workflow to rebuild them after dependency-only updates

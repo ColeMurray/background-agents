@@ -87,17 +87,6 @@ describe("evaluateImageBuildForSpawn", () => {
   });
 
   it("enforces the shutdown protocol floor", async () => {
-    expect(
-      (
-        await evaluateImageBuildForSpawn(
-          await readyImage({
-            runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-preservation-runtime`,
-          }),
-          SESSION_REPOSITORIES
-        )
-      ).outcome
-    ).toBe("selected");
-
     for (const runtimeVersion of [
       `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
       "dev",
@@ -114,28 +103,28 @@ describe("evaluateImageBuildForSpawn", () => {
   });
 
   it("applies the higher of the harness and shutdown protocol floors", async () => {
-    const claudeFloor = minCompatibleRuntimeVersionFor("claude");
-    expect(MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION).toBeGreaterThan(claudeFloor);
-    const image = await readyImage({
-      runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION - 1}-before-preservation`,
-    });
-
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "claude")).toEqual({
-      outcome: "miss",
-      reason: "runtime_below_floor",
-      imageBuildId: "imgb-1",
-    });
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, "opencode")).toEqual({
-      outcome: "miss",
-      reason: "runtime_below_floor",
-      imageBuildId: "imgb-1",
-    });
-    const current = await readyImage({
+    const preservation = await readyImage({
       runtime_version: `v${MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION}-preservation`,
     });
-    expect(
-      (await evaluateImageBuildForSpawn(current, SESSION_REPOSITORIES, "claude")).outcome
-    ).toBe("selected");
+
+    for (const harness of ["claude", "opencode"] as const) {
+      expect(
+        await evaluateImageBuildForSpawn(preservation, SESSION_REPOSITORIES, harness),
+        harness
+      ).toEqual({
+        outcome: "miss",
+        reason: "runtime_below_floor",
+        imageBuildId: "imgb-1",
+      });
+
+      const current = await readyImage({
+        runtime_version: `v${minCompatibleRuntimeVersionFor(harness)}-current`,
+      });
+      expect(
+        (await evaluateImageBuildForSpawn(current, SESSION_REPOSITORIES, harness)).outcome,
+        harness
+      ).toBe("selected");
+    }
   });
 
   it("misses when the environment was edited after the session was created", async () => {

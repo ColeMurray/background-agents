@@ -11,7 +11,7 @@ dependencies = [
     "PyJWT[crypto]>=2.9.0",
     # Exact pin: the wheel bundles the `claude` binary and its message shapes
     # are what harness/claude.py translates.
-    "claude-agent-sdk==0.2.152",
+    "claude-agent-sdk==0.2.158",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +31,9 @@ packages = ["src/sandbox_runtime"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Test this checkout even when PYTHONPATH points at an installed runtime
+# (sandbox images set PYTHONPATH=/app).
+pythonpath = ["src"]
 
 [tool.ruff]
 extend = "../../ruff.toml"

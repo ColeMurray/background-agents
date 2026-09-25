@@ -7,6 +7,7 @@ on:
       - "packages/web/**"
       - "packages/shared/**"
       - ".github/workflows/deploy-web.yml"
+      - ".nvmrc"
   workflow_dispatch: # Allow manual trigger
 
 permissions:
@@ -47,7 +48,7 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies

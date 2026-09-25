@@ -212,6 +212,27 @@ export function createMockStorage(
         sandbox.created_at = data.createdAt;
       }
     }),
+    completeProviderResume: vi.fn(async (generation, access) => {
+      calls.push("completeProviderResume");
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt ||
+        !["connecting", "ready"].includes(sandbox.status) ||
+        sandbox.fenced !== 0
+      ) {
+        return false;
+      }
+      sandbox.modal_object_id = access.providerObjectId;
+      sandbox.code_server_url = access.codeServer?.url ?? null;
+      sandbox.code_server_password = access.codeServer?.password ?? null;
+      sandbox.vnc_url = access.vnc?.url ?? null;
+      sandbox.vnc_password = access.vnc?.password ?? null;
+      sandbox.ttyd_url = access.ttyd?.url ?? null;
+      sandbox.ttyd_token = access.ttyd?.token ?? null;
+      sandbox.tunnel_urls = access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null;
+      return true;
+    }),
     updateSandboxModalObjectId: vi.fn((id: string | null) => {
       calls.push(`updateSandboxModalObjectId:${id}`);
       if (sandbox) sandbox.modal_object_id = id;
@@ -260,6 +281,10 @@ export function createMockStorage(
         sandbox[ACCESS_FIELDS[kind].url] = url;
         sandbox[ACCESS_FIELDS[kind].secret] = secret;
       }
+    }),
+    getSandboxAccessSecret: vi.fn(async (kind: SandboxAccessKind) => {
+      calls.push(`getSandboxAccessSecret:${kind}`);
+      return sandbox?.[ACCESS_FIELDS[kind].secret] ?? null;
     }),
     clearSandboxAccess: vi.fn((kind: SandboxAccessKind) => {
       calls.push(`clearSandboxAccess:${kind}`);
@@ -434,7 +459,8 @@ export function createCheckpointShutdown(
   provider: SandboxProvider,
   storage: SandboxStorage & SessionContextReader,
   messenger: SandboxBroadcaster,
-  onLifecycleChange: () => Promise<void> = async () => {}
+  onLifecycleChange: () => Promise<void> = async () => {},
+  retireAccess: () => void = () => {}
 ): SandboxShutdownLifecycle {
   let state: ShutdownRecord | null = null;
   const coordinator = new SandboxShutdownCoordinator({
@@ -450,17 +476,25 @@ export function createCheckpointShutdown(
       getSession: () => storage.getSession(),
       transaction: <T>(operation: () => T): T => operation(),
     },
+    messages: { getProcessingMessage: () => null },
+    failures: { record: vi.fn(), deliver: vi.fn() },
     messenger,
     sockets: { getSandboxSocket: () => null },
     alarm: createMockAlarmScheduler(),
     background: { submit: vi.fn((task: () => Promise<void>) => void task()) },
     onLifecycleChange: vi.fn(onLifecycleChange),
     reconcileStatusFromMessages: vi.fn(async () => {}),
-    retireAccess: vi.fn(),
+    retireAccess,
   } as never);
   return {
     ...createUnmanagedShutdown(),
     captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    requestShutdown: (reason, mode) =>
+      mode === "emergency"
+        ? coordinator.requestShutdown(reason, mode)
+        : Promise.resolve("unmanaged"),
+    isHolding: () => coordinator.isHolding(),
+    admissionDecision: () => coordinator.admissionDecision(),
   };
 }
 

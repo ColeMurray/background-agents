@@ -109,7 +109,16 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-opus-5",
         name: "Claude Opus 5",
-        description: "Latest Opus, adaptive thinking",
+        description: "Most capable, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        description: "Latest Opus, long-running agentic coding",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",
@@ -190,6 +199,24 @@ export const MODEL_CATALOG = [
         description: "Most capable model for complex, demanding work",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
+        id: "openai/gpt-6-sol",
+        name: "GPT-6 Sol",
+        description: "Complex coding and agentic workflows",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
+        id: "openai/gpt-6-luna",
+        name: "GPT-6 Luna",
+        description: "Efficient model for focused, high-volume tasks",
+        reasoning: {
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
           default: "medium",
         },
       },

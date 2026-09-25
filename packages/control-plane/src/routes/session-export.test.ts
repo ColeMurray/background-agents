@@ -3,7 +3,7 @@
  *
  * Tests run in Node (not workerd) with mocked stores and session runtime.
  * Requests dispatch through the production module, so admission (including
- * the sessions.read permission) runs; authentication is mocked to supply the
+ * the sessions.export permission) runs; authentication is mocked to supply the
  * principal.
  */
 
@@ -143,12 +143,37 @@ describe("GET /sessions/export", () => {
     vi.clearAllMocks();
   });
 
-  it("rejects a caller without sessions.read before touching the store", async () => {
+  it("rejects a caller without sessions.export before touching the store", async () => {
     const response = await callExport({}, { permissions: [] });
 
     expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ permission: "sessions.export" });
     expect(mocks.list).not.toHaveBeenCalled();
     expect(mocks.runtimeFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Viewer with sessions.read", async () => {
+    const response = await callExport({}, { permissions: ["sessions.read"] });
+
+    expect(response.status).toBe(403);
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it("works on a GitLab deployment", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: USER_PRINCIPAL,
+      request,
+    }));
+
+    const response = await createHandler()(
+      new Request("https://test.local/sessions/export"),
+      { ...createEnv(), SCM_PROVIDER: "gitlab" },
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+    expect(await readLines(response)).toMatchObject([{ type: "session", id: "session-1" }]);
   });
 
   it("streams one valid NDJSON session line per row with the export content type", async () => {

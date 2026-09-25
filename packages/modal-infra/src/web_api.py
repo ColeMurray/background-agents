@@ -439,6 +439,16 @@ async def api_create_sandbox(
         try:
             handle = await manager.create_sandbox(config)
         except RepositoryImageUnavailableError as e:
+            cause = e.__cause__ or e
+            log.error(
+                "sandbox.repository_image_unavailable",
+                cause_type=type(cause).__name__,
+                cause_message=str(cause),
+                trace_id=x_trace_id,
+                request_id=x_request_id,
+                session_id=x_session_id,
+                sandbox_id=x_sandbox_id,
+            )
             raise HTTPException(status_code=410, detail="Repository image unavailable") from e
 
         return {

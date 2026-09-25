@@ -69,16 +69,18 @@ export class EventRepository {
     );
   }
 
-  createEventOnce(data: CreateEventData): boolean {
+  /** Idempotent event recording for a lifecycle decision retried after reconstruction. */
+  createEventIfAbsent(data: CreateEventData): boolean {
     const result = this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-      VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL}) ON CONFLICT(id) DO NOTHING`,
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL}) ON CONFLICT(id) DO NOTHING`,
       data.id,
       data.type,
       data.data,
       data.messageId,
       data.createdAt
     );
+    result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }
 

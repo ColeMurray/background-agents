@@ -2,11 +2,12 @@
  * The compose smoke's session round-trip.
  *
  * Runs against a booted stack (see `scripts/compose-smoke.sh`) and drives one
- * session the way a caller does: create it, mint a WebSocket token, subscribe a
- * client socket, send a prompt, and wait for the stand-in sandbox's reply to
- * arrive back on that socket. Every call is a signed HTTP request against the
- * published API, so this exercises the container's real routing, admission,
- * persistence, and both WebSocket roles without reaching into its database.
+ * session the way a caller does: create it, store and read back an attachment,
+ * mint a WebSocket token, subscribe a client socket, send a prompt, and wait
+ * for the stand-in sandbox's reply to arrive back on that socket. Every call is
+ * a signed HTTP request against the published API, so this exercises the
+ * container's real routing, admission, persistence, and both WebSocket roles
+ * without reaching into its database.
  *
  * Reads CONTROL_PLANE_URL, FAKE_MODAL_URL, SERVICE_AUTH_SECRET_SLACK_BOT.
  */
@@ -43,24 +44,29 @@ function pass(message) {
   console.log(`  ok  ${message}`);
 }
 
-async function signedFetch(path, { method = "GET", body } = {}) {
+/**
+ * A signed request with exactly the body bytes that were signed. `headers` are
+ * sent as given; the signature covers method, path, query, body and actor.
+ */
+async function signedRequest(path, { method = "GET", body, headers = {} } = {}) {
   const url = `${CONTROL_PLANE_URL}${path}`;
-  const serialized = body === undefined ? undefined : JSON.stringify(body);
-  const headers = await buildServiceAuthHeaders({
+  const authHeaders = await buildServiceAuthHeaders({
     service: SERVICE,
     secret: SERVICE_SECRET,
     method,
     url,
-    body: serialized,
+    body,
     actor: ACTOR,
   });
-  const response = await fetch(url, {
+  return fetch(url, { method, headers: { ...authHeaders, ...headers }, body });
+}
+
+async function signedFetch(path, { method = "GET", body } = {}) {
+  const serialized = body === undefined ? undefined : JSON.stringify(body);
+  const response = await signedRequest(path, {
     method,
-    headers: {
-      ...headers,
-      ...(serialized === undefined ? {} : { "Content-Type": "application/json" }),
-    },
     body: serialized,
+    headers: serialized === undefined ? {} : { "Content-Type": "application/json" },
   });
   const text = await response.text();
   let parsed;
@@ -174,6 +180,57 @@ function waitForMessage(socket, received, predicate, description) {
   });
 }
 
+/** A 1x1 PNG: the smallest file the attachment route accepts as an image. */
+const ATTACHMENT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64"
+);
+
+/**
+ * Store an attachment and read it back, whole and by range, through the public
+ * API. This is the application's own S3 client against the stack's object
+ * store: the put with its content type, the head a ranged read starts from,
+ * and both kinds of get.
+ */
+async function attachmentRoundTrip(sessionId) {
+  const form = new FormData();
+  form.append("file", new Blob([ATTACHMENT_PNG], { type: "image/png" }), "smoke.png");
+  // Serialized once so the signature covers the exact multipart bytes sent.
+  const encoded = new Request("http://smoke.invalid/", { method: "POST", body: form });
+  const body = new Uint8Array(await encoded.arrayBuffer());
+  const upload = await signedRequest(`/sessions/${sessionId}/attachments`, {
+    method: "POST",
+    body,
+    headers: { "Content-Type": encoded.headers.get("Content-Type") },
+  });
+  const uploaded = await upload.json().catch(() => null);
+  if (upload.status !== 201) fail(`attachment upload returned ${upload.status}`, uploaded);
+  if (!uploaded?.attachmentId) fail("attachment upload returned no attachmentId", uploaded);
+  const path = `/sessions/${sessionId}/attachments/${uploaded.attachmentId}`;
+
+  const whole = await signedRequest(path);
+  const wholeBytes = Buffer.from(await whole.arrayBuffer());
+  if (whole.status !== 200) fail(`attachment read returned ${whole.status}`);
+  if (whole.headers.get("Content-Type") !== "image/png") {
+    fail(`attachment read returned Content-Type ${whole.headers.get("Content-Type")}`);
+  }
+  if (!wholeBytes.equals(ATTACHMENT_PNG)) fail("attachment read returned different bytes");
+
+  const start = 8;
+  const end = 15;
+  const ranged = await signedRequest(path, { headers: { Range: `bytes=${start}-${end}` } });
+  const rangedBytes = Buffer.from(await ranged.arrayBuffer());
+  if (ranged.status !== 206) fail(`ranged attachment read returned ${ranged.status}`);
+  const expectedRange = `bytes ${start}-${end}/${ATTACHMENT_PNG.length}`;
+  if (ranged.headers.get("Content-Range") !== expectedRange) {
+    fail(`ranged read returned Content-Range ${ranged.headers.get("Content-Range")}`);
+  }
+  if (!rangedBytes.equals(ATTACHMENT_PNG.subarray(start, end + 1))) {
+    fail("ranged attachment read returned different bytes");
+  }
+  pass(`attachment ${uploaded.attachmentId} stored, read whole, and read by range`);
+}
+
 async function fakeModalState() {
   const response = await fetch(`${FAKE_MODAL_URL}/__smoke/state`);
   if (!response.ok) fail(`stand-in Modal host returned ${response.status}`);
@@ -187,6 +244,7 @@ async function main() {
   await health();
 
   const sessionId = await createSession();
+  await attachmentRoundTrip(sessionId);
   const token = await mintWsToken(sessionId);
   const { socket, received } = await subscribeClient(sessionId, token);
   pass("client socket subscribed");

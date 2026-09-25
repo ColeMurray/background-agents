@@ -80,4 +80,44 @@ describe("handleSlackInteraction", () => {
 
     expect(handleTargetSelection).not.toHaveBeenCalled();
   });
+
+  it("routes a click on a control posted before request ids existed", async () => {
+    await handleSlackInteraction(
+      payload({
+        action_id: quickPickActionId(0),
+        block_id: "repo_quick_picks",
+        value: "acme/app",
+      }),
+      {} as Env,
+      undefined,
+      vi.fn()
+    );
+
+    expect(handleTargetSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: undefined, selectionSource: "quick_pick" }),
+      expect.anything(),
+      undefined,
+      expect.any(Function)
+    );
+  });
+
+  it("routes a click carrying a Slack-generated block id", async () => {
+    await handleSlackInteraction(
+      payload({
+        action_id: "select_repo",
+        block_id: "Xq2n",
+        selected_option: { value: "acme/app" },
+      }),
+      {} as Env,
+      undefined,
+      vi.fn()
+    );
+
+    expect(handleTargetSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: undefined, selectionSource: "picker" }),
+      expect.anything(),
+      undefined,
+      expect.any(Function)
+    );
+  });
 });

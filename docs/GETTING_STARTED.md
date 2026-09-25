@@ -56,8 +56,8 @@ Create accounts on these services before continuing:
 # Terraform (1.14.0+; see terraform/environments/production/versions.tf)
 brew install terraform
 
-# Node.js (22+)
-brew install node@22
+# Node.js (24+)
+brew install node@24
 
 # Python 3.12+ and uv (Modal CLI is installed via uv sync below)
 brew install python@3.12 uv

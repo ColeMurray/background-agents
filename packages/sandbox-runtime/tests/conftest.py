@@ -15,6 +15,33 @@ if TYPE_CHECKING:
     from sandbox_runtime.bridge import AgentBridge
 
 
+SANDBOX_SESSION_ENV_VARS = (
+    "CONTROL_PLANE_URL",
+    "SANDBOX_AUTH_TOKEN",
+    "SESSION_CONFIG",
+    "VCS_CLONE_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GITHUB_APP_TOKEN",
+    "OI_GITHUB_TOKEN_IS_FALLBACK",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_sandbox_credentials(monkeypatch):
+    """Strip live-session credentials from the test environment.
+
+    This suite routinely runs inside a live Open-Inspect sandbox, whose
+    session credentials (control-plane URL, sandbox auth token, session
+    config, SCM tokens) would otherwise route credential-helper tests to the
+    real control plane and change which fallback paths they take. CI
+    (GitHub Actions) likewise sets GITHUB_TOKEN. Tests that need any of these
+    set them explicitly.
+    """
+    for key in SANDBOX_SESSION_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def isolate_runtime_file_paths(tmp_path, monkeypatch):
     """Redirect the runtime's fixed file paths to per-test locations.
@@ -25,18 +52,27 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     (e.g. ``await sup.run()``) would otherwise overwrite it with fixture
     repos, which breaks push targeting and PR creation for the live session —
     and likewise truncate the live boot-events file or read the live
-    tunnel-env file. Tests that care about a specific path still patch it
-    themselves; this fixture is the backstop that keeps every other test off
-    the real files.
+    tunnel-env file. ``build_supervisor()`` would also apply the image-baked
+    runtime environment, overriding test-controlled ``HOME`` and
+    ``XDG_CONFIG_HOME``; it gets an absent per-test file instead. Tests that
+    care about a specific path still patch it themselves; this fixture is the
+    backstop that keeps every other test off the real files.
     """
     manifest_path = str(tmp_path / "oi-repo-manifest.json")
     boot_events_path = str(tmp_path / "oi-boot-events.jsonl")
     tunnel_env_path = str(tmp_path / ".tunnels.env")
+    image_environment_path = tmp_path / "openinspect-runtime-environment.json"
     monkeypatch.setattr("sandbox_runtime.repository_boot.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.bridge.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.boot_events.BOOT_EVENTS_FILE_PATH", boot_events_path)
     monkeypatch.setattr("sandbox_runtime.boot_attach.BOOT_EVENTS_FILE_PATH", boot_events_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
+    monkeypatch.setattr(
+        "sandbox_runtime.image_environment.IMAGE_ENVIRONMENT_PATH", image_environment_path
+    )
+    # An image-build test would otherwise run the real OpenCode, which downloads
+    # the model catalog into the live session's cache.
+    monkeypatch.setattr("sandbox_runtime.supervisor.OPENCODE_MODELS_REFRESH_COMMAND", ("true",))
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:

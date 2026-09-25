@@ -20,7 +20,7 @@ import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { parseQuery } from "./query";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 
 export const EXPORT_SCHEMA_VERSION = 1;
 const DEFAULT_EXPORT_LIMIT = 100;
@@ -317,8 +317,8 @@ async function handleExport(
 }
 
 const EXPORT_READ = admit({
-  ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("sessions.read"),
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("sessions.export"),
   cacheControl: "private, no-store",
 });
 

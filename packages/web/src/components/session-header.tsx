@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import type { BootPhaseName, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-shutdown";
 import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
@@ -33,6 +34,26 @@ const BOOTING_STATUSES: ReadonlySet<SandboxStatusValue> = new Set(["spawning", "
  * say. Full detail is always in the actions menu regardless.
  */
 const STEADY_SANDBOX_STATUS: SandboxStatusValue = "ready";
+
+/**
+ * Graceful-stop phases. The control plane keeps the sandbox `ready` until the
+ * stop finishes, but new prompts are already held while it saves, so the
+ * header reports a save rather than a sandbox that is available.
+ */
+const GRACEFUL_STOP_PHASES: ReadonlySet<SandboxShutdownState["phase"]> = new Set([
+  "draining",
+  "prepared",
+  "capturing",
+  "retiring",
+]);
+
+function displayedSandboxStatus(
+  sessionState: SessionSocketState["sessionState"]
+): SandboxStatusValue | undefined {
+  const status = sessionState?.sandboxStatus;
+  const phase = sessionState?.sandboxPreservation?.phase;
+  return status === "ready" && phase && GRACEFUL_STOP_PHASES.has(phase) ? "snapshotting" : status;
+}
 
 type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnected";
 
@@ -197,13 +218,14 @@ export function SessionHeader({
   // Anything worth reporting goes in the strip below, as text rather than a
   // decorative dot, and the full detail is always in the actions menu.
   // Desktop keeps the full header.
-  const sandbox = sessionState?.sandboxStatus
+  const sandboxStatus = displayedSandboxStatus(sessionState);
+  const sandbox = sandboxStatus
     ? resolveSandboxStatus({
-        status: sessionState.sandboxStatus,
-        dashboardUrl: capabilities.sandboxAccess ? sessionState.sandboxDashboardUrl : undefined,
+        status: sandboxStatus,
+        dashboardUrl: capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined,
         error: sandboxError,
         bootPhase,
-        repositoryCount: sessionState.repositories?.length ?? 0,
+        repositoryCount: sessionState?.repositories?.length ?? 0,
       })
     : null;
 
@@ -276,7 +298,7 @@ export function SessionHeader({
               />
             )}
             <SandboxStatusIcon
-              status={sessionState?.sandboxStatus}
+              status={sandboxStatus}
               dashboardUrl={
                 capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined
               }
@@ -307,7 +329,7 @@ export function SessionHeader({
         connection={
           capabilities.read ? connectionState(connected, connecting, reconnecting) : "connected"
         }
-        status={sessionState?.sandboxStatus}
+        status={sandboxStatus}
         dashboardUrl={capabilities.sandboxAccess ? sessionState?.sandboxDashboardUrl : undefined}
         error={sandboxError}
         bootPhase={bootPhase}

@@ -11,6 +11,7 @@ import {
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
+import { decryptStoredAccessValue } from "./sandbox-access";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 const rawSandboxRowSchema = sandboxRowSchema.extend({ status: z.unknown().optional() });
@@ -27,6 +28,8 @@ const sandboxCircuitBreakerRowSchema = z.object({
   last_spawn_failure: z.number().nullable(),
 });
 type SandboxCircuitBreakerRow = z.infer<typeof sandboxCircuitBreakerRowSchema>;
+
+const sandboxAccessSecretRowSchema = z.object({ secret: z.string().nullable() });
 
 /** URL and secret columns backing each access artifact kind. */
 const ACCESS_ARTIFACT_COLUMNS: Record<
@@ -71,6 +74,15 @@ export interface SpawnSandboxData {
 export interface ResumeSandboxData {
   status: SandboxStatus;
   createdAt: number;
+}
+
+/** Provider access discovered while resuming an existing sandbox. */
+export interface ProviderResumeAccessData {
+  providerObjectId: string;
+  codeServer: { url: string; password: string } | null;
+  vnc: { url: string; password: string } | null;
+  ttyd: { url: string | null; token: string } | null;
+  tunnelUrls: Record<string, string> | null;
 }
 
 /**
@@ -337,6 +349,48 @@ export class SandboxRepository {
     );
   }
 
+  /**
+   * Commit all provider access returned by a resume as one generation-scoped
+   * write. `ready` is allowed because the bridge can complete startup before
+   * the provider's resume request returns.
+   */
+  async completeProviderResume(
+    generation: { sandboxId: string | null; createdAt: number },
+    access: ProviderResumeAccessData
+  ): Promise<boolean> {
+    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
+      access.codeServer ? this.encrypt(access.codeServer.password) : null,
+      access.vnc ? this.encrypt(access.vnc.password) : null,
+      access.ttyd ? this.encrypt(access.ttyd.token) : null,
+    ]);
+    const result = this.sql.exec(
+      `UPDATE sandbox SET
+         modal_object_id = ?,
+         code_server_url = ?,
+         code_server_password = ?,
+         vnc_url = ?,
+         vnc_password = ?,
+         ttyd_url = ?,
+         ttyd_token = ?,
+         tunnel_urls = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?
+         AND status IN ('connecting', 'ready') AND fenced = 0`,
+      access.providerObjectId,
+      access.codeServer?.url ?? null,
+      codeServerPassword,
+      access.vnc?.url ?? null,
+      vncPassword,
+      access.ttyd?.url ?? null,
+      ttydToken,
+      access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
   updateSandboxModalObjectId(modalObjectId: string | null): void {
     this.sql.exec(
       `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
@@ -435,6 +489,17 @@ export class SandboxRepository {
       url,
       await this.encrypt(secret)
     );
+  }
+
+  /** Read and decrypt one access artifact's stored secret. */
+  async getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null> {
+    const { secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
+    const row = this.sql.exec(`SELECT ${secretColumn} AS secret FROM sandbox LIMIT 1`).toArray()[0];
+    const parsed = row === undefined ? null : sandboxAccessSecretRowSchema.safeParse(row);
+    if (parsed && !parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted sandbox access secret");
+    }
+    return decryptStoredAccessValue(parsed?.data.secret ?? null, this.encryptionKey, this.log);
   }
 
   /** Clear one access artifact's URL and secret. */

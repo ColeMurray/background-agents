@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { Logger } from "../logger";
 import { SessionInternalPaths } from "./contracts";
@@ -193,9 +194,34 @@ describe("SessionServer", () => {
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "error",
       code: "INVALID_PROMPT",
-      message: "Invalid prompt",
+      message: "content is required",
       clientRequestId: "request-1",
     });
+  });
+
+  it.each([
+    [
+      "oversized content",
+      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1) },
+      `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
+    ],
+    ["invalid clientRequestId", { content: "hello", clientRequestId: 123 }, "clientRequestId:"],
+  ])("reports %s over WebSocket", async (_case, payload, message) => {
+    const { server, sockets, clientCommands } = createHarness();
+    await server.onMessage(
+      "client",
+      JSON.stringify({ type: "prompt", clientRequestId: "request-1", ...payload })
+    );
+
+    expect(sockets.send).toHaveBeenCalledWith(
+      "client",
+      expect.objectContaining({
+        type: "error",
+        code: "INVALID_PROMPT",
+        message: expect.stringContaining(message),
+      })
+    );
+    expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
   });
 
   it("preserves request correlation when a cancel prompt payload fails validation", async () => {

@@ -6,6 +6,7 @@ import {
   type RoleReference,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
+import type { AuditOperationAction } from "@open-inspect/shared/types/audit-events";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -53,7 +54,7 @@ export type AuthorizationRoleRecord = RoleReference & {
 interface AuditInput {
   requestId: string;
   actorUserId: string;
-  action: string;
+  action: AuditOperationAction;
   resourceType: string;
   resourceId?: string | null;
   targetUserId?: string | null;

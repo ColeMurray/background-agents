@@ -75,6 +75,19 @@ export function parseTargetInteractionRequestId(
   return REQUEST_ID_PATTERN.test(requestId) ? requestId : null;
 }
 
+/**
+ * True when a block id was minted by this module, whichever control it came
+ * from. A click on such a block must carry a parseable request id; a block id
+ * this code never produced belongs to a control posted before request ids
+ * existed, and its selection still resolves by channel and thread.
+ */
+export function isTargetInteractionBlockId(blockId: string): boolean {
+  return (
+    blockId.startsWith(TARGET_PICKER_BLOCK_ID_PREFIX) ||
+    blockId.startsWith(TARGET_QUICK_PICK_BLOCK_ID_PREFIX)
+  );
+}
+
 /** Unique per-button action_id; Slack requires action_id uniqueness within an actions block. */
 export function quickPickActionId(index: number): string {
   return `${SELECT_TARGET_QUICK_PICK_ACTION_ID}:${index}`;

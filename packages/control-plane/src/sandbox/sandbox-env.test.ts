@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
@@ -277,6 +279,25 @@ describe("buildSandboxEnvVars", () => {
     expect(enabled.NOVNC_PORT).toBe("6099");
   });
 
+  it("owns terminal enablement, port, and captured-image disablement", () => {
+    const disabled = buildSandboxEnvVars(
+      {
+        ...baseConfig,
+        userEnvVars: { TERMINAL_ENABLED: "true", TTYD_PROXY_PORT: "7000" },
+      },
+      { scmIdentity: scmCloneIdentity("github"), emitDisabledTerminalEnv: true }
+    );
+    expect(disabled.TERMINAL_ENABLED).toBe("");
+    expect(disabled).not.toHaveProperty("TTYD_PROXY_PORT");
+
+    const enabled = buildSandboxEnvVars(
+      { ...baseConfig, sandboxSettings: { terminalEnabled: true, terminalPort: 7001 } },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+    expect(enabled.TERMINAL_ENABLED).toBe("true");
+    expect(enabled.TTYD_PROXY_PORT).toBe("7001");
+  });
+
   it("strips boot-mode markers from the user layer", () => {
     // Providers add these after buildSandboxEnvVars returns, and only when the
     // mode is real, so they are not part of the system overlay that shadows user
@@ -486,9 +507,9 @@ describe("cross-plane env-key contract manifest", () => {
   // consumption: the runtime constants stay as code.
   const manifest = JSON.parse(
     readFileSync(
-      new URL(
-        "../../../sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json",
-        import.meta.url
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json"
       ),
       "utf8"
     )

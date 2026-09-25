@@ -128,6 +128,89 @@ class TestHandlePartTranslation:
     """Text and step parts are translated by _handle_part, the production
     path (with cumulative-text handling); tool parts are covered above."""
 
+    def test_step_ids_match_start_parts_across_steps_and_replay(self, bridge: AgentBridge):
+        stream = bridge.harness.prompt_stream
+        state = make_state("cp-message-123")
+        first_start = stream._handle_part(
+            state, {"type": "step-start", "id": "start-1", "messageID": "assistant-1"}, None
+        )[0]
+        first_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        second_start = stream._handle_part(
+            state, {"type": "step-start", "id": "start-2", "messageID": "assistant-1"}, None
+        )[0]
+        interleaved_replay = stream._handle_part(
+            state, {"type": "step-start", "id": "start-1", "messageID": "assistant-1"}, None
+        )[0]
+        corrected_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        second_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-2", "messageID": "assistant-1"}, None
+        )[0]
+
+        assert first_start["stepId"] == first_finish["stepId"] == "start-1"
+        assert interleaved_replay["stepId"] == first_start["stepId"]
+        assert corrected_finish["stepId"] == first_start["stepId"]
+        assert second_start["stepId"] == second_finish["stepId"] == "start-2"
+        assert first_start["stepId"] != second_start["stepId"]
+        replayed_start = stream._handle_part(
+            state,
+            {"type": "step-start", "id": "start-1", "messageID": "assistant-1"},
+            None,
+        )[0]
+        assert replayed_start["stepId"] == first_finish["stepId"]
+        replayed_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        unmatched_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-3", "messageID": "assistant-1"}, None
+        )[0]
+        assert replayed_finish["stepId"] == first_start["stepId"]
+        assert unmatched_finish["stepId"] == "finish-3"
+
+    def test_step_ids_are_separate_for_interleaved_messages(self, bridge: AgentBridge):
+        stream = bridge.harness.prompt_stream
+        state = make_state("cp-message-123")
+        parent_start = stream._handle_part(
+            state, {"type": "step-start", "id": "parent", "messageID": "parent-msg"}, None
+        )[0]
+        child_start = stream._handle_part(
+            state,
+            {"type": "step-start", "id": "child", "messageID": "child-msg"},
+            None,
+            is_subtask=True,
+        )[0]
+        parent_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "parent-end", "messageID": "parent-msg"}, None
+        )[0]
+        child_finish = stream._handle_part(
+            state,
+            {"type": "step-finish", "id": "child-end", "messageID": "child-msg"},
+            None,
+            is_subtask=True,
+        )[0]
+        assert parent_finish["stepId"] == parent_start["stepId"]
+        assert child_finish["stepId"] == child_start["stepId"]
+
+    def test_step_finish_without_start_has_nonempty_id(self, bridge: AgentBridge):
+        event = bridge.harness.prompt_stream._handle_part(
+            make_state("cp-message-123"), {"type": "step-finish", "id": "finish-only"}, None
+        )[0]
+        assert event["stepId"] == "finish-only"
+
+    def test_parts_without_ids_get_nonempty_matching_step_ids(self, bridge: AgentBridge):
+        stream = bridge.harness.prompt_stream
+        state = make_state("cp-message-123")
+        start = stream._handle_part(state, {"type": "step-start"}, None)[0]
+        finish = stream._handle_part(state, {"type": "step-finish"}, None)[0]
+        unmatched = stream._handle_part(state, {"type": "step-finish"}, None)[0]
+        assert start["stepId"] == finish["stepId"]
+        assert start["stepId"]
+        assert unmatched["stepId"]
+        assert unmatched["stepId"] != finish["stepId"]
+
     def test_text_part_uses_provided_message_id(self, bridge: AgentBridge):
         """Text parts should use the provided message_id, not any internal ID."""
         stream = bridge.harness.prompt_stream
@@ -155,7 +238,7 @@ class TestHandlePartTranslation:
 
         events = stream._handle_part(make_state("cp-message-123"), part, None)
 
-        assert events == [{"type": "step_start", "messageId": "cp-message-123"}]
+        assert events == [{"type": "step_start", "messageId": "cp-message-123", "stepId": "step-1"}]
 
     def test_step_finish_part(self, bridge: AgentBridge):
         """Step-finish parts should include cost and token info."""
@@ -178,6 +261,7 @@ class TestHandlePartTranslation:
                 "tokens": 150,
                 "reason": "end_turn",
                 "messageId": "cp-message-123",
+                "stepId": "step-1",
             }
         ]
 
@@ -191,6 +275,18 @@ class TestHandlePartTranslation:
 
         assert "cost" not in events[0]
         assert events[0]["messageCostUsd"] == 0.0
+
+    def test_step_finish_omits_unknown_tokens_and_reason(self, bridge: AgentBridge):
+        stream = bridge.harness.prompt_stream
+        events = stream._handle_part(
+            make_state("cp-message-123"),
+            {"type": "step-finish", "id": "step-1", "cost": 0.5},
+            None,
+        )
+
+        assert "tokens" not in events[0]
+        assert "reason" not in events[0]
+        assert events[0]["cost"] == 0.5
 
     def test_step_finish_reports_cumulative_turn_cost(self, bridge: AgentBridge):
         """Each step carries the turn total; a re-emitted part replaces its own cost."""

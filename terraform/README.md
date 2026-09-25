@@ -46,8 +46,8 @@ brew install terraform
 # Modal CLI (for Modal deployments)
 pip install modal
 
-# Node.js >= 22 (for building workers)
-brew install node@22
+# Node.js >= 24 (for building workers)
+brew install node@24
 ```
 
 ### 2. Cloudflare Setup

@@ -27,8 +27,8 @@ check_cmd node
 check_cmd npm
 
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-if (( NODE_MAJOR < 20 )); then
-  error "Node.js >= 20 required (found $(node -v)). Please upgrade."
+if (( NODE_MAJOR < 24 )); then
+  error "Node.js >= 24 required (found $(node -v)). Please upgrade."
   exit 1
 fi
 info "Node $(node -v) ✓"

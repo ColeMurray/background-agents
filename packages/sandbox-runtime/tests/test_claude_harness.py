@@ -414,6 +414,32 @@ class TestOptions:
 
 class TestTranslation:
     @pytest.mark.asyncio
+    async def test_step_ids_match_each_turn_and_are_unique(self, tmp_path: Path) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_stream("message_start", message={"id": "msg_1"}), _result(0.1)],
+                [AssistantMessage(content=[], model="m", message_id="msg_2"), _result(0.2)],
+                [_result(0.3)],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+
+        first, _ = await _run(h.harness, HarnessPrompt(message_id="m1", text="one"))
+        second, _ = await _run(h.harness, HarnessPrompt(message_id="m2", text="two"))
+        unmatched, _ = await _run(h.harness, HarnessPrompt(message_id="m3", text="three"))
+
+        first_start, first_finish = (e for e in first if e["type"] in ("step_start", "step_finish"))
+        second_start, second_finish = (
+            e for e in second if e["type"] in ("step_start", "step_finish")
+        )
+        assert first_start["stepId"] == first_finish["stepId"]
+        assert second_start["stepId"] == second_finish["stepId"]
+        assert first_start["stepId"] != second_start["stepId"]
+        assert next(e for e in unmatched if e["type"] == "step_finish")["stepId"]
+
+    @pytest.mark.asyncio
     async def test_a_turn_with_text_and_a_tool_call(self, tmp_path: Path) -> None:
         turn = [
             SystemMessage(subtype="init", data={"model": "claude-sonnet-4-6", "tools": ["Bash"]}),

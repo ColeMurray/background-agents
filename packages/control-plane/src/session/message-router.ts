@@ -1,5 +1,6 @@
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
+import { clientRequestIdSchema, promptValidationError } from "@open-inspect/shared/types/prompts";
+import type { ZodError } from "zod";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
@@ -17,13 +18,13 @@ export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
 export type RecoverShutdownCommand = Extract<ClientMessage, { type: "recover_preservation" }>;
 
 type BoundarySchema<T> = {
-  safeParse(
-    input: unknown
-  ): { success: true; data: T } | { success: false; error: { issues: unknown } };
+  safeParse(input: unknown): { success: true; data: T } | { success: false; error: ZodError };
 };
 
 // Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
-type ParsedMessage<T> = { valid: true; data: T } | { valid: false; raw?: unknown };
+type ParsedMessage<T> =
+  | { valid: true; data: T }
+  | { valid: false; raw?: unknown; error?: ZodError };
 
 export interface SessionClientCommands<Connection, Client extends ConnectedClient> {
   subscribe: (connection: Connection, message: ClientSubscribe) => Promise<void>;
@@ -97,11 +98,17 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
       const parsed = this.parseMessage(message, "client", clientMessageSchema);
       if (!parsed.valid) {
         const invalidRequest = this.readInvalidCorrelatedRequest(parsed.raw);
+        const invalidPrompt = invalidRequest?.type === "prompt";
+        let validationMessage = "Failed to process message";
+        if (invalidPrompt) {
+          validationMessage = parsed.error
+            ? promptValidationError(parsed.error, parsed.raw).error
+            : "Invalid prompt";
+        }
         this.deps.sockets.send(connection, {
           type: "error",
-          code: invalidRequest?.type === "prompt" ? "INVALID_PROMPT" : "INVALID_MESSAGE",
-          message:
-            invalidRequest?.type === "prompt" ? "Invalid prompt" : "Failed to process message",
+          code: invalidPrompt ? "INVALID_PROMPT" : "INVALID_MESSAGE",
+          message: validationMessage,
           ...(invalidRequest?.clientRequestId
             ? { clientRequestId: invalidRequest.clientRequestId }
             : {}),
@@ -277,7 +284,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         issues: result.error.issues,
       });
       // Keep the parsed object for clientRequestId correlation on invalid prompts.
-      return { valid: false, raw };
+      return { valid: false, raw, error: result.error };
     }
     return { valid: true, data: result.data };
   }

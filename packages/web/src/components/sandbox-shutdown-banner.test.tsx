@@ -2,7 +2,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
+import type {
+  SandboxShutdownState,
+  ShutdownRecoveryAction,
+} from "@open-inspect/shared/types/sandbox-shutdown";
 import { SandboxShutdownBanner as Banner } from "./sandbox-shutdown-banner";
 
 const acceptedRecovery = () =>
@@ -21,16 +24,24 @@ describe("SandboxShutdownBanner", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it.each([
-    ["draining", "Stopping the prompt"],
-    ["prepared", "Prompt stopped"],
-    ["capturing", "Saving final sandbox state"],
-    ["retiring", "Confirming sandbox shutdown"],
-    ["restoring", "Restoring the saved sandbox state"],
-  ] as const)("shows the %s phase", (phase, text) => {
-    render(<Banner shutdown={{ phase, expiresAtMs: 2, drainAtMs: 1 }} />);
-    expect(screen.getByRole("status")).toHaveTextContent(text);
-  });
+  it.each(["draining", "prepared", "capturing", "retiring", "restoring"] as const)(
+    "stays silent during a routine %s phase",
+    (phase) => {
+      const { container } = render(
+        <Banner
+          shutdown={{
+            phase,
+            expiresAtMs: 2,
+            drainAtMs: 1,
+            reason: "inactivity_timeout",
+            hasRecoveryPoint: true,
+          }}
+          onRecover={acceptedRecovery()}
+        />
+      );
+      expect(container).toBeEmptyDOMElement();
+    }
+  );
 
   it("offers to resume queued work after an active prompt was interrupted and saved", () => {
     const onRecover = acceptedRecovery();
@@ -49,10 +60,10 @@ describe("SandboxShutdownBanner", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "The previous prompt was interrupted and will not replay automatically"
+      "interrupted prompts will not replay automatically"
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Partial work was saved. Queued work will wait until you resume"
+      "Partial state was saved. Queued work will wait until you resume"
     );
     expect(onRecover).not.toHaveBeenCalled();
 
@@ -96,39 +107,48 @@ describe("SandboxShutdownBanner", () => {
     }
   );
 
-  it("clears the paused-continuation action when newer state no longer requires it", () => {
+  it("clears the paused-continuation banner through resume and the restore that follows", async () => {
     const onRecover = acceptedRecovery();
-    const { rerender } = render(
+    const paused: SandboxShutdownState = {
+      phase: "saved",
+      reason: "sandbox_lifetime_expiring",
+      expiresAtMs: 2,
+      drainAtMs: 1,
+      savedAtMs: 1,
+      hasRecoveryPoint: true,
+      continuationPaused: true,
+      availableRecoveryActions: ["restore_saved"],
+    };
+    const { container, rerender } = render(<Banner shutdown={paused} onRecover={onRecover} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume queued work" }));
+    await waitFor(() => expect(onRecover).toHaveBeenCalledWith("restore_saved"));
+
+    // recover() clears the pause and keeps the saved phase, which no longer offers an action.
+    rerender(
       <Banner
-        shutdown={{
-          phase: "saved",
-          expiresAtMs: 2,
-          drainAtMs: 1,
-          hasRecoveryPoint: true,
-          continuationPaused: true,
-          availableRecoveryActions: ["restore_saved"],
-        }}
+        shutdown={{ ...paused, continuationPaused: false, availableRecoveryActions: [] }}
         onRecover={onRecover}
       />
     );
-    expect(screen.getByRole("button", { name: "Resume queued work" })).toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
 
+    // reserveStartup() then starts a fresh record for the restoring generation.
     rerender(
       <Banner
         shutdown={{
           phase: "restoring",
-          expiresAtMs: 2,
-          drainAtMs: 1,
+          expiresAtMs: null,
+          drainAtMs: null,
+          savedAtMs: 1,
           hasRecoveryPoint: true,
-          continuationPaused: true,
-          availableRecoveryActions: ["restore_saved"],
+          continuationPaused: false,
+          availableRecoveryActions: [],
         }}
         onRecover={onRecover}
       />
     );
-
-    expect(screen.queryByRole("button", { name: "Resume queued work" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Restoring the saved sandbox state");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows paused-continuation information without an action when recovery is unavailable", () => {
@@ -162,7 +182,7 @@ describe("SandboxShutdownBanner", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "The previous prompt was interrupted and will not replay automatically"
+      "interrupted prompts will not replay automatically"
     );
     expect(screen.queryByRole("button", { name: "Resume queued work" })).not.toBeInTheDocument();
   });

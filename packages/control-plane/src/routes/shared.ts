@@ -129,6 +129,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "sessions.collaborate",
   "sessions.create",
   "sessions.delete",
+  "sessions.export",
   "sessions.lifecycle",
   "sessions.sandbox_access",
   "skill_profiles.manage_own",

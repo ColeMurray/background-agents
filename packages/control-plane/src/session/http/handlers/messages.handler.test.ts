@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
 import type { MessageService } from "../../services/message.service";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 
 function createHandler() {
   const messageService = {
@@ -107,7 +108,39 @@ describe("MessagesHandler", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid prompt body" });
+    expect(((await response.json()) as { error: string }).error).toContain("source");
+    expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "oversized content",
+      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1), authorId: "user-1", source: "web" },
+      {
+        error: `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
+        code: "prompt_too_long",
+      },
+    ],
+    [
+      "blank content",
+      { content: "  \n", authorId: "user-1", source: "web" },
+      { error: "content is required" },
+    ],
+    ["invalid source", { content: "hello", authorId: "user-1", source: "unknown" }, null],
+  ])("reports %s at the internal boundary", async (_case, body, expected) => {
+    const { handler, messageService, log } = createHandler();
+    const response = await handler.enqueuePrompt(
+      new Request("http://internal/internal/prompt", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      log
+    );
+
+    expect(response.status).toBe(400);
+    const result = (await response.json()) as { error: string };
+    if (expected) expect(result).toEqual(expected);
+    else expect(result.error).toContain("source");
     expect(messageService.enqueuePrompt).not.toHaveBeenCalled();
   });
 

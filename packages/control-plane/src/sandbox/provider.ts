@@ -341,6 +341,8 @@ interface ResumeResultFields {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** ttyd proxy tunnel URL (if available) */
+  ttydUrl?: string;
   /** Complete browser-based VNC credential (if available) */
   vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */

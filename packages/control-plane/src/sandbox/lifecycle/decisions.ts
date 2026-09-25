@@ -266,9 +266,8 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
  *
  * Fails closed, matching image selection: a snapshot whose runtime version was
  * never recorded (taken before this column existed) or does not parse is
- * treated as below the floor. The cost is one fresh spawn — the sandbox's
- * uncommitted filesystem state — after which the next snapshot records its
- * version and restores resume as normal.
+ * treated as below the floor. Incompatibility blocks execution, not retention:
+ * keep the snapshot for operator recovery instead of substituting a clean tree.
  */
 export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
   if (!snapshotRuntimeVersion) return false;
@@ -281,6 +280,7 @@ export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | nul
  */
 export type SpawnAction =
   | { action: "spawn"; reason?: string }
+  | { action: "hold"; reason: string }
   | { action: "resume"; providerObjectId: string }
   | { action: "restore"; snapshotImageId: string; snapshotRuntimeVersion: string }
   | { action: "skip"; reason: string }
@@ -363,9 +363,9 @@ export function evaluateSpawnDecision(
         snapshotRuntimeVersion: state.snapshotRuntimeVersion as string,
       };
     }
-    // Fall through to a fresh spawn rather than booting a retired runtime.
+    // Never substitute a clean filesystem for retained user state.
     return {
-      action: "spawn",
+      action: "hold",
       reason: `snapshot runtime ${state.snapshotRuntimeVersion ?? "unknown"} is below the v${MIN_COMPATIBLE_RUNTIME_VERSION} floor`,
     };
   }

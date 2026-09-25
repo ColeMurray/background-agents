@@ -26,6 +26,7 @@ from .opencode_client import (
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
+from .opencode_step_ids import StepIdTracker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -72,6 +73,7 @@ class _PromptState:
     # Priced step costs keyed by OpenCode part id. Last write wins, so a part
     # OpenCode re-emits with a corrected cost replaces its earlier value.
     step_costs: dict[str, float] = field(default_factory=dict)
+    step_ids: StepIdTracker = field(default_factory=StepIdTracker)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -655,24 +657,36 @@ class OpenCodePromptStream:
                     events.append(tool_event)
 
         elif part_type == "step-start":
+            message_id = part.get("messageID") or part.get("sessionID") or ""
+            step_id = state.step_ids.start(
+                message_id, part_id if isinstance(part_id, str) else None
+            )
             events.append(
                 {
                     "type": "step_start",
                     "messageId": state.message_id,
+                    "stepId": step_id,
                 }
             )
 
         elif part_type == "step-finish":
+            message_id = part.get("messageID") or part.get("sessionID") or ""
+            step_id = state.step_ids.finish(
+                message_id, part_id if isinstance(part_id, str) else None
+            )
             cost = part.get("cost")
             if isinstance(cost, int | float) and not isinstance(cost, bool):
                 state.step_costs[str(part.get("id", ""))] = float(cost)
             finish_event = {
                 "type": "step_finish",
-                "tokens": part.get("tokens"),
-                "reason": part.get("reason"),
                 "messageId": state.message_id,
+                "stepId": step_id,
                 "messageCostUsd": state.message_cost_usd(),
             }
+            if part.get("tokens") is not None:
+                finish_event["tokens"] = part["tokens"]
+            if part.get("reason") is not None:
+                finish_event["reason"] = part["reason"]
             if cost is not None:
                 finish_event["cost"] = cost
             events.append(finish_event)

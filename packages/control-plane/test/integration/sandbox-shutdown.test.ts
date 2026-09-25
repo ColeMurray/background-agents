@@ -9,7 +9,6 @@ import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sa
 import { EventRepository } from "../../src/session/event-repository";
 import { MessageFailureService } from "../../src/session/message-failure-service";
 import { MessageRepository } from "../../src/session/message-repository";
-import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxRuntimeEventHandler } from "../../src/session/sandbox-events/runtime.handler";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
@@ -29,6 +28,7 @@ import {
   seedSandboxAuth,
 } from "./helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
+import { realLifecycleHarness } from "./sandbox-lifecycle-harness";
 
 const AUTH_TOKEN = "shutdown-integration-token";
 const SANDBOX_ID = "shutdown-sandbox";
@@ -74,90 +74,6 @@ async function readShutdown(stub: DurableObjectStub): Promise<Record<string, unk
     "SELECT state FROM sandbox_preservation WHERE singleton = 1"
   );
   return JSON.parse(row.state) as Record<string, unknown>;
-}
-
-function realLifecycleHarness(
-  instance: SessionDO,
-  durableState: DurableObjectState,
-  provider: SandboxProvider,
-  options: {
-    store?: ShutdownStore;
-    onQueueAdmission?: (decision: string) => void;
-  } = {}
-) {
-  const sandbox = componentsOf(instance).sandboxRepository;
-  const sessions = new SessionCoreRepository(durableState.storage.sql, (callback) =>
-    durableState.storage.transactionSync(callback)
-  );
-  const sessionContext = new LifecycleSessionContext(sessions, {
-    getUserEnvVars: async () => undefined,
-  } as never);
-  const shutdownAnnouncements: object[] = [];
-  const lifecycleAnnouncements: object[] = [];
-  const queueAdmissions: string[] = [];
-  const processQueue = async () => {
-    const decision = shutdown.admissionDecision();
-    queueAdmissions.push(decision);
-    options.onQueueAdmission?.(decision);
-  };
-  const shutdown = new SandboxShutdownCoordinator({
-    store: options.store ?? new SandboxShutdownRepository(durableState.storage.sql),
-    provider,
-    sandbox,
-    session: sessions,
-    messages: { getProcessingMessage: () => null },
-    failures: { record: () => undefined, deliver: () => undefined },
-    messenger: {
-      broadcast: (message: object) => shutdownAnnouncements.push(message),
-    },
-    sockets: {
-      getSandboxSocket: () => null,
-      send: () => false,
-    },
-    alarm: { schedule: async () => undefined },
-    background: {
-      submit: (task: () => Promise<void>) => {
-        void task();
-      },
-    },
-    onLifecycleChange: processQueue,
-    reconcileStatusFromMessages: async () => undefined,
-    retireAccess: () => undefined,
-  } as never);
-  const manager = new SandboxLifecycleManager(
-    provider,
-    sandbox,
-    sessionContext,
-    { broadcast: (message) => lifecycleAnnouncements.push(message) },
-    {
-      getSandboxWebSocket: () => null,
-      getConnectedClientCount: () => 0,
-      sendToSandbox: () => false,
-      detachSandboxWebSocket: () => undefined,
-    },
-    {
-      schedule: async () => undefined,
-      cancel: async () => undefined,
-      current: async () => null,
-    },
-    { generateId: () => "integration-sandbox-token" },
-    shutdown,
-    {
-      ...DEFAULT_LIFECYCLE_CONFIG,
-      controlPlaneUrl: "https://control-plane.test",
-      model: "anthropic/claude-sonnet-4-5",
-    }
-  );
-  return {
-    manager,
-    shutdown,
-    shutdownAnnouncements,
-    lifecycleAnnouncements,
-    queueAdmissions,
-    processQueue,
-    sandbox,
-    sessions,
-  };
 }
 
 describe("sandbox graceful shutdown wiring", () => {
@@ -980,24 +896,29 @@ describe("sandbox graceful shutdown wiring", () => {
       clientRequestId: "resume-1",
       action: "restore_saved",
     });
+    // The integration outbound service answers every *.modal.run call with 404, so this restore
+    // always fails. Wait for that terminal state rather than for the pause to lift: the pause lifts
+    // at "restoring" while the restore is still in flight, so waiting on it raced the failure.
     await vi.waitFor(async () => {
+      expect(await readShutdown(stub)).toMatchObject({ phase: "unknown" });
       expect(await readShutdown(stub)).not.toMatchObject({ continuationPaused: true });
     });
-    const rejected = collectMessages(authenticated.ws, {
-      until: (message) => message.type === "error",
+    // A failed restore retains the receipt and deliberately re-offers restore_saved, so a further
+    // authenticated request is accepted rather than rejected.
+    const retried = collectMessages(authenticated.ws, {
+      until: (message) => message.type === "shutdown_recovery_accepted",
     });
     authenticated.ws.send(
       JSON.stringify({
         type: "recover_preservation",
         action: "restore_saved",
-        clientRequestId: "stale-1",
+        clientRequestId: "retry-1",
       })
     );
-    await expect(rejected).resolves.toContainEqual({
-      type: "error",
-      code: "RECOVERY_UNAVAILABLE",
-      message: "Shutdown recovery is unavailable",
-      clientRequestId: "stale-1",
+    await expect(retried).resolves.toContainEqual({
+      type: "shutdown_recovery_accepted",
+      clientRequestId: "retry-1",
+      action: "restore_saved",
     });
     authenticated.ws.close();
 
