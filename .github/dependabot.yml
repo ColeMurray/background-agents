@@ -84,5 +84,8 @@ updates:
     ignore:
       # The cloudflare provider is deliberately held below 5.20.0 (worker
       # observability regression, cloudflare/terraform-provider-cloudflare#7177).
-      # Drop this entry once that is fixed upstream.
+      # Ignore only the versions at or above that bound, so updates inside the
+      # allowed range still arrive. Drop this entry once that is fixed upstream.
       - dependency-name: cloudflare/cloudflare
+        versions:
+          - ">= 5.20.0"
