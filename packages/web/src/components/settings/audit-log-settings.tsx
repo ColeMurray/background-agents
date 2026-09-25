@@ -7,6 +7,7 @@ import {
   type AuditEvent,
   type AuditEventInterpretation,
   type AuditOperationAction,
+  type AuditPrincipalKind,
   type AuditOperationResult,
 } from "@open-inspect/shared/types/audit-events";
 import { Badge } from "@/components/ui/badge";
@@ -68,13 +69,21 @@ function badgeTreatment(interpretation: AuditEventInterpretation): BadgeTreatmen
   }
 }
 
+/** Keyed by every principal kind, so a new kind cannot render without a label. */
+const PRINCIPAL_LABELS: Record<AuditPrincipalKind, string> = {
+  user: "User principal",
+  service: "Service principal",
+  sandbox: "Sandbox principal",
+  "access-token": "Access token principal",
+};
+
 function actorSummary(event: AuditEvent): string {
   if (event.actorServiceSnapshot && event.actorUserIdSnapshot) {
     return `Service / ${event.actorServiceSnapshot} / User actor / ${event.actorUserIdSnapshot}`;
   }
   if (event.actorServiceSnapshot) return `Service / ${event.actorServiceSnapshot}`;
   if (event.actorUserIdSnapshot) return `User / ${event.actorUserIdSnapshot}`;
-  return `${event.principalKind.charAt(0).toUpperCase()}${event.principalKind.slice(1)} principal`;
+  return PRINCIPAL_LABELS[event.principalKind];
 }
 
 function resourceSummary(event: AuditEvent): string {

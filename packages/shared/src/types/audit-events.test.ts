@@ -39,7 +39,7 @@ const event = {
 
 describe("audit event contracts", () => {
   it("accepts current principals, outcomes, nullable snapshots, and forward-compatible metadata", () => {
-    for (const principalKind of ["user", "service", "sandbox"]) {
+    for (const principalKind of ["user", "service", "sandbox", "access-token"]) {
       for (const operationResult of ["applied", "no_op", "denied", "rejected"]) {
         expect(auditEventSchema.parse({ ...event, principalKind, operationResult })).toMatchObject({
           principalKind,
