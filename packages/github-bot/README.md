@@ -164,11 +164,12 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 If the prompt cannot be delivered, the handler requests the session's close-out itself, with "Review
 failed to start" as its description. If that request cannot be recorded either, the control plane's
 reaper finds the review later: the session is created with the PR's repository on its fence row, and
-a latest review that has no close-out after 10 minutes gets a "Review failed to start" close-out
-request, and then its session is asked to archive itself as an unprompted draft (so no prompt can
-start it). The request is withdrawn only if the session turns out to hold a prompt or to be active;
-otherwise the close-out runs like any other. Recording before archiving keeps the close-out
-resumable if the archive's answer is lost.
+a latest review that has no close-out after 10 minutes gets a provisional "Review failed to start"
+marker, and then its session is asked to archive itself as an unprompted draft (so no prompt can
+start it). While the marker is provisional the agent's lease request gets 423 (wait), and no
+close-out is granted. The marker is withdrawn if the session turns out to hold a prompt or to be
+active; otherwise it becomes a close-out request and runs like any other. A lost archive answer
+leaves it provisional, and the next tick asks again.
 
 **Review Requested (compatibility path):**
 

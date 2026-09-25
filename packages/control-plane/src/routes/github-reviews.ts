@@ -198,20 +198,21 @@ const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
  * no completion callback will record it either, and the status would stay
  * pending. The same holds for a fence a lost DO init kept (initialize.ts).
  *
- * Candidates are latest-generation rows with no close-out request and a
- * recorded repository, past REVIEW_FENCE_ORPHAN_GRACE_MS (no create or
- * prompt delivery is still in flight by then), whose index status says the
- * session never started.
+ * Candidates are latest-generation rows with a recorded repository, past
+ * REVIEW_FENCE_ORPHAN_GRACE_MS (no create or prompt delivery is still in
+ * flight by then), that either have no close-out request and an index status
+ * saying the session never started, or still carry this pass's provisional
+ * marker from an earlier tick.
  *
- * The close-out request is recorded first, then the session is asked to
- * expire as a draft. Recording first makes this resumable: once the request
- * is durable the close-out pass drives it, whatever happens to the expiry —
- * including an expiry that archived the session but whose answer was lost,
- * after which the session would never be a candidate again. The request is
- * withdrawn only when the session proves it can still run a review: it holds
- * a queued or processed prompt (`has_work`), or it is `active`. A session that
- * archived itself, has no runtime, or whose turn already ended keeps the
- * request; an archived session rejects any later prompt.
+ * A provisional marker is recorded first, then the session is asked to expire
+ * as a draft. While it is provisional, the review's agent is told to wait
+ * (423), and no close-out is granted or driven for it. The marker is withdrawn
+ * when the session proves it can still run a review — it holds a queued or
+ * processed prompt (`has_work`), or it is `active` — and is otherwise promoted
+ * to a close-out request: the session archived itself (and so rejects any
+ * later prompt), has no runtime, or its turn already ended. An expiry whose
+ * answer is lost leaves the marker provisional, so the next tick asks again;
+ * an already archived session then answers `not_draft` and is promoted.
  */
 async function closeOutUnpromptedReviews(
   db: SqlDatabase,
@@ -226,10 +227,12 @@ async function closeOutUnpromptedReviews(
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
        JOIN sessions s ON s.id = grs.session_id
        WHERE grs.generation = st.latest_generation
-         AND grs.close_out_request IS NULL
          AND grs.repo_owner IS NOT NULL AND grs.repo_name IS NOT NULL
          AND grs.created_at < ?
-         AND s.status IN ('created', 'failed')
+         AND (
+           (grs.close_out_request IS NULL AND s.status IN ('created', 'failed'))
+           OR ${isProvisionalSql("grs.close_out_request")}
+         )
        ORDER BY grs.created_at ASC, grs.session_id ASC
        LIMIT ?`
     )
@@ -243,8 +246,15 @@ async function closeOutUnpromptedReviews(
       repo: row.repo_name,
       description: REVIEW_START_FAILED_DESCRIPTION,
     };
+    const provisional = provisionalCloseOut(request);
     try {
-      await recordCloseOutRequest(db, sessionId, request);
+      await db
+        .prepare(
+          `UPDATE github_review_sessions SET close_out_request = ?
+           WHERE session_id = ? AND close_out_request IS NULL`
+        )
+        .bind(provisional, sessionId)
+        .run();
     } catch (recordError) {
       // Nothing changed: the row is still a candidate on the next tick.
       logger.warn("review_reaper.unprompted_record_failed", {
@@ -259,8 +269,8 @@ async function closeOutUnpromptedReviews(
     try {
       expiry = await drafts.expireDraftWithStatus(sessionId);
     } catch (probeError) {
-      // The request stays: the expiry may have archived the session before its
-      // answer was lost, and nothing would ever select this row again.
+      // The marker stays provisional, so the row is probed again next tick: the
+      // expiry may have archived the session before its answer was lost.
       logger.warn("review_reaper.unprompted_probe_failed", {
         event: "review_reaper.unprompted_probe_failed",
         session_id: sessionId,
@@ -272,29 +282,22 @@ async function closeOutUnpromptedReviews(
     const canStillRun =
       expiry.outcome === "has_work" ||
       (expiry.outcome === "not_draft" && expiry.status === "active");
-    if (!canStillRun) {
-      logger.warn("review_reaper.unprompted_closed_out", {
-        event: "review_reaper.unprompted_closed_out",
-        session_id: sessionId,
-        outcome: expiry.outcome,
-        status: expiry.status,
-      });
-      continue;
-    }
-    // Withdraw only our own request, and not while a close-out holds the lease.
+    // Both updates act only on the reaper's own marker: a real request that
+    // replaced it in the meantime is left as it is.
     await db
       .prepare(
-        `UPDATE github_review_sessions SET close_out_request = NULL
-         WHERE session_id = ? AND close_out_request = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM github_review_state st
-             WHERE st.repo_id = github_review_sessions.repo_id
-               AND st.pr_number = github_review_sessions.pr_number
-               AND ${liveCloseOutLeaseOf("github_review_sessions")}
-           )`
+        `UPDATE github_review_sessions SET close_out_request = ?
+         WHERE session_id = ? AND close_out_request = ?`
       )
-      .bind(sessionId, JSON.stringify(request), Date.now())
+      .bind(canStillRun ? null : JSON.stringify(request), sessionId, provisional)
       .run();
+    logger.info("review_reaper.unprompted_probed", {
+      event: "review_reaper.unprompted_probed",
+      session_id: sessionId,
+      outcome: expiry.outcome,
+      status: expiry.status,
+      closed_out: !canStillRun,
+    });
   }
 }
 
@@ -559,13 +562,31 @@ async function recordCloseOutRequest(
   sessionId: string,
   request: CloseOutRequest
 ): Promise<void> {
+  // The first real request wins; it also replaces the reaper's provisional marker.
   await db
     .prepare(
-      `UPDATE github_review_sessions SET close_out_request = COALESCE(close_out_request, ?)
-       WHERE session_id = ?`
+      `UPDATE github_review_sessions SET close_out_request = ?
+       WHERE session_id = ?
+         AND (close_out_request IS NULL OR ${isProvisionalSql("close_out_request")})`
     )
     .bind(JSON.stringify(request), sessionId)
     .run();
+}
+
+/**
+ * The reaper's not-yet-confirmed close-out of a review that may never have
+ * received its prompt. Unlike a close-out request it is never granted or
+ * driven, and an agent asking for the lease meanwhile is told to wait (423),
+ * not that it lost the review. It becomes a request once the session proves
+ * it cannot run, and is withdrawn once it proves it can.
+ */
+function provisionalCloseOut(request: CloseOutRequest): string {
+  return JSON.stringify({ ...request, provisional: true });
+}
+
+/** SQL condition: the close-out request in `column` is the reaper's provisional marker. */
+function isProvisionalSql(column: string): string {
+  return `COALESCE(json_extract(${column}, '$.provisional'), 0) = 1`;
 }
 
 interface CloseOutRow extends StaleReviewSessionRow {
@@ -574,6 +595,8 @@ interface CloseOutRow extends StaleReviewSessionRow {
   generation: number;
   head_sha: string;
   close_out_request: string | null;
+  /** 1 when close_out_request is the reaper's provisional marker, not yet a request. */
+  close_out_provisional: number;
   latest_generation: number;
   /** 1 when a newer review is registered on this row's head: that status is no longer this row's. */
   head_reclaimed: number;
@@ -584,6 +607,7 @@ async function loadCloseOutRow(db: SqlDatabase, sessionId: string): Promise<Clos
     .prepare(
       `SELECT grs.session_id, grs.repo_id, grs.pr_number, grs.generation, grs.head_sha,
          grs.created_at, grs.close_out_request,
+         ${isProvisionalSql("grs.close_out_request")} AS close_out_provisional,
          st.latest_generation, st.lease_session_id, st.lease_expires_at,
          EXISTS (
            SELECT 1 FROM github_review_sessions newer
@@ -664,6 +688,7 @@ export async function handleCloseOutReview(
     return notOwned("head_reclaimed");
   }
   if (row.close_out_request === null) return notOwned("not_requested");
+  if (row.close_out_provisional === 1) return deferred("provisional");
   const closeOut = closeOutRequestSchema.safeParse(JSON.parse(row.close_out_request));
   if (!closeOut.success) return error("Invalid stored close-out request", 500);
 
@@ -700,6 +725,7 @@ export async function handleCloseOutReview(
              AND grs.repo_id = github_review_state.repo_id
              AND grs.pr_number = github_review_state.pr_number
              AND grs.close_out_request IS NOT NULL
+             AND NOT ${isProvisionalSql("grs.close_out_request")}
              AND NOT EXISTS (
                SELECT 1 FROM github_review_sessions newer
                WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
@@ -816,8 +842,9 @@ export async function handleFinalizeCloseOut(
  *
  * 204: acquired (re-acquiring one's own lease is an idempotent retry).
  * 423 + Retry-After: this session is eligible, but another holder's lease is
- * live — wait. 409: permanent — superseded, swept, or closed out; the agent
- * must exit without writing.
+ * live, or the reaper is checking whether it ever received its prompt — wait.
+ * 409: permanent — superseded, swept, or closed out; the agent must exit
+ * without writing.
  */
 export async function handleReviewOwnership(
   _request: Request,
@@ -852,7 +879,8 @@ export async function handleReviewOwnership(
   }
 
   // The lease may be released between the UPDATE and this read; that costs
-  // one spurious 423 and a retry, never a wrong 409.
+  // one spurious 423 and a retry, never a wrong 409. A provisional marker is
+  // also "wait": the reaper withdraws it if this session proves it is live.
   const eligible = await ctx.db
     .prepare(
       `SELECT st.lease_expires_at
@@ -861,7 +889,7 @@ export async function handleReviewOwnership(
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
        WHERE grs.session_id = ?
          AND grs.generation = st.latest_generation
-         AND grs.close_out_request IS NULL`
+         AND (grs.close_out_request IS NULL OR ${isProvisionalSql("grs.close_out_request")})`
     )
     .bind(sessionId)
     .first<{ lease_expires_at: number | null }>();
@@ -994,6 +1022,7 @@ export async function reapSupersededReviewSessions(
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
        WHERE grs.close_out_request IS NOT NULL
+         AND NOT ${isProvisionalSql("grs.close_out_request")}
          AND (st.lease_expires_at IS NULL OR st.lease_expires_at < ?)
        ORDER BY grs.created_at ASC, grs.session_id ASC
        LIMIT ?`

@@ -709,21 +709,26 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
       const repoId = 634343;
       const prNumber = 6;
       const sessionId = await createUnpromptedReview(repoId, prNumber);
-      const answerLost: SessionRuntimeClient = {
+      let answersLost = 0;
+      const firstAnswerLost: SessionRuntimeClient = {
         fetch: async (id, path, init, search) => {
           const response = await realSessions.fetch(id, path, init, search);
-          if (path === "/internal/expire-draft") throw new Error("response lost");
+          if (path === "/internal/expire-draft" && answersLost === 0) {
+            answersLost += 1;
+            throw new Error("response lost");
+          }
           return response;
         },
       };
 
-      const firstTick = await reapWithBot(answerLost);
-      const secondTick = await reapWithBot(answerLost);
-
+      const firstTick = await reapWithBot(firstAnswerLost);
       expect(await sessionStatus(sessionId)).toBe("archived");
+      expect(firstTick).not.toHaveBeenCalled();
+      const secondTick = await reapWithBot(firstAnswerLost);
+
       const [row] = await fenceRows(repoId, prNumber);
       expect(JSON.parse(row.close_out_request ?? "null")).toEqual(FAILED_TO_START);
-      expect(firstTick.mock.calls.length + secondTick.mock.calls.length).toBeGreaterThan(0);
+      expect(secondTick).toHaveBeenCalledTimes(1);
     });
 
     it("leaves the review for the next tick when its close-out cannot be recorded", async () => {
@@ -735,7 +740,7 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
         ...realDb,
         batch: realDb.batch.bind(realDb),
         prepare(sql: string) {
-          if (sql.includes("SET close_out_request = COALESCE")) {
+          if (sql.includes("WHERE session_id = ? AND close_out_request IS NULL")) {
             throw new Error("D1 write failed");
           }
           return realDb.prepare(sql);
@@ -757,6 +762,7 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
       const repoId = 636363;
       const prNumber = 7;
       const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const acquiresDuringExpiry: number[] = [];
       const promptedMeanwhile: SessionRuntimeClient = {
         fetch: async (id, path, init, search) => {
           if (path === "/internal/expire-draft") {
@@ -766,6 +772,9 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
               body: JSON.stringify({ content: "Review", authorId: "github:1", source: "github" }),
             });
             expect(prompt.status).toBe(200);
+            // The live agent asks for its lease while the reaper's marker is still provisional:
+            // it must be told to wait, never that it no longer owns the review.
+            acquiresDuringExpiry.push((await agentAcquire(id)).status);
           }
           return realSessions.fetch(id, path, init, search);
         },
@@ -773,10 +782,34 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
 
       const botFetch = await reapWithBot(promptedMeanwhile);
 
+      expect(acquiresDuringExpiry).toEqual([423]);
       const [row] = await fenceRows(repoId, prNumber);
       expect(row.close_out_request).toBeNull();
       expect(botFetch).not.toHaveBeenCalled();
       expect((await agentAcquire(sessionId)).status).toBe(204);
+    });
+
+    it("lets a real close-out request replace the reaper's provisional marker", async () => {
+      const repoId = 637373;
+      const prNumber = 7;
+      await createUnpromptedReview(repoId, prNumber);
+      const completionMeanwhile: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          if (path === "/internal/expire-draft") {
+            // The provisional marker is never granted, and a completion's request supersedes it.
+            await expect(grantOf(closeOut(id, REQUEST))).resolves.toMatchObject({
+              description: REQUEST.description,
+            });
+            return Response.json({ outcome: "not_draft", status: "active" });
+          }
+          return realSessions.fetch(id, path, init, search);
+        },
+      };
+
+      await reapWithBot(completionMeanwhile);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual(REQUEST);
     });
 
     it("archives the never-prompted session and closes its status out as failed to start", async () => {
