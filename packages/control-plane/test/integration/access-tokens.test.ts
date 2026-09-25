@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env, SELF } from "cloudflare:test";
 import { ACCESS_TOKEN_PREFIX } from "@open-inspect/shared/types/access-tokens";
+import worker from "../../src/index";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 import {
   LAST_USED_RESOLUTION_MS,
   PersonalAccessTokenStore,
@@ -49,6 +51,32 @@ function bearer(token: string, init?: { method?: string }): Promise<Response> {
     method: init?.method ?? "GET",
     headers: { Authorization: `Bearer ${token}` },
   });
+}
+
+/**
+ * A token read that returns only once its deferred work has settled.
+ *
+ * `last_used_at` is written through `waitUntil`, which `SELF.fetch` does not
+ * wait for, so reading the column straight after a plain request races the
+ * write. Driving the worker entrypoint with a recording execution context
+ * makes that bookkeeping part of the request under test.
+ */
+async function settledBearer(token: string): Promise<Response> {
+  const pending: Promise<unknown>[] = [];
+  const context = {
+    waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+    passThroughOnException: () => {},
+    props: {},
+  } as unknown as ExecutionContext;
+  const response = await worker.fetch(
+    new Request("https://test.local/sessions", {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+    env as unknown as WorkerBindings,
+    context
+  );
+  await Promise.all(pending);
+  return response;
 }
 
 describe("personal access tokens", () => {
@@ -252,7 +280,7 @@ describe("personal access tokens", () => {
 
   it("records last use, so an unused token is identifiable before revoking it", async () => {
     const token = await issueToken();
-    expect(await bearer(token)).toMatchObject({ status: 200 });
+    expect(await settledBearer(token)).toMatchObject({ status: 200 });
 
     expect(await readLastUsed()).toBeGreaterThan(0);
   });
@@ -263,11 +291,11 @@ describe("personal access tokens", () => {
     const token = await issueToken();
 
     // A column older than the resolution window must be written. That pins the
-    // bookkeeping write as observable by the time the response resolves —
-    // without it, the unchanged value below would prove nothing.
+    // bookkeeping write as observable once the request's deferred work settles
+    // — without it, the unchanged value below would prove nothing.
     const stale = Date.now() - 5 * LAST_USED_RESOLUTION_MS;
     await setLastUsed(stale);
-    await bearer(token);
+    await settledBearer(token);
     expect(await readLastUsed()).not.toBe(stale);
 
     // Seeded rather than reused from the write above: two requests can land in
@@ -275,7 +303,7 @@ describe("personal access tokens", () => {
     // would then leave the same value behind and pass anyway.
     const recent = Date.now() - 1_000;
     await setLastUsed(recent);
-    await bearer(token);
+    await settledBearer(token);
     expect(await readLastUsed()).toBe(recent);
   });
 
