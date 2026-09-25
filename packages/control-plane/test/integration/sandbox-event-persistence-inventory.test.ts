@@ -1,35 +1,12 @@
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   eventTypeSchema,
   toolCallIdentityKey,
   type EventType,
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
-import { generateId } from "../../auth/crypto";
-import { createTestBackgroundTasks } from "../../background-tasks.test-support";
-import type { Logger } from "../../logger";
-import { createNodeSqlStorage } from "../../node/sqlite-storage";
-import { ArtifactRepository } from "../artifact-repository";
-import { SessionBudgetService } from "../budget-service";
-import type { CallbackNotificationService } from "../callback-notification-service";
-import type { SessionDiffService } from "../diffs/service";
-import { EventRepository } from "../event-repository";
-import { MessageRepository } from "../message-repository";
-import { SandboxPushService } from "../sandbox-push-service";
-import { SandboxRepository } from "../sandbox-repository";
-import { initSchema } from "../schema";
-import { SessionAttachmentRepository } from "../session-attachment-repository";
-import { SessionCoreRepository } from "../session-core-repository";
-import type { SessionStatusService } from "../session-status-service";
-import { UsageRepository } from "../usage-repository";
-import type { SessionWebSocketManager } from "../websocket-manager";
-import { SandboxArtifactEventHandler } from "./artifact.handler";
-import { SandboxExecutionEventHandler } from "./execution.handler";
-import { SANDBOX_EVENT_PERSISTENCE } from "./persistence-inventory";
-import { SessionSandboxEventProcessor } from "./processor";
-import { SandboxRuntimeEventHandler } from "./runtime.handler";
-import { SandboxStreamingEventHandler } from "./streaming.handler";
+import { SANDBOX_EVENT_PERSISTENCE } from "../../src/session/sandbox-events/persistence-inventory";
+import { initSession, queryDO, seedMessage } from "./helpers";
 
 const SANDBOX_ID = "sb-1";
 const MESSAGE_ID = "msg-1";
@@ -142,7 +119,7 @@ const REPRESENTATIVE_EVENTS: { [T in EventType]: readonly [EventOf<T>, EventOf<T
       sandboxId: SANDBOX_ID,
       messageId: MESSAGE_ID,
       timestamp: 2,
-      stepId: "s2",
+      stepId: "s1",
       tokens: { input: 12, output: 3 },
     },
   ],
@@ -258,151 +235,75 @@ function toolCallRowId(event: SandboxEvent): string | null {
   return event.type === "tool_call" ? `tool_call:${toolCallIdentityKey(event)}` : null;
 }
 
-const log: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  child: () => log,
-};
+interface EventRow {
+  id: string;
+  type: string;
+  data: string;
+  created_at: number;
+}
+
+interface StepUsageRow {
+  id: string;
+  input_tokens: number | null;
+  created_at: number;
+}
 
 /**
- * The processor and its four family handlers as `components.ts` composes
- * them, over real repositories on node SQLite. Collaborators that never touch
- * session storage (broadcasts, callbacks, snapshot and queue triggers, the
- * graceful-shutdown coordinator with no shutdown in progress) are inert.
+ * A session Durable Object built by the production runtime, with one
+ * processing message for events to attribute to. Events go through the same
+ * `/internal/sandbox-event` route and processor the sandbox bridge feeds.
  */
-function createStoredProcessor(db: DatabaseSync) {
-  const storage = createNodeSqlStorage(db);
-  initSchema(storage.sql);
-  db.exec(
-    "INSERT INTO session (id, model, harness, created_at, updated_at) VALUES ('s', 'model', 'opencode', 1, 1)"
-  );
-  db.exec("INSERT INTO participants (id, user_id, joined_at) VALUES ('p', 'user', 1)");
-  db.exec(
-    `INSERT INTO messages (id, author_id, content, source, status, created_at)
-     VALUES ('${MESSAGE_ID}', 'p', 'prompt', 'web', 'processing', 1)`
-  );
-  db.exec(`INSERT INTO sandbox (id, status, created_at) VALUES ('${SANDBOX_ID}', 'connecting', 1)`);
-
-  const { sql, transactionSync } = storage;
-  const eventRepository = new EventRepository(sql, transactionSync);
-  const usageRepository = new UsageRepository(sql, transactionSync);
-  const messageRepository = new MessageRepository(
-    sql,
-    transactionSync,
-    new SessionAttachmentRepository(sql),
-    eventRepository
-  );
-  const sessionCoreRepository = new SessionCoreRepository(sql, transactionSync);
-  const sandboxRepository = new SandboxRepository(sql, log, "unused-encryption-key");
-
-  const messenger = { broadcast: () => {}, sendToSandbox: async () => {} };
-  const wsManager = {
-    getSandboxSocket: () => null,
-    getSandboxCommandTarget: () => ({ kind: "unavailable" }),
-    send: () => true,
-  } as unknown as SessionWebSocketManager;
-  const callbackService = {
-    notifyToolCall: async () => {},
-    notifyComplete: async () => {},
-  } as unknown as CallbackNotificationService;
-  const backgroundTasks = createTestBackgroundTasks();
-  const updateLastActivity = () => {};
-  const scheduleInactivityCheck = async () => {};
-  const processMessageQueue = async () => {};
-
-  const budgetService = new SessionBudgetService(
-    sessionCoreRepository,
-    messageRepository,
-    eventRepository,
-    messenger,
-    { prepare: () => null, deliver: async () => {} },
-    processMessageQueue,
-    generateId
-  );
-
-  const processor = new SessionSandboxEventProcessor(
-    log,
-    messageRepository,
-    wsManager,
-    new SandboxStreamingEventHandler(
-      backgroundTasks,
-      eventRepository,
-      callbackService,
-      messenger,
-      updateLastActivity,
-      budgetService,
-      usageRepository
-    ),
-    new SandboxArtifactEventHandler(
-      new ArtifactRepository(sql),
-      eventRepository,
-      messenger,
-      updateLastActivity
-    ),
-    new SandboxExecutionEventHandler(
-      backgroundTasks,
-      log,
-      messageRepository,
-      callbackService,
-      messenger,
-      async () => {},
-      { reconcileAfterExecution: async () => {} } as unknown as SessionStatusService,
-      async () => {},
-      updateLastActivity,
-      scheduleInactivityCheck,
-      processMessageQueue,
-      () => {},
-      budgetService,
-      transactionSync,
-      () => {}
-    ),
-    new SandboxRuntimeEventHandler(
-      sessionCoreRepository,
-      sandboxRepository,
-      eventRepository,
-      messenger,
-      { pinBaselines: () => {} } as unknown as SessionDiffService,
-      (title) => ({ ok: true, title }),
-      updateLastActivity,
-      () => {},
-      scheduleInactivityCheck,
-      backgroundTasks,
-      { processMessageQueue },
-      log,
-      { onRuntimeReady: () => false }
-    ),
-    new SandboxPushService(log, wsManager),
-    { generationReady: () => {}, prepared: () => {} }
+async function createStoredSession() {
+  const { stub } = await initSession();
+  const [owner] = await queryDO<{ id: string }>(stub, "SELECT id FROM participants LIMIT 1");
+  await seedMessage(stub, {
+    id: MESSAGE_ID,
+    authorId: owner.id,
+    content: "prompt",
+    source: "web",
+    status: "processing",
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+  });
+  const [{ baseline }] = await queryDO<{ baseline: number }>(
+    stub,
+    "SELECT COALESCE(MAX(timeline_sequence), 0) AS baseline FROM events"
   );
 
   return {
-    processor,
-    events: () => eventRepository.getEventTimelinePage({ limit: 100 }).events,
-    stepUsageRowCount: () => usageRepository.getSessionTotals().rowCount,
+    async send(event: SandboxEvent): Promise<void> {
+      const response = await stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      });
+      expect(response.status).toBe(200);
+    },
+    /** Timeline rows written since the session was set up, oldest first. */
+    events: () =>
+      queryDO<EventRow>(
+        stub,
+        `SELECT id, type, data, created_at FROM events
+         WHERE timeline_sequence > ? ORDER BY timeline_sequence`,
+        baseline
+      ),
+    stepUsage: () =>
+      queryDO<StepUsageRow>(stub, "SELECT id, input_tokens, created_at FROM step_usage"),
   };
 }
 
 describe("SANDBOX_EVENT_PERSISTENCE", () => {
-  let db: DatabaseSync;
-  let stored: ReturnType<typeof createStoredProcessor>;
+  let session: Awaited<ReturnType<typeof createStoredSession>>;
 
-  beforeEach(() => {
-    db = new DatabaseSync(":memory:");
-    stored = createStoredProcessor(db);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    db.close();
+  beforeEach(async () => {
+    session = await createStoredSession();
   });
 
   it.each(eventTypeSchema.options)("stores %s as its declared mode", async (type) => {
     const [first, second] = REPRESENTATIVE_EVENTS[type];
-    await stored.processor.processSandboxEvent(first);
-    await stored.processor.processSandboxEvent(second);
-    const events = stored.events();
+    await session.send(first);
+    await session.send(second);
+    const events = await session.events();
     const mode = SANDBOX_EVENT_PERSISTENCE[type];
 
     switch (mode) {
@@ -417,11 +318,11 @@ describe("SANDBOX_EVENT_PERSISTENCE", () => {
         return;
       case "usage_table":
         expect(events).toEqual([]);
-        expect(stored.stepUsageRowCount()).toBe(2);
+        expect(await session.stepUsage()).toHaveLength(1);
         return;
       case "none":
         expect(events).toEqual([]);
-        expect(stored.stepUsageRowCount()).toBe(0);
+        expect(await session.stepUsage()).toEqual([]);
         return;
       default:
         mode satisfies never;
@@ -430,11 +331,12 @@ describe("SANDBOX_EVENT_PERSISTENCE", () => {
 
   it("keeps only the latest cumulative token text for a message", async () => {
     const [first, second] = REPRESENTATIVE_EVENTS.token;
-    await stored.processor.processSandboxEvent(first);
-    await stored.processor.processSandboxEvent(second);
-    await stored.processor.processSandboxEvent({ ...first, messageId: "msg-2", content: "Other" });
+    await session.send(first);
+    await session.send(second);
+    await session.send({ ...first, messageId: "msg-2", content: "Other" });
 
-    expect(stored.events().map((row) => [row.id, JSON.parse(row.data).content])).toEqual([
+    const events = await session.events();
+    expect(events.map((row) => [row.id, JSON.parse(row.data).content])).toEqual([
       [`token:${MESSAGE_ID}`, "Hello"],
       ["token:msg-2", "Other"],
     ]);
@@ -442,52 +344,63 @@ describe("SANDBOX_EVENT_PERSISTENCE", () => {
 
   it("keeps the first execution completion for a message and drops a resend", async () => {
     const [completion, resend] = REPRESENTATIVE_EVENTS.execution_complete;
-    await stored.processor.processSandboxEvent(completion);
-    await stored.processor.processSandboxEvent(resend);
+    await session.send(completion);
+    await session.send(resend);
 
-    expect(stored.events().map((row) => [row.id, JSON.parse(row.data).success])).toEqual([
+    const events = await session.events();
+    expect(events.map((row) => [row.id, JSON.parse(row.data).success])).toEqual([
       [`execution_complete:${MESSAGE_ID}`, true],
     ]);
   });
 
   it("keeps the pre-compaction token text when context is compacted", async () => {
     const [before, after] = REPRESENTATIVE_EVENTS.token;
-    await stored.processor.processSandboxEvent(before);
-    await stored.processor.processSandboxEvent(REPRESENTATIVE_EVENTS.context_compacted[0]);
-    await stored.processor.processSandboxEvent(after);
+    await session.send(before);
+    await session.send(REPRESENTATIVE_EVENTS.context_compacted[0]);
+    await session.send(after);
 
-    const events = stored.events();
+    const events = await session.events();
     expect(events.map((row) => row.type)).toEqual(["token", "context_compacted", "token"]);
     expect(events[0].id).toMatch(new RegExp(`^token:${MESSAGE_ID}:`));
     expect(events.map((row) => JSON.parse(row.data).content)).toEqual(["Hel", undefined, "Hello"]);
   });
 
   it("keeps only the latest state of a tool call, at the first state's position", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
     const [running, completed] = REPRESENTATIVE_EVENTS.tool_call;
-    vi.setSystemTime(1_000);
-    await stored.processor.processSandboxEvent(running);
-    vi.setSystemTime(2_000);
-    await stored.processor.processSandboxEvent(completed);
+    await session.send(running);
+    const [runningRow] = await session.events();
+    await session.send(completed);
 
-    const [row, ...rest] = stored.events();
+    const [row, ...rest] = await session.events();
     expect(rest).toEqual([]);
     expect(row.id).toBe(toolCallRowId(completed));
-    expect(row.created_at).toBe(1_000);
+    expect(row.created_at).toBe(runningRow.created_at);
     expect(JSON.parse(row.data)).toMatchObject({ status: "completed", output: "README.md" });
   });
 
   it("keeps a separate row per tool-call identity", async () => {
     const [call] = REPRESENTATIVE_EVENTS.tool_call;
     const subtaskCall = { ...call, isSubtask: true, childSessionId: "child-1" };
-    await stored.processor.processSandboxEvent(call);
-    await stored.processor.processSandboxEvent({ ...call, callId: "call-2" });
-    await stored.processor.processSandboxEvent(subtaskCall);
+    await session.send(call);
+    await session.send({ ...call, callId: "call-2" });
+    await session.send(subtaskCall);
 
-    expect(stored.events().map((row) => row.id)).toEqual([
+    const events = await session.events();
+    expect(events.map((row) => row.id)).toEqual([
       toolCallRowId(call),
       toolCallRowId({ ...call, callId: "call-2" }),
       toolCallRowId(subtaskCall),
+    ]);
+  });
+
+  it("replaces a resent step's usage in place, keeping its first arrival time", async () => {
+    const [step, resend] = REPRESENTATIVE_EVENTS.step_finish;
+    await session.send(step);
+    const [firstRow] = await session.stepUsage();
+    await session.send(resend);
+
+    expect(await session.stepUsage()).toEqual([
+      { id: "s1", input_tokens: 12, created_at: firstRow.created_at },
     ]);
   });
 });

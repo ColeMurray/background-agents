@@ -4,6 +4,11 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
  * How a sandbox event reaches the session's `events` table: the timeline,
  * and the intended source of a trace export (not yet exported).
  *
+ * A mode describes the event's own record only. Handlers also write derived
+ * state that is not listed here: `step_finish` and `execution_complete` feed
+ * reported cost into the message and session rows, and crossing the session
+ * cost limit appends a separate budget `warning` row.
+ *
  * - `append`: one row per accepted event under a fresh id. Keeps every event.
  *   (`boot_progress` is accepted once per `bootSeq`; a resend is dropped.)
  * - `upsert_by_message`: one row per message, id `<type>:<messageId>`. Keeps
