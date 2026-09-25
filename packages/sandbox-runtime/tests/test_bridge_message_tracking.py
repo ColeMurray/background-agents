@@ -140,23 +140,31 @@ class TestHandlePartTranslation:
         second_start = stream._handle_part(
             state, {"type": "step-start", "id": "start-2", "messageID": "assistant-1"}, None
         )[0]
+        corrected_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
         second_finish = stream._handle_part(
             state, {"type": "step-finish", "id": "finish-2", "messageID": "assistant-1"}, None
         )[0]
 
         assert first_start["stepId"] == first_finish["stepId"] == "start-1"
+        assert corrected_finish["stepId"] == first_start["stepId"]
         assert second_start["stepId"] == second_finish["stepId"] == "start-2"
         assert first_start["stepId"] != second_start["stepId"]
-        corrected_finish = stream._handle_part(
-            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
-        )[0]
-        assert corrected_finish["stepId"] == first_start["stepId"]
         replayed_start = stream._handle_part(
-            make_state("cp-message-123"),
+            state,
             {"type": "step-start", "id": "start-1", "messageID": "assistant-1"},
             None,
         )[0]
         assert replayed_start["stepId"] == first_finish["stepId"]
+        replayed_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
+        )[0]
+        unmatched_finish = stream._handle_part(
+            state, {"type": "step-finish", "id": "finish-3", "messageID": "assistant-1"}, None
+        )[0]
+        assert replayed_finish["stepId"] == first_start["stepId"]
+        assert unmatched_finish["stepId"] == "finish-3"
 
     def test_step_ids_are_separate_for_interleaved_messages(self, bridge: AgentBridge):
         stream = bridge.harness.prompt_stream

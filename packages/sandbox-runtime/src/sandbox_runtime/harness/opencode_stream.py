@@ -672,12 +672,15 @@ class OpenCodePromptStream:
         elif part_type == "step-finish":
             message_id = part.get("messageID") or part.get("sessionID") or ""
             finish_id = part_id if isinstance(part_id, str) and part_id else None
-            step_id = (
-                (state.finished_step_ids.get(finish_id) if finish_id else None)
-                or state.active_step_ids.pop(message_id, None)
-                or finish_id
-                or str(uuid.uuid4())
-            )
+            cached_step_id = state.finished_step_ids.get(finish_id) if finish_id else None
+            if cached_step_id:
+                if state.active_step_ids.get(message_id) == cached_step_id:
+                    state.active_step_ids.pop(message_id)
+                step_id = cached_step_id
+            else:
+                step_id = (
+                    state.active_step_ids.pop(message_id, None) or finish_id or str(uuid.uuid4())
+                )
             if finish_id:
                 state.finished_step_ids[finish_id] = step_id
             cost = part.get("cost")
