@@ -120,6 +120,12 @@ describe("MessageRepository", () => {
     expect(repository.getNextPendingMessage()).toEqual(pending);
   });
 
+  it("rejects malformed persisted processing-message rows", () => {
+    mock.setData(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`, [{ id: 123 }]);
+
+    expect(() => repository.getProcessingMessage()).toThrow(SessionStorageIntegrityError);
+  });
+
   it("throws on malformed persisted message rows", () => {
     const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
     mock.setData(pendingQuery, [{ ...messageRow(), source: "unknown" }]);
@@ -151,6 +157,16 @@ describe("MessageRepository", () => {
     });
   });
 
+  it("rejects partial persisted processing-message timestamp rows", () => {
+    mock.setData(`SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`, [
+      { id: "msg-1" },
+    ]);
+
+    expect(() => repository.getProcessingMessageWithCreatedAt()).toThrow(
+      SessionStorageIntegrityError
+    );
+  });
+
   it("tracks stop confirmation deadlines", () => {
     const query = `SELECT id, stop_confirmation_deadline FROM messages
        WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;
@@ -162,6 +178,16 @@ describe("MessageRepository", () => {
     });
     repository.clearMessageAwaitingStopConfirmation("msg-1");
     expect(mock.calls[2].query).toContain("stop_confirmation_deadline = NULL");
+  });
+
+  it("rejects malformed persisted stop-confirmation rows", () => {
+    const query = `SELECT id, stop_confirmation_deadline FROM messages
+       WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;
+    mock.setData(query, [{ id: "msg-1", stop_confirmation_deadline: null }]);
+
+    expect(() => repository.getMessageAwaitingStopConfirmation()).toThrow(
+      SessionStorageIntegrityError
+    );
   });
 
   it("looks up idempotent requests and unfinished positions", () => {
