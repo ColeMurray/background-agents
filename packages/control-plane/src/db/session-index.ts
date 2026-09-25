@@ -90,6 +90,11 @@ export interface SessionEntry {
   activeDurationMs?: number;
   messageCount?: number;
   prCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   createdAt: number;
   updatedAt: number;
   /**
@@ -138,6 +143,11 @@ const sessionRowSchema = z.object({
   active_duration_ms: z.number(),
   message_count: z.number(),
   pr_count: z.number(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  reasoning_tokens: z.number(),
+  cache_read_tokens: z.number(),
+  cache_write_tokens: z.number(),
   environment_id: z.string().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
@@ -190,6 +200,11 @@ function toEntry(row: SessionRow): SessionEntry {
     activeDurationMs: row.active_duration_ms,
     messageCount: row.message_count,
     prCount: row.pr_count,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    reasoningTokens: row.reasoning_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheWriteTokens: row.cache_write_tokens,
     environmentId: row.environment_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -735,14 +750,32 @@ export class SessionIndexStore {
       activeDurationMs: number;
       messageCount: number;
       prCount: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
     }
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?
+        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?,
+           input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_read_tokens = ?,
+           cache_write_tokens = ?
          WHERE id = ?`
       )
-      .bind(metrics.totalCost, metrics.activeDurationMs, metrics.messageCount, metrics.prCount, id)
+      .bind(
+        metrics.totalCost,
+        metrics.activeDurationMs,
+        metrics.messageCount,
+        metrics.prCount,
+        metrics.inputTokens,
+        metrics.outputTokens,
+        metrics.reasoningTokens,
+        metrics.cacheReadTokens,
+        metrics.cacheWriteTokens,
+        id
+      )
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }

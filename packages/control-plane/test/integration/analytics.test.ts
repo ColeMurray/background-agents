@@ -56,6 +56,11 @@ async function seedSession(
     activeDurationMs: input.activeDurationMs,
     messageCount: input.messageCount,
     prCount: input.prCount,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   });
 }
 

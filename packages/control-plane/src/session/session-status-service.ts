@@ -18,6 +18,7 @@ import type { SessionRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
+import type { UsageRepository } from "./usage-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
 import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/session-activity";
@@ -32,6 +33,7 @@ export class SessionStatusService {
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
     private readonly artifactRepository: ArtifactRepository,
+    private readonly usageRepository: Pick<UsageRepository, "getSessionTotals">,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexProjections,
     private readonly statusProjection: Pick<SessionStatusProjectionStore, "project">,
@@ -346,13 +348,21 @@ export class SessionStatusService {
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
     this.backgroundTasks.submit(
-      () =>
-        this.sessionIndex.updateMetrics(sessionId, {
+      () => {
+        // The index keeps aggregate-friendly zeros; "unknown" lives in the usage rows.
+        const tokens = this.usageRepository.getSessionTotals();
+        return this.sessionIndex.updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,
           activeDurationMs,
           messageCount,
           prCount,
-        }),
+          inputTokens: tokens.inputTokens ?? 0,
+          outputTokens: tokens.outputTokens ?? 0,
+          reasoningTokens: tokens.reasoningTokens ?? 0,
+          cacheReadTokens: tokens.cacheReadTokens ?? 0,
+          cacheWriteTokens: tokens.cacheWriteTokens ?? 0,
+        });
+      },
       {
         name: "session_index.update_metrics",
         context: { session_id: sessionId },

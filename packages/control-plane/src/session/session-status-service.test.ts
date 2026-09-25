@@ -9,6 +9,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
+import type { SessionUsageTotals, UsageRepository } from "./usage-repository";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -41,6 +42,19 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   } as SessionRow;
 }
 
+function createUsageTotals(overrides: Partial<SessionUsageTotals> = {}): SessionUsageTotals {
+  return {
+    rowCount: 2,
+    inputTokens: 1200,
+    outputTokens: 340,
+    reasoningTokens: 56,
+    cacheReadTokens: 7800,
+    cacheWriteTokens: 910,
+    totalTokens: 10306,
+    ...overrides,
+  };
+}
+
 function harness(options: { session?: SessionRow | null } = {}) {
   const session = options.session === undefined ? createSession() : options.session;
 
@@ -57,6 +71,10 @@ function harness(options: { session?: SessionRow | null } = {}) {
       () => [{ type: "pr" }, { type: "screenshot" }, { type: "pr" }] as ArtifactRow[]
     ),
   } as unknown as ArtifactRepository;
+
+  const usageRepository = {
+    getSessionTotals: vi.fn(() => createUsageTotals()),
+  };
 
   const broadcast = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) } as SessionMessenger;
@@ -88,6 +106,7 @@ function harness(options: { session?: SessionRow | null } = {}) {
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
     artifactRepository,
+    usageRepository as unknown as UsageRepository,
     messenger,
     sessionIndex,
     statusProjection,
@@ -99,6 +118,7 @@ function harness(options: { session?: SessionRow | null } = {}) {
     statusProjection,
     repository,
     artifactRepository,
+    usageRepository,
     broadcast,
     sessionIndex,
     backgroundTasks,
@@ -200,8 +220,57 @@ describe("SessionStatusService.transition", () => {
       activeDurationMs: 4500,
       messageCount: 3,
       prCount: 2,
+      inputTokens: 1200,
+      outputTokens: 340,
+      reasoningTokens: 56,
+      cacheReadTokens: 7800,
+      cacheWriteTokens: 910,
     });
     expect(h.backgroundTasks.submissions).not.toHaveLength(0);
+  });
+
+  it("projects token kinds no step reported as zero", async () => {
+    const h = harness({ session: createSession({ status: "active" }) });
+    h.usageRepository.getSessionTotals.mockReturnValue(
+      createUsageTotals({
+        rowCount: 0,
+        inputTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        totalTokens: null,
+      })
+    );
+
+    await h.service.transition("completed");
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith(
+      "public-session-1",
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      })
+    );
+  });
+
+  it("absorbs a usage totals read failure in the metrics background task", async () => {
+    const h = harness({
+      session: createSession({ status: "active", parent_session_id: "parent-1" }),
+    });
+    const error = new Error("Malformed step usage totals row");
+    h.usageRepository.getSessionTotals.mockImplementation(() => {
+      throw error;
+    });
+
+    expect(await h.service.transition("completed")).toBe(true);
+
+    expect(h.backgroundTasks.failures).toEqual([error]);
+    expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
+    expect(h.parentFetch).toHaveBeenCalledTimes(1);
   });
 
   it("syncs metrics even when already in the terminal status", async () => {

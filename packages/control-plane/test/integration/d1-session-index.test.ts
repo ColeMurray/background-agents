@@ -475,6 +475,13 @@ describe("D1 SessionIndexStore", () => {
     expect(before!.activeDurationMs).toBe(0);
     expect(before!.messageCount).toBe(0);
     expect(before!.prCount).toBe(0);
+    expect(before).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
 
     // Update metrics
     const updated = await store.updateMetrics("session-metrics", {
@@ -482,6 +489,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 120000,
       messageCount: 5,
       prCount: 1,
+      inputTokens: 1200,
+      outputTokens: 340,
+      reasoningTokens: 56,
+      cacheReadTokens: 7800,
+      cacheWriteTokens: 910,
     });
     expect(updated).toBe(true);
 
@@ -491,6 +503,13 @@ describe("D1 SessionIndexStore", () => {
     expect(after!.activeDurationMs).toBe(120000);
     expect(after!.messageCount).toBe(5);
     expect(after!.prCount).toBe(1);
+    expect(after).toMatchObject({
+      inputTokens: 1200,
+      outputTokens: 340,
+      reasoningTokens: 56,
+      cacheReadTokens: 7800,
+      cacheWriteTokens: 910,
+    });
   });
 
   it("updateMetrics overwrites on repeated calls (last write wins)", async () => {
@@ -515,6 +534,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 60000,
       messageCount: 3,
       prCount: 0,
+      inputTokens: 100,
+      outputTokens: 20,
+      reasoningTokens: 0,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 50,
     });
 
     await store.updateMetrics("session-metrics-overwrite", {
@@ -522,6 +546,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 180000,
       messageCount: 8,
       prCount: 2,
+      inputTokens: 300,
+      outputTokens: 60,
+      reasoningTokens: 10,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 75,
     });
 
     const session = await store.get("session-metrics-overwrite");
@@ -529,6 +558,13 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.activeDurationMs).toBe(180000);
     expect(session!.messageCount).toBe(8);
     expect(session!.prCount).toBe(2);
+    expect(session).toMatchObject({
+      inputTokens: 300,
+      outputTokens: 60,
+      reasoningTokens: 10,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 75,
+    });
   });
 
   it("updateMetrics returns false for non-existent session", async () => {
@@ -538,6 +574,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 1000,
       messageCount: 1,
       prCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     });
     expect(result).toBe(false);
   });
