@@ -96,6 +96,7 @@ from a command, check that the command actually printed something first.
 | `get_session_events`    | `GET /sessions/:id/events`         | what a session did, and where it went wrong     |
 | `get_session_messages`  | `GET /sessions/:id/messages`       | prompts and responses without tool detail       |
 | `get_session_diff`      | `GET /sessions/:id/diff`           | the changes a session produced                  |
+| `list_automations`      | `GET /automations`                 | find an automation id, and what triggers it     |
 | `list_automation_runs`  | `GET /automations/:id/invocations` | did a scheduled automation fire, skip, or fail  |
 | `get_automation_run`    | `GET /automations/:id/runs/:runId` | one run and the sessions it launched            |
 | `create_automation`     | `POST /automations`                | schedule or wire up new recurring work          |
@@ -104,11 +105,12 @@ from a command, check that the command actually printed something first.
 | `import_skill_from_git` | `POST /skills/import`              | create a skill from a repository                |
 | `update_skill_from_git` | `POST /skills/:id/reimport`        | re-import a skill from its recorded source      |
 
-`get_session_events`, `get_session_messages` and `list_skills` are paged — pass the cursor from a
-response back to continue.
+`get_session_events`, `get_session_messages`, `list_automations` and `list_skills` are paged — pass
+the cursor from a response back to continue.
 
-There is no `list_automations`: `GET /automations` is a read this credential may make, but no tool
-wraps it yet, so an automation id comes from `create_automation` or from the dashboard.
+`list_automations` also narrows by name (`search`) and by target repository (`repo_owner`,
+`repo_name`, either alone), and reports each automation's last few invocations alongside its trigger
+and targets — enough to see whether a schedule is firing without a second call.
 
 ### The two automation writes
 

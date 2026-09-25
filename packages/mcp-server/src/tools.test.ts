@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
+import { z } from "zod";
 import type { ControlPlaneClient } from "./client";
 import { TOOLS, type ToolDefinition } from "./tools";
 
@@ -131,6 +133,62 @@ describe("list_skills", () => {
     await tool("list_skills").run(client, { limit: 25, cursor: "deploy-service" });
 
     expect(get).toHaveBeenCalledWith("/skills", { limit: 25, cursor: "deploy-service" });
+  });
+});
+
+describe("list_automations", () => {
+  it("camel-cases the filters and passes the caller's cursor through", async () => {
+    const { client, get } = fakeClient({
+      get: () => ({ automations: [], hasMore: false, nextCursor: null }),
+    });
+
+    await tool("list_automations").run(client, {
+      search: "nightly",
+      repo_owner: "group/subgroup",
+      repo_name: "api",
+      limit: 50,
+      cursor: "opaque",
+    });
+
+    expect(get).toHaveBeenCalledWith("/automations", {
+      search: "nightly",
+      repoOwner: "group/subgroup",
+      repoName: "api",
+      limit: 50,
+      cursor: "opaque",
+    });
+  });
+
+  it("refuses a blank or over-long search rather than letting the route answer", () => {
+    // The route trims search and drops the filter when nothing survives, so a
+    // blank one would answer with every automation; past its own cap it answers
+    // 400, which the tool should not have let the model reach.
+    const schema = z.object(tool("list_automations").inputSchema);
+
+    expect(schema.safeParse({ search: "   " }).success).toBe(false);
+    expect(schema.safeParse({ search: "x".repeat(MAX_AUTOMATION_NAME_LENGTH + 1) }).success).toBe(
+      false
+    );
+    expect(schema.parse({ search: " nightly " }).search).toBe("nightly");
+  });
+
+  it("sends no filters of its own, leaving the control plane's page size", async () => {
+    // Every value here is undefined, which the client drops from the query
+    // string — a limit invented locally would override the server default and
+    // then have to be kept in step with it.
+    const { client, get } = fakeClient({
+      get: () => ({ automations: [], hasMore: false, nextCursor: null }),
+    });
+
+    await tool("list_automations").run(client, {});
+
+    expect(get).toHaveBeenCalledWith("/automations", {
+      search: undefined,
+      repoOwner: undefined,
+      repoName: undefined,
+      limit: undefined,
+      cursor: undefined,
+    });
   });
 });
 

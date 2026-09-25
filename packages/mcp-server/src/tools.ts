@@ -13,6 +13,8 @@ import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { automationTriggerTypeSchema, triggerConfigSchema } from "@open-inspect/shared/triggers";
 import {
   MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
+  MAX_AUTOMATION_LIST_PAGE_SIZE,
+  MAX_AUTOMATION_NAME_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
   sentryClientSecretSchema,
 } from "@open-inspect/shared/types/automations";
@@ -60,7 +62,7 @@ const sessionId = z.string().min(1).describe("Session id, as returned by list_se
 const automationId = z
   .string()
   .min(1)
-  .describe("Automation id, as returned by create_automation or shown in the web UI");
+  .describe("Automation id, as returned by list_automations or create_automation");
 
 /**
  * The preview fields a confirmation needs, read leniently.
@@ -250,6 +252,52 @@ export const TOOLS: ToolDefinition[] = [
       client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/diff`),
   },
   {
+    name: "list_automations",
+    title: "List automations",
+    readOnly: true,
+    description:
+      "List the installation's automations with their trigger, targets, and last few " +
+      "invocations. Use to find an automation id before triggering one or reading its runs, and " +
+      "to see which automations are enabled. Returns one page; pass the response's nextCursor " +
+      "back to continue.",
+    inputSchema: {
+      search: z
+        // Trimmed, and blank refused: the route trims this itself and drops the
+        // filter when nothing is left, which would answer a blank search with a
+        // full unfiltered page that reads as a filtered one. Capped where the
+        // route caps it, so an over-long needle fails here rather than as a 400.
+        .string()
+        .trim()
+        .min(1)
+        .max(MAX_AUTOMATION_NAME_LENGTH)
+        .optional()
+        .describe("Only automations whose name contains this text, case-insensitively"),
+      repo_owner: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Only automations targeting this owner. May contain `/` where the provider nests " +
+            "namespaces, as GitLab subgroups do."
+        ),
+      repo_name: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Only automations targeting this repository name. Usable without repo_owner."),
+      limit: z.number().int().min(1).max(MAX_AUTOMATION_LIST_PAGE_SIZE).optional(),
+      cursor,
+    },
+    run: (client, args) =>
+      client.get("/automations", {
+        search: args.search as string | undefined,
+        repoOwner: args.repo_owner as string | undefined,
+        repoName: args.repo_name as string | undefined,
+        limit: args.limit as number | undefined,
+        cursor: args.cursor as string | undefined,
+      }),
+  },
+  {
     name: "list_automation_runs",
     title: "List automation invocations",
     readOnly: true,
@@ -296,7 +344,11 @@ export const TOOLS: ToolDefinition[] = [
       "takes, and for a webhook trigger the key that calls it, which is shown this once only. " +
       "Targets have to be repositories and environments the owner may already use.",
     inputSchema: {
-      name: z.string().min(1).describe("Display name, as the dashboard lists it"),
+      name: z
+        .string()
+        .min(1)
+        .max(MAX_AUTOMATION_NAME_LENGTH)
+        .describe("Display name, as the dashboard lists it"),
       instructions: z
         .string()
         .min(1)
