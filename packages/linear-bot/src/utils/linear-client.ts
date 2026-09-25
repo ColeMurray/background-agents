@@ -10,6 +10,7 @@ import {
   type LinearIssueDetails,
 } from "../types";
 import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared/auth";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { createLogger } from "../logger";
 import {
   getClientCredentialsTokenOrThrow,
@@ -18,6 +19,7 @@ import {
 } from "./linear-credentials";
 import { z } from "zod";
 import { abortable } from "./abortable";
+import { LINEAR_DOCUMENTS, type LinearDocument } from "./linear-documents";
 
 export {
   completeLinearOAuthInstallation,
@@ -29,6 +31,8 @@ const log = createLogger("linear-client");
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 export const LINEAR_GRAPHQL_TIMEOUT_MS = 15_000;
+/** Largest non-2xx response body read to recover Linear's error messages. */
+const LINEAR_ERROR_BODY_MAX_BYTES = 16 * 1024;
 
 const linearCommentCreateResponseSchema = z.object({
   data: z
@@ -108,7 +112,7 @@ export async function getLinearClientOrThrow(
  */
 export async function linearGraphQL(
   client: LinearApiClient,
-  query: string,
+  query: LinearDocument,
   variables: Record<string, unknown>,
   callerSignal?: AbortSignal
 ): Promise<Record<string, unknown>> {
@@ -163,7 +167,11 @@ export async function linearGraphQL(
   }
 
   if (!res.ok) {
-    throw new Error(`Linear API error: ${res.status}`);
+    // Callers log the thrown error, so the detail reaches their log lines too.
+    const detail = await readLinearErrorDetail(res);
+    throw new Error(
+      detail ? `Linear API error: ${res.status}: ${detail}` : `Linear API error: ${res.status}`
+    );
   }
 
   const parsed = linearGraphQLResponseSchema.safeParse(await res.json());
@@ -180,6 +188,33 @@ export async function linearGraphQL(
   return json;
 }
 
+/**
+ * Recover the GraphQL `errors[].message` list from a non-2xx response. Linear
+ * reports query validation failures (e.g. an unknown variable type) as HTTP
+ * 400 with the reason only in the body. Returns undefined when the body is
+ * oversized, unreadable, or carries no messages.
+ */
+async function readLinearErrorDetail(res: Response): Promise<string | undefined> {
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await readBodyCapped(res.body, LINEAR_ERROR_BODY_MAX_BYTES);
+  } catch {
+    return undefined;
+  }
+  if (!bytes) return undefined;
+
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return undefined;
+  }
+  const parsed = linearGraphQLResponseSchema.safeParse(body);
+  if (!parsed.success) return undefined;
+  const messages = (parsed.data.errors ?? []).flatMap((e) => (e.message ? [e.message] : []));
+  return messages.length > 0 ? messages.join("; ") : undefined;
+}
+
 // ─── Agent Activities ────────────────────────────────────────────────────────
 
 export async function emitAgentActivity(
@@ -189,19 +224,9 @@ export async function emitAgentActivity(
   ephemeral?: boolean
 ): Promise<boolean> {
   try {
-    await linearGraphQL(
-      client,
-      `
-      mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
-        agentActivityCreate(input: $input) {
-          success
-        }
-      }
-    `,
-      {
-        input: { agentSessionId, content, ephemeral },
-      }
-    );
+    await linearGraphQL(client, LINEAR_DOCUMENTS.AgentActivityCreate, {
+      input: { agentSessionId, content, ephemeral },
+    });
     return true;
   } catch (err) {
     log.error("linear.emit_activity_failed", {
@@ -222,33 +247,7 @@ export async function fetchIssueDetails(
   issueId: string
 ): Promise<LinearIssueDetails | null> {
   try {
-    const data = await linearGraphQL(
-      client,
-      `
-      query IssueDetails($id: String!) {
-        issue(id: $id) {
-          id
-          identifier
-          title
-          description
-          url
-          priority
-          priorityLabel
-          labels { nodes { id name } }
-          project { id name }
-          assignee { id name }
-          team { id key name }
-          comments(first: 10, orderBy: createdAt) {
-            nodes {
-              body
-              user { name }
-            }
-          }
-        }
-      }
-    `,
-      { id: issueId }
-    );
+    const data = await linearGraphQL(client, LINEAR_DOCUMENTS.IssueDetails, { id: issueId });
 
     const parsed = linearIssueDetailsResponseSchema.safeParse(data);
     if (!parsed.success) return null;
@@ -277,17 +276,7 @@ export async function updateAgentSession(
   input: Record<string, unknown>
 ): Promise<void> {
   try {
-    await linearGraphQL(
-      client,
-      `
-      mutation AgentSessionUpdate($id: String!, $input: AgentSessionUpdateInput!) {
-        agentSessionUpdate(id: $id, input: $input) {
-          success
-        }
-      }
-    `,
-      { id: agentSessionId, input }
-    );
+    await linearGraphQL(client, LINEAR_DOCUMENTS.AgentSessionUpdate, { id: agentSessionId, input });
   } catch (err) {
     log.error("linear.update_session_failed", {
       agent_session_id: agentSessionId,
@@ -306,24 +295,11 @@ export async function getRepoSuggestions(
   candidateRepos: Array<{ hostname: string; repositoryFullName: string }>
 ): Promise<Array<{ repositoryFullName: string; confidence: number }>> {
   try {
-    const data = await linearGraphQL(
-      client,
-      `
-      query RepoSuggestions($issueId: String!, $agentSessionId: String!, $candidateRepositories: [IssueRepositorySuggestionInput!]!) {
-        issueRepositorySuggestions(
-          issueId: $issueId
-          agentSessionId: $agentSessionId
-          candidateRepositories: $candidateRepositories
-        ) {
-          suggestions {
-            repositoryFullName
-            confidence
-          }
-        }
-      }
-    `,
-      { issueId, agentSessionId, candidateRepositories: candidateRepos }
-    );
+    const data = await linearGraphQL(client, LINEAR_DOCUMENTS.RepoSuggestions, {
+      issueId,
+      agentSessionId,
+      candidateRepositories: candidateRepos,
+    });
 
     const parsed = linearRepoSuggestionsResponseSchema.safeParse(data);
     if (!parsed.success) return [];
@@ -348,19 +324,7 @@ export async function fetchUser(
   userId: string
 ): Promise<{ id: string; name: string; email: string | null } | null> {
   try {
-    const data = await linearGraphQL(
-      client,
-      `
-      query FetchUser($id: String!) {
-        user(id: $id) {
-          id
-          name
-          email
-        }
-      }
-    `,
-      { id: userId }
-    );
+    const data = await linearGraphQL(client, LINEAR_DOCUMENTS.FetchUser, { id: userId });
 
     const parsed = linearUserResponseSchema.safeParse(data);
     if (!parsed.success) return null;
@@ -409,11 +373,7 @@ export async function postIssueComment(
         Authorization: apiKey,
       },
       body: JSON.stringify({
-        query: `
-          mutation CommentCreate($input: CommentCreateInput!) {
-            commentCreate(input: $input) { success }
-          }
-        `,
+        query: LINEAR_DOCUMENTS.CommentCreate,
         variables: { input: { issueId, body } },
       }),
       signal: AbortSignal.timeout(LINEAR_GRAPHQL_TIMEOUT_MS),
