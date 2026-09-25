@@ -5,6 +5,7 @@ import {
   BLANK_PROMPT_MESSAGE,
   isBlankPrompt,
   promptContentSchema,
+  promptValidationError,
 } from "@open-inspect/shared/types/prompts";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
@@ -31,9 +32,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id: sessionId } = await params;
 
   try {
-    const parsed = promptRequestSchema.safeParse(await request.json());
+    const raw = await request.json();
+    const parsed = promptRequestSchema.safeParse(raw);
     if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid prompt request" }, { status: 400 });
+      return NextResponse.json(promptValidationError(parsed.error, raw), {
+        status: 400,
+      });
     }
     const { content, model, reasoningEffort, attachments } = parsed.data;
 

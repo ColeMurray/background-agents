@@ -1,6 +1,7 @@
 import type { Logger } from "../../../logger";
 import { eventTypeSchema } from "@open-inspect/shared/types/sandbox-events";
 import { messageStatusSchema } from "@open-inspect/shared/types/sessions";
+import { promptValidationError } from "@open-inspect/shared/types/prompts";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
@@ -30,7 +31,7 @@ export class MessagesHandler {
       const raw = await request.json();
       const result = enqueuePromptRequestSchema.safeParse(raw);
       if (!result.success) {
-        return Response.json({ error: "Invalid prompt body" }, { status: 400 });
+        return Response.json(promptValidationError(result.error, raw), { status: 400 });
       }
 
       const body: EnqueuePromptRequest = result.data;
