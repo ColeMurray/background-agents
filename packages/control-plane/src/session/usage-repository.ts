@@ -82,13 +82,27 @@ export class UsageRepository {
       );
       if (!source.success)
         throw new SessionStorageIntegrityError("Malformed usage attribution row");
+      // A timestamp fallback cannot distinguish a correction from another step.
       this.sql.exec(
         `INSERT INTO step_usage (
           id, message_id, model, harness, input_tokens, output_tokens, reasoning_tokens,
           cache_read_tokens, cache_write_tokens, total_tokens, step_cost_usd, message_cost_usd,
           is_subtask, child_session_id, task_call_id, reason, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO NOTHING`,
+        ON CONFLICT(id) DO UPDATE SET
+          input_tokens = excluded.input_tokens,
+          output_tokens = excluded.output_tokens,
+          reasoning_tokens = excluded.reasoning_tokens,
+          cache_read_tokens = excluded.cache_read_tokens,
+          cache_write_tokens = excluded.cache_write_tokens,
+          total_tokens = excluded.total_tokens,
+          step_cost_usd = excluded.step_cost_usd,
+          message_cost_usd = excluded.message_cost_usd,
+          is_subtask = excluded.is_subtask,
+          child_session_id = excluded.child_session_id,
+          task_call_id = excluded.task_call_id,
+          reason = excluded.reason
+        WHERE ? IS NOT NULL`,
         event.stepId ?? `${attributedMessageId}:${event.timestamp}`,
         attributedMessageId,
         source.data.model,
@@ -107,7 +121,8 @@ export class UsageRepository {
         event.childSessionId ?? null,
         event.taskCallId ?? null,
         event.reason ?? null,
-        createdAt
+        createdAt,
+        event.stepId ?? null
       );
     });
   }

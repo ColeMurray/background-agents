@@ -192,6 +192,18 @@ class TestHandlePartTranslation:
         assert "cost" not in events[0]
         assert events[0]["messageCostUsd"] == 0.0
 
+    def test_step_finish_omits_unknown_tokens_and_reason(self, bridge: AgentBridge):
+        stream = bridge.harness.prompt_stream
+        events = stream._handle_part(
+            make_state("cp-message-123"),
+            {"type": "step-finish", "id": "step-1", "cost": 0.5},
+            None,
+        )
+
+        assert "tokens" not in events[0]
+        assert "reason" not in events[0]
+        assert events[0]["cost"] == 0.5
+
     def test_step_finish_reports_cumulative_turn_cost(self, bridge: AgentBridge):
         """Each step carries the turn total; a re-emitted part replaces its own cost."""
         stream = bridge.harness.prompt_stream

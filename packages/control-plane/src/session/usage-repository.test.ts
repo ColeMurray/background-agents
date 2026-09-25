@@ -112,7 +112,7 @@ describe("UsageRepository", () => {
     ]);
   });
 
-  it("keeps unknown tokens null and does not overwrite an existing step on resend", () => {
+  it("updates a corrected step without adding a row or moving its pagination timestamp", () => {
     const event = {
       type: "step_finish" as const,
       sandboxId: "s",
@@ -121,7 +121,7 @@ describe("UsageRepository", () => {
       timestamp: 1,
     };
     usage.recordStepUsage(event, "m", 10);
-    usage.recordStepUsage({ ...event, tokens: 99 }, "m", 20);
+    usage.recordStepUsage({ ...event, tokens: 99, cost: 0.25, reason: "corrected" }, "m", 20);
     expect(usage.getSessionTotals()).toEqual({
       rowCount: 1,
       inputTokens: null,
@@ -129,12 +129,17 @@ describe("UsageRepository", () => {
       reasoningTokens: null,
       cacheReadTokens: null,
       cacheWriteTokens: null,
-      totalTokens: null,
+      totalTokens: 99,
     });
     expect(usage.listStepUsage(null, 10).items[0]).toMatchObject({
       createdAt: 10,
-      totalTokens: null,
+      totalTokens: 99,
+      stepCostUsd: 0.25,
+      reason: "corrected",
     });
+    usage.recordStepUsage({ ...event, tokens: 99, cost: 0.25, reason: "corrected" }, "m", 30);
+    expect(usage.getSessionTotals().rowCount).toBe(1);
+    expect(usage.listStepUsage(null, 10).items[0].createdAt).toBe(10);
   });
 
   it("uses messageId and event timestamp when stepId is absent and sums known values", () => {

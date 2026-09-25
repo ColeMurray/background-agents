@@ -46,6 +46,28 @@ describe("POST /internal/sandbox-event", () => {
       );
       expect(rows).toEqual([{ id: "step-usage", input_tokens: 5, output_tokens: 0 }]);
     });
+    // OpenCode omits unknown tokens and reason rather than sending nulls.
+    ws!.send(
+      JSON.stringify({
+        type: "step_finish",
+        sandboxId,
+        messageId: "msg-usage",
+        timestamp: 1002,
+        cost: 0.01,
+        messageCostUsd: 0.03,
+      })
+    );
+    await vi.waitFor(async () => {
+      const rows = await queryDO<{
+        id: string;
+        total_tokens: number | null;
+        reason: string | null;
+      }>(stub, "SELECT id, total_tokens, reason FROM step_usage ORDER BY id");
+      expect(rows).toEqual([
+        { id: "msg-usage:1002", total_tokens: null, reason: null },
+        { id: "step-usage", total_tokens: 5, reason: null },
+      ]);
+    });
     ws!.close();
   });
   it("stores token event", async () => {
