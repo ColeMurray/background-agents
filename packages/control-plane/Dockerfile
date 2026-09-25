@@ -46,9 +46,9 @@ WORKDIR /app
 # against the roots compiled into it. Litestream is a Go binary and uses the
 # system store, so without this it cannot verify any TLS endpoint -- which
 # means the restore-on-empty-volume path fails against real S3 and works only
-# against a plain-http MinIO, the one case the compose stack and the smoke
-# cover. Taken from the stage above rather than from the litestream image,
-# whose own bundle is frozen at that pinned tag.
+# against a plain-http local object store, the one case the compose stack and
+# the smoke cover. Taken from the stage above rather than from the litestream
+# image, whose own bundle is frozen at that pinned tag.
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
 COPY --from=build /app/packages/control-plane/dist/node/main.js packages/control-plane/dist/node/main.js
