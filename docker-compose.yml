@@ -44,12 +44,10 @@ services:
   # release. Credentials are required on every S3 request.
   #
   # `weed server` runs every component in this one container. Only the S3
-  # gateway listens beyond it: the master, volume server and filer bind to
-  # loopback, because their HTTP and gRPC APIs take no credentials and would
-  # otherwise let any container here read or rewrite objects without the S3
-  # secret. The gateway's own gRPC port has to stay reachable, and it accepts
-  # identity changes unless a filer signing key is set, so each start
-  # generates one. The buckets named in S3_BUCKET are created once S3 answers.
+  # gateway listens beyond it; the master, volume server and filer bind to
+  # loopback, since nothing outside the container talks to them. Each start
+  # generates the filer signing key the components share. The buckets named
+  # in S3_BUCKET are created once S3 answers.
   #
   # The shell stays as PID 1 to create the buckets, and forwards SIGTERM to
   # the server. The filer can take 10 s to close its streams, so the stop
@@ -89,7 +87,7 @@ services:
     # Litestream never start against a store without its buckets. The filer is
     # asked, over loopback, because S3 answers an unsigned request 403 whether
     # or not the bucket exists. Checks run every 2 s until the first passes,
-    # then every 30 s.
+    # then every 30 s; an engine older than Docker 25 skips the 2 s phase.
     healthcheck:
       test:
         - CMD-SHELL
