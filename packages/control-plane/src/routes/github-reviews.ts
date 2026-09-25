@@ -201,12 +201,17 @@ const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
  * Candidates are latest-generation rows with no close-out request and a
  * recorded repository, past REVIEW_FENCE_ORPHAN_GRACE_MS (no create or
  * prompt delivery is still in flight by then), whose index status says the
- * session never started. The index can lag, so each session decides for
- * itself through its draft expiry: it archives itself only when it holds no
- * message and is still `created`, and an archived session rejects any later
- * prompt, so no agent can start after the request is recorded. A session
- * that received its prompt answers `not_draft` or `has_work` and is left
- * alone, its index row repaired; a missing one never had a runtime.
+ * session never started.
+ *
+ * The close-out request is recorded first, then the session is asked to
+ * expire as a draft. Recording first makes this resumable: once the request
+ * is durable the close-out pass drives it, whatever happens to the expiry —
+ * including an expiry that archived the session but whose answer was lost,
+ * after which the session would never be a candidate again. The request is
+ * withdrawn only when the session proves it can still run a review: it holds
+ * a queued or processed prompt (`has_work`), or it is `active`. A session that
+ * archived itself, has no runtime, or whose turn already ended keeps the
+ * request; an archived session rejects any later prompt.
  */
 async function closeOutUnpromptedReviews(
   db: SqlDatabase,
@@ -232,28 +237,64 @@ async function closeOutUnpromptedReviews(
     .all<{ session_id: string; repo_owner: string; repo_name: string }>();
   const drafts = new SessionDraftExpiryClient(sessionRuntime);
   for (const row of candidates.results) {
-    let outcome: DraftSweepOutcome;
+    const sessionId = row.session_id;
+    const request: CloseOutRequest = {
+      owner: row.repo_owner,
+      repo: row.repo_name,
+      description: REVIEW_START_FAILED_DESCRIPTION,
+    };
     try {
-      outcome = await drafts.expireDraft(row.session_id);
+      await recordCloseOutRequest(db, sessionId, request);
+    } catch (recordError) {
+      // Nothing changed: the row is still a candidate on the next tick.
+      logger.warn("review_reaper.unprompted_record_failed", {
+        event: "review_reaper.unprompted_record_failed",
+        session_id: sessionId,
+        error: recordError instanceof Error ? recordError.message : String(recordError),
+      });
+      continue;
+    }
+
+    let expiry: { outcome: DraftSweepOutcome; status?: string };
+    try {
+      expiry = await drafts.expireDraftWithStatus(sessionId);
     } catch (probeError) {
+      // The request stays: the expiry may have archived the session before its
+      // answer was lost, and nothing would ever select this row again.
       logger.warn("review_reaper.unprompted_probe_failed", {
         event: "review_reaper.unprompted_probe_failed",
-        session_id: row.session_id,
+        session_id: sessionId,
         error: probeError instanceof Error ? probeError.message : String(probeError),
       });
       continue;
     }
-    if (outcome !== "archived" && outcome !== "missing") continue;
-    await recordCloseOutRequest(db, row.session_id, {
-      owner: row.repo_owner,
-      repo: row.repo_name,
-      description: REVIEW_START_FAILED_DESCRIPTION,
-    });
-    logger.warn("review_reaper.unprompted_closed_out", {
-      event: "review_reaper.unprompted_closed_out",
-      session_id: row.session_id,
-      outcome,
-    });
+
+    const canStillRun =
+      expiry.outcome === "has_work" ||
+      (expiry.outcome === "not_draft" && expiry.status === "active");
+    if (!canStillRun) {
+      logger.warn("review_reaper.unprompted_closed_out", {
+        event: "review_reaper.unprompted_closed_out",
+        session_id: sessionId,
+        outcome: expiry.outcome,
+        status: expiry.status,
+      });
+      continue;
+    }
+    // Withdraw only our own request, and not while a close-out holds the lease.
+    await db
+      .prepare(
+        `UPDATE github_review_sessions SET close_out_request = NULL
+         WHERE session_id = ? AND close_out_request = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM github_review_state st
+             WHERE st.repo_id = github_review_sessions.repo_id
+               AND st.pr_number = github_review_sessions.pr_number
+               AND ${liveCloseOutLeaseOf("github_review_sessions")}
+           )`
+      )
+      .bind(sessionId, JSON.stringify(request), Date.now())
+      .run();
   }
 }
 

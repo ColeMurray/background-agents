@@ -164,8 +164,11 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 If the prompt cannot be delivered, the handler requests the session's close-out itself, with "Review
 failed to start" as its description. If that request cannot be recorded either, the control plane's
 reaper finds the review later: the session is created with the PR's repository on its fence row, and
-a latest review that has no close-out after 10 minutes and whose session still holds no prompt is
-archived (so no prompt can start it) and closed out the same way.
+a latest review that has no close-out after 10 minutes gets a "Review failed to start" close-out
+request, and then its session is asked to archive itself as an unprompted draft (so no prompt can
+start it). The request is withdrawn only if the session turns out to hold a prompt or to be active;
+otherwise the close-out runs like any other. Recording before archiving keeps the close-out
+resumable if the archive's answer is lost.
 
 **Review Requested (compatibility path):**
 

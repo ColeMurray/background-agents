@@ -678,11 +678,11 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
       return sessionId;
     }
 
-    async function reapWithBot(sessions: SessionRuntimeClient) {
+    async function reapWithBot(sessions: SessionRuntimeClient, db = sqlDatabase(env.DB)) {
       const botFetch = vi.fn(async () => Response.json({ ok: true }));
       const drives: Promise<unknown>[] = [];
       await reapSupersededReviewSessions(
-        sqlDatabase(env.DB),
+        db,
         sessions,
         {
           GITHUB_BOT: { fetch: botFetch },
@@ -693,6 +693,91 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
       await Promise.all(drives);
       return botFetch;
     }
+
+    const FAILED_TO_START = {
+      owner: "acme",
+      repo: "widgets",
+      description: "Review failed to start",
+    };
+
+    async function sessionStatus(sessionId: string) {
+      const state = await realSessions.fetch(sessionId, "/internal/state");
+      return (await state.json<{ status: string }>()).status;
+    }
+
+    it("resumes a close-out whose draft expiry committed but whose answer was lost", async () => {
+      const repoId = 634343;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const answerLost: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          const response = await realSessions.fetch(id, path, init, search);
+          if (path === "/internal/expire-draft") throw new Error("response lost");
+          return response;
+        },
+      };
+
+      const firstTick = await reapWithBot(answerLost);
+      const secondTick = await reapWithBot(answerLost);
+
+      expect(await sessionStatus(sessionId)).toBe("archived");
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual(FAILED_TO_START);
+      expect(firstTick.mock.calls.length + secondTick.mock.calls.length).toBeGreaterThan(0);
+    });
+
+    it("leaves the review for the next tick when its close-out cannot be recorded", async () => {
+      const repoId = 635353;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const realDb = sqlDatabase(env.DB);
+      const recordFails = {
+        ...realDb,
+        batch: realDb.batch.bind(realDb),
+        prepare(sql: string) {
+          if (sql.includes("SET close_out_request = COALESCE")) {
+            throw new Error("D1 write failed");
+          }
+          return realDb.prepare(sql);
+        },
+      } as typeof realDb;
+
+      await reapWithBot(realSessions, recordFails);
+      expect((await fenceRows(repoId, prNumber))[0].close_out_request).toBeNull();
+      expect(await sessionStatus(sessionId)).toBe("created");
+
+      const botFetch = await reapWithBot(realSessions);
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual(FAILED_TO_START);
+      expect(botFetch).toHaveBeenCalledTimes(1);
+      expect(await sessionStatus(sessionId)).toBe("archived");
+    });
+
+    it("hands the review back to a session prompted between the record and the expiry", async () => {
+      const repoId = 636363;
+      const prNumber = 7;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const promptedMeanwhile: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          if (path === "/internal/expire-draft") {
+            const prompt = await realSessions.fetch(id, "/internal/prompt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: "Review", authorId: "github:1", source: "github" }),
+            });
+            expect(prompt.status).toBe(200);
+          }
+          return realSessions.fetch(id, path, init, search);
+        },
+      };
+
+      const botFetch = await reapWithBot(promptedMeanwhile);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(row.close_out_request).toBeNull();
+      expect(botFetch).not.toHaveBeenCalled();
+      expect((await agentAcquire(sessionId)).status).toBe(204);
+    });
 
     it("archives the never-prompted session and closes its status out as failed to start", async () => {
       const repoId = 632323;
