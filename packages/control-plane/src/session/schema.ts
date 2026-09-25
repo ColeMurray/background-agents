@@ -56,6 +56,26 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   next_attempt_at INTEGER NOT NULL
 );`;
 
+const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
+  id TEXT PRIMARY KEY,
+  message_id TEXT,
+  model TEXT,
+  harness TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  reasoning_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  total_tokens INTEGER,
+  step_cost_usd REAL,
+  message_cost_usd REAL,
+  is_subtask INTEGER NOT NULL DEFAULT 0,
+  child_session_id TEXT,
+  task_call_id TEXT,
+  reason TEXT,
+  created_at INTEGER NOT NULL
+)`;
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sandbox_preservation (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -156,6 +176,9 @@ CREATE TABLE IF NOT EXISTS events (
   timeline_sequence INTEGER NOT NULL UNIQUE
 );
 
+-- Per-step usage, distinct from the timeline and from cumulative session cost.
+${STEP_USAGE_TABLE_SQL};
+
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
@@ -253,6 +276,8 @@ CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
+CREATE INDEX IF NOT EXISTS idx_step_usage_message ON step_usage(message_id);
+CREATE INDEX IF NOT EXISTS idx_step_usage_created ON step_usage(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
@@ -722,6 +747,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: `CREATE TABLE IF NOT EXISTS sandbox_preservation (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
     )`,
+  },
+  {
+    id: 55,
+    description: "Persist per-step usage in the session",
+    run: STEP_USAGE_TABLE_SQL,
   },
 ];
 

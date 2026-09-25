@@ -275,6 +275,39 @@ describe("applyMigrations", () => {
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_repositories");
   });
 
+  it("creates step_usage for fresh and migrated DOs", () => {
+    const migration = MIGRATIONS.find(({ id }) => id === 55);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS step_usage");
+    const fresh = new DatabaseSync(":memory:");
+    const migrated = new DatabaseSync(":memory:");
+    try {
+      initSchema(createDatabaseSql(fresh));
+      migrated.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      if (typeof migration?.run !== "string") throw new Error("Expected SQL migration 55");
+      migrated.exec(migration.run);
+      migrated.exec(migration.run);
+      for (const db of [fresh, migrated]) {
+        expect(db.prepare("PRAGMA table_info(step_usage)").all()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "id", type: "TEXT", pk: 1 }),
+            expect.objectContaining({ name: "input_tokens", type: "INTEGER", notnull: 0 }),
+            expect.objectContaining({ name: "is_subtask", type: "INTEGER", notnull: 1 }),
+            expect.objectContaining({ name: "created_at", type: "INTEGER", notnull: 1 }),
+          ])
+        );
+      }
+      expect(fresh.prepare("PRAGMA index_list(step_usage)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "idx_step_usage_message" }),
+          expect.objectContaining({ name: "idx_step_usage_created" }),
+        ])
+      );
+    } finally {
+      fresh.close();
+      migrated.close();
+    }
+  });
+
   it("adds WebSocket authorization lease state for fresh and migrated DOs", () => {
     expect(SCHEMA_SQL).toContain("authorization_expires_at INTEGER NOT NULL");
     expect(SCHEMA_SQL).not.toContain("authorization_version");

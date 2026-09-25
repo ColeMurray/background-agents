@@ -679,12 +679,14 @@ class OpenCodePromptStream:
                 state.step_costs[str(part.get("id", ""))] = float(cost)
             finish_event = {
                 "type": "step_finish",
-                "tokens": part.get("tokens"),
-                "reason": part.get("reason"),
                 "messageId": state.message_id,
                 "stepId": step_id,
                 "messageCostUsd": state.message_cost_usd(),
             }
+            if part.get("tokens") is not None:
+                finish_event["tokens"] = part["tokens"]
+            if part.get("reason") is not None:
+                finish_event["reason"] = part["reason"]
             if cost is not None:
                 finish_event["cost"] = cost
             events.append(finish_event)

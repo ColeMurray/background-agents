@@ -1,8 +1,75 @@
-import { describe, it, expect } from "vitest";
-import { initSession, queryDO, seedMessage } from "./helpers";
+import { describe, it, expect, vi } from "vitest";
+import {
+  initNamedSession,
+  initSession,
+  openSandboxWs,
+  queryDO,
+  seedMessage,
+  seedSandboxAuth,
+} from "./helpers";
 import { runInSessionDO } from "./session-do-access";
 
 describe("POST /internal/sandbox-event", () => {
+  it("stores step usage received over the sandbox WebSocket without duplicating a resent step", async () => {
+    const name = `usage-${crypto.randomUUID()}`;
+    const { stub } = await initNamedSession(name);
+    const sandboxId = "sandbox-usage";
+    const authToken = "usage-test-token";
+    await seedSandboxAuth(stub, { sandboxId, authToken });
+    const { ws, response } = await openSandboxWs(name, { sandboxId, authToken });
+    expect(response.status).toBe(101);
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    const event = {
+      type: "step_finish",
+      sandboxId,
+      messageId: "msg-usage",
+      stepId: "step-usage",
+      timestamp: 1000,
+      tokens: { input: 5, output: 0 },
+      cost: 0.01,
+    };
+    ws!.send(JSON.stringify(event));
+    await vi.waitFor(async () => {
+      const rows = await queryDO<{ id: string }>(stub, "SELECT id FROM step_usage");
+      expect(rows).toHaveLength(1);
+    });
+    ws!.send(JSON.stringify({ ...event, timestamp: 1001 }));
+    await vi.waitFor(async () => {
+      const session = await queryDO<{ total_cost: number }>(stub, "SELECT total_cost FROM session");
+      expect(session[0].total_cost).toBeCloseTo(0.02);
+    });
+    await vi.waitFor(async () => {
+      const rows = await queryDO<{ id: string; input_tokens: number; output_tokens: number }>(
+        stub,
+        "SELECT id, input_tokens, output_tokens FROM step_usage"
+      );
+      expect(rows).toEqual([{ id: "step-usage", input_tokens: 5, output_tokens: 0 }]);
+    });
+    // OpenCode omits unknown tokens and reason rather than sending nulls.
+    ws!.send(
+      JSON.stringify({
+        type: "step_finish",
+        sandboxId,
+        messageId: "msg-usage",
+        timestamp: 1002,
+        cost: 0.01,
+        messageCostUsd: 0.03,
+      })
+    );
+    await vi.waitFor(async () => {
+      const rows = await queryDO<{
+        id: string;
+        total_tokens: number | null;
+        reason: string | null;
+      }>(stub, "SELECT id, total_tokens, reason FROM step_usage ORDER BY id");
+      expect(rows).toEqual([
+        { id: "msg-usage:1002", total_tokens: null, reason: null },
+        { id: "step-usage", total_tokens: 5, reason: null },
+      ]);
+    });
+    ws!.close();
+  });
   it("stores token event", async () => {
     const { stub } = await initSession();
 
