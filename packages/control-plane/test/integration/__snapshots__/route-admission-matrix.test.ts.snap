@@ -35,6 +35,7 @@ exports[`route admission matrix > admits only the named bot on every exact-servi
   "POST /internal/github-reviews/release-claim github-bot=400 slack-bot=403 web=403",
   "POST /internal/github-reviews/sweep github-bot=400 slack-bot=403 web=403",
   "POST /internal/github-reviews/close-out github-bot=400 slack-bot=403 web=403",
+  "POST /internal/github-reviews/close-out/finalize github-bot=400 slack-bot=403 web=403",
 ]
 `;
 
@@ -394,6 +395,7 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /internal/github-reviews/release-claim anonymous=401",
   "POST /internal/github-reviews/sweep anonymous=401",
   "POST /internal/github-reviews/close-out anonymous=401",
+  "POST /internal/github-reviews/close-out/finalize anonymous=401",
   "POST /sessions/:id/review-ownership anonymous=401",
   "DELETE /sessions/:id/review-ownership anonymous=401",
 ]

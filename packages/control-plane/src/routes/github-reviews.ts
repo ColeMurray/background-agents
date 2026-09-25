@@ -6,17 +6,30 @@
  * (repoId, prNumber) before creating a review session, then — once its own
  * session is admitted — sweeps every session from an older generation:
  * cancelling the stale session's DO and its active descendants so at most
- * one review session per PR is ever running. The claim, release-claim,
- * sweep, and close-out routes are gated to the github-bot service principal;
- * the review-ownership pair is the review agent's own submission-lease
- * boundary and is gated to the calling session's sandbox principal.
+ * one review session per PR is ever running.
+ *
+ * Ownership of a review's terminal `open-inspect` commit status: the only
+ * token that permits writing one is the PR's submission lease in
+ * github_review_state (one slot per PR). An agent takes it under its own
+ * session id, only while its session is the latest generation and its turn
+ * has not been closed out. A close-out takes it under `close-out:<sessionId>`,
+ * only while that session's fence row is the newest row for its head. The
+ * only unleased status write is the admitting handler's "pending".
+ *
+ * The claim, release-claim, sweep, and close-out routes are gated to the
+ * github-bot service principal; the review-ownership pair is the review
+ * agent's own submission-lease boundary and is gated to the calling session's
+ * sandbox principal.
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
+import { computeHmacHex } from "@open-inspect/shared/auth";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
 import { SessionIndexStore } from "../db/session-index";
 import type { SqlDatabase } from "../db/sql-database";
 import { createLogger } from "../logger";
+import type { BackgroundTasks } from "../platform-ports";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
@@ -41,14 +54,38 @@ const claimRequestSchema = z.object({
   prNumber: z.number().int().positive(),
 });
 
-const sweepRequestSchema = z.object({
+const releaseRequestSchema = z.object({
   repoId: z.number().int().positive(),
   prNumber: z.number().int().positive(),
   generation: z.number().int().positive(),
 });
 
+/**
+ * `owner`/`repo` name where the review's commit status lives. Optional so a
+ * bot that predates close-out requests keeps the old sweep behavior.
+ */
+const sweepRequestSchema = releaseRequestSchema.extend({
+  owner: z.string().trim().min(1).optional(),
+  repo: z.string().trim().min(1).optional(),
+});
+
+/** Stored in github_review_sessions.close_out_request once a review's turn has ended. */
 const closeOutRequestSchema = z.object({
+  owner: z.string().trim().min(1),
+  repo: z.string().trim().min(1),
+  description: z.string().nullable(),
+});
+
+type CloseOutRequest = z.infer<typeof closeOutRequestSchema>;
+
+const closeOutBodySchema = z.object({
   sessionId: z.string().trim().min(1),
+  request: closeOutRequestSchema.optional(),
+});
+
+const closeOutFinalizeBodySchema = z.object({
+  sessionId: z.string().trim().min(1),
+  outcome: z.enum(["done", "retry"]),
 });
 
 interface StaleReviewSessionRow {
@@ -57,6 +94,11 @@ interface StaleReviewSessionRow {
   /** Current leaseholder for the row's PR, when a lease is held. */
   lease_session_id: string | null;
   lease_expires_at: number | null;
+}
+
+/** Lease holder id for a close-out of `sessionId`; never equal to any session id. */
+function closeOutHolder(sessionId: string): string {
+  return `close-out:${sessionId}`;
 }
 
 /**
@@ -69,14 +111,29 @@ interface StaleReviewSessionRow {
 const REVIEW_FENCE_ORPHAN_GRACE_MS = 10 * 60 * 1000;
 
 /**
- * How long a submission lease defers cancellation of its holder. Claims are
- * never blocked by a lease — it only serializes the WRITE boundary: sweeps
- * and the reaper skip a session holding an unexpired lease so a cancel can
- * never race its in-flight GitHub POSTs, and a successor agent cannot
- * acquire until release/expiry. The agent releases explicitly right after
- * its writes; the TTL only bounds a crashed leaseholder.
+ * How long a submission lease is held. Claims are never blocked by a lease —
+ * it only serializes the terminal status write: sweeps and the reaper skip a
+ * session holding an unexpired lease so a cancel can never race its in-flight
+ * GitHub POSTs, and every other agent or close-out waits for release/expiry.
+ * Holders release explicitly right after their writes; the TTL only bounds a
+ * crashed holder.
  */
 export const REVIEW_SUBMISSION_LEASE_MS = 2 * 60 * 1000;
+
+/**
+ * Age past which the reaper drops a fence row outright: far beyond a review
+ * session's sandbox lifetime (two hours by default), so no live review owns a
+ * row this old. It bounds a close-out that can never succeed, and the
+ * head-of-line blocking it would cause.
+ */
+const REVIEW_FENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** Rows the reaper handles per pass, so one tick stays bounded. */
+const REAPER_STALE_BATCH = 20;
+const REAPER_CLOSE_OUT_BATCH = 10;
+
+/** Timeout for one reaper-driven close-out request to the github-bot. */
+const CLOSE_OUT_DRIVE_TIMEOUT_MS = 10_000;
 
 /**
  * POST /internal/github-reviews/claim
@@ -137,7 +194,7 @@ export async function handleReleaseReviewGeneration(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const parsed = await parseBody(request, sweepRequestSchema, "Invalid release request body");
+  const parsed = await parseBody(request, releaseRequestSchema, "Invalid release request body");
   if (parsed instanceof Response) return parsed;
   const { repoId, prNumber, generation } = parsed;
 
@@ -167,15 +224,17 @@ export async function handleReleaseReviewGeneration(
   return json({ released });
 }
 
-type StaleReviewCancellationOutcome = "cancelled" | "deferred" | "failed";
+type StaleReviewCancellationOutcome = "cancelled" | "orphaned" | "deferred" | "failed";
 
 /**
  * Cancel one stale review session's DO plus its active descendants
  * (mirroring handleCancelChild's cascade in routes/session-children.ts).
  *
- * `cancelled` means the fence row may be deleted, `deferred` means a normal
- * lease or initialization window retained it for a later sweep, and `failed`
- * means cancellation was attempted but did not reach a terminal state.
+ * `cancelled` means the session reached a terminal state; `orphaned` means
+ * its DO never existed (so no status was ever posted for it) and the fence
+ * row can go; `deferred` means a normal lease or initialization window
+ * retained it for a later attempt; and `failed` means cancellation was
+ * attempted but did not reach a terminal state.
  */
 async function cancelStaleReviewSession(
   ctx: Pick<SessionRouteContext, "sessionRuntime">,
@@ -217,7 +276,7 @@ async function cancelStaleReviewSession(
       session_id: sessionId,
       age_ms: ageMs,
     });
-    return "cancelled";
+    return "orphaned";
   }
   if (!response.ok && response.status !== 409) return "failed";
 
@@ -237,12 +296,24 @@ async function cancelStaleReviewSession(
   return descendantsCancelled ? "cancelled" : "failed";
 }
 
+interface SweptReviewSessionRow extends StaleReviewSessionRow {
+  close_out_request: string | null;
+  /** 1 when no newer review is registered on this row's head, so its status is still its own. */
+  head_unclaimed: number;
+}
+
 /**
  * POST /internal/github-reviews/sweep
  * Cancels every review session from a generation older than the caller's,
- * for the same PR, then drops the rows for the ones it successfully
- * cancelled. Always 200, even with partial failures — sweep failure must
- * never block the review session that triggered it.
+ * for the same PR. Always 200, even with partial failures — sweep failure
+ * must never block the review session that triggered it.
+ *
+ * A stale review whose head no newer review has claimed (a push replaced it)
+ * still owns that head's status. When the caller names the repository, such
+ * a row gets a close-out request and is kept: it is closed out under the
+ * lease like any ended review — by its own completion callback, or the
+ * reaper — and only a close-out deletes it. Every other stale row is deleted
+ * once cancelled: its head's status belongs to the newer review.
  */
 export async function handleSweepStaleReviews(
   request: Request,
@@ -252,18 +323,26 @@ export async function handleSweepStaleReviews(
 ): Promise<Response> {
   const parsed = await parseBody(request, sweepRequestSchema, "Invalid sweep request body");
   if (parsed instanceof Response) return parsed;
-  const { repoId, prNumber, generation } = parsed;
+  const { repoId, prNumber, generation, owner, repo } = parsed;
+  const closeOutRequest: CloseOutRequest | null =
+    owner && repo ? { owner, repo, description: null } : null;
 
   const stale = await ctx.db
     .prepare(
-      `SELECT grs.session_id, grs.created_at, st.lease_session_id, st.lease_expires_at
+      `SELECT grs.session_id, grs.created_at, grs.close_out_request,
+         st.lease_session_id, st.lease_expires_at,
+         NOT EXISTS (
+           SELECT 1 FROM github_review_sessions newer
+           WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
+             AND newer.generation > grs.generation AND newer.head_sha = grs.head_sha
+         ) AS head_unclaimed
        FROM github_review_sessions grs
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
        WHERE grs.repo_id = ? AND grs.pr_number = ? AND grs.generation < ?`
     )
     .bind(repoId, prNumber, generation)
-    .all<StaleReviewSessionRow>();
+    .all<SweptReviewSessionRow>();
 
   const sessionStore = new SessionIndexStore(ctx.db);
   const cancelledSessionIds: string[] = [];
@@ -272,8 +351,13 @@ export async function handleSweepStaleReviews(
 
   for (const row of stale.results) {
     const sessionId = row.session_id;
+    const owesCloseOut =
+      row.head_unclaimed === 1 && (closeOutRequest !== null || row.close_out_request !== null);
     let outcome: StaleReviewCancellationOutcome;
     try {
+      if (owesCloseOut && closeOutRequest) {
+        await recordCloseOutRequest(ctx.db, sessionId, closeOutRequest);
+      }
       outcome = await cancelStaleReviewSession(ctx, sessionStore, row);
     } catch (cancelError) {
       // A thrown DO transport or D1 error must not abort the sweep: report
@@ -295,6 +379,7 @@ export async function handleSweepStaleReviews(
       continue;
     }
     cancelledSessionIds.push(sessionId);
+    if (owesCloseOut && outcome === "cancelled") continue;
     await ctx.db
       .prepare(
         `DELETE FROM github_review_sessions WHERE repo_id = ? AND pr_number = ? AND session_id = ?`
@@ -306,72 +391,258 @@ export async function handleSweepStaleReviews(
   return json({ cancelledSessionIds, deferredSessionIds, failedSessionIds });
 }
 
+/** Record that a review's turn has ended; the first request's details win. */
+async function recordCloseOutRequest(
+  db: SqlDatabase,
+  sessionId: string,
+  request: CloseOutRequest
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE github_review_sessions SET close_out_request = COALESCE(close_out_request, ?)
+       WHERE session_id = ?`
+    )
+    .bind(JSON.stringify(request), sessionId)
+    .run();
+}
+
+interface CloseOutRow extends StaleReviewSessionRow {
+  repo_id: number;
+  pr_number: number;
+  generation: number;
+  head_sha: string;
+  close_out_request: string | null;
+  latest_generation: number;
+  /** 1 when a newer review is registered on this row's head: that status is no longer this row's. */
+  head_reclaimed: number;
+}
+
+async function loadCloseOutRow(db: SqlDatabase, sessionId: string): Promise<CloseOutRow | null> {
+  return db
+    .prepare(
+      `SELECT grs.session_id, grs.repo_id, grs.pr_number, grs.generation, grs.head_sha,
+         grs.created_at, grs.close_out_request,
+         st.latest_generation, st.lease_session_id, st.lease_expires_at,
+         EXISTS (
+           SELECT 1 FROM github_review_sessions newer
+           WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
+             AND newer.generation > grs.generation AND newer.head_sha = grs.head_sha
+         ) AS head_reclaimed
+       FROM github_review_sessions grs
+       JOIN github_review_state st
+         ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
+       WHERE grs.session_id = ?`
+    )
+    .bind(sessionId)
+    .first<CloseOutRow>();
+}
+
+async function deleteFenceRow(db: SqlDatabase, sessionId: string): Promise<void> {
+  await db.prepare(`DELETE FROM github_review_sessions WHERE session_id = ?`).bind(sessionId).run();
+}
+
 /**
  * POST /internal/github-reviews/close-out
  * Called by the github-bot when a review session's turn has ended, however it
- * ended, before it replaces a still-pending commit status. Deletes the
- * session's fence row in one statement, and only while:
+ * ended — its completion callback, a failed prompt delivery, or a reaper
+ * drive — to obtain the right to terminalize that review's pending status.
  *
- * - the session is still the latest claimed generation for its PR, so a
- *   successor's own "pending" status is never touched; and
- * - the session does not hold an unexpired submission lease, so a write chain
- *   still in flight is never overwritten.
+ * `request` records the close-out durably before any lease decision (the
+ * first request's details win). Once recorded, the review's agent can never
+ * take the lease again, and the row is kept until finalize reports a terminal
+ * status. The grant is the PR's submission lease, held as
+ * `close-out:<sessionId>`, and is given only while the session's row is the
+ * newest registered for its head, a stale session is confirmed cancelled,
+ * and no other holder's lease is live.
  *
- * Deleting the row is the fence: the agent's ownership check requires it, so
- * an agent that wakes after its turn was failed can no longer acquire the lease
- * and publish over the close-out. 204 means the caller now owns the terminal
- * status write; 409 means it must write nothing.
+ * 200 `granted`: the caller holds the lease for `leaseExpiresInMs` and may
+ * replace a status it reads as pending, then must call finalize.
+ * 202 `deferred`: another holder's lease is live or the stale session is not
+ * yet cancelled; the request is recorded and the reaper re-drives it.
+ * 409 `not_owned`: no close-out is owed — the row is gone, a newer review on
+ * the same head owns the status, or no close-out was ever requested.
  */
 export async function handleCloseOutReview(
   request: Request,
   _env: Env,
   _params: object,
-  ctx: RequestContext
+  ctx: SessionRouteContext
 ): Promise<Response> {
-  const parsed = await parseBody(request, closeOutRequestSchema, "Invalid close-out request body");
+  const parsed = await parseBody(request, closeOutBodySchema, "Invalid close-out request body");
   if (parsed instanceof Response) return parsed;
   const { sessionId } = parsed;
-
-  const row = await ctx.db
-    .prepare(
-      `DELETE FROM github_review_sessions
-       WHERE session_id = ?
-         AND EXISTS (
-           SELECT 1 FROM github_review_state st
-           WHERE st.repo_id = github_review_sessions.repo_id
-             AND st.pr_number = github_review_sessions.pr_number
-             AND st.latest_generation = github_review_sessions.generation
-             AND (
-               st.lease_session_id IS NULL
-               OR st.lease_session_id != ?
-               OR st.lease_expires_at < ?
-             )
-         )
-       RETURNING session_id`
-    )
-    .bind(sessionId, sessionId, Date.now())
-    .first<{ session_id: string }>();
-
-  if (row) return new Response(null, { status: 204 });
-  logger.info("review_close_out.declined", {
-    event: "review_close_out.declined",
+  const meta = {
     session_id: sessionId,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
+  };
+  const notOwned = (reason: string) => {
+    logger.info("review_close_out.not_owned", {
+      event: "review_close_out.not_owned",
+      ...meta,
+      reason,
+    });
+    return json({ outcome: "not_owned" }, 409);
+  };
+  const deferred = (reason: string) => {
+    logger.info("review_close_out.deferred", {
+      event: "review_close_out.deferred",
+      ...meta,
+      reason,
+    });
+    return json({ outcome: "deferred" }, 202);
+  };
+
+  if (parsed.request) await recordCloseOutRequest(ctx.db, sessionId, parsed.request);
+
+  const row = await loadCloseOutRow(ctx.db, sessionId);
+  if (!row) return notOwned("no_fence_row");
+  if (row.head_reclaimed === 1) {
+    await deleteFenceRow(ctx.db, sessionId);
+    return notOwned("head_reclaimed");
+  }
+  if (row.close_out_request === null) return notOwned("not_requested");
+  const closeOut = closeOutRequestSchema.safeParse(JSON.parse(row.close_out_request));
+  if (!closeOut.success) return error("Invalid stored close-out request", 500);
+
+  if (row.generation < row.latest_generation) {
+    let outcome: StaleReviewCancellationOutcome;
+    try {
+      outcome = await cancelStaleReviewSession(ctx, new SessionIndexStore(ctx.db), row);
+    } catch (cancelError) {
+      logger.warn("review_close_out.cancel_threw", {
+        event: "review_close_out.cancel_threw",
+        ...meta,
+        error: cancelError instanceof Error ? cancelError.message : String(cancelError),
+      });
+      outcome = "failed";
+    }
+    if (outcome === "orphaned") {
+      await deleteFenceRow(ctx.db, sessionId);
+      return notOwned("orphaned");
+    }
+    if (outcome !== "cancelled") return deferred(`stale_session_${outcome}`);
+  }
+
+  const now = Date.now();
+  const acquired = await ctx.db
+    .prepare(
+      `UPDATE github_review_state SET lease_session_id = ?, lease_expires_at = ?
+       WHERE repo_id = ? AND pr_number = ?
+         AND (lease_session_id IS NULL OR lease_expires_at < ?)
+         AND EXISTS (
+           SELECT 1 FROM github_review_sessions grs
+           WHERE grs.session_id = ?
+             AND grs.repo_id = github_review_state.repo_id
+             AND grs.pr_number = github_review_state.pr_number
+             AND grs.close_out_request IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM github_review_sessions newer
+               WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
+                 AND newer.generation > grs.generation AND newer.head_sha = grs.head_sha
+             )
+         )
+       RETURNING latest_generation`
+    )
+    .bind(
+      closeOutHolder(sessionId),
+      now + REVIEW_SUBMISSION_LEASE_MS,
+      row.repo_id,
+      row.pr_number,
+      now,
+      sessionId
+    )
+    .first<{ latest_generation: number }>();
+
+  if (!acquired) {
+    const current = await loadCloseOutRow(ctx.db, sessionId);
+    if (!current) return notOwned("no_fence_row");
+    if (current.head_reclaimed === 1) {
+      await deleteFenceRow(ctx.db, sessionId);
+      return notOwned("head_reclaimed");
+    }
+    return deferred("lease_busy");
+  }
+
+  const superseded = row.generation < acquired.latest_generation;
+  logger.info("review_close_out.granted", {
+    event: "review_close_out.granted",
+    ...meta,
+    superseded,
   });
-  return error("Review close-out not owned", 409);
+  return json({
+    outcome: "granted",
+    owner: closeOut.data.owner,
+    repo: closeOut.data.repo,
+    prNumber: row.pr_number,
+    headSha: row.head_sha,
+    description: closeOut.data.description,
+    superseded,
+    leaseExpiresInMs: REVIEW_SUBMISSION_LEASE_MS,
+  });
+}
+
+/**
+ * POST /internal/github-reviews/close-out/finalize
+ * Ends a granted close-out. `done` (GitHub shows a terminal status, written
+ * or observed) deletes the fence row and releases the lease; `retry` only
+ * releases the lease, keeping the row and its request for the reaper. Only a
+ * lease still held as this close-out is touched. Always 204.
+ */
+export async function handleFinalizeCloseOut(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
+  const parsed = await parseBody(
+    request,
+    closeOutFinalizeBodySchema,
+    "Invalid close-out finalize body"
+  );
+  if (parsed instanceof Response) return parsed;
+  const { sessionId, outcome } = parsed;
+  const holder = closeOutHolder(sessionId);
+
+  if (outcome === "done") {
+    await ctx.db.batch([
+      ctx.db.prepare(`DELETE FROM github_review_sessions WHERE session_id = ?`).bind(sessionId),
+      ctx.db
+        .prepare(
+          `UPDATE github_review_state SET lease_session_id = NULL, lease_expires_at = NULL
+           WHERE lease_session_id = ?`
+        )
+        .bind(holder),
+    ]);
+  } else {
+    await ctx.db
+      .prepare(`UPDATE github_review_state SET lease_expires_at = ? WHERE lease_session_id = ?`)
+      .bind(Date.now() - 1, holder)
+      .run();
+  }
+  logger.info("review_close_out.finalized", {
+    event: "review_close_out.finalized",
+    session_id: sessionId,
+    outcome,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+  return new Response(null, { status: 204 });
 }
 
 /**
  * POST /sessions/:id/review-ownership
- * Sandbox-token-authenticated ownership check and lease acquisition: the
- * review agent calls this
- * immediately before its final GitHub writes. `owned` is true only while the
- * calling session's registered generation is still the latest claimed one
- * for its PR — a superseded (or swept) session gets false and must exit
- * without posting. This is the submission-boundary fence that cancellation
- * alone cannot provide: a same-head successor passes the prompt's head-SHA
- * check, but never this one.
+ * Sandbox-token-authenticated lease acquisition: the review agent calls this
+ * immediately before its final GitHub writes. The lease is granted only
+ * while the calling session is still the latest claimed generation for its
+ * PR and its turn has not been closed out. This is the submission-boundary
+ * fence that cancellation alone cannot provide: a same-head successor passes
+ * the prompt's head-SHA check, but never this one.
+ *
+ * 204: acquired (re-acquiring one's own lease is an idempotent retry).
+ * 423 + Retry-After: this session is eligible, but another holder's lease is
+ * live — wait. 409: permanent — superseded, swept, or closed out; the agent
+ * must exit without writing.
  */
 export async function handleReviewOwnership(
   _request: Request,
@@ -385,10 +656,6 @@ export async function handleReviewOwnership(
     return error("Unauthorized", 401);
   }
 
-  // Atomic ownership check + lease acquisition in one statement: the update
-  // lands only while the caller's registered generation is still the latest
-  // AND no other session holds an unexpired lease. Re-acquiring one's own
-  // lease is allowed (idempotent retry of the submission chain).
   const now = Date.now();
   const result = await ctx.db
     .prepare(
@@ -399,19 +666,40 @@ export async function handleReviewOwnership(
            AND grs.repo_id = github_review_state.repo_id
            AND grs.pr_number = github_review_state.pr_number
            AND grs.generation = github_review_state.latest_generation
+           AND grs.close_out_request IS NULL
        )
        AND (lease_session_id IS NULL OR lease_session_id = ? OR lease_expires_at < ?)`
     )
     .bind(sessionId, now + REVIEW_SUBMISSION_LEASE_MS, sessionId, sessionId, now)
     .run();
-
-  // 204 vs 409 rather than a JSON body: the agent-side check is plain
-  // `curl -f`, which mechanically fails closed on 409 — no response parsing
-  // for the model to get wrong.
   if ((result.meta?.changes ?? 0) > 0) {
     return new Response(null, { status: 204 });
   }
-  return error("Review generation superseded", 409);
+
+  // The lease may be released between the UPDATE and this read; that costs
+  // one spurious 423 and a retry, never a wrong 409.
+  const eligible = await ctx.db
+    .prepare(
+      `SELECT st.lease_expires_at
+       FROM github_review_sessions grs
+       JOIN github_review_state st
+         ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
+       WHERE grs.session_id = ?
+         AND grs.generation = st.latest_generation
+         AND grs.close_out_request IS NULL`
+    )
+    .bind(sessionId)
+    .first<{ lease_expires_at: number | null }>();
+  if (!eligible) return error("Review generation superseded", 409);
+
+  const retryAfterSeconds = Math.max(
+    1,
+    Math.ceil(((eligible.lease_expires_at ?? now) - Date.now()) / 1000)
+  );
+  return new Response(JSON.stringify({ error: "Review submission lease busy" }), {
+    status: 423,
+    headers: { "Content-Type": "application/json", "Retry-After": String(retryAfterSeconds) },
+  });
 }
 
 /**
@@ -444,29 +732,48 @@ export async function handleReviewLeaseRelease(
 }
 
 /**
- * Cron-driven reaper: retries the cancellation of every superseded review
- * session whose fence row survived its sweep (cancel unconfirmed, fresh-404
- * grace, or a creator's failed self-cancel). Runs from the Worker's minute
- * cron so retained rows have a durable retry owner that does not depend on
- * another PR event ever arriving. Row-deletion rules match the sweep's.
+ * Cron-driven reaper: the durable retry owner for review fence rows, so no
+ * retained row depends on another PR event ever arriving. Each pass:
+ *
+ * 1. Drops rows older than REVIEW_FENCE_MAX_AGE_MS.
+ * 2. Retries the cancellation of superseded sessions that owe no close-out
+ *    (cancel unconfirmed, fresh-404 grace, or a creator's failed
+ *    self-cancel), deleting each once cancelled — the sweep's rule.
+ * 3. Re-drives every owed close-out whose PR has no live lease, by asking
+ *    the github-bot to run it (a signed POST, as a background task).
+ *    Duplicate drives are harmless: a second request finds the first one's
+ *    lease live and is deferred.
  */
 export async function reapSupersededReviewSessions(
   db: SqlDatabase,
-  sessionRuntime: SessionRuntimeClient
+  sessionRuntime: SessionRuntimeClient,
+  env: Pick<Env, "GITHUB_BOT" | "SERVICE_AUTH_SECRET_GITHUB_BOT">,
+  backgroundTasks: BackgroundTasks
 ): Promise<void> {
+  const now = Date.now();
+  const expired = await db
+    .prepare(`DELETE FROM github_review_sessions WHERE created_at < ? RETURNING session_id`)
+    .bind(now - REVIEW_FENCE_MAX_AGE_MS)
+    .all<{ session_id: string }>();
+  for (const row of expired.results) {
+    logger.warn("review_reaper.expired", {
+      event: "review_reaper.expired",
+      session_id: row.session_id,
+    });
+  }
+
   const stale = await db
     .prepare(
       `SELECT grs.session_id, grs.created_at, st.lease_session_id, st.lease_expires_at
        FROM github_review_sessions grs
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
-       WHERE grs.generation < st.latest_generation
+       WHERE grs.generation < st.latest_generation AND grs.close_out_request IS NULL
        ORDER BY grs.created_at ASC, grs.session_id ASC
-       LIMIT 20`
+       LIMIT ?`
     )
+    .bind(REAPER_STALE_BATCH)
     .all<StaleReviewSessionRow>();
-  if (stale.results.length === 0) return;
-
   const sessionStore = new SessionIndexStore(db);
   for (const row of stale.results) {
     let outcome: StaleReviewCancellationOutcome;
@@ -480,15 +787,57 @@ export async function reapSupersededReviewSessions(
       });
       continue;
     }
-    if (outcome !== "cancelled") continue;
-    await db
-      .prepare(`DELETE FROM github_review_sessions WHERE session_id = ?`)
-      .bind(row.session_id)
-      .run();
+    if (outcome !== "cancelled" && outcome !== "orphaned") continue;
+    await deleteFenceRow(db, row.session_id);
     logger.info("review_reaper.reaped", {
       event: "review_reaper.reaped",
       session_id: row.session_id,
     });
+  }
+
+  const owed = await db
+    .prepare(
+      `SELECT grs.session_id
+       FROM github_review_sessions grs
+       JOIN github_review_state st
+         ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
+       WHERE grs.close_out_request IS NOT NULL
+         AND (st.lease_expires_at IS NULL OR st.lease_expires_at < ?)
+       ORDER BY grs.created_at ASC, grs.session_id ASC
+       LIMIT ?`
+    )
+    .bind(now, REAPER_CLOSE_OUT_BATCH)
+    .all<{ session_id: string }>();
+  if (owed.results.length === 0) return;
+  const githubBot = env.GITHUB_BOT;
+  const secret = callbackSigningSecret(env, "github-bot");
+  if (!githubBot || !secret) {
+    logger.warn("review_reaper.close_out_undeliverable", {
+      event: "review_reaper.close_out_undeliverable",
+      session_ids: owed.results.map((row) => row.session_id),
+      reason: githubBot ? "missing_signing_secret" : "missing_github_bot_binding",
+    });
+    return;
+  }
+  for (const { session_id: sessionId } of owed.results) {
+    backgroundTasks.submit(
+      async () => {
+        const payload = { sessionId, timestamp: Date.now() };
+        const signature = await computeHmacHex(JSON.stringify(payload), secret);
+        const response = await githubBot.fetch("https://internal/callbacks/review-close-out", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, signature }),
+          signal: AbortSignal.timeout(CLOSE_OUT_DRIVE_TIMEOUT_MS),
+        });
+        logger.info("review_reaper.close_out_driven", {
+          event: "review_reaper.close_out_driven",
+          session_id: sessionId,
+          status: response.status,
+        });
+      },
+      { name: "review_close_out_drive", context: { session_id: sessionId } }
+    );
   }
 }
 
@@ -517,7 +866,13 @@ githubReviewRoutes.post(
 githubReviewRoutes.post(
   "/internal/github-reviews/close-out",
   admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("github-bot") }),
-  (c) => dispatch(c, handleCloseOutReview)
+  (c) => dispatchSession(c, handleCloseOutReview)
+);
+
+githubReviewRoutes.post(
+  "/internal/github-reviews/close-out/finalize",
+  admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("github-bot") }),
+  (c) => dispatch(c, handleFinalizeCloseOut)
 );
 
 // Submission-boundary fence, called by the review agent from the sandbox.

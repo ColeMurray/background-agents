@@ -66,7 +66,7 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       // Retire review sessions a newer generation has superseded. Its failure
       // must not cost the automation tick below its slot.
       try {
-        await reapSupersededReviewSessions(db, sessions);
+        await reapSupersededReviewSessions(db, sessions, env, backgroundTasks);
       } catch (reaperError) {
         log.warn("Review reaper tick failed", {
           event: "review_reaper.tick_failed",
