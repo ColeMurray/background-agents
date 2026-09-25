@@ -36,7 +36,7 @@ from sandbox_runtime.constants import (
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
-from ..app import app, llm_secrets
+from ..app import app
 from ..images.base import base_image
 from .vcs_env import inject_vcs_env_vars
 
@@ -391,10 +391,7 @@ class SandboxManager:
         if isinstance(spec.source, _BaseImageSource):
             image = base_image
         elif isinstance(spec.source, _RepositoryImageSource):
-            try:
-                image = modal.Image.from_id(spec.source.image_id)
-            except modal.exception.NotFoundError as e:
-                raise RepositoryImageUnavailableError("repository image is unavailable") from e
+            image = modal.Image.from_id(spec.source.image_id)
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = spec.source.sha or ""
         else:
@@ -452,6 +449,11 @@ class SandboxManager:
         )
         if tunnel_ports:
             env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
+
+        # from_name handles cache their resolved ID; use a fresh handle on every
+        # launch so a deleted and recreated secret can be resolved again.
+        llm_secrets = modal.Secret.from_name("llm-api-keys")
+        await llm_secrets.hydrate.aio()
 
         create_kwargs: dict[str, Any] = {
             "image": image,

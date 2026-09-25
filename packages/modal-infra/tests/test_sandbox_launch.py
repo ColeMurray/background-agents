@@ -203,14 +203,19 @@ async def test_repository_image_create_validates_repo_before_image_lookup(monkey
 
 
 @pytest.mark.asyncio
-async def test_repository_image_not_found_is_reported_explicitly(monkeypatch):
+async def test_repository_image_not_found_is_reported_explicitly(monkeypatch, fake_llm_secret):
     from modal.exception import NotFoundError
 
     monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _image_id: object())
-    create = SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("image not found")))
+
+    async def create_aio(*_args, **_kwargs):
+        fake_llm_secret[0].hydrate.aio.assert_awaited_once_with()
+        raise NotFoundError("image not found")
+
+    create = SimpleNamespace(aio=AsyncMock(side_effect=create_aio))
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", create)
 
-    with pytest.raises(RepositoryImageUnavailableError):
+    with pytest.raises(RepositoryImageUnavailableError) as exc_info:
         await SandboxManager().create_sandbox(
             SandboxConfig(
                 repo_owner="acme",
@@ -218,3 +223,41 @@ async def test_repository_image_not_found_is_reported_explicitly(monkeypatch):
                 repo_image_id="repo-image-missing",
             )
         )
+
+    assert isinstance(exc_info.value.__cause__, NotFoundError)
+    create.aio.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_missing_secret_does_not_mark_repository_image_unavailable(monkeypatch):
+    from modal.exception import NotFoundError
+
+    create = SimpleNamespace(aio=AsyncMock())
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", create)
+
+    def missing_secret(_name, **_kwargs):
+        secret = Mock()
+        secret.hydrate.aio = AsyncMock(side_effect=NotFoundError("secret not found"))
+        return secret
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Secret.from_name", missing_secret)
+
+    with pytest.raises(NotFoundError, match="secret not found"):
+        await SandboxManager().create_sandbox(
+            SandboxConfig(repo_owner="acme", repo_name="repo", repo_image_id="repo-image-1")
+        )
+
+    create.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_base_image_not_found_is_not_classified_as_repository_image(monkeypatch):
+    from modal.exception import NotFoundError
+
+    create = SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("base image not found")))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", create)
+
+    with pytest.raises(NotFoundError, match="base image not found"):
+        await SandboxManager().create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
+
+    create.aio.assert_awaited_once()
