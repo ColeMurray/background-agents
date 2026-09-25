@@ -49,6 +49,11 @@ async function seedSession(input: {
     activeDurationMs: 0,
     messageCount: 0,
     prCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   });
 }
 

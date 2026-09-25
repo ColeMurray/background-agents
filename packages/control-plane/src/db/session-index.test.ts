@@ -26,6 +26,11 @@ type SessionRow = {
   active_duration_ms: number;
   message_count: number;
   pr_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   environment_id: string | null;
   created_at: number;
   updated_at: number;
@@ -217,6 +222,11 @@ class FakeD1Database {
           active_duration_ms: 0,
           message_count: 0,
           pr_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          reasoning_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
           environment_id: environmentId,
           created_at: createdAt,
           updated_at: updatedAt,
@@ -395,6 +405,11 @@ describe("SessionIndexStore", () => {
         activeDurationMs: 0,
         messageCount: 0,
         prCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         environmentId: null,
       });
     });

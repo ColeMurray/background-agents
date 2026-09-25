@@ -394,6 +394,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     messageRepository,
     artifactRepository,
+    usageRepository,
     messenger,
     sessionIndexStore,
     new SessionStatusProjectionStore(db),
