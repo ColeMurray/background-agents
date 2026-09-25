@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
-import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
+import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
+  type AutomationRunStatus,
+} from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import {
@@ -32,7 +35,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
-    max_concurrent_runs: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",

@@ -60,9 +60,17 @@ export const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
 export const MAX_AUTOMATION_CONCURRENT_RUNS = 10;
 
 /**
- * Concurrency bound as a request field. One reproduces the serialized
- * behaviour every automation had before the field existed, which is why it is
- * the default rather than something inferred from the trigger or the cadence.
+ * Concurrency bound for an automation that does not set one. One reproduces
+ * the serialized behaviour every automation had before the field existed,
+ * which is why it is the default rather than something inferred from the
+ * trigger or the cadence.
+ */
+export const DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS = 1;
+
+/**
+ * Concurrency bound as a request field. Omitting it on create stores
+ * DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS; omitting it on update keeps the
+ * current bound.
  */
 export const automationMaxConcurrentRunsSchema = z
   .number()
@@ -212,7 +220,7 @@ export const createAutomationRequestSchema = z.object({
   eventType: z.string().optional(),
   triggerConfig: triggerConfigSchema.optional(),
   sentryClientSecret: sentryClientSecretSchema.optional(),
-  /** Firings allowed in flight at once. Omission means one (serialized). */
+  /** Firings allowed in flight at once. Omission means DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS. */
   maxConcurrentRuns: automationMaxConcurrentRunsSchema.optional(),
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories: automationRepositoriesInputSchema.optional(),

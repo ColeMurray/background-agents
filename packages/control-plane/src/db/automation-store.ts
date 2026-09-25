@@ -20,7 +20,10 @@ import type {
   AutomationRun,
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
-import { automationInvocationStatusSchema } from "@open-inspect/shared/types/automations";
+import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
+  automationInvocationStatusSchema,
+} from "@open-inspect/shared/types/automations";
 import {
   automationTriggerTypeSchema,
   triggerConfigSchema,
@@ -76,7 +79,7 @@ export interface AutomationRow {
   model: string;
   reasoning_effort: string | null;
   enabled: number; // SQLite integer boolean
-  /** Firings allowed in flight at once; 1 serializes (the pre-0082 behaviour). */
+  /** Firings allowed in flight at once; one serializes (the pre-0083 behaviour). */
   max_concurrent_runs: number;
   next_run_at: number | null;
   consecutive_failures: number;
@@ -1027,10 +1030,10 @@ export class AutomationStore {
    * value — admitting work past a limit the operator had already lowered.
    * Reading it here lets the database order the two.
    *
-   * `MAX(…, 1)` and the COALESCE are the SQL twin of
+   * The inner filter and the COALESCE are the SQL twin of
    * automationConcurrencyLimit: a row carrying zero, a negative, or NULL — and
-   * an automation deleted mid-firing — all read as the serialized default
-   * rather than as no bound at all.
+   * an automation deleted mid-firing — all read as
+   * DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as no bound at all.
    */
   private overlapPredicate(
     automationId: string,
@@ -1051,8 +1054,9 @@ export class AutomationStore {
               SELECT COUNT(DISTINCT ar.invocation_id) FROM automation_runs ar
               WHERE ar.automation_id = ? AND ar.status IN ('starting', 'running')
             ) >= COALESCE(
-              (SELECT MAX(a.max_concurrent_runs, 1) FROM automations a WHERE a.id = ?),
-              1
+              (SELECT a.max_concurrent_runs FROM automations a
+               WHERE a.id = ? AND a.max_concurrent_runs >= 1),
+              ${DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS}
             )`,
       params: [automationId, automationId],
     };

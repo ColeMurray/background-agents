@@ -23,9 +23,10 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
-import type {
-  AutomationInvocationSource,
-  AutomationRun,
+import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
+  type AutomationInvocationSource,
+  type AutomationRun,
 } from "@open-inspect/shared/types/automations";
 import type {
   AutomationCallbackContext,
@@ -206,14 +207,15 @@ const slackThreadContextResponseSchema = z.object({
 
 /**
  * The automation's concurrency bound. Anything that is not a positive integer
- * reads as the serialized default rather than as an unbounded one: the
- * predicate compares a count against this, and a comparison against NaN is
- * false — which would admit every firing instead of refusing them. The column
- * is NOT NULL DEFAULT 1, so this only guards rows assembled outside SQL.
+ * reads as DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as an unbounded
+ * one: the predicate compares a count against this, and a comparison against
+ * NaN is false — which would admit every firing instead of refusing them. The
+ * column is NOT NULL with a SQL default, so this only guards rows assembled
+ * outside SQL.
  */
 function automationConcurrencyLimit(automation: AutomationRow): number {
   const limit = automation.max_concurrent_runs;
-  return Number.isInteger(limit) && limit >= 1 ? limit : 1;
+  return Number.isInteger(limit) && limit >= 1 ? limit : DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS;
 }
 
 export interface AutomationRunCompletion {

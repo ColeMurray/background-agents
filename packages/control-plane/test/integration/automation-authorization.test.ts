@@ -4,6 +4,7 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 
@@ -22,7 +23,7 @@ function automation(id: string, userId: string): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
-    max_concurrent_runs: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: userId,

@@ -9,6 +9,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   MAX_AUTOMATION_CONCURRENT_RUNS,
   validateAutomationTargetCounts,
   type AutomationRepositoryInput,
@@ -97,10 +98,13 @@ export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 /**
  * Coerce a stored or template concurrency to the range the API accepts. An
  * automation created before the field existed, or a template that omits it,
- * reads as the serialized default rather than as an invalid form.
+ * reads as DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as an invalid
+ * form.
  */
 export function clampConcurrentRuns(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 1;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS;
+  }
   return Math.min(MAX_AUTOMATION_CONCURRENT_RUNS, Math.max(1, Math.trunc(value)));
 }
 

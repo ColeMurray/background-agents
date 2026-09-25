@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   MAX_AUTOMATION_CONCURRENT_RUNS,
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
@@ -21,7 +22,7 @@ const automation = {
   harness: "opencode",
   reasoningEffort: null,
   enabled: true,
-  maxConcurrentRuns: 1,
+  maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   nextRunAt: 123,
   consecutiveFailures: 0,
   createdBy: "user-1",
@@ -134,8 +135,8 @@ describe("automation concurrency bound", () => {
   });
 
   it("omission is the serialized default rather than an unbounded one", () => {
-    // The column defaults to 1, so a request that says nothing must not read as
-    // a request to lift the bound.
+    // Creation stores DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS, so a request that
+    // says nothing must not read as a request to lift the bound.
     expect(
       createAutomationRequestSchema.parse({ name: "Queue drain", instructions: "Drain" })
     ).not.toHaveProperty("maxConcurrentRuns");

@@ -10,6 +10,7 @@ import {
 } from "../../src/db/automation-store";
 import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
 import { cleanD1Tables } from "./cleanup";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
-    max_concurrent_runs: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: now + 86_400_000,
     consecutive_failures: 0,
     created_by: "user-1",

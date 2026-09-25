@@ -15,6 +15,7 @@ import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -370,7 +371,7 @@ const sampleAutomation = {
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,
   enabled: 1,
-  max_concurrent_runs: 1,
+  max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   next_run_at: now - 60000,
   consecutive_failures: 0,
   created_by: "user-1",
