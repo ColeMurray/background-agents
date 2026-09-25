@@ -119,10 +119,9 @@ def test_git_invokes_custom_ssh_signer_with_literal_public_key(tmp_path: Path) -
     )
 
     invocation = json.loads(invocation_path.read_text())
-    assert invocation["arguments"][:4] == ["-Y", "sign", "-n", "git"]
-    assert invocation["arguments"][4] == "-f"
-    assert invocation["arguments"][6] == "-U"
-    assert len(invocation["arguments"]) == 8
+    assert invocation["arguments"][:5] == ["-Y", "sign", "-n", "git", "-f"]
+    # Older Git (e.g. 2.39) omits -U before the buffer path.
+    assert invocation["arguments"][6:-1] in ([], ["-U"])
     assert invocation["public_key"] == public_key
     assert invocation["buffer"].startswith("tree ")
     assert "\n\nrecord signer invocation\n" in invocation["buffer"]
