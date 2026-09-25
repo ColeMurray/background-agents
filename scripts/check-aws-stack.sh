@@ -99,7 +99,7 @@ cat >"$STACK_ENV" <<'ENV'
 CONTROL_PLANE_IMAGE=example.invalid/control-plane:test
 OBJECT_STORE_BUCKET=example-media
 LITESTREAM_BUCKET=example-backups
-MINIO_ROOT_PASSWORD=unused-on-aws
+OBJECT_STORE_ROOT_PASSWORD=unused-on-aws
 CADDY_DOMAIN=example.invalid
 ENV
 
