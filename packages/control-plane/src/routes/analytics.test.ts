@@ -147,8 +147,8 @@ describe("analytics route handlers", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ runs: [{ rootSessionId: "root" }] });
       expect(mockRunStore.list).toHaveBeenCalledWith({
-        start: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
-        end: FIXED_NOW,
+        startAt: FIXED_NOW - DEFAULT_ANALYTICS_DAYS * 24 * 60 * 60 * 1000,
+        endAt: FIXED_NOW,
         limit: 50,
         orderBy: "cost",
       });
@@ -159,8 +159,8 @@ describe("analytics route handlers", () => {
       const response = await callRoute("GET", "/analytics/runs?days=14&limit=10&orderBy=created");
       expect(response.status).toBe(200);
       expect(mockRunStore.list).toHaveBeenCalledWith({
-        start: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
-        end: FIXED_NOW,
+        startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
+        endAt: FIXED_NOW,
         limit: 10,
         orderBy: "created",
       });

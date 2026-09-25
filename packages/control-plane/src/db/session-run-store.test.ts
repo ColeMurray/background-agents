@@ -19,8 +19,8 @@ describe("SessionRunStore row validation", () => {
   it("rejects malformed list rows rather than returning unchecked data", async () => {
     await expect(
       new SessionRunStore(database).list({
-        start: 0,
-        end: 1,
+        startAt: 0,
+        endAt: 1,
         limit: 1,
         orderBy: "cost",
       })

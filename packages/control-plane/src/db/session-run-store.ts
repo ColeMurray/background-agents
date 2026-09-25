@@ -1,13 +1,13 @@
-import type { SessionRun } from "@open-inspect/shared/types/analytics";
+import type { AnalyticsRunOrderBy, SessionRun } from "@open-inspect/shared/types/analytics";
 import { spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { SqlDatabase } from "./sql-database";
 
 export interface ListSessionRunsOptions {
-  start: number;
-  end: number;
+  startAt: number;
+  endAt: number;
   limit: number;
-  orderBy: "cost" | "created";
+  orderBy: AnalyticsRunOrderBy;
 }
 
 const runRowSchema = z.object({
@@ -81,7 +81,7 @@ function toRun(value: unknown): SessionRun {
 export class SessionRunStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list({ start, end, limit, orderBy }: ListSessionRunsOptions): Promise<SessionRun[]> {
+  async list({ startAt, endAt, limit, orderBy }: ListSessionRunsOptions): Promise<SessionRun[]> {
     const order = orderBy === "cost" ? "total_cost" : "created_at";
     const result = await this.db
       .prepare(
@@ -91,7 +91,7 @@ export class SessionRunStore {
          ORDER BY ${order} DESC, root_session_id ASC
          LIMIT ?`
       )
-      .bind(start, end, limit)
+      .bind(startAt, endAt, limit)
       .all<unknown>();
     return (result.results ?? []).map(toRun);
   }

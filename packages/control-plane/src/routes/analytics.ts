@@ -1,6 +1,7 @@
 import {
   ANALYTICS_BREAKDOWN_BY,
   ANALYTICS_DAYS,
+  ANALYTICS_RUN_ORDER_BY,
   type AnalyticsDays,
 } from "@open-inspect/shared/types/analytics";
 import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
@@ -53,8 +54,8 @@ const runsQuery = daysQuery.extend({
       error: `limit must be an integer between 1 and ${MAX_RUNS_LIMIT}`,
     }),
   orderBy: z
-    .enum(["cost", "created"], {
-      error: "orderBy must be one of: cost, created",
+    .enum(ANALYTICS_RUN_ORDER_BY, {
+      error: `orderBy must be one of: ${ANALYTICS_RUN_ORDER_BY.join(", ")}`,
     })
     .default("cost"),
 });
@@ -160,12 +161,12 @@ async function handleRuns(
 ): Promise<Response> {
   const query = parseQuery(request, runsQuery);
   if (query instanceof Response) return query;
-  const end = Date.now();
+  const endAt = Date.now();
   const store = new SessionRunStore(ctx.db);
   return json({
     runs: await store.list({
-      start: end - query.days * 24 * 60 * 60 * 1000,
-      end,
+      startAt: endAt - query.days * 24 * 60 * 60 * 1000,
+      endAt,
       limit: query.limit,
       orderBy: query.orderBy,
     }),

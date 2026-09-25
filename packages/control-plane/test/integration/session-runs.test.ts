@@ -208,8 +208,8 @@ describe("session runs", () => {
     expect(body.runs[0]).toMatchObject({ sessionCount: 2, totalCost: 7, totalPrs: 1 });
 
     const runs = await new SessionRunStore(env.DB).list({
-      start: now - 11 * DAY_MS,
-      end: now - 7 * DAY_MS,
+      startAt: now - 11 * DAY_MS,
+      endAt: now - 7 * DAY_MS,
       limit: 10,
       orderBy: "created",
     });
@@ -243,7 +243,7 @@ describe("session runs", () => {
     );
 
     const runs = new SessionRunStore(env.DB);
-    const window = { start: now - 7 * DAY_MS, end: now, limit: 1 };
+    const window = { startAt: now - 7 * DAY_MS, endAt: now, limit: 1 };
     expect(
       (await runs.list({ ...window, orderBy: "cost" })).map((run) => run.rootSessionId)
     ).toEqual(["older-expensive"]);
