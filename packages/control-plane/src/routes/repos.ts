@@ -17,6 +17,7 @@ import {
   type RepoMetadata,
 } from "@open-inspect/shared/types/repository-catalog";
 import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
+import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import { createLogger } from "../logger";
 import { z } from "zod";
 import {
@@ -166,6 +167,7 @@ async function handleListRepos(
 ): Promise<Response> {
   const cacheStore = env.REPOS_CACHE;
   const scmIdentity = await reposCacheIdentity(env);
+  const scmHost = scmCloneIdentity(resolveScmProviderFromEnv(env.SCM_PROVIDER)).host;
 
   // Read from KV cache
   let cached: CachedReposList | null = null;
@@ -197,6 +199,7 @@ async function handleListRepos(
       repos: cached.repos,
       cached: true,
       cachedAt: cached.cachedAt,
+      scmHost,
     });
   }
 
@@ -228,6 +231,7 @@ async function handleListRepos(
     repos: result.repos,
     cached: false,
     cachedAt: result.cachedAt,
+    scmHost,
   });
 }
 

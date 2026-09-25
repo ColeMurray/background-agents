@@ -25,6 +25,8 @@ import { getProjectRepoMapping, getTeamRepoMapping } from "./kv-store";
 import { createLogger } from "./logger";
 
 const log = createLogger("target-resolution");
+/** Host for repos listed by a control plane that predates `scmHost` (GitHub-only then). */
+const LEGACY_SCM_HOST = "github.com";
 const REPO_PATH_CHAR = /[\w/-]/;
 
 function extendsRepositoryPath(text: string, index: number, direction: -1 | 1): boolean {
@@ -260,7 +262,7 @@ export async function resolveSessionTarget(
   // 4. Try Linear's built-in issueRepositorySuggestions API
   if (repos.length > 0) {
     const candidates = repos.map((r) => ({
-      hostname: "github.com",
+      hostname: r.scmHost ?? LEGACY_SCM_HOST,
       repositoryFullName: `${r.owner}/${r.name}`,
     }));
 

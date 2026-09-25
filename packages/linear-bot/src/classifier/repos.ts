@@ -16,7 +16,7 @@ import type { Env } from "../types";
 import { createCachedResource } from "../cached-resource";
 import { fetchControlPlaneJson } from "../control-plane";
 
-function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
+function toRepoConfig(repo: ControlPlaneRepo, scmHost: string | undefined): RepoConfig {
   const owner = repo.owner.toLowerCase();
   const name = repo.name.toLowerCase();
   return {
@@ -32,6 +32,7 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
     topics: repo.topics,
     aliases: repo.metadata?.aliases,
     keywords: repo.metadata?.keywords,
+    scmHost,
   };
 }
 
@@ -45,7 +46,8 @@ const reposResource = createCachedResource<RepoConfig[]>({
     // Throws on a malformed body so the resource falls back to the KV
     // last-known-good copy. Returning [] here would instead publish "no
     // repositories" as a successful load and overwrite that copy.
-    return controlPlaneReposResponseSchema.parse(body).repos.map(toRepoConfig);
+    const { repos, scmHost } = controlPlaneReposResponseSchema.parse(body);
+    return repos.map((repo) => toRepoConfig(repo, scmHost));
   },
   deserialize: (cached) => {
     const result = repoConfigsSchema.safeParse(cached);

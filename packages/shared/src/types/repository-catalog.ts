@@ -52,6 +52,8 @@ export const repoConfigSchema = z.object({
   aliases: z.array(z.string()).optional(),
   keywords: z.array(z.string()).optional(),
   channelAssociations: z.array(z.string()).optional(),
+  /** Git host serving the repository (e.g. "github.com"); see `scmHost` on the repos response. */
+  scmHost: z.string().optional(),
 });
 
 export type RepoConfig = z.infer<typeof repoConfigSchema>;
@@ -62,6 +64,8 @@ export const controlPlaneReposResponseSchema = z.object({
   repos: z.array(enrichedRepositorySchema),
   cached: z.boolean(),
   cachedAt: z.string(),
+  /** Git host of the deployment's SCM provider. Absent from older control planes. */
+  scmHost: z.string().optional(),
 });
 
 export type ControlPlaneReposResponse = z.infer<typeof controlPlaneReposResponseSchema>;

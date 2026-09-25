@@ -224,6 +224,11 @@ npm run build
 wrangler dev  # Local development
 ```
 
+Every GraphQL document in `src/` is validated against Linear's schema, vendored as
+`linear-schema.graphql` (`src/utils/linear-graphql-schema.test.ts`). To pick up Linear schema
+changes, bump the `@linear/sdk` tag in the `update:linear-schema` script and run
+`npm run update:linear-schema`.
+
 ## Architecture
 
 Built on Linear's [Agents API](https://linear.app/developers/agents):
