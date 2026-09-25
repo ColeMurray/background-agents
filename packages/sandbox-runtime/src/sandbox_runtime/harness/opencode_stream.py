@@ -6,7 +6,6 @@ import asyncio
 import math
 import re
 import time
-import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from enum import Enum
@@ -27,6 +26,7 @@ from .opencode_client import (
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
+from .opencode_step_ids import StepIdTracker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -73,8 +73,7 @@ class _PromptState:
     # Priced step costs keyed by OpenCode part id. Last write wins, so a part
     # OpenCode re-emits with a corrected cost replaces its earlier value.
     step_costs: dict[str, float] = field(default_factory=dict)
-    active_step_ids: dict[str, str] = field(default_factory=dict)
-    finished_step_ids: dict[str, str] = field(default_factory=dict)
+    step_ids: StepIdTracker = field(default_factory=StepIdTracker)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -659,8 +658,9 @@ class OpenCodePromptStream:
 
         elif part_type == "step-start":
             message_id = part.get("messageID") or part.get("sessionID") or ""
-            step_id = part_id if isinstance(part_id, str) and part_id else str(uuid.uuid4())
-            state.active_step_ids[message_id] = step_id
+            step_id = state.step_ids.start(
+                message_id, part_id if isinstance(part_id, str) else None
+            )
             events.append(
                 {
                     "type": "step_start",
@@ -671,18 +671,9 @@ class OpenCodePromptStream:
 
         elif part_type == "step-finish":
             message_id = part.get("messageID") or part.get("sessionID") or ""
-            finish_id = part_id if isinstance(part_id, str) and part_id else None
-            cached_step_id = state.finished_step_ids.get(finish_id) if finish_id else None
-            if cached_step_id:
-                if state.active_step_ids.get(message_id) == cached_step_id:
-                    state.active_step_ids.pop(message_id)
-                step_id = cached_step_id
-            else:
-                step_id = (
-                    state.active_step_ids.pop(message_id, None) or finish_id or str(uuid.uuid4())
-                )
-            if finish_id:
-                state.finished_step_ids[finish_id] = step_id
+            step_id = state.step_ids.finish(
+                message_id, part_id if isinstance(part_id, str) else None
+            )
             cost = part.get("cost")
             if isinstance(cost, int | float) and not isinstance(cost, bool):
                 state.step_costs[str(part.get("id", ""))] = float(cost)

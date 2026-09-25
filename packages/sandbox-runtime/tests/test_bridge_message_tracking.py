@@ -140,6 +140,9 @@ class TestHandlePartTranslation:
         second_start = stream._handle_part(
             state, {"type": "step-start", "id": "start-2", "messageID": "assistant-1"}, None
         )[0]
+        interleaved_replay = stream._handle_part(
+            state, {"type": "step-start", "id": "start-1", "messageID": "assistant-1"}, None
+        )[0]
         corrected_finish = stream._handle_part(
             state, {"type": "step-finish", "id": "finish-1", "messageID": "assistant-1"}, None
         )[0]
@@ -148,6 +151,7 @@ class TestHandlePartTranslation:
         )[0]
 
         assert first_start["stepId"] == first_finish["stepId"] == "start-1"
+        assert interleaved_replay["stepId"] == first_start["stepId"]
         assert corrected_finish["stepId"] == first_start["stepId"]
         assert second_start["stepId"] == second_finish["stepId"] == "start-2"
         assert first_start["stepId"] != second_start["stepId"]
