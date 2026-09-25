@@ -34,7 +34,8 @@ const tokenUsageDetailsSchema = z
     { message: "Expected at least one token usage count" }
   );
 
-const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
+export const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
+export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 
 /** The steps of a sandbox boot, in the order the supervisor runs them. */
 export const bootPhaseNameSchema = z.enum([
@@ -138,12 +139,14 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_start"),
+    stepId: z.string().optional(),
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
+    stepId: z.string().optional(),
     /** Cost of this step alone; absent when the runtime could not price it. */
     cost: z.number().nullable().optional(),
     /** Cumulative reported cost of the whole turn so far; idempotent on resend. */

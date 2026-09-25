@@ -139,6 +139,10 @@ export {
 
 export { sandboxShutdownSchema } from "./sandbox-shutdown";
 export type { SandboxShutdownState } from "./sandbox-shutdown";
+export { tokenUsageSchema } from "./sandbox-events";
+export type { TokenUsage } from "./sandbox-events";
+export { normalizeTokenUsage } from "./usage";
+export type { NormalizedTokenUsage, StepUsage } from "./usage";
 export type {
   ParticipantPresence,
   PromptQueueItem,
