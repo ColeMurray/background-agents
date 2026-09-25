@@ -5,7 +5,7 @@ import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
@@ -391,7 +391,7 @@ export async function initNamedSession(
     canonicalUserId?: string;
     scmLogin?: string;
     parentSessionId?: string;
-    spawnSource?: "user" | "agent" | "automation";
+    spawnSource?: SpawnSource;
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
     providerAuth?: SessionModelProviderAuthInput[];

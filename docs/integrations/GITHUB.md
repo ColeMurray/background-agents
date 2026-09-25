@@ -89,7 +89,8 @@ credentials without the login leave reviews on the main App's identity.
 
 The agent fetches a short-lived installation token from `GET /sessions/:id/review-token` using its
 sandbox token immediately before submitting the review. The route authenticates the caller against
-that session and returns `Cache-Control: no-store`. Only the review POST uses this credential; other
+that session, issues the token only to sessions the GitHub bot created (any other session's sandbox
+gets 403), and returns `Cache-Control: no-store`. Only the review POST uses this credential; other
 GitHub calls retain their existing credential. With no reviewer App configured, the endpoint returns
 404 and the prompt omits the token fetch. When the GitHub bot has a reviewer login, any token-fetch
 failure, including that 404 from missing or partial reviewer credentials, stops the review rather

@@ -3,7 +3,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import type { WorkerBindings } from "../../src/cloudflare/platform";
 import { INSTALLATION_TOKEN_CACHE_MAX_AGE_MS } from "../../src/auth/github-app";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, routeRequest, seedSandboxAuth } from "./helpers";
+import { initNamedSession, routeRequest, seedSandboxAuth, serviceFetch } from "./helpers";
 
 /**
  * A token already in the installation-token cache, so the route answers
@@ -54,7 +54,7 @@ describe("reviewer app token broker", () => {
     await cleanD1Tables();
   });
 
-  it("mints the reviewer App's token for the session's own sandbox", async () => {
+  it("mints the reviewer App's token for a GitHub bot session's own sandbox", async () => {
     const suffix = `${Date.now()}`;
     const sessionName = `review-token-${suffix}`;
     const keyPair = (await crypto.subtle.generateKey(
@@ -88,7 +88,7 @@ describe("reviewer app token broker", () => {
     // token: the review POST must be authenticated as the reviewer App.
     await cacheInstallationToken(`main-${suffix}`, `mi-${suffix}`, "main-installation-token");
 
-    const { stub } = await initNamedSession(sessionName);
+    const { stub } = await initNamedSession(sessionName, { spawnSource: "github-bot" });
     await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
 
     const response = await fetchReviewToken(sessionName, "sandbox-token", {
@@ -130,9 +130,9 @@ describe("reviewer app token broker", () => {
 
     const reviewed = `review-token-${suffix}`;
     const other = `other-session-${suffix}`;
-    const { stub } = await initNamedSession(reviewed);
+    const { stub } = await initNamedSession(reviewed, { spawnSource: "github-bot" });
     await seedSandboxAuth(stub, { authToken: "reviewed-token", sandboxId: "sandbox-1" });
-    const { stub: otherStub } = await initNamedSession(other);
+    const { stub: otherStub } = await initNamedSession(other, { spawnSource: "github-bot" });
     await seedSandboxAuth(otherStub, { authToken: "other-token", sandboxId: "sandbox-2" });
 
     const response = await fetchReviewToken(reviewed, "other-token", bindings);
@@ -140,4 +140,58 @@ describe("reviewer app token broker", () => {
     expect(response.status).toBe(401);
     expect(await response.text()).not.toContain("reviewer-installation-token");
   });
+
+  it("mints for a session the GitHub bot created through the session API", async () => {
+    const suffix = `created-${Date.now()}`;
+    await cacheInstallationToken(
+      `reviewer-${suffix}`,
+      `ri-${suffix}`,
+      "reviewer-installation-token"
+    );
+    const body = JSON.stringify({
+      title: "GitHub: Review PR #1",
+      model: "anthropic/claude-haiku-4-5",
+    });
+    const created = await serviceFetch("https://test.local/sessions", {
+      service: "github-bot",
+      method: "POST",
+      actor: "github:1001",
+      body,
+    });
+    expect(created.status).toBe(201);
+    const { sessionId } = await created.json<{ sessionId: string }>();
+    const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
+
+    const response = await fetchReviewToken(
+      sessionId,
+      "sandbox-token",
+      withReviewerApp(`reviewer-${suffix}`, `ri-${suffix}`)
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ token: "reviewer-installation-token" });
+  });
+
+  it.each(["user", "agent", "automation", "slack-bot", "linear-bot"] as const)(
+    "refuses the own sandbox of a session spawned by %s",
+    async (spawnSource) => {
+      const suffix = `${spawnSource}-${Date.now()}`;
+      const bindings = withReviewerApp(`reviewer-${suffix}`, `ri-${suffix}`);
+      await cacheInstallationToken(
+        `reviewer-${suffix}`,
+        `ri-${suffix}`,
+        "reviewer-installation-token"
+      );
+      const sessionName = `non-review-${suffix}`;
+      const { stub } = await initNamedSession(sessionName, { spawnSource });
+      await seedSandboxAuth(stub, { authToken: "sandbox-token", sandboxId: "sandbox-1" });
+
+      const response = await fetchReviewToken(sessionName, "sandbox-token", bindings);
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("Cache-Control")).toContain("no-store");
+      expect(await response.text()).not.toContain("reviewer-installation-token");
+    }
+  );
 });
