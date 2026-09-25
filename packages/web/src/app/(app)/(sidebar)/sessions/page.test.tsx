@@ -323,21 +323,30 @@ describe("SessionsPage", () => {
     );
   });
 
-  it("writes each change against the last written state before navigations land", () => {
+  it("sends a reversal made before the previous navigation lands", () => {
     render(<SessionsPage />);
 
     // The URL still shows the default view while the first replace is in flight.
     chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "All");
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?lifecycle=all", { scroll: false });
-    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Archived");
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveTextContent("All");
+    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Not archived");
     expect(mockReplace).toHaveBeenCalledTimes(2);
-    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?lifecycle=archived", {
-      scroll: false,
-    });
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
 
     // Re-selecting the state already written is not a navigation.
-    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Archived");
+    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Not archived");
     expect(mockReplace).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an environment ID that matches the Any sentinel distinct from Any", () => {
+    mockSearchParamsState.value = new URLSearchParams("environmentId=__any__");
+    render(<SessionsPage />);
+
+    const environment = screen.getByRole("combobox", { name: "Environment" });
+    expect(environment).toHaveTextContent("__any__");
+    chooseOption(environment, "Any environment");
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
   });
 
   it("follows URL changes from browser navigation", () => {

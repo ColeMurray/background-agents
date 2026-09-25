@@ -24,6 +24,11 @@ import {
 
 /** Radix Select reserves the empty string, so "Any" options use a sentinel value. */
 const ANY_OPTION = "__any__";
+/**
+ * Environment IDs come from the URL unvalidated, so their option values are
+ * namespaced to keep an `environmentId` from colliding with `ANY_OPTION`.
+ */
+const ENVIRONMENT_OPTION_PREFIX = "environment:";
 
 interface LabeledSelectProps {
   label: string;
@@ -164,13 +169,21 @@ export function SessionDiscoveryFilters({
 
       <LabeledSelect
         label="Environment"
-        value={query.environmentId ?? ANY_OPTION}
-        onValueChange={(value) => onChange({ environmentId: value === ANY_OPTION ? null : value })}
+        value={
+          query.environmentId ? `${ENVIRONMENT_OPTION_PREFIX}${query.environmentId}` : ANY_OPTION
+        }
+        onValueChange={(value) =>
+          onChange({
+            environmentId: value.startsWith(ENVIRONMENT_OPTION_PREFIX)
+              ? value.slice(ENVIRONMENT_OPTION_PREFIX.length)
+              : null,
+          })
+        }
         triggerClassName="w-44"
       >
         <SelectItem value={ANY_OPTION}>Any environment</SelectItem>
         {environmentOptions.map((environment) => (
-          <SelectItem key={environment.id} value={environment.id}>
+          <SelectItem key={environment.id} value={`${ENVIRONMENT_OPTION_PREFIX}${environment.id}`}>
             {environment.name}
           </SelectItem>
         ))}

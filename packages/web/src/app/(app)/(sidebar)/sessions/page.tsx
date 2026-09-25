@@ -56,8 +56,13 @@ function SessionsContent() {
   // query this page has written or read, so two quick control changes compose
   // even before the first navigation has landed in `searchParams`.
   const latestQuery = useRef(query);
+  // What the filter controls show: the last written query until the URL
+  // catches up. Controlled selects ignore picking the value they already
+  // show, so rendering the URL here would swallow a quick reversal.
+  const [controlsQuery, setControlsQuery] = useState(query);
   useEffect(() => {
     latestQuery.current = query;
+    setControlsQuery(query);
   }, [query]);
 
   // Search text the user has typed but the URL does not show yet. Null means
@@ -87,6 +92,7 @@ function SessionsContent() {
         ...patch,
       };
       latestQuery.current = next;
+      setControlsQuery(next);
       if ("q" in patch) pendingSearch.current = null;
       const href = buildSessionsHref(next);
       if (href !== previousHref) router.replace(href, { scroll: false });
@@ -97,6 +103,7 @@ function SessionsContent() {
     pendingSearch.current = null;
     setSearchText("");
     latestQuery.current = DEFAULT_SESSION_DISCOVERY_QUERY;
+    setControlsQuery(DEFAULT_SESSION_DISCOVERY_QUERY);
     router.replace(buildSessionsHref(), { scroll: false });
   }, [router]);
   const resetSearch = useCallback(() => {
@@ -220,7 +227,7 @@ function SessionsContent() {
 
               <div className="mb-4">
                 <SessionDiscoveryFilters
-                  query={query}
+                  query={controlsQuery}
                   repositories={repositoryOptions}
                   environments={environments}
                   hasFilters={hasFilters}
