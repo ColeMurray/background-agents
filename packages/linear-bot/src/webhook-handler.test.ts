@@ -9,6 +9,7 @@ import {
 import { clearEnvironmentsLocalCache } from "./environments";
 import { clearReposLocalCache } from "./classifier/repos";
 import type { Environment } from "@open-inspect/shared/types/environments";
+import { MAX_SESSION_INSTRUCTIONS_LENGTH } from "@open-inspect/shared/types/integrations";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 import type { AgentSessionWebhook, Env } from "./types";
 import {
@@ -591,7 +592,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     );
   });
 
-  it("rejects oversized configured instructions with actionable guidance", async () => {
+  it.each([0, 1])("handles a configured prompt %i characters over the limit", async (overflow) => {
     const { kv, store } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "config:project-repos": JSON.stringify({
@@ -599,14 +600,30 @@ describe("handleAgentSessionEvent environment targets", () => {
       }),
     });
     const env = makeLinearBotEnv(kv);
-    const instructions = "x".repeat(MAX_WEB_PROMPT_CHARS);
+    const instructions = "i".repeat(MAX_SESSION_INSTRUCTIONS_LENGTH);
     const fetchMock = stubControlPlane(env, { instructions });
     const webhook = makeWebhook();
-    webhook.promptContext = "Short issue context";
+    const instructionSuffix = `\n\n## Additional Instructions\n\n${instructions}`;
+    webhook.promptContext = "x".repeat(
+      MAX_WEB_PROMPT_CHARS -
+        buildPromptContextPrompt("").length -
+        instructionSuffix.length +
+        overflow
+    );
+    const prompt = buildPromptContextPrompt(webhook.promptContext) + instructionSuffix;
+    expect(prompt).toHaveLength(MAX_WEB_PROMPT_CHARS + overflow);
 
     await handleAgentSessionEvent(webhook, env, "trace-instructions-limit");
 
+    if (overflow === 0) {
+      expect(createSessionBody(fetchMock)).not.toBeNull();
+      expect(promptBody(fetchMock)?.content).toBe(prompt);
+      expect(store.has("issue:issue-1")).toBe(true);
+      return;
+    }
+
     expect(createSessionBody(fetchMock)).toBeNull();
+    expect(promptBody(fetchMock)).toBeNull();
     expect(store.has("issue:issue-1")).toBe(false);
     const activities = vi
       .mocked(fetch)
@@ -618,7 +635,11 @@ describe("handleAgentSessionEvent environment targets", () => {
           }
       )
       .map(({ variables }) => variables?.input?.content);
-    expect(activities.find((content) => content?.type === "error")?.body).toContain(
+    const errorBody = activities.find((content) => content?.type === "error")?.body;
+    expect(errorBody).toContain(
+      `${(MAX_WEB_PROMPT_CHARS + 1).toLocaleString("en-US")} characters, exceeding the ${MAX_WEB_PROMPT_CHARS.toLocaleString("en-US")}-character limit`
+    );
+    expect(errorBody).toContain(
       "shorten this issue, its parent, or the configured instructions, then delegate again"
     );
   });
