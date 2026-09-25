@@ -114,9 +114,11 @@ export function AccessTokensSettings() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground mb-6">
-        Personal access tokens let local tools — such as the Open-Inspect MCP server — read the
-        control plane as you. They are read-only: a token can never create, modify, or delete
-        anything, and it cannot issue another token.
+        Personal access tokens let local tools — such as the Open-Inspect MCP server — act on the
+        control plane as you, within your role. A token can read, import skills, and create or run
+        automations; it cannot delete anything, edit an existing automation, change secrets, or
+        issue another token. An automation it creates runs later as you, so only issue tokens to
+        machines you trust.
       </p>
 
       {creating && (
