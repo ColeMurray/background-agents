@@ -66,6 +66,7 @@ import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
+import { UsageRepository } from "./usage-repository";
 import { recordSessionWarning } from "./session-warnings";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
@@ -245,6 +246,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const attachmentRepository = new SessionAttachmentRepository(sql);
   const artifactRepository = new ArtifactRepository(sql);
   const eventRepository = new EventRepository(sql, transaction);
+  const usageRepository = new UsageRepository(sql, transaction);
   const messageRepository = new MessageRepository(
     sql,
     transaction,
@@ -542,7 +544,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     messenger,
     updateLastActivity,
-    budgetService
+    budgetService,
+    usageRepository
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,

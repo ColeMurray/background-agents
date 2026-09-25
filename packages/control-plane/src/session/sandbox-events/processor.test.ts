@@ -19,6 +19,7 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionStatusService } from "../session-status-service";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "../websocket-manager";
 import type { SessionBudgetService } from "../budget-service";
+import type { UsageRepository } from "../usage-repository";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
   return {
@@ -112,6 +113,7 @@ function createProcessor(shutdown?: {
     })),
     deliverTransition: vi.fn(async () => {}),
   };
+  const usageRepository = { recordStepUsage: vi.fn() };
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
@@ -126,7 +128,8 @@ function createProcessor(shutdown?: {
       callbackService as unknown as CallbackNotificationService,
       messenger,
       updateLastActivity,
-      budgetService as unknown as SessionBudgetService
+      budgetService as unknown as SessionBudgetService,
+      usageRepository as unknown as UsageRepository
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
@@ -193,6 +196,7 @@ function createProcessor(shutdown?: {
     backgroundTasks,
     log,
     budgetService,
+    usageRepository,
   };
 }
 
@@ -444,6 +448,11 @@ describe("SessionSandboxEventProcessor", () => {
       expect.any(Number)
     );
     expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
+    expect(h.usageRepository.recordStepUsage).toHaveBeenCalledWith(
+      event,
+      "msg-1",
+      expect.any(Number)
+    );
   });
 
   it("records unavailable cost tracking for positive-token steps without cost", async () => {

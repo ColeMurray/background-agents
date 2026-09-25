@@ -5,13 +5,14 @@ import type { CallbackNotificationService } from "../callback-notification-servi
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
 import type { SessionBudgetService } from "../budget-service";
+import type { UsageRepository } from "../usage-repository";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 
 /**
  * Streaming/timeline family: the high-frequency events that narrate an
  * execution (tokens, steps, tool activity, compaction). Every event here is
  * broadcast to clients; the ones with a durable representation also record
- * to the timeline (steps only renew activity and accumulate cost). Nothing
+ * to the timeline (steps renew activity, accumulate cost, and persist usage). Nothing
  * here transitions session state. Also owns the timeline-observer path
  * (`recordTimelineEvent`) for events that persist and broadcast unchanged.
  */
@@ -22,7 +23,8 @@ export class SandboxStreamingEventHandler {
     private readonly callbackService: CallbackNotificationService,
     private readonly messenger: SessionMessenger,
     private readonly updateLastActivity: (timestamp: number) => void,
-    private readonly budgetService: SessionBudgetService
+    private readonly budgetService: SessionBudgetService,
+    private readonly usageRepository: UsageRepository
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
@@ -55,6 +57,7 @@ export class SandboxStreamingEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
       await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+      this.usageRepository.recordStepUsage(event, context.messageId, context.now);
     }
   }
 
