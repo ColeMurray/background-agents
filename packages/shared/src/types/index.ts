@@ -352,16 +352,19 @@ export type {
 } from "./image-builds";
 export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
-export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
+export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY, ANALYTICS_RUN_ORDER_BY } from "./analytics";
 export type {
   AnalyticsDays,
   AnalyticsBreakdownBy,
+  AnalyticsRunOrderBy,
   AnalyticsStatusBreakdown,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesPoint,
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  SessionRun,
+  AnalyticsRunsResponse,
   AnalyticsPullRequestFunnel,
   AnalyticsPullRequestTimeseriesPoint,
   AnalyticsPullRequestRepoEntry,

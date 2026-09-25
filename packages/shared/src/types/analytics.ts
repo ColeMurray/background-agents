@@ -6,6 +6,9 @@ export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
 export const ANALYTICS_BREAKDOWN_BY = ["user", "repo"] as const;
 export type AnalyticsBreakdownBy = (typeof ANALYTICS_BREAKDOWN_BY)[number];
 
+export const ANALYTICS_RUN_ORDER_BY = ["cost", "created"] as const;
+export type AnalyticsRunOrderBy = (typeof ANALYTICS_RUN_ORDER_BY)[number];
+
 export interface AnalyticsStatusBreakdown {
   created: number;
   active: number;
@@ -49,6 +52,32 @@ export interface AnalyticsBreakdownEntry {
 
 export interface AnalyticsBreakdownResponse {
   entries: AnalyticsBreakdownEntry[];
+}
+
+/** All sessions in one root_session_id family, attributed to the root. */
+export interface SessionRun {
+  rootSessionId: string;
+  sessionCount: number;
+  maxSpawnDepth: number;
+  totalCost: number;
+  totalPrs: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  createdAt: number;
+  updatedAt: number;
+  userId: string | null;
+  scmLogin: string | null;
+  spawnSource: SpawnSource;
+  automationId: string | null;
+  repoOwner: string | null;
+  repoName: string | null;
+}
+
+export interface AnalyticsRunsResponse {
+  runs: SessionRun[];
 }
 
 // ─── Pull-request analytics ──────────────────────────────────────────────────
