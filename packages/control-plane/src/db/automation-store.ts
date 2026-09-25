@@ -79,7 +79,7 @@ export interface AutomationRow {
   model: string;
   reasoning_effort: string | null;
   enabled: number; // SQLite integer boolean
-  /** Firings allowed in flight at once; one serializes (the pre-0083 behaviour). */
+  /** Firings allowed in flight at once; one serializes (the pre-0092 behaviour). */
   max_concurrent_runs: number;
   next_run_at: number | null;
   consecutive_failures: number;
