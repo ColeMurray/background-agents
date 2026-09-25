@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionExportStore } from "../../src/db/session-export-store";
+import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 import { sqlDatabase } from "./helpers";
 
@@ -245,5 +246,80 @@ describe("SessionExportStore integration", () => {
     expect(result.sessions[100].repositories).toEqual([
       { repoOwner: "acme", repoName: "oldest", repoId: null, baseBranch: "main" },
     ]);
+  });
+
+  it("keeps metrics and PRs on one snapshot when a write interleaves with the read", async () => {
+    await insertSession("interleaved", 100);
+    const rawDb = sqlDatabase(env.DB);
+    const unwrapped = new WeakMap<SqlStatement, SqlStatement>();
+    let wrote = false;
+    const write = async () => {
+      if (wrote) return;
+      wrote = true;
+      await env.DB.prepare("UPDATE sessions SET pr_count = 1 WHERE id = ?")
+        .bind("interleaved")
+        .run();
+      await env.DB.prepare(
+        `INSERT INTO session_pull_requests
+         (artifact_id, session_id, repo_owner, repo_name, pr_number, url, lifecycle_state,
+          is_draft, head_branch, base_branch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          "pr-interleaved",
+          "interleaved",
+          "acme",
+          "repo",
+          1,
+          "https://example.com/pr/1",
+          "open",
+          0,
+          "feature",
+          "main",
+          100,
+          100
+        )
+        .run();
+    };
+    const db: SqlDatabase = {
+      prepare(sql) {
+        const statement = rawDb.prepare(sql);
+        if (!sql.includes("FROM sessions")) return statement;
+        const wrap = (inner: SqlStatement): SqlStatement => {
+          const wrapped: SqlStatement = {
+            bind(...values) {
+              return wrap(inner.bind(...values));
+            },
+            first<T = Record<string, unknown>>() {
+              return inner.first<T>();
+            },
+            run<T = Record<string, unknown>>() {
+              return inner.run<T>();
+            },
+            async all<T = Record<string, unknown>>() {
+              const result = await inner.all<T>();
+              await write();
+              return result;
+            },
+          };
+          unwrapped.set(wrapped, inner);
+          return wrapped;
+        };
+        return wrap(statement);
+      },
+      async batch<T = unknown>(statements: SqlStatement[]) {
+        const result = await rawDb.batch<T>(statements.map((stmt) => unwrapped.get(stmt) ?? stmt));
+        await write();
+        return result;
+      },
+    };
+
+    const result = await new SessionExportStore(db).list({ cursor: null, limit: 10 });
+
+    expect(wrote).toBe(true);
+    expect(result.sessions[0].prCount).toBe(result.sessions[0].pullRequests.length);
+    expect(
+      await env.DB.prepare("SELECT pr_count FROM sessions WHERE id = ?").bind("interleaved").first()
+    ).toMatchObject({ pr_count: 1 });
   });
 });
