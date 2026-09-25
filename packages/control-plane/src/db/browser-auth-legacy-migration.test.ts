@@ -1,10 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const MIGRATIONS_DIRECTORY = fileURLToPath(
-  new URL("../../../../terraform/d1/migrations/", import.meta.url)
+const MIGRATIONS_DIRECTORY = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../terraform/d1/migrations"
 );
 const BACKFILL_MIGRATION = "0049_backfill_better_auth_accounts.sql";
 

@@ -158,7 +158,7 @@ export SERVICE_AUTH_SECRET_SLACK_BOT
 # imports for its bundlers, so bundle the driver the way every other consumer
 # builds against it; `ws` stays external and resolves from node_modules.
 npx --no-install esbuild packages/control-plane/test/smoke/run-smoke.mjs \
-  --bundle --platform=node --format=esm --target=node22 --external:ws \
+  --bundle --platform=node --format=esm --target=node24 --external:ws \
   --outfile="$DRIVER_BUNDLE" --log-level=warning || fail "could not bundle the smoke driver"
 
 CONTROL_PLANE_URL="http://localhost:$APP_PORT" \

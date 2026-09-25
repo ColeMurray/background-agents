@@ -3,14 +3,14 @@
  * surface a Durable Object supplies, backed by an in-process database, so the
  * session core runs unchanged on a Node host.
  *
- * `node:sqlite` was chosen over better-sqlite3 because it ships with the Node
- * release CI already pins (unflagged since 22.13), so the host adds no native
- * dependency to install or rebuild. better-sqlite3 exposes the same
- * prepare/run/all shape and is the fallback if a gap appears here.
+ * `node:sqlite` was chosen over better-sqlite3 because it ships unflagged with
+ * every supported Node release, so the host adds no native dependency to
+ * install or rebuild. better-sqlite3 exposes the same prepare/run/all shape and
+ * is the fallback if a gap appears here.
  *
  * Statement boundaries come from the prepared statements' own extents. The
  * only SQL text recognized here is statement-less trivia, which must be
- * filtered before prepare() because affected Node 22/24 releases mishandle the
+ * filtered before prepare() because affected Node 24 releases mishandle the
  * null statement SQLite returns for such input. Rows come from stepping the
  * last statement, and the write count comes from SQLite's change counter.
  * Foreign keys are enforced, as they are in Durable Object storage. The

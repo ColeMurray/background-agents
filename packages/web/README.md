@@ -44,7 +44,7 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 
 ### Prerequisites
 
-- Node.js 22+
+- Node.js 24+
 - A deployed control plane with at least one sign-in provider
 - GitHub App repository credentials configured on the control plane
 

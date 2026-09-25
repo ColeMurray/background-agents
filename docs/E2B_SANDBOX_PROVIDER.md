@@ -54,7 +54,7 @@ E2B sandboxes boot from a **template** image that contains:
 
 - the Open-Inspect sandbox runtime (`packages/sandbox-runtime`, staged into `/app`)
 - OpenCode and the OpenCode plugin dependencies
-- Python 3.12 and Node 22 runtimes
+- Python 3.12 and Node 24 runtimes
 - `code-server`, `agent-browser`, and browser/terminal tooling used by the agent runtime
 - GitHub CLI and a Git credential helper
 

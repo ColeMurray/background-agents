@@ -21,10 +21,6 @@
   "hatchling": "1.27.0",
   "websockify": "0.13.0",
   "node": {
-    "22": {
-      "version": "22.23.2",
-      "sha256": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
-    },
     "24": {
       "version": "24.20.0",
       "sha256": "2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2"

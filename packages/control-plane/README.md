@@ -290,7 +290,7 @@ from an HTTP 2xx.
 
 ### Prerequisites
 
-- Node.js 22+
+- Node.js 24+
 - Terraform (for deployment)
 
 ### Setup

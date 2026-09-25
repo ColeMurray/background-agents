@@ -1,11 +1,11 @@
 {
-  "runtimeVersion": "v72-claude-opus-5-5",
-  "generation": 72,
+  "runtimeVersion": "v73-node-24",
+  "generation": 73,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 72,
+  "minimumRebuildGeneration": 73,
   "harnessMinimumGeneration": {
-    "claude": 72,
-    "opencode": 72
+    "claude": 73,
+    "opencode": 73
   }
 }
