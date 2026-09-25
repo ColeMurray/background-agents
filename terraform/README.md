@@ -360,7 +360,7 @@ through Open-Inspect's scoped secret store instead. The classifier still require
 `anthropic_api_key` when a bot is enabled with an Anthropic `classification_model`.
 
 With injection disabled, Terraform keeps `ANTHROPIC_API_KEY=""` in Modal's `llm-api-keys` secret to
-clear any previously configured value; Modal does not accept an empty secret. The OpenComputer
+clear any previously configured value; Modal rejects a secret with no keys. The OpenComputer
 control-plane binding is omitted. Do not edit Terraform-managed Modal secrets by hand: a change to
 any Modal secret causes Terraform to replace them with its configured values, discarding manual
 edits. Move any additional keys into Terraform before the next secret change.
