@@ -137,7 +137,11 @@ EOF
 # ---------------------------------------------------------------------------
 
 log "building and starting the stack"
-"${COMPOSE[@]}" up -d --build --wait || fail "the stack did not become healthy"
+# The fixed project name reclaims a killed run's containers only for services
+# the compose files still define. --remove-orphans covers the rest: a run
+# killed before a service was renamed or removed would otherwise leave that
+# container holding its ports.
+"${COMPOSE[@]}" up -d --build --wait --remove-orphans || fail "the stack did not become healthy"
 
 # ---------------------------------------------------------------------------
 # The session round-trip.
