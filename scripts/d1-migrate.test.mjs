@@ -87,6 +87,24 @@ test("accepts a ledger that records exactly the migrations on disk", () => {
   assert.match(result.stdout, /Verified: ledger matches all 2 migration file\(s\)\./);
 });
 
+test("counts zero migrations when both the directory and the ledger are empty", () => {
+  const result = run([], []);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Verified: ledger matches all 0 migration file\(s\)\./);
+});
+
+test("lists no phantom missing entry when the directory is empty", () => {
+  const result = run([], [["0001", "0001_alpha.sql"]]);
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /Missing from the database \(expected but not recorded\):\nUnexpected in the database/
+  );
+  assert.match(result.stderr, /Unexpected in the database[^]*?0001\s+0001_alpha\.sql/);
+});
+
 test("fails when a migration it just applied is not recorded", () => {
   // The silent-partial case: the apply loop reported success for both files,
   // so without the postcondition the script exits 0 over a database missing

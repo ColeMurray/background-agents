@@ -125,13 +125,22 @@ FINAL_LEDGER=$(
     jq -r '.[0].results[]? | [.version, .name] | @tsv' | sort
 )
 
+# One entry per line, and nothing at all for an empty ledger: `$(...)` strips
+# the trailing newline, so `printf '%s\n'` on an empty ledger would otherwise
+# emit a blank entry.
+ledger_lines() {
+  if [ -n "$1" ]; then
+    printf '%s\n' "$1"
+  fi
+}
+
 if [ "$EXPECTED_LEDGER" != "$FINAL_LEDGER" ]; then
   echo "ERROR: migration ledger does not match $MIGRATIONS_DIR after applying." >&2
   echo "Missing from the database (expected but not recorded):" >&2
-  comm -23 <(printf '%s\n' "$EXPECTED_LEDGER") <(printf '%s\n' "$FINAL_LEDGER") | sed 's/^/  /' >&2
+  comm -23 <(ledger_lines "$EXPECTED_LEDGER") <(ledger_lines "$FINAL_LEDGER") | sed 's/^/  /' >&2
   echo "Unexpected in the database (recorded but no such file):" >&2
-  comm -13 <(printf '%s\n' "$EXPECTED_LEDGER") <(printf '%s\n' "$FINAL_LEDGER") | sed 's/^/  /' >&2
+  comm -13 <(ledger_lines "$EXPECTED_LEDGER") <(ledger_lines "$FINAL_LEDGER") | sed 's/^/  /' >&2
   exit 1
 fi
 
-echo "Verified: ledger matches all $(printf '%s\n' "$EXPECTED_LEDGER" | wc -l | tr -d ' ') migration file(s)."
+echo "Verified: ledger matches all $(ledger_lines "$EXPECTED_LEDGER" | wc -l | tr -d ' ') migration file(s)."
