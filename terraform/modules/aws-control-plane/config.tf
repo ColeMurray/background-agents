@@ -28,8 +28,9 @@ locals {
   # The variables this deliberately leaves out are as load-bearing as the ones
   # it sets. OBJECT_STORE_ENDPOINT and LITESTREAM_ENDPOINT unset mean AWS S3
   # rather than the compose stack's object store; the four credential
-  # variables unset mean the SDK finds the instance role. An SSM parameter cannot hold an empty string, so "unset"
-  # here is "no parameter", which is exactly how the host reads it.
+  # variables unset mean the SDK finds the instance role. An SSM parameter
+  # cannot hold an empty string, so "unset" here is "no parameter", which is
+  # exactly how the host reads it.
   derived_config = {
     DEPLOYMENT_NAME = var.name
 
@@ -69,8 +70,15 @@ locals {
   )
 }
 
+# The instance reads these files and the parameters below together, at every
+# start. Uploading after the parameters are written keeps an apply that stops
+# partway from leaving a compose file that names a variable no parameter holds
+# yet; a parameter this apply drops is deleted only after the upload, so the
+# old file keeps its variables until then.
 resource "aws_s3_object" "stack" {
   for_each = local.stack_files
+
+  depends_on = [aws_ssm_parameter.config]
 
   bucket = aws_s3_bucket.backups.id
   key    = "stack/${each.key}"
