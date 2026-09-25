@@ -143,6 +143,60 @@ docker compose logs app | grep litestream.restore
 docker compose logs litestream | grep "snapshot written"
 ```
 
+## Moving objects out of a MinIO volume
+
+A stack started before the object store was SeaweedFS keeps its media and its Litestream replica in
+the `minio-data` volume, in MinIO's own on-disk format. SeaweedFS cannot read that volume, and the
+database in `control-plane-data` still refers to the media in it. Copy the objects across before the
+new stack serves traffic. MinIO's images can no longer be pulled, so this needs the two the old
+stack left in the machine's image cache (`docker image ls | grep minio` lists them).
+
+1. Stop the old stack with `docker compose down`. Do not pass `-v`, which deletes both volumes. Then
+   update the checkout and `.env`: rename `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` to
+   `OBJECT_STORE_ROOT_USER` and `OBJECT_STORE_ROOT_PASSWORD`, and point `OBJECT_STORE_ENDPOINT` and
+   `LITESTREAM_ENDPOINT` at `http://object-store:9000`. Note the old password first, because the old
+   volume only opens with it.
+
+2. Start the new object store alone, then the old MinIO on its volume and on the same network:
+
+   ```bash
+   P="$(basename "$PWD")"   # the compose project name, unless COMPOSE_PROJECT_NAME says otherwise
+   docker compose up -d --wait object-store
+   docker run -d --name minio-old --network "${P}_default" -v "${P}_minio-data:/data" \
+     -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD='<old password>' \
+     quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+   until docker exec minio-old curl -sf -o /dev/null http://localhost:9000/minio/health/live; do
+     sleep 1
+   done
+   ```
+
+3. Copy both buckets, keeping each object's content type, then fail unless nothing differs.
+   `mc diff` exits 0 even when it lists differences, so the check is on its output. Substitute the
+   bucket names if `.env` changes `OBJECT_STORE_BUCKET` or `LITESTREAM_BUCKET`, and the two user
+   names if it changes either root user.
+
+   ```bash
+   docker run --rm --network "${P}_default" --entrypoint sh \
+     -e OLD='<old password>' -e NEW="$(grep '^OBJECT_STORE_ROOT_PASSWORD=' .env | cut -d= -f2-)" \
+     quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z -c '
+       mc alias set old http://minio-old:9000 minioadmin "$OLD" >/dev/null &&
+       mc alias set new http://object-store:9000 objectstoreadmin "$NEW" >/dev/null &&
+       for bucket in media backups; do
+         mc mirror --preserve "old/$bucket" "new/$bucket" || exit 1
+         diff="$(mc diff "old/$bucket" "new/$bucket")" || exit 1
+         [ -z "$diff" ] || { echo "$diff"; exit 1; }
+       done && echo "both buckets match"'
+   ```
+
+4. Remove the old MinIO container and start the rest of the stack. Delete the old volume once the
+   app serves its media and Litestream logs `snapshot written`:
+
+   ```bash
+   docker rm -f minio-old
+   docker compose up -d --wait
+   docker volume rm "${P}_minio-data"
+   ```
+
 ## Recovering from an unclean stop
 
 A `docker compose down`, a `docker compose up -d` that recreates the app, and a stopped instance all
