@@ -604,7 +604,7 @@ async function handleNewSession(
   if (prompt.length > MAX_WEB_PROMPT_CHARS) {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: `The prompt for this issue is ${prompt.length.toLocaleString("en-US")} characters, exceeding the ${MAX_WEB_PROMPT_CHARS.toLocaleString("en-US")}-character limit. Linear may include the parent issue's description; shorten this issue or its parent, then delegate again.`,
+      body: `The prompt for this issue is ${prompt.length.toLocaleString("en-US")} characters, exceeding the ${MAX_WEB_PROMPT_CHARS.toLocaleString("en-US")}-character limit. Linear may include the parent issue's description; shorten this issue, its parent, or the configured instructions, then delegate again.`,
     });
     log.warn("agent_session.prompt_too_long", {
       trace_id: traceId,

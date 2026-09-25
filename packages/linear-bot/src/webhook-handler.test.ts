@@ -586,10 +586,12 @@ describe("handleAgentSessionEvent environment targets", () => {
         ),
       },
     ]);
-    expect(activities[0]?.body).toContain("shorten this issue or its parent, then delegate again");
+    expect(activities[0]?.body).toContain(
+      "shorten this issue, its parent, or the configured instructions, then delegate again"
+    );
   });
 
-  it("counts configured instructions before creating a session", async () => {
+  it("rejects oversized configured instructions with actionable guidance", async () => {
     const { kv, store } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "config:project-repos": JSON.stringify({
@@ -597,18 +599,28 @@ describe("handleAgentSessionEvent environment targets", () => {
       }),
     });
     const env = makeLinearBotEnv(kv);
-    const instructions = "Additional configuration";
+    const instructions = "x".repeat(MAX_WEB_PROMPT_CHARS);
     const fetchMock = stubControlPlane(env, { instructions });
     const webhook = makeWebhook();
-    const instructionSuffix = `\n\n## Additional Instructions\n\n${instructions}`;
-    webhook.promptContext = "x".repeat(
-      MAX_WEB_PROMPT_CHARS - buildPromptContextPrompt("").length - instructionSuffix.length + 1
-    );
+    webhook.promptContext = "Short issue context";
 
     await handleAgentSessionEvent(webhook, env, "trace-instructions-limit");
 
     expect(createSessionBody(fetchMock)).toBeNull();
     expect(store.has("issue:issue-1")).toBe(false);
+    const activities = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input) === "https://api.linear.app/graphql")
+      .map(
+        ([, init]) =>
+          JSON.parse(String(init?.body)) as {
+            variables?: { input?: { content?: { type: string; body: string } } };
+          }
+      )
+      .map(({ variables }) => variables?.input?.content);
+    expect(activities.find((content) => content?.type === "error")?.body).toContain(
+      "shorten this issue, its parent, or the configured instructions, then delegate again"
+    );
   });
 
   it("logs prompt length when the control plane rejects the prompt", async () => {
