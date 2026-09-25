@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { snapshotToRecord, type PullRequestSnapshotInput } from "./pull-request-snapshot";
+import {
+  parsePullRequestArtifactMetadata,
+  snapshotToRecord,
+  type PullRequestSnapshotInput,
+} from "./pull-request-snapshot";
 
 const identity = {
   artifactId: "artifact-1",
@@ -67,5 +71,20 @@ describe("snapshotToRecord outcome timestamps", () => {
     expect(record.providerCreatedAt).toBeNull();
     expect(record.mergedAt).toBeNull();
     expect(record.closedAt).toBeNull();
+  });
+});
+
+describe("parsePullRequestArtifactMetadata", () => {
+  it("parses persisted object metadata", () => {
+    expect(parsePullRequestArtifactMetadata('{"providerUpdatedAt":123,"legacy":true}')).toEqual({
+      providerUpdatedAt: 123,
+      legacy: true,
+    });
+  });
+
+  it("rejects malformed or partial non-object metadata", () => {
+    expect(parsePullRequestArtifactMetadata("not-json")).toEqual({});
+    expect(parsePullRequestArtifactMetadata("null")).toEqual({});
+    expect(parsePullRequestArtifactMetadata("[]")).toEqual({});
   });
 });

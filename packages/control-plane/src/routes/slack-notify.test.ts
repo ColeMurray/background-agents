@@ -161,6 +161,41 @@ function lastLogPayload(
 }
 
 describe("handleSlackNotify", () => {
+  it("returns invalid_input for malformed partial bodies before loading the session", async () => {
+    const res = await callHandler({ channel: "#ops" });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "invalid_input",
+      message: "text is required.",
+    });
+    expect(sessionStoreMock.get).not.toHaveBeenCalled();
+  });
+
+  it("accepts null optional fields as absent", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+    });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "1.2" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
+
+    const res = await callHandler({
+      channel: "#ops",
+      text: "hello",
+      thread_ts: null,
+      reason: null,
+    });
+
+    expect(res.status).toBe(200);
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(sentBody).not.toHaveProperty("thread_ts");
+  });
+
   it("happy path posts no events to the DO — the agent's tool_call is the source of truth", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({

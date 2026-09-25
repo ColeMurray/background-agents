@@ -4,6 +4,9 @@
 
 import type { JsonPathFilter, WebhookAutomationEvent } from "../types";
 import { buildWebhookContextBlock } from "./context";
+import { z } from "zod";
+
+const webhookObjectSchema = z.record(z.string(), z.unknown());
 
 /**
  * Normalize a webhook payload into a WebhookAutomationEvent.
@@ -18,8 +21,9 @@ export function normalizeWebhookEvent(
 
   // Strip idempotencyKey from body before including in context
   let contextBody = body;
-  if (body && typeof body === "object" && "idempotencyKey" in (body as Record<string, unknown>)) {
-    const { idempotencyKey: _, ...rest } = body as Record<string, unknown>;
+  const parsedBody = webhookObjectSchema.safeParse(body);
+  if (parsedBody.success && "idempotencyKey" in parsedBody.data) {
+    const { idempotencyKey: _, ...rest } = parsedBody.data;
     contextBody = rest;
   }
 
@@ -44,8 +48,9 @@ export function resolveJsonPath(path: string, obj: unknown): unknown {
   const keys = path.slice(2).split(".");
   let current: unknown = obj;
   for (const key of keys) {
-    if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
+    const parsedCurrent = webhookObjectSchema.safeParse(current);
+    if (!parsedCurrent.success) return undefined;
+    current = parsedCurrent.data[key];
   }
   return current;
 }

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 /**
@@ -41,12 +42,36 @@ const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
 
-interface ParsedBody {
-  channel: string;
-  text: string;
-  threadTs: string | undefined;
-  reason: string | undefined;
-}
+const slackNotifyBodySchema = z
+  .object({
+    channel: z.preprocess(
+      (value) => (typeof value === "string" ? value.trim() : ""),
+      z.string().min(1).max(CHANNEL_INPUT_MAX_LENGTH)
+    ),
+    text: z.preprocess(
+      (value) => (typeof value === "string" ? value : ""),
+      z.string().min(1).max(RAW_TEXT_INPUT_MAX_LENGTH)
+    ),
+    thread_ts: z.preprocess(
+      (value) => (typeof value === "string" && value.length > 0 ? value : undefined),
+      z.string().optional()
+    ),
+    reason: z.preprocess(
+      (value) =>
+        typeof value === "string" && value.length > 0
+          ? value.slice(0, REASON_MAX_LENGTH)
+          : undefined,
+      z.string().optional()
+    ),
+  })
+  .transform(({ channel, text, thread_ts, reason }) => ({
+    channel,
+    text,
+    threadTs: thread_ts,
+    reason,
+  }));
+
+type ParsedBody = z.infer<typeof slackNotifyBodySchema>;
 
 interface AuditFields {
   prompt_author_user_id: string | null;
@@ -192,37 +217,26 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
   if (raw === null || typeof raw !== "object") {
     return failureResponse("invalid_input", "Body must be a JSON object.");
   }
-  const body = raw as Record<string, unknown>;
 
-  const channelValue = typeof body.channel === "string" ? body.channel.trim() : "";
-  if (channelValue.length === 0 || channelValue.length > CHANNEL_INPUT_MAX_LENGTH) {
+  const parsed = slackNotifyBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    if (issue?.path[0] === "text" && issue.code === "too_big") {
+      return failureResponse(
+        "invalid_input",
+        `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`
+      );
+    }
+    if (issue?.path[0] === "text") {
+      return failureResponse("invalid_input", "text is required.");
+    }
     return failureResponse(
       "invalid_input",
       `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`
     );
   }
-  const text = typeof body.text === "string" ? body.text : "";
-  if (text.length === 0) {
-    return failureResponse("invalid_input", "text is required.");
-  }
-  if (text.length > RAW_TEXT_INPUT_MAX_LENGTH) {
-    return failureResponse(
-      "invalid_input",
-      `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`
-    );
-  }
 
-  const threadTs =
-    typeof body.thread_ts === "string" && body.thread_ts.length > 0 ? body.thread_ts : undefined;
-  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
-  const reason = rawReason ? rawReason.slice(0, REASON_MAX_LENGTH) : undefined;
-
-  return {
-    channel: channelValue,
-    text,
-    threadTs,
-    reason,
-  };
+  return parsed.data;
 }
 
 function buildBlocks(opts: {
