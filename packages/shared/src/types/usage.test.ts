@@ -91,6 +91,28 @@ describe("normalizeTokenUsage", () => {
     ).toBeNull();
   });
 
+  it("ignores fractional and unsafe counts and sums only safe integer parts", () => {
+    expect(normalizeTokenUsage(1.5).totalTokens).toBeNull();
+    expect(normalizeTokenUsage(Number.MAX_SAFE_INTEGER + 1).totalTokens).toBeNull();
+    expect(normalizeTokenUsage({ total: 1.5, input: 2 }).totalTokens).toBe(2);
+    expect(normalizeTokenUsage({ total: Number.MAX_SAFE_INTEGER + 1, input: 2 }).totalTokens).toBe(
+      2
+    );
+    expect(
+      normalizeTokenUsage({ input: 1.5, output: 2, cache: { read: Number.MAX_VALUE } })
+    ).toEqual({
+      inputTokens: null,
+      outputTokens: 2,
+      reasoningTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      totalTokens: 2,
+    });
+    expect(
+      normalizeTokenUsage({ input: Number.MAX_SAFE_INTEGER, output: 1 }).totalTokens
+    ).toBeNull();
+  });
+
   it("rejects empty details using the existing token schema refine", () => {
     expect(tokenUsageSchema.safeParse({}).success).toBe(false);
     expect(tokenUsageSchema.safeParse({ cache: {} }).success).toBe(false);
@@ -104,5 +126,6 @@ describe("stepId on sandbox events", () => {
       stepId: "step-1",
     });
     expect(sandboxEventSchema.parse(event)).not.toHaveProperty("stepId");
+    expect(sandboxEventSchema.safeParse({ ...event, stepId: "" }).success).toBe(false);
   });
 });

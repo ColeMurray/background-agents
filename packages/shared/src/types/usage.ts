@@ -1,3 +1,4 @@
+import type { HarnessId } from "../harnesses";
 import type { TokenUsage } from "./sandbox-events";
 
 export interface NormalizedTokenUsage {
@@ -13,7 +14,7 @@ export interface StepUsage extends NormalizedTokenUsage {
   id: string;
   messageId: string | null;
   model: string | null;
-  harness: string | null;
+  harness: HarnessId | null;
   stepCostUsd: number | null;
   messageCostUsd: number | null;
   isSubtask: boolean;
@@ -25,7 +26,7 @@ export interface StepUsage extends NormalizedTokenUsage {
 
 export function normalizeTokenUsage(tokens: TokenUsage | undefined): NormalizedTokenUsage {
   const count = (value: number | undefined): number | null =>
-    value !== undefined && Number.isFinite(value) && value >= 0 ? value : null;
+    value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
   const details = typeof tokens === "object" ? tokens : undefined;
   const inputTokens = count(details?.input);
