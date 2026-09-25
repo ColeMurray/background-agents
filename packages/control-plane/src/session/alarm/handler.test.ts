@@ -67,12 +67,24 @@ function createHandler(preserveBeforeWatchdogs?: () => Promise<"continue" | "hol
 }
 
 describe("createAlarmHandler", () => {
+  it("does not attribute a switch-owned boot failure to either queued prompt", async () => {
+    const { handler, repository, lifecycleManager, messageQueue } = createHandler();
+    repository.getNextPendingMessage.mockReturnValue({ id: "P1" });
+    lifecycleManager.handleAlarm.mockResolvedValue({
+      kind: "boot_budget_exceeded",
+      reason: "expired",
+      owner: { kind: "provider_switch", operationId: "switch" },
+    });
+    await handler.handle();
+    expect(messageQueue.failPendingMessage).not.toHaveBeenCalled();
+  });
   it("fails the prompt a boot was for when the lifecycle gives up on the boot budget", async () => {
     const { handler, repository, messageQueue, executionStop, lifecycleManager } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
     repository.getNextPendingMessage.mockReturnValue({ id: "msg-boot" });
     lifecycleManager.handleAlarm.mockResolvedValue({
       kind: "boot_budget_exceeded",
+      owner: { kind: "prompt", messageId: "msg-boot" },
       reason: "Sandbox boot exceeded 30 minutes while running setup.sh for acme/api.",
     });
 
@@ -86,15 +98,19 @@ describe("createAlarmHandler", () => {
     expect(executionStop.resumeAfterSandboxTermination).not.toHaveBeenCalled();
   });
 
-  it("fails the prompt that was waiting when the alarm fired, not whichever is head afterwards", async () => {
+  it("fails only the boot admission owner even when a different prompt leads the queue at alarm delivery", async () => {
     // Lifecycle handling can yield on a provider stop; a cancel in that gap
     // must not shift the failure onto the next user's prompt.
     const { handler, repository, messageQueue, lifecycleManager } = createHandler();
     repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
-    repository.getNextPendingMessage.mockReturnValue({ id: "msg-boot" });
+    repository.getNextPendingMessage.mockReturnValue({ id: "msg-other" });
     lifecycleManager.handleAlarm.mockImplementation(async () => {
       repository.getNextPendingMessage.mockReturnValue({ id: "msg-later" });
-      return { kind: "boot_budget_exceeded", reason: "budget" };
+      return {
+        kind: "boot_budget_exceeded",
+        reason: "budget",
+        owner: { kind: "prompt", messageId: "msg-boot" },
+      };
     });
 
     await handler.handle();

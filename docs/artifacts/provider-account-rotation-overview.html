@@ -1,0 +1,2034 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="A visual guide to the proposed Open Inspect provider-account selection and safe session-recovery design."
+    />
+    <title>Keep the work. Change the account. — Open Inspect</title>
+    <style>
+      :root {
+        --paper: #f6f5f0;
+        --white: #fffefa;
+        --ink: #19322e;
+        --muted: #576b65;
+        --line: #d8dfd6;
+        --teal: #167461;
+        --mint: #e3f0e8;
+        --amber: #965015;
+        --sand: #fff0dc;
+        --blue: #386487;
+        --ice: #e8f0f6;
+        --dark: #183b33;
+        --radius: 18px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 90px;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--paper);
+        font:
+          16px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      a {
+        color: var(--teal);
+        text-underline-offset: 4px;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+      }
+      button,
+      a,
+      summary {
+        -webkit-tap-highlight-color: transparent;
+      }
+      :focus-visible {
+        outline: 3px solid #d28b39;
+        outline-offset: 5px;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1,
+      h2,
+      h3 {
+        line-height: 1.12;
+        letter-spacing: -0.045em;
+      }
+      h1 {
+        font-size: clamp(42px, 5.8vw, 76px);
+        font-weight: 650;
+      }
+      h2 {
+        font-size: clamp(30px, 3.8vw, 46px);
+        font-weight: 620;
+      }
+      h3 {
+        font-size: 22px;
+        font-weight: 630;
+      }
+      p {
+        max-width: 70ch;
+      }
+      code {
+        font:
+          0.86em/1.5 ui-monospace,
+          SFMono-Regular,
+          Consolas,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      .wrap {
+        max-width: 1180px;
+        padding: 0 32px;
+        margin: auto;
+      }
+      .masthead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding-top: 27px;
+        padding-bottom: 27px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 660;
+        letter-spacing: -0.02em;
+      }
+      .brand-mark {
+        background: var(--ink);
+        color: var(--white);
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 9px;
+        font:
+          600 12px ui-monospace,
+          monospace;
+      }
+      .caps {
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 10px;
+        border: 1px solid var(--line);
+        border-radius: 100px;
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.025em;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.12fr 1fr;
+        gap: 40px;
+        align-items: center;
+        padding-top: 48px;
+        padding-bottom: 62px;
+      }
+      .hero .eyebrow {
+        margin-bottom: 20px;
+        color: var(--teal);
+      }
+      .hero h1 span {
+        color: var(--teal);
+      }
+      .intro {
+        font-size: 18px;
+        color: var(--muted);
+        margin-top: 24px;
+        max-width: 480px;
+      }
+      .hero-note {
+        margin-top: 24px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .hero-figure {
+        margin: 0;
+        padding: 26px 24px 22px;
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: 0 18px 45px #173a3008;
+      }
+      .figure-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .figure-heading .caps {
+        color: var(--muted);
+      }
+      .session-frame {
+        border: 1px solid #b6cec0;
+        border-radius: 16px;
+        padding: 24px;
+        background: #edf4ed;
+      }
+      .session-title {
+        font-size: 15px;
+        font-weight: 650;
+      }
+      .account-transfer {
+        display: grid;
+        grid-template-columns: 1fr 30px 1fr;
+        align-items: center;
+        gap: 8px;
+        margin-top: 22px;
+      }
+      .account-chip {
+        padding: 17px 12px;
+        border-radius: 12px;
+        background: var(--white);
+        border: 1px solid #c6dacf;
+        text-align: center;
+      }
+      .account-chip.limit {
+        border-color: #dfc59f;
+        background: #fff7eb;
+      }
+      .account-chip strong {
+        display: block;
+        font-size: 17px;
+      }
+      .account-chip small {
+        display: block;
+        font-size: 11px;
+        color: var(--teal);
+        margin-top: 3px;
+      }
+      .account-chip.limit small {
+        color: var(--amber);
+      }
+      .arrow {
+        color: var(--teal);
+        font-size: 24px;
+        text-align: center;
+      }
+      .preserved {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        margin-top: 20px;
+        color: var(--teal);
+        font-size: 12px;
+      }
+      .preserved span::before {
+        content: "✓ ";
+        font-weight: 700;
+      }
+      .figure-caption {
+        margin-top: 16px;
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .nav-shell {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: #f6f5f0f2;
+        backdrop-filter: blur(12px);
+      }
+      .nav {
+        display: flex;
+        gap: 34px;
+        align-items: center;
+        min-height: 62px;
+      }
+      .nav a {
+        text-decoration: none;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .nav a:hover {
+        color: var(--teal);
+      }
+      .nav a span {
+        font:
+          11px ui-monospace,
+          monospace;
+        color: #698278;
+        margin-right: 8px;
+      }
+      section.chapter {
+        padding-top: 76px;
+        padding-bottom: 72px;
+        border-bottom: 1px solid var(--line);
+      }
+      .section-top {
+        display: grid;
+        grid-template-columns: 80px 1fr;
+        gap: 10px;
+        margin-bottom: 32px;
+      }
+      .section-number {
+        padding-top: 9px;
+        color: var(--teal);
+        font:
+          14px ui-monospace,
+          monospace;
+      }
+      .section-top p {
+        margin-top: 15px;
+        color: var(--muted);
+        max-width: 660px;
+      }
+      .two-up {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      .panel {
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 28px;
+      }
+      .panel-label {
+        color: var(--muted);
+        margin-bottom: 18px;
+      }
+      .segmented {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 5px;
+        background: #e9eee7;
+        border-radius: 12px;
+        width: fit-content;
+      }
+      .segmented button {
+        border: 0;
+        border-radius: 8px;
+        padding: 9px 14px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .segmented button[aria-pressed="true"] {
+        background: var(--white);
+        color: var(--ink);
+        box-shadow: 0 1px 5px #183b3310;
+      }
+      .later {
+        font-size: 10px;
+        border: 1px solid #b8c5b9;
+        border-radius: 4px;
+        padding: 1px 4px;
+        margin-left: 4px;
+      }
+      .selection-demo {
+        margin-top: 22px;
+      }
+      .pool {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .pool-account {
+        padding: 16px 12px;
+        border: 1px solid #c6d7cb;
+        border-radius: 11px;
+        background: var(--mint);
+      }
+      .pool-account span {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .pool-account.unavailable {
+        background: #f0efea;
+        border-style: dashed;
+        color: #66756d;
+      }
+      .allocation-connector {
+        height: 45px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .allocation-connector::before,
+      .allocation-connector::after {
+        content: "";
+        height: 1px;
+        background: var(--line);
+        flex: 1;
+      }
+      .sessions {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 8px;
+      }
+      .session-cell {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 13px 8px;
+        text-align: center;
+      }
+      .session-cell span {
+        font:
+          10px ui-monospace,
+          monospace;
+        display: block;
+        color: var(--muted);
+        margin-bottom: 7px;
+      }
+      .session-cell strong {
+        font-size: 15px;
+      }
+      .session-cell[data-account="A"] {
+        background: #e7f1e8;
+      }
+      .session-cell[data-account="B"] {
+        background: #e8eff7;
+      }
+      .session-cell[data-account="C"] {
+        background: #f5eee0;
+      }
+      .selection-caption {
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 13px;
+        min-height: 42px;
+      }
+      .small-note {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 14px;
+      }
+      .precedence {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        counter-reset: rule;
+      }
+      .precedence li {
+        counter-increment: rule;
+        display: grid;
+        grid-template-columns: 29px 1fr;
+        gap: 10px;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .precedence li:last-child {
+        border: 0;
+      }
+      .precedence li::before {
+        content: counter(rule, decimal-leading-zero);
+        color: var(--teal);
+        font:
+          11px ui-monospace,
+          monospace;
+        padding-top: 4px;
+      }
+      .precedence strong {
+        display: block;
+        color: var(--ink);
+        font-size: 14px;
+        margin-bottom: 2px;
+      }
+      .precedence span {
+        color: var(--muted);
+      }
+      .strip {
+        margin-top: 22px;
+        padding: 17px 20px;
+        background: #e8eee5;
+        border-radius: 11px;
+        font-size: 13px;
+        color: #415b50;
+      }
+      .strip strong {
+        color: var(--ink);
+      }
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+      .stepper button {
+        padding: 15px 10px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: transparent;
+        text-align: left;
+        color: var(--muted);
+      }
+      .stepper button span {
+        display: block;
+        font:
+          11px ui-monospace,
+          monospace;
+        margin-bottom: 8px;
+      }
+      .stepper button strong {
+        display: block;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .stepper button[aria-current="step"] {
+        background: var(--teal);
+        border-color: var(--teal);
+        color: #fff;
+      }
+      .workbench {
+        background: var(--dark);
+        color: #eef8f0;
+        padding: 30px;
+        border-radius: 20px;
+      }
+      .workbench-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border-bottom: 1px solid #527367;
+        padding-bottom: 19px;
+      }
+      .workbench .pill {
+        border-color: #627f70;
+        color: #d8eade;
+      }
+      .workbench-top strong {
+        font-size: 14px;
+      }
+      .workbench-grid {
+        display: grid;
+        grid-template-columns: 0.92fr 1.25fr;
+        gap: 40px;
+        margin-top: 28px;
+      }
+      .workbench h3 {
+        font-size: 28px;
+        color: #fff;
+      }
+      .step-copy {
+        color: #cadbd0;
+        font-size: 15px;
+        margin-top: 13px;
+        min-height: 100px;
+      }
+      .step-tag {
+        color: #a8d8bd;
+        font-size: 11px;
+        margin-top: 17px;
+      }
+      .binding-diagram {
+        display: grid;
+        grid-template-columns: 1fr 22px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+      .binding-box {
+        min-width: 0;
+        background: #244b3f;
+        border: 1px solid #658875;
+        border-radius: 12px;
+        padding: 17px 15px;
+      }
+      .binding-box small {
+        color: #bdcfc2;
+        font-size: 11px;
+        display: block;
+      }
+      .binding-box strong {
+        display: block;
+        font-size: 22px;
+        margin-top: 11px;
+      }
+      .binding-box code {
+        display: block;
+        color: #bfe0ca;
+        font-size: 11px;
+        margin-top: 7px;
+      }
+      .binding-diagram .arrow {
+        color: #a8cfb6;
+      }
+      .queue-strip {
+        margin-top: 12px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        background: #2b5042;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+      }
+      .queue-strip strong {
+        color: #f5d69f;
+      }
+      .workbench-bottom {
+        border-top: 1px solid #527367;
+        margin-top: 25px;
+        padding-top: 20px;
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: center;
+      }
+      .unchanged {
+        font-size: 12px;
+        color: #c4d9ca;
+      }
+      .step-controls {
+        display: flex;
+        gap: 8px;
+      }
+      .step-controls button {
+        color: #eaf7ee;
+        border: 1px solid #668575;
+        border-radius: 8px;
+        background: transparent;
+        padding: 8px 14px;
+        font-size: 12px;
+      }
+      .step-controls .next {
+        background: #d8eddb;
+        color: #173b2d;
+        border-color: #d8eddb;
+      }
+      .explanation {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 32px;
+        margin-top: 26px;
+      }
+      .explanation h3 {
+        font-size: 18px;
+        margin-bottom: 10px;
+      }
+      .explanation p {
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .eyebrow {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .review-note {
+        margin: 0 0 24px;
+        padding: 15px 19px;
+        border-left: 3px solid var(--teal);
+        background: var(--mint);
+        font-size: 13px;
+      }
+      .owner-diagram {
+        display: grid;
+        grid-template-columns: 1fr 45px 1.12fr 45px 1.32fr;
+        gap: 0;
+        align-items: center;
+      }
+      .diagram-column {
+        min-width: 0;
+      }
+      .signal {
+        padding: 13px 16px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        margin: 8px 0;
+        background: #f4f3eb;
+        font-size: 13px;
+      }
+      .owner-node {
+        padding: 24px 18px;
+        background: var(--mint);
+        border: 1px solid #b3cdbb;
+        border-radius: 14px;
+        text-align: center;
+      }
+      .owner-node strong {
+        display: block;
+        font-size: 19px;
+        line-height: 1.25;
+      }
+      .owner-node small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 13px;
+      }
+      .owner-result {
+        padding: 16px;
+        background: var(--white);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        margin: 9px 0;
+      }
+      .owner-result strong {
+        display: block;
+        font-size: 13px;
+      }
+      .owner-result span {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .owner-result.switch {
+        border-color: #b1cbbb;
+        background: #edf5ed;
+      }
+      .owner-result.cancel {
+        border-color: #dec6a7;
+        background: #fff6e9;
+      }
+      .caption {
+        margin-top: 20px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .rules {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 24px;
+        margin-top: 28px;
+      }
+      .rule {
+        border-top: 2px solid #b9cfc1;
+        padding-top: 16px;
+      }
+      .rule .caps {
+        color: var(--teal);
+        margin-bottom: 10px;
+      }
+      .rule h3 {
+        font-size: 19px;
+        margin-bottom: 10px;
+      }
+      .rule p {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .retention-note {
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 12px;
+        border-top: 1px dashed #c3cfc2;
+        padding-top: 16px;
+      }
+      .architecture {
+        display: grid;
+        grid-template-columns: 0.75fr 40px 1.25fr 40px 1fr;
+        align-items: center;
+      }
+      .tier {
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        min-width: 0;
+        background: var(--white);
+      }
+      .tier .caps {
+        margin-bottom: 16px;
+        color: var(--muted);
+      }
+      .tier h3 {
+        font-size: 22px;
+        margin-bottom: 12px;
+      }
+      .tier p {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .tier.control {
+        background: var(--mint);
+        border-color: #b3cdbb;
+      }
+      .module {
+        border-top: 1px solid #c2d4c7;
+        padding-top: 12px;
+        margin-top: 12px;
+      }
+      .module strong {
+        display: block;
+        font-size: 13px;
+      }
+      .module small {
+        display: block;
+        color: var(--muted);
+        margin-top: 3px;
+        font-size: 12px;
+      }
+      .runtime-compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        margin-top: 24px;
+      }
+      .runtime-compare article {
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+      }
+      .runtime-compare h3 {
+        font-size: 19px;
+        margin-bottom: 9px;
+      }
+      .runtime-compare p {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .runtime-compare .eyebrow {
+        margin-bottom: 12px;
+        color: var(--teal);
+      }
+      .fences {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+        margin-top: 24px;
+      }
+      .fence {
+        padding-left: 15px;
+        border-left: 2px solid #a4bdb0;
+      }
+      .fence strong {
+        font-size: 12px;
+        display: block;
+      }
+      .fence p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .phases {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 12px;
+      }
+      .phase {
+        padding: 22px 18px;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: var(--white);
+      }
+      .phase.highlight {
+        background: var(--mint);
+        border-color: #abc9b4;
+      }
+      .phase .caps {
+        color: var(--teal);
+        margin-bottom: 22px;
+      }
+      .phase h3 {
+        font-size: 20px;
+        margin-bottom: 12px;
+      }
+      .phase p {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .phase .phase-state {
+        display: inline-block;
+        margin-top: 20px;
+        font-size: 10px;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+        padding-top: 9px;
+      }
+      details {
+        margin-top: 18px;
+        padding: 19px 22px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--white);
+      }
+      summary {
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 650;
+      }
+      details[open] summary {
+        margin-bottom: 20px;
+      }
+      .file-map {
+        margin: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px 28px;
+      }
+      .file-map dt {
+        font-size: 13px;
+        font-weight: 650;
+        margin-bottom: 5px;
+      }
+      .file-map dd {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .file-map code {
+        display: block;
+        margin-top: 6px;
+      }
+      .acceptance {
+        margin: 0;
+        padding-left: 20px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .acceptance li {
+        margin: 9px 0;
+      }
+      .ending {
+        padding-top: 42px;
+        padding-bottom: 46px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+      }
+      .ending strong {
+        display: block;
+        font-size: 18px;
+        letter-spacing: -0.02em;
+      }
+      .ending p {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 9px;
+        max-width: 600px;
+      }
+      .spec-link {
+        display: inline-block;
+        padding: 10px 17px;
+        border: 1px solid #a9bdaf;
+        border-radius: 9px;
+        font-size: 13px;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 950px) {
+        .hero {
+          gap: 25px;
+        }
+        .wrap {
+          padding-left: 24px;
+          padding-right: 24px;
+        }
+        .two-up {
+          grid-template-columns: 1.35fr 1fr;
+        }
+        .panel {
+          padding: 21px;
+        }
+        .owner-diagram {
+          grid-template-columns: 0.9fr 24px 1fr 24px 1.1fr;
+        }
+        .tier {
+          padding: 18px;
+        }
+        .architecture {
+          grid-template-columns: 0.8fr 25px 1.1fr 25px 1fr;
+        }
+        .phases {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .workbench-grid {
+          gap: 22px;
+        }
+      }
+      @media (max-width: 720px) {
+        html {
+          scroll-padding-top: 100px;
+        }
+        .hero {
+          grid-template-columns: 1fr;
+          padding-top: 28px;
+          padding-bottom: 35px;
+        }
+        .hero-figure {
+          max-width: 510px;
+          width: 100%;
+        }
+        .intro {
+          max-width: 560px;
+          font-size: 17px;
+        }
+        .nav {
+          gap: 10px 22px;
+          flex-wrap: wrap;
+          padding-top: 12px;
+          padding-bottom: 12px;
+        }
+        .nav a {
+          font-size: 12px;
+        }
+        .nav a span {
+          display: none;
+        }
+        section.chapter {
+          padding-top: 46px;
+          padding-bottom: 44px;
+        }
+        .section-top {
+          grid-template-columns: 33px 1fr;
+          gap: 9px;
+        }
+        .section-number {
+          padding-top: 6px;
+          font-size: 12px;
+        }
+        .section-top p {
+          font-size: 14px;
+        }
+        .two-up,
+        .explanation,
+        .workbench-grid {
+          grid-template-columns: 1fr;
+        }
+        .stepper {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .step-copy {
+          min-height: 0;
+        }
+        .workbench {
+          padding: 22px;
+        }
+        .workbench-top {
+          align-items: flex-start;
+        }
+        .workbench .pill {
+          font-size: 10px;
+          white-space: nowrap;
+        }
+        .binding-diagram {
+          margin-top: 0;
+        }
+        .rules {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+        .rule {
+          display: grid;
+          grid-template-columns: 40px 1fr;
+          gap: 2px 10px;
+        }
+        .rule .caps {
+          grid-row: span 2;
+        }
+        .owner-diagram,
+        .architecture {
+          grid-template-columns: 1fr;
+          gap: 9px;
+        }
+        .owner-diagram > .arrow,
+        .architecture > .arrow {
+          transform: rotate(90deg);
+          line-height: 30px;
+        }
+        .diagram-column.signals {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+        }
+        .signal {
+          font-size: 12px;
+          padding: 12px 10px;
+          text-align: center;
+          margin: 0;
+        }
+        .owner-node {
+          padding: 20px;
+        }
+        .owner-node small {
+          margin-top: 8px;
+        }
+        .owner-result {
+          margin: 8px 0;
+        }
+        .tier.control {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px 22px;
+        }
+        .tier.control .caps,
+        .tier.control h3 {
+          grid-column: 1 / -1;
+          margin-bottom: 0;
+        }
+        .tier.control .module {
+          margin-top: 7px;
+        }
+        .runtime-compare {
+          grid-template-columns: 1fr;
+        }
+        .fences {
+          grid-template-columns: 1fr;
+          gap: 15px;
+        }
+        .phases {
+          grid-template-columns: 1fr 1fr;
+        }
+        .file-map {
+          grid-template-columns: 1fr;
+        }
+        .ending {
+          flex-direction: column;
+        }
+      }
+      @media (max-width: 420px) {
+        .wrap {
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+        .masthead {
+          padding-top: 20px;
+          padding-bottom: 18px;
+        }
+        .masthead .meta {
+          display: none;
+        }
+        .hero {
+          padding-top: 22px;
+        }
+        .hero-figure {
+          padding: 20px 16px;
+        }
+        .session-frame {
+          padding: 19px 13px;
+        }
+        .account-chip {
+          padding: 13px 7px;
+        }
+        .account-chip strong {
+          font-size: 15px;
+        }
+        .section-top {
+          grid-template-columns: 25px 1fr;
+        }
+        .pool {
+          grid-template-columns: 1fr 1fr;
+        }
+        .sessions {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .segmented button {
+          padding: 8px 9px;
+          font-size: 12px;
+        }
+        .binding-box {
+          padding: 15px 10px;
+        }
+        .binding-box strong {
+          font-size: 18px;
+        }
+        .queue-strip {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 3px;
+        }
+        .workbench-top {
+          flex-wrap: wrap;
+        }
+        .phases {
+          grid-template-columns: 1fr;
+        }
+        .phase .caps {
+          margin-bottom: 12px;
+        }
+        .phase .phase-state {
+          margin-top: 12px;
+        }
+        .tier.control {
+          grid-template-columns: 1fr;
+        }
+        .diagram-column.signals {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+      @media print {
+        body {
+          background: #fff;
+        }
+        .nav-shell,
+        .segmented,
+        .stepper,
+        .step-controls,
+        .spec-link {
+          display: none;
+        }
+        .hero {
+          padding-top: 10px;
+          padding-bottom: 20px;
+        }
+        section.chapter {
+          padding-top: 30px;
+          padding-bottom: 30px;
+        }
+        .workbench {
+          color: var(--ink);
+          background: #e8f0e9;
+        }
+        .workbench h3,
+        .workbench p,
+        .workbench .pill,
+        .workbench .step-tag,
+        .unchanged {
+          color: var(--ink);
+        }
+        .binding-box,
+        .queue-strip {
+          background: #f8fbf8;
+        }
+        .binding-box small,
+        .binding-box code,
+        .queue-strip strong {
+          color: var(--ink);
+        }
+        .panel,
+        .workbench,
+        .phase,
+        .owner-diagram,
+        .runtime-compare {
+          break-inside: avoid;
+        }
+        .wrap {
+          max-width: none;
+          padding: 0 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead wrap">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">OI</span> Open Inspect
+        <span class="meta">/ Engineering design</span>
+      </div>
+      <span class="pill">PROPOSED · NOT IMPLEMENTED</span>
+    </header>
+    <main>
+      <div class="hero wrap">
+        <div>
+          <p class="eyebrow">Provider accounts · Selection & recovery</p>
+          <h1>Keep the work.<br /><span>Change the account.</span></h1>
+          <p class="intro">
+            When a subscription reaches its limit, the session should have a way forward. Switch its
+            account without starting the work over, and spread new sessions across your
+            subscriptions.
+          </p>
+          <p class="hero-note">
+            Manual switching + random selection first.<br />Automatic fallback and round robin are
+            optional follow-ups.
+          </p>
+        </div>
+        <figure class="hero-figure" aria-labelledby="hero-diagram-caption">
+          <div class="figure-heading">
+            <span class="caps">The proposed experience</span><span class="pill">Same session</span>
+          </div>
+          <div class="session-frame">
+            <div class="session-title">Open Inspect session</div>
+            <div class="account-transfer">
+              <div class="account-chip limit">
+                <strong>Account A</strong><small>Usage limit reached</small>
+              </div>
+              <span class="arrow" aria-hidden="true">→</span>
+              <div class="account-chip">
+                <strong>Account B</strong><small>Selected to continue</small>
+              </div>
+            </div>
+            <div class="preserved">
+              <span>Workspace</span><span>Conversation</span><span>Queued work</span>
+            </div>
+          </div>
+          <figcaption class="figure-caption" id="hero-diagram-caption">
+            Same provider, model, and harness. Different account.<br />Support is gated on proving
+            that each harness preserves state.
+          </figcaption>
+        </figure>
+      </div>
+      <nav class="nav-shell" aria-label="Overview sections">
+        <div class="nav wrap">
+          <a href="#selection"><span>01</span>Choose an account</a>
+          <a href="#recovery"><span>02</span>Switch safely</a>
+          <a href="#ownership"><span>03</span>Handle failures</a>
+          <a href="#architecture"><span>04</span>Implementation</a>
+          <a href="#delivery"><span>05</span>Delivery plan</a>
+        </div>
+      </nav>
+
+      <section class="chapter wrap" id="selection" aria-labelledby="selection-title">
+        <div class="section-top">
+          <span class="section-number">01 /</span>
+          <div>
+            <h2 id="selection-title">Choose once. Keep it pinned.</h2>
+            <p>
+              Selection decides which account a <strong>new session</strong> starts with. It is not
+              per-request routing, and it does not change accounts in sessions that already exist.
+            </p>
+          </div>
+        </div>
+        <div class="two-up">
+          <div class="panel">
+            <div class="panel-label caps">Compare the selection policies</div>
+            <div class="segmented" role="group" aria-label="Account selection policy">
+              <button type="button" data-policy="fixed" aria-pressed="false">Fixed</button>
+              <button type="button" data-policy="random" aria-pressed="true">Random</button>
+              <button type="button" data-policy="round-robin" aria-pressed="false">
+                Round robin <span class="later">Later</span>
+              </button>
+            </div>
+            <div
+              class="selection-demo"
+              role="figure"
+              aria-label="Illustrative pool and six new session assignments"
+            >
+              <div class="pool">
+                <div class="pool-account"><strong>Account A</strong><span>Eligible</span></div>
+                <div class="pool-account"><strong>Account B</strong><span>Eligible</span></div>
+                <div class="pool-account"><strong>Account C</strong><span>Eligible</span></div>
+                <div class="pool-account unavailable">
+                  <strong>Account D</strong><span>Disabled · excluded</span>
+                </div>
+              </div>
+              <div class="allocation-connector">
+                <span id="allocation-label">One random draw per new session</span>
+              </div>
+              <div class="sessions" id="sessions">
+                <div class="session-cell" data-account="A">
+                  <span>SESSION 1</span><strong>Account A</strong>
+                </div>
+                <div class="session-cell" data-account="C">
+                  <span>SESSION 2</span><strong>Account C</strong>
+                </div>
+                <div class="session-cell" data-account="C">
+                  <span>SESSION 3</span><strong>Account C</strong>
+                </div>
+                <div class="session-cell" data-account="B">
+                  <span>SESSION 4</span><strong>Account B</strong>
+                </div>
+                <div class="session-cell" data-account="A">
+                  <span>SESSION 5</span><strong>Account A</strong>
+                </div>
+                <div class="session-cell" data-account="C">
+                  <span>SESSION 6</span><strong>Account C</strong>
+                </div>
+              </div>
+            </div>
+            <p class="selection-caption" id="policy-description" aria-live="polite">
+              Random is the recommended first release. Repeats are normal; it spreads assignments,
+              not measured tokens or cost.
+            </p>
+            <p class="small-note">
+              Illustrative assignments, not live quota data. Eligible means active, compatible, and
+              included in the selected pool—not guaranteed remaining quota.
+            </p>
+          </div>
+          <aside class="panel" aria-labelledby="precedence-title">
+            <div class="panel-label caps" id="precedence-title">What wins over random?</div>
+            <ol class="precedence">
+              <li>
+                <div>
+                  <strong>An explicit choice</strong
+                  ><span>A named account or API key stays an explicit choice.</span>
+                </div>
+              </li>
+              <li>
+                <div>
+                  <strong>A child session's inheritance</strong
+                  ><span>Copy the parent's captured account; do not reroll.</span>
+                </div>
+              </li>
+              <li>
+                <div>
+                  <strong>Unattended API-key policy</strong
+                  ><span>Preserve the existing setting for unpinned bots and automations.</span>
+                </div>
+              </li>
+              <li>
+                <div>
+                  <strong>Installation selection policy</strong
+                  ><span>Fixed or random applies to remaining compatible provider slots.</span>
+                </div>
+              </li>
+            </ol>
+            <p class="small-note">
+              No configured policy? Keep today's legacy behavior. A configured pool with no eligible
+              members produces an error—not a silent move to API billing.
+            </p>
+          </aside>
+        </div>
+        <div class="strip">
+          <strong>Important edge cases:</strong> a warmed session keeps its original draw; each
+          automation fan-out session gets its own allocation; reconnecting or refreshing a token
+          never rerolls the account.
+        </div>
+      </section>
+
+      <section class="chapter wrap" id="recovery" aria-labelledby="recovery-title">
+        <div class="section-top">
+          <span class="section-number">02 /</span>
+          <div>
+            <h2 id="recovery-title">Switch accounts, not sessions.</h2>
+            <p>
+              The control plane pauses execution, settles the old turn, and verifies the runtime has
+              loaded the new credentials. Walk through the proposed handoff.
+            </p>
+          </div>
+        </div>
+        <div class="stepper" role="group" aria-label="Account switch walkthrough">
+          <button type="button" data-step="0" aria-current="step">
+            <span>01</span><strong>Pause dispatch</strong>
+          </button>
+          <button type="button" data-step="1"><span>02</span><strong>Stop old work</strong></button>
+          <button type="button" data-step="2">
+            <span>03</span><strong>Prepare target</strong>
+          </button>
+          <button type="button" data-step="3">
+            <span>04</span><strong>Commit binding</strong>
+          </button>
+          <button type="button" data-step="4">
+            <span>05</span><strong>Apply & confirm</strong>
+          </button>
+          <button type="button" data-step="5"><span>06</span><strong>Continue</strong></button>
+        </div>
+        <div class="workbench">
+          <div class="workbench-top">
+            <strong>One session · Account A → Account B</strong
+            ><span class="pill">Illustrative protocol</span>
+          </div>
+          <div class="workbench-grid">
+            <div aria-live="polite" aria-atomic="true">
+              <h3 id="step-title">Pause before anything changes.</h3>
+              <p class="step-copy" id="step-description">
+                An authorized user selects Account B. SessionDO records the switch and blocks new
+                prompt dispatch before asynchronous validation begins.
+              </p>
+              <p class="step-tag caps" id="step-owner">Owner: SessionDO</p>
+            </div>
+            <div>
+              <div
+                class="binding-diagram"
+                role="figure"
+                aria-label="Selected database binding and credentials loaded by the runtime"
+              >
+                <div class="binding-box">
+                  <small>Selected in global SQL</small><strong id="db-account">Account A</strong
+                  ><code id="db-revision">binding revision 1</code>
+                </div>
+                <span class="arrow" aria-hidden="true">→</span>
+                <div class="binding-box">
+                  <small>Loaded by the runtime</small><strong id="runtime-account">Account A</strong
+                  ><code id="runtime-revision">applied revision 1</code>
+                </div>
+              </div>
+              <div class="queue-strip">
+                <span>Prompt queue</span><strong id="queue-status">Dispatch paused</strong>
+              </div>
+              <p class="sr-only" id="step-state" aria-live="polite">
+                Selected Account A, runtime Account A, dispatch paused.
+              </p>
+            </div>
+          </div>
+          <div class="workbench-bottom">
+            <div class="unchanged">
+              Unchanged: workspace · conversation · budget · prior messages
+            </div>
+            <div class="step-controls">
+              <button type="button" id="previous-step" disabled>← Previous</button
+              ><button type="button" class="next" id="next-step">Next step →</button>
+            </div>
+          </div>
+        </div>
+        <div class="explanation">
+          <article>
+            <h3>“Selected” is not “applied.”</h3>
+            <p>
+              A database write cannot replace cached credentials. Dispatch stays paused until the
+              correct runtime acknowledges the exact binding revision and the old execution is
+              stopped.
+            </p>
+          </article>
+          <article>
+            <h3>Continue is a new intent.</h3>
+            <p>
+              The original failed turn remains in history. The user resumes queued work or submits a
+              new continuation. The platform never silently replays the old prompt or its tool
+              effects.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="chapter wrap" id="ownership" aria-labelledby="ownership-title">
+        <div class="section-top">
+          <span class="section-number">03 /</span>
+          <div>
+            <h2 id="ownership-title">A failed switch is not a failed prompt.</h2>
+            <p>
+              The review identified a second route to getting stuck: independent watchdogs could
+              kill a switching sandbox or blame a switch-only boot failure on the next queued
+              prompt.
+            </p>
+          </div>
+        </div>
+        <div class="review-note">
+          <strong>Revision:</strong> lifecycle work now has an explicit durable owner, bound to its
+          sandbox generation and attempt. Watchdogs settle that owner's work instead of guessing
+          from the queue.
+        </div>
+        <div class="panel">
+          <div
+            class="owner-diagram"
+            role="figure"
+            aria-label="Watchdog signals are routed by durable work owner: switch failures pause recovery and retain prompts; prompt boots fail only their owning prompt; archive or cancel takes precedence."
+          >
+            <div class="diagram-column signals">
+              <div class="signal">Heartbeat missing</div>
+              <div class="signal">Inactivity reached</div>
+              <div class="signal">Boot budget expired</div>
+            </div>
+            <span class="arrow" aria-hidden="true">→</span>
+            <div class="owner-node">
+              <span class="caps">Check durable state</span
+              ><strong>Who owns this<br />lifecycle attempt?</strong
+              ><small>Owner + operation<br />Sandbox generation + deadline</small>
+            </div>
+            <span class="arrow" aria-hidden="true">→</span>
+            <div class="diagram-column">
+              <div class="owner-result switch">
+                <strong>Switch-owned work → recovery state</strong
+                ><span>Pause or reconcile the switch. Keep P1 and P2 pending.</span>
+              </div>
+              <div class="owner-result">
+                <strong>Prompt-owned boot → that prompt</strong
+                ><span>Only its captured owning message can fail.</span>
+              </div>
+              <div class="owner-result cancel">
+                <strong>Archive / cancel → takes precedence</strong
+                ><span>Fence the switch. A late acknowledgement cannot reopen it.</span>
+              </div>
+            </div>
+          </div>
+          <p class="caption">
+            Example: switch S boots a suspended sandbox while P1 waits. If that boot times out, S
+            becomes a recovery failure. P1 never ran, so P1 stays queued.
+          </p>
+        </div>
+        <div class="rules">
+          <article class="rule">
+            <div class="caps">01</div>
+            <h3>Bound the restart grace.</h3>
+            <p>
+              Declare an intentional disconnect before restarting. Only that operation gets grace,
+              and retries cannot extend its absolute deadline.
+            </p>
+          </article>
+          <article class="rule">
+            <div class="caps">02</div>
+            <h3>Timeout stops retries.</h3>
+            <p>
+              A deadline produces a visible reconciliation state. It is not permission for the next
+              generic alarm to destroy the sandbox.
+            </p>
+          </article>
+          <article class="rule">
+            <div class="caps">03</div>
+            <h3>Preserve before stopping.</h3>
+            <p>
+              Paused retention requires verified persistent suspension or a successful current
+              checkpoint. A skipped or failed snapshot is not proof.
+            </p>
+          </article>
+        </div>
+        <p class="retention-note">
+          A lost acknowledgement means “state unknown,” not “roll back.” Reconcile the same
+          operation and revision. Provider hard lifetimes still apply: surface retention limits and
+          workspace loss honestly; do not promise indefinite compute.
+        </p>
+      </section>
+
+      <section class="chapter wrap" id="architecture" aria-labelledby="architecture-title">
+        <div class="section-top">
+          <span class="section-number">04 /</span>
+          <div>
+            <h2 id="architecture-title">Three layers. Clear responsibilities.</h2>
+            <p>
+              Extend the existing boundaries: web expresses intent, the control plane owns routing
+              and execution admission, and the runtime applies credentials. No new infrastructure is
+              required.
+            </p>
+          </div>
+        </div>
+        <div
+          class="architecture"
+          role="figure"
+          aria-label="Web calls the control plane, which manages policy, session lifecycle, bindings, and credential issuance. Runtime executes and acknowledges applied credentials back to the control plane."
+        >
+          <article class="tier">
+            <div class="caps">User experience</div>
+            <h3>Web</h3>
+            <p>
+              Selection settings, current account, switch progress, and an explicit Continue action.
+            </p>
+            <div class="module">
+              <strong>Intent and projection</strong
+              ><small>No credentials. No client-side account allocator.</small>
+            </div>
+          </article>
+          <span class="arrow" aria-hidden="true">→</span>
+          <article class="tier control">
+            <div class="caps">Source of authority</div>
+            <h3>Control plane</h3>
+            <div class="module">
+              <strong>Selection policy</strong
+              ><small>Eligible pool; fixed or random; explicit pins win.</small>
+            </div>
+            <div class="module">
+              <strong>SessionDO</strong
+              ><small>Queue hold, switch state, lifecycle owner, deadlines.</small>
+            </div>
+            <div class="module">
+              <strong>Global SQL</strong
+              ><small>Concrete binding and revision; guarded writes.</small>
+            </div>
+            <div class="module">
+              <strong>Credential broker</strong
+              ><small>Session-bound issuance; existing refresh and encryption.</small>
+            </div>
+          </article>
+          <span class="arrow" aria-hidden="true">↔</span>
+          <article class="tier">
+            <div class="caps">Existing sandbox</div>
+            <h3>Runtime</h3>
+            <p>
+              Stop old execution, replace cached credentials, preserve the conversation, and
+              acknowledge the applied revision.
+            </p>
+            <div class="module">
+              <strong>Applies, never chooses</strong
+              ><small>Cannot request arbitrary account IDs.</small>
+            </div>
+          </article>
+        </div>
+        <div class="runtime-compare">
+          <article>
+            <div class="eyebrow">OpenCode · OpenAI / xAI</div>
+            <h3>Restart the local agent service.</h3>
+            <p>
+              The supervisor replaces the OpenCode process inside the same sandbox, reconstructing
+              token and account-header caches. Restarting only the bridge is insufficient. Preserve
+              the local session database and exact conversation ID.
+            </p>
+          </article>
+          <article>
+            <div class="eyebrow">Claude Agent · Anthropic</div>
+            <h3>Reconnect the SDK with new credentials.</h3>
+            <p>
+              Drain and stop the old SDK client, refetch the managed credential, and recreate the
+              client with the same transcript/session ID. Preserve aggregate cost when the new
+              query's accounting baseline begins.
+            </p>
+          </article>
+        </div>
+        <div class="fences">
+          <div class="fence">
+            <strong>Binding revision</strong>
+            <p>Which account this session uses.</p>
+          </div>
+          <div class="fence">
+            <strong>Credential version</strong>
+            <p>Which token version belongs to that account.</p>
+          </div>
+          <div class="fence">
+            <strong>Sandbox generation + socket</strong>
+            <p>Which runtime is authorized to act and acknowledge.</p>
+          </div>
+        </div>
+        <div class="strip">
+          <strong>Permissions stay separate:</strong> managers configure installation-wide policy;
+          authorized session collaborators switch usable accounts. Quota reports cannot disable
+          shared accounts, and no switch silently changes to paid API-key authentication.
+        </div>
+      </section>
+
+      <section class="chapter wrap" id="delivery" aria-labelledby="delivery-title">
+        <div class="section-top">
+          <span class="section-number">05 /</span>
+          <div>
+            <h2 id="delivery-title">Build the smallest useful layers.</h2>
+            <p>
+              Random selection can ship independently. In-session recovery needs the complete
+              handoff and watchdog contract—not just an account dropdown.
+            </p>
+          </div>
+        </div>
+        <div class="phases">
+          <article class="phase">
+            <div class="caps">Phase 0</div>
+            <h3>Prove preservation</h3>
+            <p>
+              Use two test accounts. Verify conversation, uncommitted files, account headers,
+              quiescence, and cost after switching.
+            </p>
+            <span class="phase-state">Release gate · not yet verified live</span>
+          </article>
+          <article class="phase">
+            <div class="caps">Phase 1</div>
+            <h3>Random at creation</h3>
+            <p>
+              Policy schema, explicit pool, resolver, warm-session identity, and one allocation per
+              automation session.
+            </p>
+            <span class="phase-state">Independent capability</span>
+          </article>
+          <article class="phase highlight">
+            <div class="caps">Phase 2</div>
+            <h3>Switch safely</h3>
+            <p>
+              Binding revisions, credential reload, queue hold, lifecycle ownership, reconciliation,
+              and Continue UI.
+            </p>
+            <span class="phase-state">Core recovery capability</span>
+          </article>
+          <article class="phase">
+            <div class="caps">Phase 3</div>
+            <h3>Recognize limits</h3>
+            <p>
+              Structured quota observations and provider-specific recovery banners. Unknown errors
+              still allow manual switching.
+            </p>
+            <span class="phase-state">No quota-polling dependency</span>
+          </article>
+          <article class="phase">
+            <div class="caps">Phase 4</div>
+            <h3>Optional automation</h3>
+            <p>
+              Bounded opt-in fallback and durable round robin. Automatic account selection does not
+              imply prompt replay.
+            </p>
+            <span class="phase-state">Later · disabled by default</span>
+          </article>
+        </div>
+        <details>
+          <summary>Implementation map — where the changes belong</summary>
+          <dl class="file-map">
+            <div>
+              <dt>Policy, eligibility, and allocation</dt>
+              <dd>
+                Generalize fixed defaults, add explicit pool membership and policy revisions; keep
+                token refresh separate.<code
+                  >control-plane/src/model-provider-accounts/<br />control-plane/src/session/provider-account-resolution.ts</code
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Binding and schema</dt>
+              <dd>
+                Persist chosen account, immutable allocation provenance, binding revision, and
+                guarded operation/audit writes.<code
+                  >control-plane/src/db/session-index.ts<br />terraform/d1/migrations/</code
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Switch and lifecycle ownership</dt>
+              <dd>
+                New focused SessionDO coordinator; shared queue, stop, and alarm paths consume the
+                same durable operation state.<code
+                  >control-plane/src/session/message-queue.ts<br />control-plane/src/session/alarm/handler.ts<br />control-plane/src/sandbox/lifecycle/manager.ts</code
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Credential delivery and runtime</dt>
+              <dd>
+                Fence issuance by binding/generation; add planned OpenCode restart and Claude
+                credential reapplication.<code
+                  >control-plane/src/routes/provider-runtime-credentials.ts<br />sandbox-runtime/src/sandbox_runtime/supervisor.py<br />sandbox-runtime/src/sandbox_runtime/harness/</code
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Shared protocol and web</dt>
+              <dd>
+                Shared commands, acknowledgements, failure DTOs and snapshots; web displays
+                authoritative applied state.<code
+                  >shared/src/types/<br />web/src/components/settings/provider-accounts-settings.tsx<br />web/src/components/session-prompt-composer.tsx</code
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Compatibility and rollout</dt>
+              <dd>
+                Existing settings migrate to fixed. Enable by runtime capability. Keep
+                reconciliation running even when new switching is disabled.<code
+                  >providerAccountSwitchV1 capability<br />D1 + Node SQLite validation</code
+                >
+              </dd>
+            </div>
+          </dl>
+        </details>
+        <details>
+          <summary>Acceptance checklist — what must be true before release</summary>
+          <ul class="acceptance">
+            <li>
+              The same workspace and exact conversation survive A → B; the next request really uses
+              B's credentials and account metadata.
+            </li>
+            <li>
+              Old execution and relevant tool descendants have stopped before any new prompt starts.
+            </li>
+            <li>
+              A stale refresh, duplicate command, lost ACK, or replaced sandbox cannot reinstall the
+              wrong account or release dispatch.
+            </li>
+            <li>
+              Heartbeat/inactivity alarms during apply respect ownership; a switch-only boot timeout
+              leaves unrelated queued prompts pending.
+            </li>
+            <li>
+              Grace and operation deadlines survive eviction and never slide on retries; failed
+              preservation cannot trigger destructive fallback.
+            </li>
+            <li>
+              Explicit pins and unattended policy remain intact; warming, first prompt, and
+              reconnect never reroll a durable allocation.
+            </li>
+            <li>
+              Budget exhaustion remains enforced. No silent API-key fallback, terminal-message
+              replay, or blank-conversation recovery.
+            </li>
+          </ul>
+        </details>
+        <noscript
+          ><p class="small-note">
+            JavaScript is disabled. The policy illustration shows random selection and the recovery
+            walkthrough shows its first step; the diagrams, narrative, and implementation plan
+            remain readable.
+          </p></noscript
+        >
+      </section>
+    </main>
+    <footer class="ending wrap">
+      <div>
+        <strong>The goal: a recoverable session, not a disposable one.</strong>
+        <p>
+          Proposed design · September 20, 2026 · Source baseline
+          <code>222f1c0</code>.<br />Lifecycle review finding addressed. Application code is
+          unchanged; live runtime feasibility remains to be proven. This overview is self-contained
+          and makes no provider requests.
+        </p>
+      </div>
+      <a class="spec-link" href="../plans/provider-account-rotation.md">Read the full design ↗</a>
+    </footer>
+    <script>
+      (() => {
+        const policies = {
+          fixed: {
+            accounts: ["A", "A", "A", "A", "A", "A"],
+            label: "Use the configured fixed account",
+            description:
+              "Fixed preserves today's behavior. Every unpinned new session selects Account A; changing the default never moves an existing session.",
+          },
+          random: {
+            accounts: ["A", "C", "C", "B", "A", "C"],
+            label: "One random draw per new session",
+            description:
+              "Random is the recommended first release. Repeats are normal; it spreads assignments, not measured tokens or cost.",
+          },
+          "round-robin": {
+            accounts: ["A", "B", "C", "A", "B", "C"],
+            label: "A durable cursor allocates the next account",
+            description:
+              "Optional later mode: round robin orders assignments using a shared, transactional cursor. It still cannot guarantee equal token usage or remaining quota.",
+          },
+        };
+        document.querySelectorAll("[data-policy]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const policy = policies[button.dataset.policy];
+            document
+              .querySelectorAll("[data-policy]")
+              .forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+            document.querySelectorAll(".session-cell").forEach((cell, index) => {
+              cell.dataset.account = policy.accounts[index];
+              cell.querySelector("strong").textContent = `Account ${policy.accounts[index]}`;
+            });
+            document.getElementById("allocation-label").textContent = policy.label;
+            document.getElementById("policy-description").textContent = policy.description;
+          });
+        });
+        const steps = [
+          {
+            title: "Pause before anything changes.",
+            description:
+              "An authorized user selects Account B. SessionDO records the switch and blocks new prompt dispatch before asynchronous validation begins.",
+            owner: "Owner: SessionDO",
+            db: "Account A",
+            dbRevision: "binding revision 1",
+            runtime: "Account A",
+            runtimeRevision: "applied revision 1",
+            queue: "Dispatch paused",
+          },
+          {
+            title: "Stop the old work for real.",
+            description:
+              "Cancel and join the current turn, drain its outcome, and stop vendor retries and relevant tool processes. A Stop response alone is not proof of quiescence.",
+            owner: "Owner: Runtime + stop coordinator",
+            db: "Account A",
+            dbRevision: "binding revision 1",
+            runtime: "Stopped",
+            runtimeRevision: "A can no longer execute",
+            queue: "P1 and P2 stay pending",
+          },
+          {
+            title: "Check B before committing.",
+            description:
+              "Validate the target and prepare its credentials through the broker. If this fails, the old binding remains. Credential validity does not prove remaining quota.",
+            owner: "Owner: Control-plane broker",
+            db: "Account A",
+            dbRevision: "binding revision 1",
+            runtime: "Stopped",
+            runtimeRevision: "target B is being validated",
+            queue: "P1 and P2 stay pending",
+          },
+          {
+            title: "Save the new binding.",
+            description:
+              "Compare-and-swap A at revision 1 to B at revision 2. Record the operation and audit fact. No prompt may run yet: selection has changed, not the runtime.",
+            owner: "Owner: Global SQL + SessionDO",
+            db: "Account B",
+            dbRevision: "binding revision 2",
+            runtime: "Not applied",
+            runtimeRevision: "still stopped; no execution",
+            queue: "Waiting for application",
+          },
+          {
+            title: "Apply, then acknowledge.",
+            description:
+              "Restart or reconnect the harness with B, resume the exact conversation, and acknowledge revision 2. A wrong generation, stale revision, or lost ACK cannot release the queue.",
+            owner: "Owner: Runtime → SessionDO",
+            db: "Account B",
+            dbRevision: "binding revision 2",
+            runtime: "Account B",
+            runtimeRevision: "applied revision 2 · confirmed",
+            queue: "Awaiting your Continue",
+          },
+          {
+            title: "Continue with a fresh intent.",
+            description:
+              "Here the user chooses Resume queued work: P1 can now start on B and P2 stays queued. Alternatively, submit a new continuation. The old failed turn is never silently replayed.",
+            owner: "Owner: User → normal prompt admission",
+            db: "Account B",
+            dbRevision: "binding revision 2",
+            runtime: "Account B",
+            runtimeRevision: "applied revision 2 · confirmed",
+            queue: "P1 runs; P2 remains queued",
+          },
+        ];
+        let currentStep = 0;
+        const renderStep = (index) => {
+          currentStep = index;
+          const step = steps[index];
+          const fields = {
+            "step-title": step.title,
+            "step-description": step.description,
+            "step-owner": step.owner,
+            "db-account": step.db,
+            "db-revision": step.dbRevision,
+            "runtime-account": step.runtime,
+            "runtime-revision": step.runtimeRevision,
+            "queue-status": step.queue,
+          };
+          Object.entries(fields).forEach(([id, value]) => {
+            document.getElementById(id).textContent = value;
+          });
+          document.querySelectorAll("[data-step]").forEach((button) => {
+            if (Number(button.dataset.step) === index) button.setAttribute("aria-current", "step");
+            else button.removeAttribute("aria-current");
+          });
+          document.getElementById("previous-step").disabled = index === 0;
+          document.getElementById("next-step").textContent =
+            index === steps.length - 1 ? "Start over ↺" : "Next step →";
+          document.getElementById("step-state").textContent =
+            `Selected ${step.db}, ${step.dbRevision}. Runtime ${step.runtime}, ${step.runtimeRevision}. ${step.queue}.`;
+        };
+        document
+          .querySelectorAll("[data-step]")
+          .forEach((button) =>
+            button.addEventListener("click", () => renderStep(Number(button.dataset.step)))
+          );
+        document
+          .getElementById("previous-step")
+          .addEventListener("click", () => renderStep(Math.max(0, currentStep - 1)));
+        document
+          .getElementById("next-step")
+          .addEventListener("click", () => renderStep((currentStep + 1) % steps.length));
+      })();
+    </script>
+  </body>
+</html>

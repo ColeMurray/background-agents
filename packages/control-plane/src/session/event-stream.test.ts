@@ -50,6 +50,27 @@ function legacyBootProgressEvent() {
 }
 
 describe("SessionEventStream", () => {
+  it("replays committed account-change audit facts without requiring a runtime sandbox ID", () => {
+    const { stream, repository } = createStream();
+    const event = {
+      type: "provider_account_changed",
+      operationId: "switch",
+      provider: "openai",
+      sourceAccountId: "source",
+      targetAccountId: "target",
+      bindingRevision: 2,
+      actorId: "actor",
+      timestamp: 1,
+    };
+    vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+      events: [eventRow("provider-account:switch:2", event.type, event, 1, 1)],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(stream.getReplay().events).toEqual([
+      { eventId: "provider-account:switch:2", timelineSequence: 1, event },
+    ]);
+  });
   describe("getReplay", () => {
     it("loads replay through the canonical timeline pager", () => {
       const { stream, repository } = createStream();

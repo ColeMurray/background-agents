@@ -164,7 +164,8 @@ export class SessionMessageQueue {
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
-    private readonly mayDispatch: () => boolean = () => true
+    private readonly mayDispatch: () => boolean = () => true,
+    private readonly dispatchEpoch: () => number = () => 0
   ) {}
 
   async enqueueAutofix(
@@ -366,6 +367,7 @@ export class SessionMessageQueue {
 
   async processMessageQueue(): Promise<void> {
     if (!this.mayDispatch()) return;
+    const admittedEpoch = this.dispatchEpoch();
     const currentSession = this.repository.getSession();
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
@@ -403,7 +405,7 @@ export class SessionMessageQueue {
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
-    if (!this.mayDispatch()) return;
+    if (!this.mayDispatch() || admittedEpoch !== this.dispatchEpoch()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
@@ -464,16 +466,18 @@ export class SessionMessageQueue {
       // pending and dispatches when the sandbox WebSocket connects.
       this.backgroundTasks.submit(
         () =>
-          this.sandboxLifecycle.spawnSandbox().catch((error) => {
-            // Expected provider failures report themselves inside the lifecycle
-            // manager; this catch only sees throws from before those handlers.
-            // Route it through the same call so the reason is persisted as well
-            // as broadcast — otherwise it survives only until the tab reloads.
-            this.sandboxLifecycle.reportSandboxError(
-              error instanceof Error ? error.message : "Failed to spawn sandbox"
-            );
-            throw error;
-          }),
+          this.sandboxLifecycle
+            .spawnSandbox({ kind: "prompt", messageId: message.id })
+            .catch((error) => {
+              // Expected provider failures report themselves inside the lifecycle
+              // manager; this catch only sees throws from before those handlers.
+              // Route it through the same call so the reason is persisted as well
+              // as broadcast — otherwise it survives only until the tab reloads.
+              this.sandboxLifecycle.reportSandboxError(
+                error instanceof Error ? error.message : "Failed to spawn sandbox"
+              );
+              throw error;
+            }),
         {
           name: "sandbox.spawn",
           context: { message_id: message.id },

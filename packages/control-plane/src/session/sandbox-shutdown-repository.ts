@@ -28,6 +28,12 @@ const stateSchema = sandboxShutdownSchema
     restoreInvoked: z.boolean().optional(),
     checkpointInFlight: z.boolean().optional(),
     operationId: z.string().optional(),
+    workOwner: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("prompt"), messageId: z.string() }),
+        z.object({ kind: z.literal("provider_switch"), operationId: z.string() }),
+      ])
+      .optional(),
     messageId: z.string().optional(),
     stopByMs: z.number().optional(),
     captureByMs: z.number().optional(),

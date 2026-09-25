@@ -51,6 +51,10 @@ interface ShutdownDependencies {
   /** Re-derives session status after any interrupted message has been persisted. */
   reconcileStatusFromMessages(): Promise<void>;
   retireAccess(): void;
+  onGenerationReserved?(
+    owner: ShutdownRecord["workOwner"],
+    generation: SandboxGeneration
+  ): ShutdownRecord["workOwner"];
   now?: () => number;
   log?: Logger;
 }
@@ -133,7 +137,8 @@ export class SandboxShutdownCoordinator {
   reserveStartup(
     createdAt: number,
     lifecyclePolicy: ShutdownLifecyclePolicy,
-    persistSandboxRow: () => void
+    persistSandboxRow: () => void,
+    workOwner?: ShutdownRecord["workOwner"]
   ): void {
     const previous = this.deps.store.read();
     const restoring =
@@ -160,7 +165,10 @@ export class SandboxShutdownCoordinator {
         lifecyclePolicy,
         receipt: previous?.receipt,
         restoreInvoked: restoring ? false : undefined,
+        workOwner: workOwner ?? (restoring ? previous?.workOwner : undefined),
       };
+      next.workOwner =
+        this.deps.onGenerationReserved?.(next.workOwner, next.generation) ?? next.workOwner;
       this.deps.store.write(next);
     });
     this.activeRestoreGeneration = restoring ? next.generation : null;
@@ -171,6 +179,80 @@ export class SandboxShutdownCoordinator {
         sandbox_id: next.generation.sandboxId,
       });
     }
+  }
+
+  /** Claim the same local transaction as the recovery hold; no checkpoint may be in flight. */
+  claimProviderSwitch(
+    operationId: string,
+    generation: SandboxGeneration,
+    persist: () => void
+  ): void {
+    const state = this.deps.store.read();
+    if (
+      !state ||
+      !this.current(state) ||
+      !this.matches(state, generation) ||
+      state.checkpointInFlight ||
+      state.lifecyclePolicy === "legacy" ||
+      !(
+        (state.phase === "running" && state.generationReady) ||
+        (state.phase === "saved" && this.canRestoreSaved(state))
+      )
+    )
+      throw new Error("preservation_unavailable");
+    this.deps.session.transaction(() => {
+      persist();
+      this.deps.store.write({
+        ...state,
+        workOwner: { kind: "provider_switch", operationId },
+      });
+    });
+  }
+
+  ownsProviderSwitch(operationId: string, generation: SandboxGeneration): boolean {
+    const state = this.deps.store.read();
+    return (
+      !!state &&
+      this.current(state) &&
+      this.matches(state, generation) &&
+      state.phase === "running" &&
+      !state.checkpointInFlight &&
+      state.workOwner?.kind === "provider_switch" &&
+      state.workOwner.operationId === operationId
+    );
+  }
+
+  canRestoreProviderSwitch(): boolean {
+    const state = this.deps.store.read();
+    return !!state && this.current(state) && state.phase === "saved" && this.canRestoreSaved(state);
+  }
+
+  async authorizeProviderSwitchRestore(operationId: string): Promise<void> {
+    const state = this.deps.store.read();
+    if (
+      !state ||
+      state.workOwner?.kind !== "provider_switch" ||
+      state.workOwner.operationId !== operationId ||
+      !this.canRestoreProviderSwitch()
+    )
+      throw new Error("provider_switch_restore_unavailable");
+    if (this.continuationPaused(state)) await this.recover("restore_saved");
+  }
+
+  releaseProviderSwitch(operationId: string): void {
+    const state = this.deps.store.read();
+    if (state?.workOwner?.kind === "provider_switch" && state.workOwner.operationId === operationId)
+      this.deps.store.write({ ...state, workOwner: undefined });
+  }
+
+  workOwner(): ShutdownRecord["workOwner"] {
+    return this.deps.store.read()?.workOwner;
+  }
+
+  /** Reuse the sole preserving stop implementation; never fall through to legacy destruction. */
+  async retainProviderSwitch(operationId: string, generation: SandboxGeneration): Promise<void> {
+    if (this.ownsProviderSwitch(operationId, generation))
+      await this.requestShutdown("provider_account_recovery");
   }
 
   /** Persist uncertainty before restore/resume can create or reactivate execution. */
@@ -646,7 +728,10 @@ export class SandboxShutdownCoordinator {
       stopByMs,
       captureByMs: Math.min(stopByMs + CAPTURE_MS, end - RETIRE_MS - MARGIN_MS),
       retireByMs: end - MARGIN_MS,
-      continuationPaused: emergency || state?.continuationPaused,
+      continuationPaused:
+        emergency ||
+        state?.workOwner?.kind === "provider_switch" ||
+        (!!state && this.continuationPaused(state)),
     };
     const failure = this.deps.session.transaction(() => {
       const message = this.deps.messages.getProcessingMessage();

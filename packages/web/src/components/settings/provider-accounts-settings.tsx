@@ -1,4 +1,5 @@
 "use client";
+import { ProviderAccountRoutingSettings } from "./provider-account-routing-settings";
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -15,7 +16,7 @@ import {
   reconnectProviderAccount,
   renameProviderAccount,
   runProviderAccountAction,
-  setProviderAccountDefault,
+  setProviderAccountRouting,
   useLegacyProviderCredentials,
   useProviderAccounts,
   type LegacyProviderKeyLocation,
@@ -44,13 +45,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -218,7 +212,8 @@ function LegacyReconnectForm({
 export function ProviderAccountsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("provider_accounts.manage");
-  const { providers, accounts, defaults, loading, error, refresh } = useProviderAccounts();
+  const { providers, accounts, defaults, policies, loading, error, refresh } =
+    useProviderAccounts();
   const legacyCredentials = useLegacyProviderCredentials();
   const [connection, setConnection] = useState<Connection | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
@@ -483,11 +478,15 @@ export function ProviderAccountsSettings() {
                                     onSelect={() =>
                                       void run(
                                         () =>
-                                          setProviderAccountDefault(
-                                            account.provider,
-                                            account.id,
-                                            providerDefault?.unattendedMode ?? "provider_account"
-                                          ),
+                                          setProviderAccountRouting(account.provider, {
+                                            expectedPolicyRevision:
+                                              policies.find(
+                                                (policy) => policy.provider === account.provider
+                                              )?.policyRevision ?? 0,
+                                            selection: { mode: "fixed", accountId: account.id },
+                                            unattendedMode:
+                                              providerDefault?.unattendedMode ?? "provider_account",
+                                          }),
                                         "Default updated"
                                       )
                                     }
@@ -566,83 +565,15 @@ export function ProviderAccountsSettings() {
             )}
           </section>
 
-          <section className="overflow-hidden rounded-md border border-border-muted">
-            <div className="border-b border-border-muted p-4">
-              <h3 className="font-medium text-foreground">Automated sessions</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Choose credentials for sessions started by automations, bots, or other agents.
-              </p>
-            </div>
-            <div className="divide-y divide-border-muted">
-              {providers.map((provider) => {
-                const providerDefault = defaults.find(
-                  (item) => item.provider === provider.provider
-                );
-                const defaultAccount = accounts.find(
-                  (account) => account.id === providerDefault?.providerAccountId
-                );
-                return (
-                  <div
-                    key={provider.provider}
-                    className="grid gap-3 p-4 sm:grid-cols-[minmax(8rem,0.6fr)_1fr] sm:items-end"
-                  >
-                    <div className="flex items-center gap-2 self-center font-medium text-foreground">
-                      <SubscriptionProviderIcon
-                        provider={provider.provider}
-                        className="size-5 text-primary"
-                      />
-                      {provider.subscriptionName}
-                    </div>
-                    <div>
-                      {providerDefault ? (
-                        <>
-                          <Label htmlFor={`unattended-${provider.provider}`}>
-                            Automated authentication
-                          </Label>
-                          <Select
-                            disabled={!canManage || saving}
-                            value={providerDefault.unattendedMode}
-                            onValueChange={(value: "provider_account" | "api_key") => {
-                              if (!operationInFlightRef.current)
-                                void run(
-                                  () =>
-                                    setProviderAccountDefault(
-                                      provider.provider,
-                                      providerDefault.providerAccountId,
-                                      value
-                                    ),
-                                  "Authentication updated"
-                                );
-                            }}
-                          >
-                            <SelectTrigger id={`unattended-${provider.provider}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="provider_account">
-                                Use default: {defaultAccount?.displayName ?? "Unavailable account"}
-                              </SelectItem>
-                              <SelectItem value="api_key">No account (API key)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </>
-                      ) : (
-                        <div className="rounded-md border border-dashed border-border-muted px-3 py-2">
-                          <p className="text-xs font-medium text-muted-foreground">
-                            Automated authentication
-                          </p>
-                          <p className="text-sm text-foreground">No default account selected</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            Choose Make default from an account above.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+          {policies.map((policy) => (
+            <ProviderAccountRoutingSettings
+              key={`${policy.provider}:${policy.policyRevision}`}
+              policy={policy}
+              accounts={accounts}
+              canManage={canManage && !saving}
+              refresh={refresh}
+            />
+          ))}
         </>
       )}
 

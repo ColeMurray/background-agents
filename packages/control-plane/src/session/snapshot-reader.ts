@@ -4,6 +4,7 @@ import {
   type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import type { ProviderAccountSwitchOperation } from "@open-inspect/shared/types/provider-account-switch";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import type { Logger } from "../logger";
 import type { SqlDatabase } from "../db/sql-database";
@@ -31,6 +32,7 @@ export interface SessionSnapshotEnrichment {
 }
 
 export interface SessionSnapshotReaderDeps {
+  getProviderAccountRecovery?: () => ProviderAccountSwitchOperation | null;
   getShutdown?: () => SandboxShutdownState | null;
   sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxStateReader;
@@ -101,6 +103,7 @@ export class SessionSnapshotReader {
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
       sandboxPreservation: this.deps.getShutdown?.() ?? null,
+      providerAccountRecovery: this.deps.getProviderAccountRecovery?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,
       harness: getValidHarnessOrDefault(session.harness),

@@ -77,6 +77,9 @@ const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
 )`;
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS provider_account_recovery (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sandbox_preservation (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   state TEXT NOT NULL
@@ -752,6 +755,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 55,
     description: "Persist per-step usage in the session",
     run: STEP_USAGE_TABLE_SQL,
+  },
+  {
+    id: 56,
+    description: "Persist provider account recovery ownership",
+    run: `CREATE TABLE IF NOT EXISTS provider_account_recovery (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), state TEXT NOT NULL)`,
   },
 ];
 

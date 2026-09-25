@@ -1,5 +1,6 @@
 import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
+import { providerAccountSwitchOperationSchema } from "./provider-account-switch";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
@@ -26,6 +27,7 @@ const sessionStateSchema = z.object({
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
   sandboxPreservation: sandboxShutdownSchema.nullable().optional(),
+  providerAccountRecovery: providerAccountSwitchOperationSchema.nullable().optional(),
   messageCount: z.number(),
   createdAt: z.number(),
   /**
@@ -191,6 +193,10 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("snapshot_saved"), imageId: z.string(), reason: z.string() }),
   z.object({ type: z.literal("sandbox_preservation"), preservation: sandboxShutdownSchema }),
+  z.object({
+    type: z.literal("provider_account_recovery"),
+    operation: providerAccountSwitchOperationSchema,
+  }),
   z.object({
     type: z.literal("shutdown_recovery_accepted"),
     clientRequestId: clientRequestIdSchema,

@@ -20,7 +20,10 @@ async def test_health_check_fails_fast_when_child_exits():
         client_type.return_value.__aenter__.return_value.get.assert_not_awaited()
 
 
-async def test_stop_tolerates_process_exiting_before_terminate():
+async def test_stop_tolerates_process_exiting_before_terminate(monkeypatch):
+    monkeypatch.setattr(
+        "sandbox_runtime.opencode_server.os.killpg", MagicMock(side_effect=ProcessLookupError)
+    )
     server = make_opencode_server({})
     process = MagicMock(returncode=None)
     process.terminate.side_effect = ProcessLookupError

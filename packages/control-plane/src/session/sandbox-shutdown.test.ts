@@ -3,6 +3,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
+import type { LifecycleWorkOwner, SandboxGeneration } from "../sandbox/lifecycle/ports";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
 
@@ -84,6 +85,9 @@ function fixture(providerValue = provider()) {
       submit: vi.fn((task: () => Promise<void>) => backgroundTasks.push(task)),
     },
     onLifecycleChange: vi.fn(async () => undefined),
+    onGenerationReserved: vi.fn(
+      (owner: LifecycleWorkOwner | undefined, _generation: SandboxGeneration) => owner
+    ),
     reconcileStatusFromMessages: vi.fn(async () => undefined),
     retireAccess: vi.fn(() => calls.push("access-retired")),
     now: () => now,
@@ -156,7 +160,95 @@ function preparedEvent(
 }
 
 describe("SandboxShutdownCoordinator", () => {
+  it("reserves recovery ownership inside the startup generation transaction", () => {
+    const f = fixture();
+    let inTransaction = false;
+    f.deps.session.transaction.mockImplementation((fn) => {
+      inTransaction = true;
+      try {
+        return fn();
+      } finally {
+        inTransaction = false;
+      }
+    });
+    f.deps.onGenerationReserved.mockImplementation((owner, generation) => {
+      expect(inTransaction).toBe(true);
+      expect(f.sandboxRow.created_at).toBe(generation.createdAt);
+      expect(owner).toEqual({ kind: "prompt", messageId: "pending" });
+      return { kind: "provider_switch", operationId: "reapply" };
+    });
+    f.shutdown.reserveStartup(
+      2000,
+      "confirmed",
+      () => {
+        f.sandboxRow.created_at = 2000;
+      },
+      { kind: "prompt", messageId: "pending" }
+    );
+    expect(f.shutdown.workOwner()).toEqual({ kind: "provider_switch", operationId: "reapply" });
+    expect(f.store.read()?.generation.createdAt).toBe(2000);
+  });
   beforeEach(() => vi.restoreAllMocks());
+
+  it("transfers switch ownership to verified retention without releasing pending work", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true,
+      imageId: "switch-saved",
+      sourceStopped: true,
+    }));
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    const persistHold = vi.fn();
+    f.shutdown.claimProviderSwitch("switch", GENERATION, persistHold);
+    expect(persistHold).toHaveBeenCalledOnce();
+    expect(f.shutdown.ownsProviderSwitch("switch", GENERATION)).toBe(true);
+    await f.shutdown.retainProviderSwitch("switch", GENERATION);
+    expect(f.shutdown.ownsProviderSwitch("switch", GENERATION)).toBe(false);
+    expect(f.store.value).toMatchObject({
+      phase: "draining",
+      continuationPaused: true,
+      workOwner: { kind: "provider_switch", operationId: "switch" },
+    });
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: { artifactId: "switch-saved" },
+    });
+    expect(f.shutdown.admissionDecision()).toBe("held");
+    expect(f.deps.failures.record).not.toHaveBeenCalled();
+    expect(f.shutdown.canRestoreProviderSwitch()).toBe(true);
+  });
+
+  it("lifetime expiry can preempt switching and an uncertain capture cannot authorize retirement", async () => {
+    const stopSandbox = vi.fn();
+    const takeSnapshot = vi.fn(async () => {
+      throw new Error("ambiguous provider outcome");
+    });
+    const f = fixture(provider({ takeSnapshot, stopSandbox }));
+    await readyFinite(f);
+    f.shutdown.claimProviderSwitch("switch", GENERATION, () => {});
+    f.setNow(f.store.value!.drainAtMs!);
+    await f.shutdown.handleAlarm();
+    expect(f.shutdown.ownsProviderSwitch("switch", GENERATION)).toBe(false);
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    expect(f.store.value).toMatchObject({ phase: "unknown", continuationPaused: true });
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(f.shutdown.canRestoreProviderSwitch()).toBe(false);
+  });
+
+  it("refuses switch admission while a checkpoint owns the generation", async () => {
+    const f = fixture();
+    await readyFinite(f);
+    f.store.value!.checkpointInFlight = true;
+    const persist = vi.fn();
+    expect(() => f.shutdown.claimProviderSwitch("switch", GENERATION, persist)).toThrow(
+      "preservation_unavailable"
+    );
+    expect(persist).not.toHaveBeenCalled();
+  });
 
   it("distinguishes unmanaged and held shutdown requests", async () => {
     const f = fixture();

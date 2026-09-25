@@ -27,6 +27,7 @@ const DEFAULT_POLL_DELAY_MS = 100;
 
 export interface ProviderAccess {
   accessToken: string;
+  credentialVersion: number;
   expiresIn?: number;
   externalAccountId?: string;
   providerMetadata?: Record<string, string>;
@@ -114,7 +115,7 @@ export class ModelProviderAccountBroker {
     const cached = adapter.cachedAccess(credential);
     if (cached && cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs) {
       await this.touchLastUsed(account);
-      return this.toAccess(account, adapter, credential, cached);
+      return this.toAccess(account, adapter, credential, cached, state.credentialVersion);
     }
 
     const key = `${accountId}:${state.credentialVersion}`;
@@ -138,7 +139,7 @@ export class ModelProviderAccountBroker {
       const cached = adapter.cachedAccess(credential);
       if (cached && cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs) {
         await this.touchLastUsed(account);
-        return this.toAccess(account, adapter, credential, cached);
+        return this.toAccess(account, adapter, credential, cached, state.credentialVersion);
       }
 
       if (state.exchangeState === "in_flight") {
@@ -191,10 +192,16 @@ export class ModelProviderAccountBroker {
           continue;
         }
         await this.touchLastUsed(account);
-        return this.toAccess(account, adapter, result.refreshed.credential, {
-          accessToken: result.refreshed.accessToken,
-          accessTokenExpiresAt: result.refreshed.accessTokenExpiresAt,
-        });
+        return this.toAccess(
+          account,
+          adapter,
+          result.refreshed.credential,
+          {
+            accessToken: result.refreshed.accessToken,
+            accessTokenExpiresAt: result.refreshed.accessTokenExpiresAt,
+          },
+          state.credentialVersion + 1
+        );
       } catch (error) {
         if (!(error instanceof ClaimedProviderCredentialExchangeError)) throw error;
         if (error.phase === "parse") {
@@ -250,7 +257,7 @@ export class ModelProviderAccountBroker {
         "Concurrent credential replacement has no usable access token"
       );
     }
-    return this.toAccess(account, adapter, credential, cached);
+    return this.toAccess(account, adapter, credential, cached, state.credentialVersion);
   }
 
   private parseCredential(
@@ -354,11 +361,13 @@ export class ModelProviderAccountBroker {
     account: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
     credential: unknown,
-    cached: { accessToken: string; accessTokenExpiresAt: number }
+    cached: { accessToken: string; accessTokenExpiresAt: number },
+    credentialVersion: number
   ): ProviderAccess {
     const expiresIn = Math.max(0, Math.floor((cached.accessTokenExpiresAt - this.now()) / 1000));
     return {
       accessToken: cached.accessToken,
+      credentialVersion,
       expiresIn,
       ...(account.externalAccountId ? { externalAccountId: account.externalAccountId } : {}),
       providerMetadata: adapter.runtimeMetadata(credential, account.externalAccountId),

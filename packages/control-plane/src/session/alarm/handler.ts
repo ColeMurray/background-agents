@@ -87,7 +87,6 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       // Identified before lifecycle handling, which may yield on provider
       // I/O: the head can change in that gap, and the prompt a boot was for
       // is the one that was waiting when the alarm fired.
-      const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
       if (lifecycleResult !== "no_action") {
         await deps.messageQueue.failStuckProcessingMessage();
@@ -96,13 +95,16 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         await deps.executionStop.resumeAfterSandboxTermination();
       }
       if (
-        bootPrompt &&
         typeof lifecycleResult === "object" &&
-        lifecycleResult.kind === "boot_budget_exceeded"
+        lifecycleResult.kind === "boot_budget_exceeded" &&
+        lifecycleResult.owner?.kind === "prompt"
       ) {
         // The boot was for that prompt; it fails with the same words the user
         // sees, and nothing re-drives it onto a fresh sandbox.
-        await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
+        await deps.messageQueue.failPendingMessage(
+          lifecycleResult.owner.messageId,
+          lifecycleResult.reason
+        );
       }
       if (projectionFailure) throw projectionFailure.error;
     },

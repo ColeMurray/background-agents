@@ -5,17 +5,23 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 import { harnessSupportsProviderAuth, type HarnessId } from "@open-inspect/shared/harnesses";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
+import { SessionIndexStore } from "../db/session-index";
+import { ProviderAccountRoutingStore } from "../db/provider-account-routing";
+import type { ProviderAccountRouting } from "@open-inspect/shared/types/provider-account-routing";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase } from "../db/sql-database";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
 import {
   ProviderAccountSelectionPolicy,
+  ProviderAccountSelectionPolicyError,
   type ProviderAccountAdapterLookup,
 } from "../model-provider-accounts/selection-policy";
 
 interface ProviderAccountResolutionStores {
   defaults: Pick<ProviderDefaultStore, "get">;
+  routing?: Pick<ProviderAccountRoutingStore, "get">;
+  random?: () => number;
   accounts: Pick<ModelProviderAccountStore, "getById">;
   adapters: ProviderAccountAdapterLookup;
 }
@@ -39,6 +45,9 @@ const LEGACY_SCOPED_OAUTH_PROVIDERS: ReadonlySet<SubscriptionProviderId> = new S
 ]);
 
 export interface ProviderAccountResolutionInput {
+  sessionId?: string;
+  randomEnabled?: boolean;
+  policies?: ProviderAccountRouting[];
   explicit?: ModelProviderSelections;
   unattended: boolean;
   /**
@@ -75,6 +84,58 @@ async function resolveProvider(
     };
   }
 
+  const routing =
+    input.policies?.find((item) => item.provider === provider) ??
+    (await stores.routing?.get(provider));
+  if (routing) {
+    if (routing.selection.mode === "unconfigured") return noSelectionFallback(provider);
+    if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account"))
+      return apiKey(provider, "harness_fallback");
+    if (input.unattended && routing.unattendedMode === "api_key")
+      return apiKey(provider, "unattended_policy");
+    let accountId: string;
+    if (routing.selection.mode === "random") {
+      if (!input.randomEnabled)
+        throw new ProviderAccountSelectionPolicyError(
+          "Random provider allocation is temporarily unavailable",
+          409
+        );
+      const candidates = (
+        await Promise.all(
+          routing.selection.accountIds.map(async (id) => {
+            try {
+              return await policy.validateSelection(provider, id);
+            } catch (error) {
+              if (error instanceof ProviderAccountSelectionPolicyError) return null;
+              throw error;
+            }
+          })
+        )
+      ).filter((account) => account !== null);
+      if (!candidates.length)
+        throw new ProviderAccountSelectionPolicyError(
+          "No eligible accounts in the configured provider pool",
+          409
+        );
+      const draw = (stores.random ?? Math.random)();
+      if (!(draw >= 0 && draw < 1)) throw new Error("Invalid provider allocation random value");
+      accountId = candidates[Math.floor(draw * candidates.length)].id;
+    } else {
+      accountId = (await policy.validateDefault(provider, routing.selection.accountId)).id;
+    }
+    return {
+      provider,
+      authMode: "provider_account",
+      providerAccountId: accountId,
+      selectionSource:
+        routing.selection.mode === "random"
+          ? "installation_random"
+          : input.unattended
+            ? "unattended_policy"
+            : "installation_default",
+      allocationPolicyRevision: routing.policyRevision,
+    };
+  }
   const providerDefault = await stores.defaults.get(provider);
   if (!providerDefault) return noSelectionFallback(provider);
   if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account")) {
@@ -103,12 +164,31 @@ export async function resolveProviderAccountSelections(
   );
 }
 
-export function resolveSessionProviderAuth(
+export async function resolveSessionProviderAuth(
   db: SqlDatabase,
   input: ProviderAccountResolutionInput
 ): Promise<SessionModelProviderAuthInput[]> {
+  if (input.sessionId) {
+    const sessions = new SessionIndexStore(db);
+    if (await sessions.get(input.sessionId)) {
+      const existing = await sessions.getCompleteProviderAuth(input.sessionId);
+      for (const binding of existing) {
+        const explicit = input.explicit?.[binding.provider];
+        if (
+          explicit &&
+          (explicit.mode !== binding.authMode ||
+            (explicit.mode === "provider_account" &&
+              (binding.authMode !== "provider_account" ||
+                explicit.accountId !== binding.providerAccountId)))
+        )
+          throw new ProviderAccountSelectionPolicyError("session_creation_intent_conflict", 409);
+      }
+      return existing;
+    }
+  }
   return resolveProviderAccountSelections(input, {
     defaults: new ProviderDefaultStore(db),
+    routing: new ProviderAccountRoutingStore(db),
     accounts: new ModelProviderAccountStore(db),
     adapters: modelProviderAccountAdapterRegistry,
   });

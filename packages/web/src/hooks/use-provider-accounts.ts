@@ -1,9 +1,13 @@
 import useSWR from "swr";
+import {
+  providerAccountRoutingResponseSchema,
+  providerAccountRoutingSchema,
+  type ProviderAccountRoutingRequest,
+} from "@open-inspect/shared/types/provider-account-routing";
 import { z, type ZodType } from "zod";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
-  modelProviderAccountDefaultsResponseSchema,
   modelProviderAccountDefaultResponseSchema,
   modelProviderAccountResponseSchema,
   modelProviderAccountsResponseSchema,
@@ -101,10 +105,25 @@ export function useProviderAccounts() {
   const accounts = useSWR(canRead ? ACCOUNTS_KEY : null, async (path) => {
     return (await requestProviderResource(path, modelProviderAccountsResponseSchema)).accounts;
   });
-  const defaults = useSWR(canRead ? DEFAULTS_KEY : null, async (path) => {
-    return (await requestProviderResource(path, modelProviderAccountDefaultsResponseSchema))
-      .defaults;
+  const routing = useSWR(canRead ? "/api/model-provider-account-routing" : null, async (path) => {
+    return (await requestProviderResource(path, providerAccountRoutingResponseSchema)).policies;
   });
+  // Only fixed policies have a default. Never fabricate one for random pools.
+  const defaults: ModelProviderAccountDefault[] = (routing.data ?? []).flatMap((policy) =>
+    policy.selection.mode === "fixed"
+      ? [
+          {
+            provider: policy.provider,
+            providerAccountId: policy.selection.accountId,
+            unattendedMode: policy.unattendedMode,
+            createdBy: null,
+            updatedBy: null,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        ]
+      : []
+  );
 
   return {
     providers: SUBSCRIPTION_PROVIDER_IDS.map((provider) => ({
@@ -112,10 +131,11 @@ export function useProviderAccounts() {
       ...SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider],
     })),
     accounts: (accounts.data ?? []) as ModelProviderAccount[],
-    defaults: (defaults.data ?? []) as ModelProviderAccountDefault[],
-    loading: accounts.isLoading || defaults.isLoading,
-    error: accounts.error ?? defaults.error,
-    refresh: async () => Promise.all([accounts.mutate(), defaults.mutate()]),
+    defaults,
+    policies: routing.data ?? [],
+    loading: accounts.isLoading || routing.isLoading,
+    error: accounts.error ?? routing.error,
+    refresh: async () => Promise.all([accounts.mutate(), routing.mutate()]),
   };
 }
 
@@ -293,4 +313,15 @@ export async function setProviderAccountDefault(
       }
     )
   ).default;
+}
+
+export function setProviderAccountRouting(
+  provider: SubscriptionProviderId,
+  body: ProviderAccountRoutingRequest
+) {
+  return requestProviderResource(
+    `/api/model-provider-account-routing/${provider}`,
+    providerAccountRoutingSchema,
+    { method: "PUT", body }
+  );
 }

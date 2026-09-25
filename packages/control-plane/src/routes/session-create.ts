@@ -213,6 +213,8 @@ export async function handleCreateSession(
   let providerAuth;
   try {
     providerAuth = await resolveSessionProviderAuth(ctx.db, {
+      sessionId,
+      randomEnabled: env.PROVIDER_ACCOUNT_RANDOM_ENABLED === "true",
       explicit: body.providerSelections,
       unattended: spawnSource !== undefined && spawnSource !== "user",
       harness,

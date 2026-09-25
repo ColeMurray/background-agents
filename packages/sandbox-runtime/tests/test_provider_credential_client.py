@@ -120,3 +120,23 @@ async def test_a_brokered_token_is_rejected_as_the_wrong_kind() -> None:
     )
     with pytest.raises(RuntimeCredentialDenied, match="stored_provider_secret"):
         await client.fetch("anthropic")
+
+
+async def test_restarted_bridge_discovers_current_revision_without_relaxing_switch_fence() -> None:
+    binding = {"bindingRevision": 2, "generation": {"sandboxId": "sb-1", "createdAt": 100}}
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=binding)
+        if request.headers.get("x-provider-binding-revision") != "2":
+            return httpx.Response(409, json={"error": "stale_provider_binding"})
+        return httpx.Response(
+            200, json={**binding, "kind": "stored_provider_secret", "secret": "new-secret"}
+        )
+
+    client, seen = _client(handler)
+    assert (await client.fetch("anthropic")).secret == "new-secret"
+    assert [request.method for request in seen] == ["POST", "GET", "POST"]
+    with pytest.raises(RuntimeCredentialDenied):
+        await client.fetch("anthropic", {**binding, "bindingRevision": 1})
+    assert len(seen) == 4

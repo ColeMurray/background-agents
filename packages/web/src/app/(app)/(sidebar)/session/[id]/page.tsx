@@ -66,6 +66,7 @@ import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
+import { SessionProviderAccount } from "@/components/session-provider-account";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -468,6 +469,14 @@ export default function SessionPage() {
       )}
 
       {/* Main content */}
+      {capabilities.read && (
+        <SessionProviderAccount
+          sessionId={sessionId}
+          model={sessionState?.model ?? DEFAULT_MODEL}
+          canSwitch={capabilities.lifecycle}
+          recovery={sessionState?.providerAccountRecovery}
+        />
+      )}
       <main className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!isBelowLg ? (
           <SessionDesktopLayout

@@ -4,6 +4,11 @@ export interface SandboxGeneration {
   createdAt: number;
 }
 
+/** Durable attribution for one generation's startup; independent of the current queue head. */
+export type LifecycleWorkOwner =
+  | { kind: "prompt"; messageId: string }
+  | { kind: "provider_switch"; operationId: string };
+
 /** Coordinator-owned checkpoint result; unknown never authorizes a destructive retry. */
 export type SandboxCheckpointOutcome =
   | { outcome: "saved"; imageId: string; sourceStopped: boolean }
@@ -63,7 +68,12 @@ export type SandboxAlarmResult =
   | "no_action"
   | "sandbox_failed"
   | "sandbox_terminated"
-  | { kind: "boot_budget_exceeded"; reason: string };
+  | {
+      kind: "boot_budget_exceeded";
+      reason: string;
+      owner?: LifecycleWorkOwner;
+      generation?: SandboxGeneration;
+    };
 
 export interface SandboxAlarm {
   handleAlarm(): Promise<SandboxAlarmResult>;

@@ -21,6 +21,9 @@ export interface SessionInternalRoute {
 
 /** Handlers required to serve every internal SessionDO HTTP route. */
 export interface SessionInternalRouteHandlers {
+  providerAuth?: SessionInternalRouteHandler;
+  providerSwitch?: SessionInternalRouteHandler;
+  providerResume?: SessionInternalRouteHandler;
   init: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;
   snapshot: SessionInternalRouteHandler;
@@ -71,6 +74,33 @@ export function createSessionInternalRoutes(
   handlers: SessionInternalRouteHandlers
 ): SessionInternalRoute[] {
   return [
+    ...(handlers.providerAuth
+      ? [
+          {
+            method: "GET" as const,
+            path: SessionInternalPaths.providerAuth,
+            handler: handlers.providerAuth,
+          },
+        ]
+      : []),
+    ...(handlers.providerSwitch
+      ? [
+          {
+            method: "POST" as const,
+            path: SessionInternalPaths.providerSwitch,
+            handler: handlers.providerSwitch,
+          },
+        ]
+      : []),
+    ...(handlers.providerResume
+      ? [
+          {
+            method: "POST" as const,
+            path: SessionInternalPaths.providerResume,
+            handler: handlers.providerResume,
+          },
+        ]
+      : []),
     { method: "POST", path: SessionInternalPaths.init, handler: handlers.init },
     { method: "GET", path: SessionInternalPaths.state, handler: handlers.state },
     { method: "GET", path: SessionInternalPaths.snapshot, handler: handlers.snapshot },

@@ -72,12 +72,16 @@ class RuntimeCredentialClient:
         session = quote(self._session_id, safe="")
         return f"{self._base_url}/sessions/{session}/provider-auth/{provider}/runtime-credential"
 
-    async def fetch(self, provider: str) -> RuntimeCredential:
+    async def fetch(
+        self, provider: str, expected: dict[str, Any] | None = None
+    ) -> RuntimeCredential:
         """Fetch the session-bound credential for ``provider`` (``anthropic`` today)."""
         headers = {
             "Authorization": f"Bearer {self._auth_token}",
             "X-Sandbox-ID": self._sandbox_id,
         }
+        if expected is not None:
+            headers["x-provider-binding-revision"] = str(expected["bindingRevision"])
         try:
             if self._http_client is not None:
                 response = await self._http_client.post(
@@ -88,6 +92,42 @@ class RuntimeCredentialClient:
                     response = await client.post(self._url(provider), headers=headers, json={})
         except httpx.HTTPError as error:
             raise RuntimeCredentialUnavailable(str(error)) from error
+
+        # Bootstrap after a bridge restart/restore discovers only the current
+        # authenticated binding, then pins that revision for the credential fetch.
+        # A request already pinned by a switch must never silently move revisions.
+        if expected is None and response.status_code == 409:
+            try:
+                stale = response.json().get("error") == "stale_provider_binding"
+            except (ValueError, AttributeError):
+                stale = False
+            if stale:
+                try:
+                    url = self._url(provider).removesuffix("runtime-credential") + "binding"
+                    if self._http_client is not None:
+                        discovery = await self._http_client.get(
+                            url, headers=headers, timeout=self._timeout_seconds
+                        )
+                    else:
+                        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                            discovery = await client.get(url, headers=headers)
+                    binding = discovery.json()
+                    if discovery.status_code != 200 or not isinstance(binding, dict):
+                        raise RuntimeCredentialDenied("Provider binding unavailable")
+                    revision = binding.get("bindingRevision")
+                    generation = binding.get("generation")
+                    if (
+                        isinstance(revision, bool)
+                        or not isinstance(revision, int)
+                        or revision < 1
+                        or not isinstance(generation, dict)
+                        or generation.get("sandboxId") != self._sandbox_id
+                        or not isinstance(generation.get("createdAt"), int)
+                    ):
+                        raise RuntimeCredentialDenied("Invalid provider binding")
+                except (httpx.HTTPError, ValueError) as error:
+                    raise RuntimeCredentialUnavailable("Provider binding unavailable") from error
+                return await self.fetch(provider, binding)
 
         if response.status_code in RETRYABLE_STATUSES or (
             response.status_code == 409 and _marked_retryable(response)
@@ -115,6 +155,11 @@ class RuntimeCredentialClient:
             ) from error
         if not isinstance(body, dict):
             raise RuntimeCredentialDenied("credential response was not an object")
+        if expected is not None and (
+            body.get("bindingRevision") != expected["bindingRevision"]
+            or body.get("generation") != expected["generation"]
+        ):
+            raise RuntimeCredentialDenied("Stale provider credential response")
         kind = body.get("kind")
         secret = body.get("secret")
         if kind != STORED_PROVIDER_SECRET_KIND or not isinstance(secret, str) or not secret:

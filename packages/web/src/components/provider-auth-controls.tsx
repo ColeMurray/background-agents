@@ -7,6 +7,7 @@ import type {
   SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
+import type { ProviderAccountRouting } from "@open-inspect/shared/types/provider-account-routing";
 import {
   getHarnessLabel,
   harnessSupportsProviderAuth,
@@ -37,12 +38,13 @@ import {
 const POLICY = "policy";
 const API_KEY = "api_key";
 const ACCOUNT_PREFIX = "account:";
-const DEFAULT_POLICY_LABEL = "Use default";
+const DEFAULT_POLICY_LABEL = "Use installation policy";
 const DEFAULT_UNATTENDED = false;
 const DEFAULT_VARIANT = "select";
 const DEFAULT_DISABLED = false;
 
 export function ProviderAuthControls({
+  policy,
   provider,
   accounts,
   defaultValue,
@@ -54,6 +56,7 @@ export function ProviderAuthControls({
   disabled = DEFAULT_DISABLED,
   harness,
 }: {
+  policy?: ProviderAccountRouting;
   provider: SubscriptionProviderId;
   accounts: ModelProviderAccount[];
   defaultValue?: ModelProviderAccountDefault;
@@ -84,7 +87,7 @@ export function ProviderAuthControls({
   );
   const effectiveDefaultLabel =
     !accountsSelectable || (unattended && defaultValue?.unattendedMode === "api_key")
-      ? "No account"
+      ? "API key"
       : defaultValue
         ? (defaultAccount?.displayName ?? "Unavailable account")
         : undefined;
@@ -94,12 +97,15 @@ export function ProviderAuthControls({
       : undefined;
   const triggerSelectionLabel = value
     ? value.mode === "api_key"
-      ? "No account"
+      ? "API key"
       : (explicitAccount?.displayName ?? "Unavailable account")
     : (effectiveDefaultLabel ?? "Use default");
-  const policyDescription = effectiveDefaultLabel
-    ? `${policyLabel}: ${effectiveDefaultLabel}`
-    : policyLabel;
+  const policyDescription =
+    accountsSelectable && policy?.selection.mode === "random"
+      ? `${policyLabel}: Random from ${policy.selection.accountIds.length} selected accounts`
+      : effectiveDefaultLabel
+        ? `${policyLabel}: ${effectiveDefaultLabel}`
+        : policyLabel;
   const providerName = SUBSCRIPTION_PROVIDER_DISPLAY_METADATA[provider].displayName;
   const handleChange = (next: string) => {
     if (disabled) return;
@@ -151,7 +157,7 @@ export function ProviderAuthControls({
                   </DropdownMenuRadioItem>
                 ))}
                 <DropdownMenuRadioItem value={API_KEY} disabled={disabled}>
-                  No account
+                  API key
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
@@ -187,7 +193,7 @@ export function ProviderAuthControls({
               {account.externalAccountId ? ` (${account.externalAccountId})` : ""}
             </SelectItem>
           ))}
-          <SelectItem value={API_KEY}>No account</SelectItem>
+          <SelectItem value={API_KEY}>API key</SelectItem>
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">

@@ -6,6 +6,7 @@ import filecmp
 import json
 import os
 import shutil
+import signal
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -59,6 +60,8 @@ class OpenCodeServer:
         self.mcp_servers = config.mcp_servers
         self._mcp_packages = McpPackageInstaller(log)
         self._opencode_process: asyncio.subprocess.Process | None = None
+        self._launch_env: dict[str, str] | None = None
+        self._launch_workdir: Path | None = None
 
     def _assemble_workspace_opencode(self, repositories: Sequence[RepoEntry]) -> None:
         """Merge member repos' .opencode/ into the workspace root (multi-repo only).
@@ -466,6 +469,10 @@ class OpenCodeServer:
         }
 
         # Start OpenCode server in the repo directory
+        self._launch_env, self._launch_workdir = env, workdir
+        await self._launch_process(env, workdir)
+
+    async def _launch_process(self, env: dict[str, str], workdir: Path) -> None:
         self._opencode_process = await asyncio.create_subprocess_exec(
             "opencode",
             "serve",
@@ -479,6 +486,7 @@ class OpenCodeServer:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+            start_new_session=True,
         )
 
         # Start log forwarder
@@ -528,16 +536,31 @@ class OpenCodeServer:
     async def stop(self) -> None:
         if self._opencode_process and self._opencode_process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
-                self._opencode_process.terminate()
+                os.killpg(self._opencode_process.pid, signal.SIGTERM)
             try:
                 await asyncio.wait_for(self._opencode_process.wait(), timeout=10.0)
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
-                    self._opencode_process.kill()
+                    os.killpg(self._opencode_process.pid, signal.SIGKILL)
                 try:
                     await asyncio.wait_for(self._opencode_process.wait(), timeout=10.0)
                 except TimeoutError:
-                    self.log.warn("opencode.stop_timeout")
+                    raise RuntimeError("OpenCode process containment timed out") from None
+        if self._opencode_process:
+            # Reap any remaining descendants in the owned process group, even if the parent exited.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self._opencode_process.pid, signal.SIGKILL)
+
+    async def restart_for_provider(self, identity: dict[str, Any]) -> None:
+        if self._launch_env is None or self._launch_workdir is None:
+            raise RuntimeError("OpenCode launch identity unavailable")
+        await self.stop()
+        provider = identity.get("provider")
+        if provider not in ("openai", "xai"):
+            raise RuntimeError("Unsupported provider")
+        Path(f"/tmp/provider-account-proof-{provider}.json").unlink(missing_ok=True)
+        env = {**self._launch_env, "PROVIDER_ACCOUNT_SWITCH_IDENTITY": json.dumps(identity)}
+        await self._launch_process(env, self._launch_workdir)
 
     def exit_code(self) -> int | None:
         """Return OpenCode's exit code, or None while absent/running."""

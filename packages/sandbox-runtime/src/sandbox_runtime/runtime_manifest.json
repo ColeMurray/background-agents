@@ -1,6 +1,6 @@
 {
-  "runtimeVersion": "v73-node-24",
-  "generation": 73,
+  "runtimeVersion": "v74-provider-account-rotation",
+  "generation": 74,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 73,

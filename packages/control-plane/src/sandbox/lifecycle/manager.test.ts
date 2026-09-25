@@ -429,7 +429,8 @@ describe("final graceful shutdown lifecycle integration", () => {
     expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
       expect.any(Number),
       "legacy",
-      expect.any(Function)
+      expect.any(Function),
+      undefined
     );
   });
 
@@ -455,7 +456,8 @@ describe("final graceful shutdown lifecycle integration", () => {
     expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
       expect.any(Number),
       policy,
-      expect.any(Function)
+      expect.any(Function),
+      undefined
     );
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
@@ -485,7 +487,8 @@ describe("final graceful shutdown lifecycle integration", () => {
     expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
       expect.any(Number),
       policy,
-      expect.any(Function)
+      expect.any(Function),
+      undefined
     );
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
@@ -601,7 +604,8 @@ describe("final graceful shutdown lifecycle integration", () => {
       expect(f.shutdown.reserveStartup).toHaveBeenCalledWith(
         expect.any(Number),
         "legacy",
-        expect.any(Function)
+        expect.any(Function),
+        undefined
       );
       expect(f.storage.getSandbox()!.runtime_version).toBe(runtimeVersion);
       expect(f.shutdown.holdFailedRecovery).not.toHaveBeenCalled();

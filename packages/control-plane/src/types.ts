@@ -14,6 +14,9 @@ import type { ObjectStorage } from "./storage/object-storage";
  * so any host can supply them.
  */
 export interface EnvConfig {
+  PROVIDER_ACCOUNT_RANDOM_ENABLED?: string;
+  PROVIDER_ACCOUNT_SWITCH_ENABLED?: string;
+  PROVIDER_ACCOUNT_SWITCH_QUALIFIED?: string;
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

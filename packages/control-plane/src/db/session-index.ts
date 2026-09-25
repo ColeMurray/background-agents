@@ -114,6 +114,7 @@ export interface SessionEntry {
   skillManifestSourceSessionId?: string;
   /** Complete immutable model-provider authentication snapshot. */
   providerAuth?: SessionModelProviderAuthInput[];
+  creationIntentHash?: string;
 }
 
 const sessionRowSchema = z.object({
@@ -146,6 +147,9 @@ const sessionRowSchema = z.object({
 type SessionRow = z.infer<typeof sessionRowSchema>;
 
 interface SessionModelProviderAuthRow {
+  binding_revision: number;
+  allocation_policy_revision: number | null;
+  last_switch_operation_id: string | null;
   provider: string;
   auth_mode: string;
   provider_account_id: string | null;
@@ -209,6 +213,13 @@ function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderA
     authMode: row.auth_mode,
     ...(row.provider_account_id ? { providerAccountId: row.provider_account_id } : {}),
     selectionSource: row.selection_source,
+    bindingRevision: row.binding_revision ?? 1,
+    ...(row.allocation_policy_revision
+      ? { allocationPolicyRevision: row.allocation_policy_revision }
+      : {}),
+    ...(row.last_switch_operation_id
+      ? { lastSwitchOperationId: row.last_switch_operation_id }
+      : {}),
   });
   return {
     ...auth,
@@ -263,7 +274,12 @@ export class SessionIndexStore {
     return result !== null;
   }
 
-  async create(session: SessionEntry): Promise<void> {
+  async create(session: SessionEntry): Promise<"created" | "reused"> {
+    if (
+      session.creationIntentHash &&
+      (await this.matchesCreationIntent(session.id, session.creationIntentHash))
+    )
+      return "reused";
     const repository = normalizeSessionRepositoryFields(session);
 
     if (session.skillManifest && session.skillManifestSourceSessionId) {
@@ -337,35 +353,69 @@ export class SessionIndexStore {
         ? this.bindManifestCopy(session.id, session.skillManifestSourceSessionId)
         : [];
     const providerAuthStmts = (session.providerAuth ?? []).map((auth) =>
-      this.db
-        .prepare(
-          `INSERT INTO session_model_provider_auth (
+      auth.inheritedFromSessionId
+        ? this.db
+            .prepare(
+              `INSERT INTO session_model_provider_auth
+        (session_id, provider, auth_mode, provider_account_id, selection_source, inherited_from_session_id, created_at, allocation_policy_revision)
+        SELECT ?, provider, auth_mode, provider_account_id, selection_source, session_id, ?, allocation_policy_revision
+        FROM session_model_provider_auth WHERE session_id = ? AND provider = ?
+        ON CONFLICT(session_id, provider) DO UPDATE SET auth_mode = excluded.auth_mode,
+          provider_account_id = excluded.provider_account_id, selection_source = excluded.selection_source,
+          inherited_from_session_id = excluded.inherited_from_session_id, allocation_policy_revision = excluded.allocation_policy_revision`
+            )
+            .bind(session.id, session.createdAt, auth.inheritedFromSessionId, auth.provider)
+        : this.db
+            .prepare(
+              `INSERT INTO session_model_provider_auth (
              session_id, provider, auth_mode, provider_account_id, selection_source,
-             inherited_from_session_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+             inherited_from_session_id, created_at, allocation_policy_revision
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (session_id, provider) DO UPDATE SET
              auth_mode = excluded.auth_mode,
              provider_account_id = excluded.provider_account_id,
              selection_source = excluded.selection_source,
              inherited_from_session_id = excluded.inherited_from_session_id,
-             created_at = excluded.created_at`
-        )
-        .bind(
-          session.id,
-          auth.provider,
-          auth.authMode,
-          "providerAccountId" in auth ? auth.providerAccountId : null,
-          auth.selectionSource,
-          auth.inheritedFromSessionId ?? null,
-          session.createdAt
-        )
+             created_at = excluded.created_at,
+             allocation_policy_revision = excluded.allocation_policy_revision`
+            )
+            .bind(
+              session.id,
+              auth.provider,
+              auth.authMode,
+              "providerAccountId" in auth ? auth.providerAccountId : null,
+              auth.selectionSource,
+              auth.inheritedFromSessionId ?? null,
+              session.createdAt,
+              auth.allocationPolicyRevision ?? null
+            )
     );
-    const results = await this.db.batch([
+    const statements = [
       sessionStmt,
       ...repositoryStmts,
       ...manifestStmts,
       ...providerAuthStmts,
-    ]);
+      ...(session.creationIntentHash
+        ? [
+            this.db
+              .prepare(
+                "INSERT INTO session_creation_claims (session_id, intent_hash) VALUES (?, ?)"
+              )
+              .bind(session.id, session.creationIntentHash),
+          ]
+        : []),
+    ];
+    let results;
+    try {
+      results = await this.db.batch(statements);
+    } catch (error) {
+      if (
+        session.creationIntentHash &&
+        (await this.matchesCreationIntent(session.id, session.creationIntentHash))
+      )
+        return "reused";
+      throw error;
+    }
 
     // Session ids are always freshly generated, so a skipped insert is a bug;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
@@ -374,6 +424,17 @@ export class SessionIndexStore {
         `Session index insert was skipped for session ${session.id} (duplicate id or constraint violation)`
       );
     }
+    return "created";
+  }
+
+  private async matchesCreationIntent(sessionId: string, intentHash: string): Promise<boolean> {
+    const claim = await this.db
+      .prepare("SELECT intent_hash FROM session_creation_claims WHERE session_id = ?")
+      .bind(sessionId)
+      .first<{ intent_hash: string }>();
+    if (!claim) return false;
+    if (claim.intent_hash !== intentHash) throw new Error("session_creation_intent_conflict");
+    return true;
   }
 
   /**
@@ -462,7 +523,7 @@ export class SessionIndexStore {
     const result = await this.db
       .prepare(
         `SELECT provider, auth_mode, provider_account_id, selection_source,
-                inherited_from_session_id
+                inherited_from_session_id, binding_revision, allocation_policy_revision, last_switch_operation_id
          FROM session_model_provider_auth
          WHERE session_id = ? ORDER BY provider`
       )
@@ -486,7 +547,7 @@ export class SessionIndexStore {
     const row = await this.db
       .prepare(
         `SELECT provider, auth_mode, provider_account_id, selection_source,
-                inherited_from_session_id
+                inherited_from_session_id, binding_revision, allocation_policy_revision, last_switch_operation_id
          FROM session_model_provider_auth
          WHERE session_id = ? AND provider = ?`
       )
