@@ -487,6 +487,34 @@ describe("SessionSandboxEventProcessor", () => {
     }
   });
 
+  it.each([false, true])(
+    "ingests cost and preserves the usage error when budget delivery rejects: %s",
+    async (budgetRejects) => {
+      const h = createProcessor();
+      const event: SandboxEvent = {
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        cost: 0.25,
+      };
+      const persistenceError = new Error("usage write failed");
+      h.usageRepository.recordStepUsage.mockImplementationOnce(() => {
+        throw persistenceError;
+      });
+      if (budgetRejects) {
+        h.budgetService.ingestStepFinish.mockRejectedValueOnce(new Error("budget delivery failed"));
+      }
+
+      await expect(h.processor.processSandboxEvent(event)).rejects.toBe(persistenceError);
+      expect(h.budgetService.ingestStepFinish).toHaveBeenCalledWith(
+        event,
+        "msg-1",
+        expect.any(Number)
+      );
+    }
+  );
+
   it("records unavailable cost tracking for positive-token steps without cost", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {

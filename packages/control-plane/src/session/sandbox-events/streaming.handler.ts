@@ -56,8 +56,19 @@ export class SandboxStreamingEventHandler {
     this.updateLastActivity(context.now);
     this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
-      this.usageRepository.recordStepUsage(event, context.messageId, context.now);
-      await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+      let persistenceFailure: { error: unknown } | null = null;
+      try {
+        this.usageRepository.recordStepUsage(event, context.messageId, context.now);
+      } catch (error) {
+        persistenceFailure = { error };
+      }
+      try {
+        await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+      } catch (error) {
+        if (persistenceFailure) throw persistenceFailure.error;
+        throw error;
+      }
+      if (persistenceFailure) throw persistenceFailure.error;
     }
   }
 
