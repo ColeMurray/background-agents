@@ -4,6 +4,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## September 25, 2026
 
+### Added
+
+Bulk session export now includes run identity, harness, model provider, repository membership, pull
+request lifecycle, and projected token totals on session lines. Schema 1 consumers must ignore
+unknown fields; `source` is unchanged and also appears as `spawnSource`.
+
 ### Changed
 
 Bulk session export now requires `sessions.export` instead of `sessions.read`. Owners,

@@ -2,6 +2,7 @@ import { harnessIdSchema, type HarnessId } from "../harnesses";
 import { z } from "zod";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
+import type { PullRequestLifecycleState } from "./artifacts";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -85,6 +86,22 @@ export const pullRequestSummarySchema = z.object({
   closed: z.number(),
 });
 export type PullRequestSummary = z.infer<typeof pullRequestSummarySchema>;
+
+/** PR lifecycle and repository identity on a session export line. Timestamps are epoch ms. */
+export interface ExportPullRequest {
+  repoOwner: string;
+  repoName: string;
+  prNumber: number;
+  url: string;
+  lifecycleState: PullRequestLifecycleState;
+  isDraft: boolean;
+  headBranch: string;
+  baseBranch: string;
+  headSha: string | null;
+  providerCreatedAt: number | null;
+  mergedAt: number | null;
+  closedAt: number | null;
+}
 
 export const INITIAL_SESSION_READ_STATE_VERSION = 0;
 
