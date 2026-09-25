@@ -15,6 +15,37 @@ if TYPE_CHECKING:
     from sandbox_runtime.bridge import AgentBridge
 
 
+SANDBOX_SESSION_ENV_VARS = (
+    "CONTROL_PLANE_URL",
+    "SANDBOX_AUTH_TOKEN",
+    "SESSION_CONFIG",
+    "VCS_CLONE_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GITHUB_APP_TOKEN",
+    "OI_GITHUB_TOKEN_IS_FALLBACK",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_sandbox_environment(monkeypatch):
+    """Strip live-session credentials and skip the baked image environment.
+
+    This suite routinely runs inside a live Open-Inspect sandbox, whose
+    session credentials (control-plane URL, sandbox auth token, session
+    config, SCM tokens) would otherwise route credential-helper tests to the
+    real control plane and change which fallback paths they take. CI
+    (GitHub Actions) likewise sets GITHUB_TOKEN. The sandbox image also bakes
+    /app/openinspect-runtime-environment.json, which ``build_supervisor()``
+    applies on top of the test-controlled environment, overriding ``HOME``
+    and ``XDG_CONFIG_HOME``. Tests that need any of these set them
+    explicitly; tests/test_image_environment.py exercises the real loader.
+    """
+    for key in SANDBOX_SESSION_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("sandbox_runtime.entrypoint.apply_image_environment", lambda: None)
+
+
 @pytest.fixture(autouse=True)
 def isolate_runtime_file_paths(tmp_path, monkeypatch):
     """Redirect the runtime's fixed file paths to per-test locations.
