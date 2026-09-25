@@ -1,8 +1,8 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 
 /**
- * How a sandbox event reaches the session's `events` table, which is both
- * the timeline and the trace a session export reads.
+ * How a sandbox event reaches the session's `events` table: the timeline,
+ * and the intended source of a trace export (not yet exported).
  *
  * - `append`: one row per accepted event under a fresh id. Keeps every event.
  *   (`boot_progress` is accepted once per `bootSeq`; a resend is dropped.)
@@ -15,8 +15,14 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
  * - `upsert_by_tool_call`: one row per tool-call identity (message, subtask
  *   scope, call id). Keeps the latest state at the first state's timeline
  *   position; earlier states (running, partial output) are overwritten.
- * - `usage_table`: no `events` row. Normalized token usage goes to
- *   `step_usage`; everything else on the event is dropped.
+ * - `usage_table`: no `events` row. One `step_usage` row per step (keyed by
+ *   `stepId`, else `<messageId>:<timestamp>`) keeps the attributed message,
+ *   model and harness at first write, normalized token counts, step and
+ *   message cost, subtask identity, finish reason, and arrival time. A resend
+ *   with the same `stepId` overwrites the counts, costs, subtask identity and
+ *   reason; a resend on the fallback key is ignored. Unrecognized token
+ *   fields are dropped, and the event's own timestamp survives only inside
+ *   a fallback key.
  * - `none`: no row anywhere in the timeline. Broadcast or side effect only.
  */
 export type SandboxEventPersistence =
