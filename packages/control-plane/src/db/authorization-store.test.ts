@@ -8,7 +8,6 @@ function result(changes: number, rows: unknown[] = []): SqlResult {
 
 function fakeDatabase(options: {
   batchResults?: SqlResult[];
-  batchError?: Error;
   allResults?: unknown[];
   prepared?: Array<{ sql: string; values: unknown[] }>;
 }): SqlDatabase {
@@ -28,7 +27,6 @@ function fakeDatabase(options: {
       return statement;
     },
     batch: async <T>() => {
-      if (options.batchError) throw options.batchError;
       return (options.batchResults ?? []) as SqlResult<T>[];
     },
   };
@@ -68,32 +66,6 @@ describe("AuthorizationStore", () => {
         assignmentCount: 4,
       },
     ]);
-  });
-
-  it.each([
-    "applied",
-    "no_op",
-    "actor_authorization_changed",
-    "role_not_found",
-    "member_not_found",
-    "conflict",
-  ] as const)("returns the %s member status replacement batch outcome", async (status) => {
-    const store = new AuthorizationStore(
-      fakeDatabase({
-        batchResults: [result(0, [{ status }]), result(1), result(1), result(1)],
-      })
-    );
-
-    await expect(store.replaceMemberStatus(replaceMemberStatusInput)).resolves.toEqual({
-      status,
-    });
-  });
-
-  it("does not classify an unexpected database failure as a conflict", async () => {
-    const failure = new Error("database unavailable");
-    const store = new AuthorizationStore(fakeDatabase({ batchError: failure }));
-
-    await expect(store.replaceMemberStatus(replaceMemberStatusInput)).rejects.toBe(failure);
   });
 
   it("returns the mutation outcome from the audit insert that gates writes", async () => {

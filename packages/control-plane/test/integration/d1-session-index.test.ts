@@ -703,9 +703,68 @@ describe("D1 SessionIndexStore", () => {
       expect(children).toEqual([]);
     });
 
+    it("listActiveDescendantIds returns active descendants deepest-first through terminal ancestors", async () => {
+      const now = Date.now();
+      for (const [id, status, parentSessionId] of [
+        ["grandchild-active", "active", childId2],
+        ["grandchild-failed", "failed", childId1],
+      ] as const) {
+        await store.create({
+          id,
+          title: null,
+          repoOwner: "owner",
+          repoName: "repo",
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: null,
+          baseBranch: null,
+          status,
+          parentSessionId,
+          spawnSource: "agent",
+          spawnDepth: 2,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      await expect(store.listActiveDescendantIds(parentId)).resolves.toEqual([
+        "grandchild-active",
+        childId1,
+      ]);
+      await expect(store.listActiveDescendantIds("nonexistent-parent")).resolves.toEqual([]);
+    });
+
+    it("listActiveDescendantIds stops walking a parent cycle at the depth limit", async () => {
+      // Child 1 becomes its own grandparent: parent -> child 1 -> cycle -> child 1.
+      const now = Date.now();
+      await store.create({
+        id: "cycle-child",
+        title: null,
+        repoOwner: "owner",
+        repoName: "repo",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        parentSessionId: childId1,
+        spawnSource: "agent",
+        spawnDepth: 2,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await env.DB.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?")
+        .bind("cycle-child", childId1)
+        .run();
+
+      const ids = await store.listActiveDescendantIds(childId1);
+
+      expect(ids).toHaveLength(10);
+      expect(new Set(ids)).toEqual(new Set([childId1, "cycle-child"]));
+    });
+
     it("countTotalChildren counts all children regardless of status", async () => {
       const count = await store.countTotalChildren(parentId);
       expect(count).toBe(2);
+      expect(await store.countTotalChildren("nonexistent-parent")).toBe(0);
     });
 
     it("isChildOf returns true for valid parent-child pair", async () => {
@@ -716,6 +775,7 @@ describe("D1 SessionIndexStore", () => {
     it("isChildOf returns false for unrelated sessions", async () => {
       const result = await store.isChildOf(childId1, "unrelated-session");
       expect(result).toBe(false);
+      expect(await store.isChildOf("nonexistent", parentId)).toBe(false);
     });
 
     it("isChildOf returns false for reversed parent-child", async () => {
