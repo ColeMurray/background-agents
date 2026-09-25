@@ -3,7 +3,8 @@
  *
  * Each line is a complete session, a session-scoped message error, a page
  * cursor, or a terminal stream error. Message failures never turn partial
- * histories into successful session records.
+ * histories into successful session records. Schema 1 session lines gain
+ * additive fields; consumers must ignore fields they do not recognize.
  */
 
 import type { SessionMessage } from "@open-inspect/shared/types/sessions";

@@ -1,4 +1,16 @@
-import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
+import { extractProviderAndModel } from "@open-inspect/shared/models";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
+import {
+  type ExportPullRequest,
+  type SessionStatus,
+  type SpawnSource,
+} from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
+import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import { sessionRepositoryRowSchema, toSessionRepository } from "./session-list-metadata";
+import { decodeSessionPullRequest } from "./session-pull-request-store";
+import { sessionRowSchema, toSessionFields, type SessionRow } from "./session-row";
 import type { SessionExportCursor } from "./session-export-cursor";
 import type { SqlDatabase } from "./sql-database";
 
@@ -12,52 +24,51 @@ export interface SessionExportRow {
   title: string | null;
   status: SessionStatus;
   source: SpawnSource;
+  spawnSource: SpawnSource;
+  parentSessionId: string | null;
+  rootSessionId: string | null;
+  spawnDepth: number;
+  harness: HarnessId;
   repoOwner: string | null;
   repoName: string | null;
+  baseBranch: string | null;
   model: string;
+  provider: string | null;
+  reasoningEffort: string | null;
   userId: string | null;
+  scmLogin: string | null;
   automationId: string | null;
+  automationRunId: string | null;
+  environmentId: string | null;
   messageCount: number;
+  prCount: number;
   totalCost: number;
   activeDurationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  repositories: SessionListRepository[];
+  pullRequests: ExportPullRequest[];
   createdAt: number;
   updatedAt: number;
 }
 
-interface SessionExportRowRaw {
-  id: string;
-  title: string | null;
-  status: SessionStatus;
-  spawn_source: SpawnSource;
-  repo_owner: string | null;
-  repo_name: string | null;
-  model: string;
-  user_id: string | null;
-  automation_id: string | null;
-  message_count: number;
-  total_cost: number;
-  active_duration_ms: number;
-  created_at: number;
-  updated_at: number;
-  snapshot_max_row_id?: number;
-}
+const exportPageRowSchema = sessionRowSchema.extend({ snapshot_max_row_id: z.number().optional() });
 
-function toExportRow(row: SessionExportRowRaw): SessionExportRow {
+function toExportRow(
+  row: SessionRow,
+  repositories: SessionListRepository[],
+  pullRequests: ExportPullRequest[]
+): SessionExportRow {
   return {
-    id: row.id,
-    title: row.title,
-    status: row.status,
+    ...toSessionFields(row),
     source: row.spawn_source,
-    repoOwner: row.repo_owner,
-    repoName: row.repo_name,
-    model: row.model,
-    userId: row.user_id,
-    automationId: row.automation_id,
-    messageCount: row.message_count,
-    totalCost: row.total_cost,
-    activeDurationMs: row.active_duration_ms,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    rootSessionId: row.root_session_id,
+    provider: extractProviderAndModel(row.model).provider,
+    repositories,
+    pullRequests,
   };
 }
 
@@ -111,22 +122,90 @@ export class SessionExportStore {
     const snapshotJoin = firstPage
       ? "CROSS JOIN (SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM sessions) export_fence"
       : "";
-    const result = await this.db
-      .prepare(
-        `SELECT id, title, status, spawn_source, repo_owner, repo_name, model, user_id,
-                automation_id, message_count, total_cost, active_duration_ms, created_at, updated_at${snapshotColumn}
-         FROM sessions
-         ${snapshotJoin}
-         ${where}
-         ORDER BY created_at DESC, id DESC
-         LIMIT ?`
-      )
-      .bind(...bindings, options.limit + 1)
-      .all<SessionExportRowRaw>();
+    const pageFrom = `FROM sessions ${snapshotJoin} ${where} ORDER BY created_at DESC, id DESC`;
+    const pageIds = `SELECT sessions.id ${pageFrom} LIMIT ?`;
+    const [sessionResult, repositoryResult, pullRequestResult] = await this.db.batch([
+      this.db
+        .prepare(`SELECT sessions.*${snapshotColumn} ${pageFrom} LIMIT ?`)
+        .bind(...bindings, options.limit + 1),
+      this.db
+        .prepare(
+          `WITH page AS (${pageIds})
+           SELECT sr.* FROM session_repositories sr JOIN page ON page.id = sr.session_id
+           ORDER BY sr.session_id, sr.position`
+        )
+        .bind(...bindings, options.limit),
+      this.db
+        .prepare(
+          `WITH page AS (${pageIds})
+           SELECT pr.* FROM session_pull_requests pr JOIN page ON page.id = pr.session_id
+           ORDER BY pr.session_id, pr.pr_number, pr.artifact_id`
+        )
+        .bind(...bindings, options.limit),
+    ]);
 
-    const rows = result.results ?? [];
+    const rows = z.array(exportPageRowSchema).parse(sessionResult.results);
     const hasMore = rows.length > options.limit;
-    const sessions = (hasMore ? rows.slice(0, options.limit) : rows).map(toExportRow);
+    const pageRows = hasMore ? rows.slice(0, options.limit) : rows;
+    const repositoriesBySession = new Map<string, SessionListRepository[]>();
+    const pullRequestsBySession = new Map<string, ExportPullRequest[]>();
+
+    for (const row of z.array(sessionRepositoryRowSchema).parse(repositoryResult.results)) {
+      const repositories = repositoriesBySession.get(row.session_id) ?? [];
+      repositories.push(toSessionRepository(row));
+      repositoriesBySession.set(row.session_id, repositories);
+    }
+    for (const raw of pullRequestResult.results) {
+      const row = decodeSessionPullRequest(raw);
+      const pullRequests = pullRequestsBySession.get(row.sessionId) ?? [];
+      const {
+        repoOwner,
+        repoName,
+        prNumber,
+        url,
+        lifecycleState,
+        isDraft,
+        headBranch,
+        baseBranch,
+        headSha,
+        providerCreatedAt,
+        mergedAt,
+        closedAt,
+      } = row;
+      pullRequests.push({
+        repoOwner,
+        repoName,
+        prNumber,
+        url,
+        lifecycleState,
+        isDraft,
+        headBranch,
+        baseBranch,
+        headSha,
+        providerCreatedAt,
+        mergedAt,
+        closedAt,
+      });
+      pullRequestsBySession.set(row.sessionId, pullRequests);
+    }
+
+    const sessions = pageRows.map((row) =>
+      toExportRow(
+        row,
+        repositoriesBySession.get(row.id) ??
+          (row.repo_owner && row.repo_name
+            ? [
+                {
+                  repoOwner: row.repo_owner,
+                  repoName: row.repo_name,
+                  repoId: null,
+                  baseBranch: row.base_branch ?? DEFAULT_BASE_BRANCH,
+                },
+              ]
+            : []),
+        pullRequestsBySession.get(row.id) ?? []
+      )
+    );
     if (!hasMore) return { sessions, hasMore: false, nextCursor: null };
 
     const last = sessions[sessions.length - 1];
