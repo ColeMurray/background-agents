@@ -28,10 +28,9 @@ services:
     ports: !override
       - "127.0.0.1:${SMOKE_APP_PORT:-8787}:8787"
 
-  minio:
+  object-store:
     ports: !override
-      - "127.0.0.1:${SMOKE_MINIO_PORT:-9000}:9000"
-      - "127.0.0.1:${SMOKE_MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${SMOKE_OBJECT_STORE_PORT:-9000}:9000"
 
   fake-modal:
     image: node:22-slim

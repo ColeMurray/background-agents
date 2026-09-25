@@ -1,15 +1,17 @@
-# The control plane without Cloudflare: the Node host, MinIO for media and
-# backups, and a Litestream sidecar replicating the global store. This is
-# the stack the AWS instance runs and the local stand-in for it. The web app
-# is not part of it (it stays on Vercel; run `next dev` locally).
+# The control plane without Cloudflare: the Node host, an S3-compatible
+# object store for media and backups, and a Litestream sidecar replicating
+# the global store. This is the stack the AWS instance runs and the local
+# stand-in for it. The web app is not part of it (it stays on Vercel; run
+# `next dev` locally).
 #
 #   cp .env.example .env   # then fill it in
 #   docker compose up --build
 #
 # Only the app reads .env; the sidecars get the few variables they need by
 # name. The app's port is published on APP_BIND_ADDRESS (loopback unless
-# .env says otherwise) and MinIO's ports on loopback only, so nothing here
-# listens on a public interface by default. See docs/CONTROL_PLANE_CONTAINER.md.
+# .env says otherwise) and the object store's on loopback only, so nothing
+# here listens on a public interface by default. See
+# docs/CONTROL_PLANE_CONTAINER.md.
 
 services:
   app:
@@ -33,49 +35,55 @@ services:
     volumes:
       - control-plane-data:/data
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      object-store:
+        condition: service_healthy
     restart: unless-stopped
 
-  # quay.io, not Docker Hub: MinIO withdrew both images from Hub, so a Hub
-  # reference now fails to pull anonymously. Same releases, same digests.
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
-    command: server /data --console-address ":9001"
+  # SeaweedFS as the S3-compatible store for media and backups. `mini` runs
+  # every SeaweedFS component in one process and creates the buckets named in
+  # S3_BUCKET at startup. Credentials are required on every S3 request.
+  # Pinned by digest to the multi-arch index, so amd64 CI and arm64 laptops
+  # run the same release.
+  #
+  # Only the S3 port is published. The master, volume and filer ports stay on
+  # the compose network, unauthenticated, reachable by the services here and
+  # nothing else.
+  object-store:
+    image: chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
+    command:
+      - mini
+      - -dir=/data
+      - -s3.port=9000
+      - -master.telemetry=false
+      - -admin.ui=false
+      - -webdav=false
+      - -s3.port.iceberg=0
+      - -s3.port.lance=0
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
-    # Loopback only: the app and the sidecar reach MinIO over the compose
-    # network, and the console is a local convenience.
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORE_ROOT_USER:-objectstoreadmin}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORE_ROOT_PASSWORD:?OBJECT_STORE_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
+      S3_BUCKET: ${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET must name the media bucket},${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
+    # Loopback only: the app and the sidecar reach it over the compose network.
     ports:
       - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
     volumes:
-      - minio-data:/data
+      - object-store-data:/data
+    # Healthy once S3 answers and every bucket exists. The buckets are created
+    # just after the S3 port opens, so the port alone would let the app and
+    # Litestream start against a store that has none. The filer is asked
+    # rather than S3, which answers an unsigned request 403 either way.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf -o /dev/null http://localhost:9000/healthz &&
+          IFS=, && for bucket in $$S3_BUCKET; do
+          curl -sf -o /dev/null "http://localhost:8888/buckets/$$bucket/" || exit 1;
+          done
+      interval: 2s
       timeout: 3s
-      retries: 12
+      retries: 30
     restart: unless-stopped
-
-  # Creates the media and backup buckets once, then exits. It sees only the
-  # variables named here, never the app's secrets.
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set; generate one with openssl rand -hex 16}
-      MEDIA_BUCKET: ${OBJECT_STORE_BUCKET:?OBJECT_STORE_BUCKET must name the media bucket}
-      BACKUP_BUCKET: ${LITESTREAM_BUCKET:?LITESTREAM_BUCKET must name the backup bucket}
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
-        mc mb --ignore-existing "local/$$MEDIA_BUCKET" "local/$$BACKUP_BUCKET"
 
   litestream:
     image: litestream/litestream:0.3.13
@@ -94,7 +102,7 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      minio:
+      object-store:
         condition: service_healthy
     restart: unless-stopped
 
@@ -119,6 +127,6 @@ services:
 
 volumes:
   control-plane-data:
-  minio-data:
+  object-store-data:
   caddy-data:
   caddy-config:

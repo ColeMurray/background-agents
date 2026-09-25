@@ -27,8 +27,8 @@ locals {
   #
   # The variables this deliberately leaves out are as load-bearing as the ones
   # it sets. OBJECT_STORE_ENDPOINT and LITESTREAM_ENDPOINT unset mean AWS S3
-  # rather than MinIO; the four credential variables unset mean the SDK finds
-  # the instance role. An SSM parameter cannot hold an empty string, so "unset"
+  # rather than the compose stack's object store; the four credential
+  # variables unset mean the SDK finds the instance role. An SSM parameter cannot hold an empty string, so "unset"
   # here is "no parameter", which is exactly how the host reads it.
   derived_config = {
     DEPLOYMENT_NAME = var.name
@@ -49,9 +49,9 @@ locals {
     APP_BIND_ADDRESS    = "127.0.0.1"
 
     # docker-compose.yml refuses to start without this one, and Compose
-    # interpolates the base file whether or not MinIO is among the services the
-    # AWS overlay leaves running. Nothing reads it here.
-    MINIO_ROOT_PASSWORD = "unused-on-aws"
+    # interpolates the base file whether or not the local object store is among
+    # the services the AWS overlay leaves running. Nothing reads it here.
+    OBJECT_STORE_ROOT_PASSWORD = "unused-on-aws"
   }
 
   # `for_each` needs its keys known at plan time, and filtering on a value makes
