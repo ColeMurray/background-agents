@@ -46,8 +46,11 @@ brew install terraform
 # Modal CLI (for Modal deployments)
 pip install modal
 
-# Node.js >= 24 (for building workers)
+# Node.js >= 24 (for building workers). node@24 is keg-only, so put it on PATH
+# (add the export to your shell profile to keep it across sessions).
 brew install node@24
+export PATH="$(brew --prefix node@24)/bin:$PATH"
+node --version  # must print v24 or newer
 ```
 
 ### 2. Cloudflare Setup

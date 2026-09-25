@@ -56,8 +56,11 @@ Create accounts on these services before continuing:
 # Terraform (1.14.0+; see terraform/environments/production/versions.tf)
 brew install terraform
 
-# Node.js (24+)
+# Node.js (24+). node@24 is keg-only, so put it on PATH (add the export to
+# your shell profile to keep it across sessions).
 brew install node@24
+export PATH="$(brew --prefix node@24)/bin:$PATH"
+node --version  # must print v24 or newer
 
 # Python 3.12+ and uv (Modal CLI is installed via uv sync below)
 brew install python@3.12 uv
