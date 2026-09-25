@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "../auth/authenticate";
+import type * as GitHubCredentialAuthorityModule from "../source-control/github-credential-authority";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
@@ -224,6 +225,27 @@ describe("automation lifecycle routes", () => {
       // Ownership admission accepts the token because a token is its owner, and
       // the route declares accessTokenWrites so the POST survives the method
       // gate. Both have to hold; either one missing is a 403.
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger", {
+        principal: ACCESS_TOKEN_PRINCIPAL,
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", undefined);
+    });
+
+    it("triggers for an access token through the real credential resolver", async () => {
+      // The sibling cases above stub the resolver, so a resolver that refuses
+      // access-token principals would still report 201 there. Run the genuine
+      // implementation to keep that failure visible: it throws outside the
+      // scheduler try/catch, which surfaces as a 500 and no launch at all.
+      const { resolveGitHubCredentialAuthority } = await vi.importActual<
+        typeof GitHubCredentialAuthorityModule
+      >("../source-control/github-credential-authority");
+      mockResolveGitHubCredentialAuthority.mockImplementation(resolveGitHubCredentialAuthority);
       mockStore.getById.mockResolvedValue(sampleRow);
       mockStore.getActiveRunForAutomation.mockResolvedValue(null);
       mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
