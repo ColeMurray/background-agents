@@ -183,7 +183,7 @@ class _TurnState:
     tool_names: dict[str, str] = field(default_factory=dict)
     tool_args: dict[str, dict[str, Any]] = field(default_factory=dict)
     emitted_error: bool = False
-    step_started: bool = False
+    step_id: str | None = None
     # Inside a turn the session injected (background task, channel, peer):
     # skip everything until that turn's result.
     injected: bool = False
@@ -739,9 +739,15 @@ class ClaudeHarness:
             if kind == "message_start":
                 message_id = (raw.get("message") or {}).get("id")
                 state.texts.append(_MessageText(message_id))
-                if not state.step_started:
-                    state.step_started = True
-                    events.append({"type": "step_start", "messageId": state.message_id})
+                if state.step_id is None:
+                    state.step_id = str(uuid.uuid4())
+                    events.append(
+                        {
+                            "type": "step_start",
+                            "messageId": state.message_id,
+                            "stepId": state.step_id,
+                        }
+                    )
             elif kind == "content_block_delta":
                 delta = raw.get("delta") or {}
                 if delta.get("type") == "text_delta" and delta.get("text"):
@@ -753,9 +759,15 @@ class ClaudeHarness:
         if isinstance(message, AssistantMessage):
             is_subtask = bool(message.parent_tool_use_id)
             if not is_subtask:
-                if not state.step_started:
-                    state.step_started = True
-                    events.append({"type": "step_start", "messageId": state.message_id})
+                if state.step_id is None:
+                    state.step_id = str(uuid.uuid4())
+                    events.append(
+                        {
+                            "type": "step_start",
+                            "messageId": state.message_id,
+                            "stepId": state.step_id,
+                        }
+                    )
                 final_text = "".join(
                     block.text for block in message.content if isinstance(block, TextBlock)
                 )
@@ -862,6 +874,7 @@ class ClaudeHarness:
             finish: BridgeEvent = {
                 "type": "step_finish",
                 "messageId": state.message_id,
+                "stepId": state.step_id or str(uuid.uuid4()),
                 "cost": message_cost,
                 "messageCostUsd": message_cost,
                 "reason": message.subtype,
