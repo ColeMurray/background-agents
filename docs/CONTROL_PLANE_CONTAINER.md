@@ -151,37 +151,49 @@ database in `control-plane-data` still refers to the media in it. Copy the objec
 new stack serves traffic. MinIO's images can no longer be pulled, so this needs the two the old
 stack left in the machine's image cache (`docker image ls | grep minio` lists them).
 
-1. Stop the old stack with `docker compose down`. Do not pass `-v`, which deletes both volumes. Then
-   update the checkout and `.env`: rename `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` to
-   `OBJECT_STORE_ROOT_USER` and `OBJECT_STORE_ROOT_PASSWORD`, and point `OBJECT_STORE_ENDPOINT` and
-   `LITESTREAM_ENDPOINT` at `http://object-store:9000`. Note the old password first, because the old
-   volume only opens with it.
+1. Stop the old stack with `docker compose down --remove-orphans`. Do not pass `-v`, which deletes
+   both volumes. `--remove-orphans` stops the old `minio` service even after a checkout that no
+   longer defines it. Then update the checkout and `.env`: rename `MINIO_ROOT_USER` and
+   `MINIO_ROOT_PASSWORD` to `OBJECT_STORE_ROOT_USER` and `OBJECT_STORE_ROOT_PASSWORD`, keeping their
+   values, and point `OBJECT_STORE_ENDPOINT` and `LITESTREAM_ENDPOINT` at
+   `http://object-store:9000`. The old volume opens with those same credentials, and the new store
+   takes them over.
 
-2. Start the new object store alone, then the old MinIO on its volume and on the same network:
+2. Read what the next steps need from Compose and `.env`, check that the old volume is there, then
+   start the new object store alone and the old MinIO beside it. The project name comes from Compose
+   rather than the directory, because Compose normalizes it, and a wrong name would have
+   `docker run` create an empty volume instead of opening the old one.
 
    ```bash
-   P="$(basename "$PWD")"   # the compose project name, unless COMPOSE_PROJECT_NAME says otherwise
-   docker compose up -d --wait object-store
-   docker run -d --name minio-old --network "${P}_default" -v "${P}_minio-data:/data" \
-     -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD='<old password>' \
-     quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
-   until docker exec minio-old curl -sf -o /dev/null http://localhost:9000/minio/health/live; do
-     sleep 1
-   done
+   P="$(docker compose config | sed -n 's/^name: //p')"
+   env_value() { grep "^$1=" .env | cut -d= -f2-; }
+   ROOT_USER="$(env_value OBJECT_STORE_ROOT_USER)"
+   ROOT_PASSWORD="$(env_value OBJECT_STORE_ROOT_PASSWORD)"
+   BUCKETS="$(env_value OBJECT_STORE_BUCKET) $(env_value LITESTREAM_BUCKET)"
+   docker volume inspect "${P}_minio-data" >/dev/null &&
+     docker compose up -d --wait object-store &&
+     docker run -d --name minio-old --network "${P}_default" -v "${P}_minio-data:/data" \
+       -e MINIO_ROOT_USER="${ROOT_USER:-minioadmin}" -e MINIO_ROOT_PASSWORD="$ROOT_PASSWORD" \
+       quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data &&
+     until docker exec minio-old curl -sf -o /dev/null http://localhost:9000/minio/health/live; do
+       sleep 1
+     done
    ```
 
+   The two stores fall back to different default users, `minioadmin` and `objectstoreadmin`, which
+   only matters when `.env` leaves the user empty.
+
 3. Copy both buckets, keeping each object's content type, then fail unless nothing differs.
-   `mc diff` exits 0 even when it lists differences, so the check is on its output. Substitute the
-   bucket names if `.env` changes `OBJECT_STORE_BUCKET` or `LITESTREAM_BUCKET`, and the two user
-   names if it changes either root user.
+   `mc diff` exits 0 even when it lists differences, so the check is on its output.
 
    ```bash
    docker run --rm --network "${P}_default" --entrypoint sh \
-     -e OLD='<old password>' -e NEW="$(grep '^OBJECT_STORE_ROOT_PASSWORD=' .env | cut -d= -f2-)" \
+     -e OLD_USER="${ROOT_USER:-minioadmin}" -e NEW_USER="${ROOT_USER:-objectstoreadmin}" \
+     -e PASSWORD="$ROOT_PASSWORD" -e BUCKETS="$BUCKETS" \
      quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z -c '
-       mc alias set old http://minio-old:9000 minioadmin "$OLD" >/dev/null &&
-       mc alias set new http://object-store:9000 objectstoreadmin "$NEW" >/dev/null &&
-       for bucket in media backups; do
+       mc alias set old http://minio-old:9000 "$OLD_USER" "$PASSWORD" >/dev/null &&
+       mc alias set new http://object-store:9000 "$NEW_USER" "$PASSWORD" >/dev/null &&
+       for bucket in $BUCKETS; do
          mc mirror --preserve "old/$bucket" "new/$bucket" || exit 1
          diff="$(mc diff "old/$bucket" "new/$bucket")" || exit 1
          [ -z "$diff" ] || { echo "$diff"; exit 1; }
