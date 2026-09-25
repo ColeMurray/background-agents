@@ -232,6 +232,32 @@ describe("openHostAlarmIndex", () => {
     expect(index.get("legacy")).toBe(100);
   });
 
+  it("treats malformed persisted deadline rows as absent", () => {
+    const first = open();
+    first.close();
+
+    const db = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    db.exec("INSERT INTO session_deadlines (session_id, deadline) VALUES ('bad', 'not-a-number')");
+    db.close();
+
+    const index = open();
+    expect(index.get("bad")).toBeNull();
+    expect(index.claim("bad", LEASE_UNTIL)).toBeNull();
+  });
+
+  it("treats malformed persisted lease rows as absent", () => {
+    const first = open();
+    first.close();
+
+    const db = new DatabaseSync(join(dataDir, "host-alarms.db"));
+    db.exec(
+      "INSERT INTO session_deadlines (session_id, in_flight, lease_expires_at) VALUES ('bad', 100, 'not-a-number')"
+    );
+    db.close();
+
+    expect(open().earliestLease()).toBeNull();
+  });
+
   it("leaves excluded sessions out of earliest and due", () => {
     const index = open();
     index.set("a", 100);
