@@ -13,7 +13,7 @@
 // ledger disagrees with the files, never because a migration was skipped.
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,27 +51,31 @@ exit 0
  */
 function run(files, ledger) {
   const dir = mkdtempSync(join(tmpdir(), "d1-migrate-"));
-  const migrations = join(dir, "migrations");
-  const stubDir = join(dir, "stub");
-  mkdirSync(migrations);
-  mkdirSync(stubDir);
+  try {
+    const migrations = join(dir, "migrations");
+    const stubDir = join(dir, "stub");
+    mkdirSync(migrations);
+    mkdirSync(stubDir);
 
-  for (const name of files) {
-    writeFileSync(join(migrations, name), "CREATE TABLE example (id INTEGER);\n");
+    for (const name of files) {
+      writeFileSync(join(migrations, name), "CREATE TABLE example (id INTEGER);\n");
+    }
+    writeFileSync(
+      join(stubDir, "final_ledger"),
+      `${JSON.stringify([{ results: ledger.map(([version, name]) => ({ version, name })) }])}\n`
+    );
+
+    const npx = join(stubDir, "npx");
+    writeFileSync(npx, NPX_STUB);
+    chmodSync(npx, 0o755);
+
+    return spawnSync("bash", [SCRIPT, "example-db", migrations], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}`, STUB_DIR: stubDir },
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  writeFileSync(
-    join(stubDir, "final_ledger"),
-    `${JSON.stringify([{ results: ledger.map(([version, name]) => ({ version, name })) }])}\n`
-  );
-
-  const npx = join(stubDir, "npx");
-  writeFileSync(npx, NPX_STUB);
-  chmodSync(npx, 0o755);
-
-  return spawnSync("bash", [SCRIPT, "example-db", migrations], {
-    encoding: "utf8",
-    env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}`, STUB_DIR: stubDir },
-  });
 }
 
 test("accepts a ledger that records exactly the migrations on disk", () => {
