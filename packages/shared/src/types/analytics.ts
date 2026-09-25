@@ -51,6 +51,32 @@ export interface AnalyticsBreakdownResponse {
   entries: AnalyticsBreakdownEntry[];
 }
 
+/** All sessions in one root_session_id family, attributed to the root. */
+export interface SessionRun {
+  rootSessionId: string;
+  sessionCount: number;
+  maxSpawnDepth: number;
+  totalCost: number;
+  totalPrs: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  createdAt: number;
+  updatedAt: number;
+  userId: string | null;
+  scmLogin: string | null;
+  spawnSource: SpawnSource;
+  automationId: string | null;
+  repoOwner: string | null;
+  repoName: string | null;
+}
+
+export interface AnalyticsRunsResponse {
+  runs: SessionRun[];
+}
+
 // ─── Pull-request analytics ──────────────────────────────────────────────────
 //
 // PR-scoped by design (docs/pr-analytics-design.md §2): sessions serve many
