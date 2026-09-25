@@ -185,7 +185,8 @@ const REPRESENTATIVE_EVENTS: { [T in EventType]: readonly [EventOf<T>, EventOf<T
       sandboxId: SANDBOX_ID,
       messageId: MESSAGE_ID,
       timestamp: 2,
-      success: true,
+      success: false,
+      error: "resent",
     },
   ],
   context_compacted: [
@@ -436,6 +437,16 @@ describe("SANDBOX_EVENT_PERSISTENCE", () => {
     expect(stored.events().map((row) => [row.id, JSON.parse(row.data).content])).toEqual([
       [`token:${MESSAGE_ID}`, "Hello"],
       ["token:msg-2", "Other"],
+    ]);
+  });
+
+  it("keeps the first execution completion for a message and drops a resend", async () => {
+    const [completion, resend] = REPRESENTATIVE_EVENTS.execution_complete;
+    await stored.processor.processSandboxEvent(completion);
+    await stored.processor.processSandboxEvent(resend);
+
+    expect(stored.events().map((row) => [row.id, JSON.parse(row.data).success])).toEqual([
+      [`execution_complete:${MESSAGE_ID}`, true],
     ]);
   });
 

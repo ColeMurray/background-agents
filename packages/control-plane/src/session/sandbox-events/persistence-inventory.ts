@@ -7,9 +7,11 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
  * - `append`: one row per accepted event under a fresh id. Keeps every event.
  *   (`boot_progress` is accepted once per `bootSeq`; a resend is dropped.)
  * - `upsert_by_message`: one row per message, id `<type>:<messageId>`. Keeps
- *   only the latest event for the message. For `token` that is the latest
- *   cumulative text; `context_compacted` renames the row first, so the text
- *   before each compaction survives as its own row.
+ *   one event per message. For `token` that is the latest cumulative text;
+ *   `context_compacted` renames the row first, so the text before each
+ *   compaction survives as its own row. `execution_complete` is written only
+ *   while its message is processing, so the first completion stays and a
+ *   resend is dropped.
  * - `upsert_by_tool_call`: one row per tool-call identity (message, subtask
  *   scope, call id). Keeps the latest state at the first state's timeline
  *   position; earlier states (running, partial output) are overwritten.
