@@ -52,10 +52,17 @@ locals {
     startswith(var.classification_model, "gpt-")
   )
 
+  # The dedicated classifier key keeps the bots' credential out of sandboxes;
+  # existing deployments that only set anthropic_api_key keep using it.
+  classifier_anthropic_api_key = (trimspace(var.classification_anthropic_api_key) != ""
+    ? var.classification_anthropic_api_key
+    : var.anthropic_api_key
+  )
+
   # Exactly one provider binding for the classifier bots.
   classifier_secret_bindings = (local.classifier_uses_openai
     ? { OPENAI_API_KEY = { value = var.classification_openai_api_key } }
-    : { ANTHROPIC_API_KEY = { value = var.anthropic_api_key } }
+    : { ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key } }
   )
 
   # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays

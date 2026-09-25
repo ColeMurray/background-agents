@@ -344,7 +344,15 @@ variable "linear_bot_default_model" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key for the Slack and Linear bot classifiers, also injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
+  description = "Deployment-wide Anthropic API key injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Also serves the Slack and Linear bot classifiers when classification_anthropic_api_key is blank. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider."
+  type        = string
+  sensitive   = true
+  default     = ""
+  nullable    = false
+}
+
+variable "classification_anthropic_api_key" {
+  description = "Anthropic API key used specifically by the Slack and Linear bot classifiers; never injected into sandboxes. Falls back to anthropic_api_key when blank. Set this and leave anthropic_api_key blank to keep the classifier key out of sandboxes."
   type        = string
   sensitive   = true
   default     = ""
@@ -359,14 +367,15 @@ variable "anthropic_api_key" {
       (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
       startswith(var.classification_model, "openai/") ||
       startswith(var.classification_model, "gpt-") ||
+      trimspace(var.classification_anthropic_api_key) != "" ||
       trimspace(var.anthropic_api_key) != ""
     )
-    error_message = "anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
+    error_message = "classification_anthropic_api_key or anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
   }
 }
 
 variable "classification_model" {
-  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by classification_anthropic_api_key (falling back to anthropic_api_key); an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
   type        = string
   default     = "claude-haiku-4-5"
   nullable    = false

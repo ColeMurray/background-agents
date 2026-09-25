@@ -348,6 +348,62 @@ describe("OpenComputerSandboxProvider", () => {
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-repo");
   });
 
+  describe("an unset deployment LLM key on checkpoint forks", () => {
+    // provider-factory always lists the key; an unset one arrives as undefined.
+    const unsetKeyConfig = {
+      scmProvider: "github" as const,
+      sandboxAccessPasswordSecret: "secret",
+      llmEnvVars: { ANTHROPIC_API_KEY: undefined },
+    };
+
+    it("blanks the key a repo-image checkpoint inherited", async () => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, unsetKeyConfig);
+
+      await provider.createSandbox({ ...baseConfig, prebuiltImageId: "checkpoint-repo-1" });
+
+      const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+      expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "");
+    });
+
+    it("blanks the key a session checkpoint inherited", async () => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, unsetKeyConfig);
+
+      await provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+      });
+
+      const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+      expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "");
+    });
+
+    it("keeps a repository key", async () => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, unsetKeyConfig);
+
+      await provider.restoreFromSnapshot({
+        ...baseConfig,
+        snapshotImageId: "checkpoint-session-1",
+        userEnvVars: { ANTHROPIC_API_KEY: "sk-repo" },
+      });
+
+      const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+      expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-repo");
+    });
+
+    it("leaves a fresh sandbox's env without the key", async () => {
+      const client = createMockClient();
+      const provider = new OpenComputerSandboxProvider(client, unsetKeyConfig);
+
+      await provider.createSandbox(baseConfig);
+
+      const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+      expect(createCall.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    });
+  });
+
   it("scopes clone secrets to GitLab hosts for GitLab sessions", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
