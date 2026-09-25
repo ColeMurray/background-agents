@@ -581,12 +581,23 @@ async function recordCloseOutRequest(
  * it cannot run, and is withdrawn once it proves it can.
  */
 function provisionalCloseOut(request: CloseOutRequest): string {
-  return JSON.stringify({ ...request, provisional: true });
+  return `${PROVISIONAL_CLOSE_OUT_PREFIX}${JSON.stringify(request)}`;
 }
 
-/** SQL condition: the close-out request in `column` is the reaper's provisional marker. */
+/**
+ * Marks a stored close-out value as provisional. It is not JSON, so a
+ * provisional value can never parse as a close-out request, and it lets SQL
+ * tell the two apart with a plain prefix comparison.
+ */
+const PROVISIONAL_CLOSE_OUT_PREFIX = "provisional:";
+
+/**
+ * SQL condition: the close-out request in `column` is the reaper's provisional
+ * marker. NULL (not false) for a NULL column; every use either follows an
+ * `IS NOT NULL` or sits in an `IS NULL OR …`.
+ */
 function isProvisionalSql(column: string): string {
-  return `COALESCE(json_extract(${column}, '$.provisional'), 0) = 1`;
+  return `substr(${column}, 1, ${PROVISIONAL_CLOSE_OUT_PREFIX.length}) = '${PROVISIONAL_CLOSE_OUT_PREFIX}'`;
 }
 
 interface CloseOutRow extends StaleReviewSessionRow {
