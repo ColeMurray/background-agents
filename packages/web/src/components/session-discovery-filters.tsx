@@ -1,8 +1,15 @@
 "use client";
 
-import { useId, type ChangeEvent, type SelectHTMLAttributes } from "react";
+import { useId, type ReactNode } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
@@ -15,34 +22,42 @@ import {
   type SessionRepositoryFilter,
 } from "@/lib/session-discovery";
 
-const ANY_OPTION = "";
+/** Radix Select reserves the empty string, so "Any" options use a sentinel value. */
+const ANY_OPTION = "__any__";
+/**
+ * Environment IDs come from the URL unvalidated, so their option values are
+ * namespaced to keep an `environmentId` from colliding with `ANY_OPTION`.
+ */
+const ENVIRONMENT_OPTION_PREFIX = "environment:";
 
-interface LabeledSelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, "onChange"> {
+interface LabeledSelectProps {
   label: string;
+  value: string;
   onValueChange: (value: string) => void;
+  triggerClassName?: string;
+  children: ReactNode;
 }
 
-/**
- * A native select styled like the app's inputs. Native controls keep the
- * filter row usable from a phone keyboard and a screen reader without a
- * popover to manage.
- */
-function LabeledSelect({ label, onValueChange, className, ...props }: LabeledSelectProps) {
+/** The app's Select with a visible label, sized to sit in the filter row. */
+function LabeledSelect({
+  label,
+  value,
+  onValueChange,
+  triggerClassName,
+  children,
+}: LabeledSelectProps) {
   const id = useId();
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <label htmlFor={id} className="text-xs font-medium text-muted-foreground">
         {label}
       </label>
-      <select
-        id={id}
-        className={cn(
-          "h-9 min-w-0 rounded-sm border border-border bg-input px-2 text-sm text-foreground shadow-sm transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-          className
-        )}
-        onChange={(event: ChangeEvent<HTMLSelectElement>) => onValueChange(event.target.value)}
-        {...props}
-      />
+      <Select value={value} onValueChange={onValueChange}>
+        <SelectTrigger id={id} density="compact" className={cn("h-9", triggerClassName)}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>{children}</SelectContent>
+      </Select>
     </div>
   );
 }
@@ -139,30 +154,38 @@ export function SessionDiscoveryFilters({
         onValueChange={(value) =>
           onChange({ repository: value === ANY_OPTION ? null : parseRepositoryOptionValue(value) })
         }
-        className="max-w-[16rem]"
+        triggerClassName="w-56"
       >
-        <option value={ANY_OPTION}>Any repository</option>
+        <SelectItem value={ANY_OPTION}>Any repository</SelectItem>
         {repositoryOptions.map((repository) => {
           const value = repositoryOptionValue(repository);
           return (
-            <option key={value} value={value}>
+            <SelectItem key={value} value={value}>
               {formatRepoLabel(repository.repoOwner, repository.repoName)}
-            </option>
+            </SelectItem>
           );
         })}
       </LabeledSelect>
 
       <LabeledSelect
         label="Environment"
-        value={query.environmentId ?? ANY_OPTION}
-        onValueChange={(value) => onChange({ environmentId: value === ANY_OPTION ? null : value })}
-        className="max-w-[14rem]"
+        value={
+          query.environmentId ? `${ENVIRONMENT_OPTION_PREFIX}${query.environmentId}` : ANY_OPTION
+        }
+        onValueChange={(value) =>
+          onChange({
+            environmentId: value.startsWith(ENVIRONMENT_OPTION_PREFIX)
+              ? value.slice(ENVIRONMENT_OPTION_PREFIX.length)
+              : null,
+          })
+        }
+        triggerClassName="w-44"
       >
-        <option value={ANY_OPTION}>Any environment</option>
+        <SelectItem value={ANY_OPTION}>Any environment</SelectItem>
         {environmentOptions.map((environment) => (
-          <option key={environment.id} value={environment.id}>
+          <SelectItem key={environment.id} value={`${ENVIRONMENT_OPTION_PREFIX}${environment.id}`}>
             {environment.name}
-          </option>
+          </SelectItem>
         ))}
       </LabeledSelect>
 
@@ -174,11 +197,12 @@ export function SessionDiscoveryFilters({
             onChange({ lifecycle: value as SessionDiscoveryQuery["lifecycle"] });
           }
         }}
+        triggerClassName="w-36"
       >
         {SESSION_LIFECYCLES.map((lifecycle) => (
-          <option key={lifecycle} value={lifecycle}>
+          <SelectItem key={lifecycle} value={lifecycle}>
             {SESSION_LIFECYCLE_LABELS[lifecycle]}
-          </option>
+          </SelectItem>
         ))}
       </LabeledSelect>
 
@@ -192,12 +216,13 @@ export function SessionDiscoveryFilters({
             onChange({ origin: value as SessionDiscoveryQuery["origin"] });
           }
         }}
+        triggerClassName="w-44"
       >
-        <option value={ANY_OPTION}>Any origin</option>
+        <SelectItem value={ANY_OPTION}>Any origin</SelectItem>
         {SESSION_ORIGINS.map((origin) => (
-          <option key={origin} value={origin}>
+          <SelectItem key={origin} value={origin}>
             {SESSION_ORIGIN_LABELS[origin]}
-          </option>
+          </SelectItem>
         ))}
       </LabeledSelect>
 
