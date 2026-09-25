@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { linearGraphQL, type LinearApiClient } from "./linear-client";
+import { LINEAR_DOCUMENTS } from "./linear-documents";
 
 const workflowStateSchema = z.object({
   id: z.string().min(1),
@@ -48,23 +49,7 @@ export async function transitionIssueToStarted(
   signal?: AbortSignal
 ): Promise<IssueStartTransitionResult> {
   const contextResponse = transitionContextSchema.parse(
-    await linearGraphQL(
-      client,
-      `
-      query IssueStartTransitionContext($issueId: String!) {
-        issue(id: $issueId) {
-          state { type }
-          team {
-            states(filter: { type: { eq: "started" } }) {
-              nodes { id name position }
-            }
-          }
-        }
-      }
-    `,
-      { issueId },
-      signal
-    )
+    await linearGraphQL(client, LINEAR_DOCUMENTS.IssueStartTransitionContext, { issueId }, signal)
   );
 
   const issue = contextResponse.data.issue;
@@ -89,13 +74,7 @@ export async function transitionIssueToStarted(
   transitionMutationSchema.parse(
     await linearGraphQL(
       client,
-      `
-      mutation IssueMoveToStarted($issueId: String!, $stateId: String!) {
-        issueUpdate(id: $issueId, input: { stateId: $stateId }) {
-          success
-        }
-      }
-    `,
+      LINEAR_DOCUMENTS.IssueMoveToStarted,
       { issueId, stateId: target.id },
       signal
     )

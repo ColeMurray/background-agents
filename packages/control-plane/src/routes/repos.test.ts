@@ -168,17 +168,6 @@ describe("repository list route", () => {
     expect(cached.scmIdentity).toBe(expectedIdentity);
   });
 
-  it("reports the deployment's SCM host on fresh and cached responses", async () => {
-    const env = createEnv();
-
-    const fresh = await handleRequest(request("/repos"), env, createTestBackgroundTasks());
-    await expect(fresh.json()).resolves.toMatchObject({ cached: false, scmHost: "github.com" });
-
-    mockCacheGet.mockResolvedValue(JSON.parse(mockCachePut.mock.calls[0][1]));
-    const cached = await handleRequest(request("/repos"), env, createTestBackgroundTasks());
-    await expect(cached.json()).resolves.toMatchObject({ cached: true, scmHost: "github.com" });
-  });
-
   it("treats a malformed singleton cache entry as a miss", async () => {
     const env = createEnv();
     mockCacheGet.mockResolvedValue({

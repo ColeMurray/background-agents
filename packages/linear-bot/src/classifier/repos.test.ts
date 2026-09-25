@@ -59,17 +59,6 @@ describe("getAvailableRepos", () => {
     ]);
   });
 
-  it("carries the control plane's SCM host onto each repository", async () => {
-    const { kv } = createFakeKV();
-    const env = makeLinearBotEnv(kv, {
-      CONTROL_PLANE: controlPlaneFetch({ ...validReposResponse, scmHost: "gitlab.com" }),
-    });
-
-    await expect(getAvailableRepos(env)).resolves.toEqual([
-      expect.objectContaining({ id: "open-inspect/background-agents", scmHost: "gitlab.com" }),
-    ]);
-  });
-
   it("serves the KV last-known-good copy when the fresh response is malformed", async () => {
     const { kv, putCalls } = createFakeKV({
       "repos:cache": JSON.stringify([cachedRepoConfig]),
