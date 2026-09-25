@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox import manager as manager_module
-from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, RepositoryImageUnavailableError
+from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,20 +274,66 @@ async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_missing_repository_image_raises_410(monkeypatch):
+async def test_missing_repository_image_raises_410(monkeypatch, fake_llm_secret):
     _patch_auth(monkeypatch)
+    error = MagicMock()
+    monkeypatch.setattr(web_api.log, "error", error)
+    from modal.exception import NotFoundError
 
-    class MissingImageManager:
-        async def create_sandbox(self, _config):
-            raise RepositoryImageUnavailableError("repository image is unavailable")
-
-    monkeypatch.setattr(manager_module, "SandboxManager", MissingImageManager)
+    create = SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("image not found")))
+    monkeypatch.setattr(manager_module.modal.Sandbox, "create", create)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _call_create_sandbox(CREATE_REQUEST)
+        await _call_create_sandbox(
+            {
+                **CREATE_REQUEST,
+                "repo_owner": "acme",
+                "repo_name": "repo",
+                "repo_image_id": "repo-image-1",
+            }
+        )
 
     assert exc_info.value.status_code == 410
     assert exc_info.value.detail == "Repository image unavailable"
+    fake_llm_secret[0].hydrate.aio.assert_awaited_once_with()
+    create.aio.assert_awaited_once()
+    error.assert_called_once_with(
+        "sandbox.repository_image_unavailable",
+        cause_type="NotFoundError",
+        cause_message="image not found",
+        trace_id=None,
+        request_id=None,
+        session_id=None,
+        sandbox_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_secret_for_repository_image_returns_500(monkeypatch):
+    from modal.exception import NotFoundError
+
+    _patch_auth(monkeypatch)
+    create = SimpleNamespace(aio=AsyncMock())
+    monkeypatch.setattr(manager_module.modal.Sandbox, "create", create)
+    secret = SimpleNamespace(
+        hydrate=SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("secret not found")))
+    )
+    monkeypatch.setattr(manager_module.modal.Secret, "from_name", lambda _name: secret)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(
+            {
+                **CREATE_REQUEST,
+                "repo_owner": "acme",
+                "repo_name": "repo",
+                "repo_image_id": "repo-image-1",
+            }
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Internal server error"
+    assert isinstance(exc_info.value.__cause__, NotFoundError)
+    create.aio.assert_not_awaited()
 
 
 @pytest.mark.asyncio
