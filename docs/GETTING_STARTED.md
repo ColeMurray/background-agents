@@ -300,11 +300,9 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    - **Webhook**: Leave "Active" unchecked for now. Step 7c enables it when
      `enable_github_bot = true` for GitHub automations or bot commands.
 4. If enabling GitHub sign-in, configure **Identifying and authorizing users** (OAuth):
-
    - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
 
    Your web app URL depends on `web_platform`:
-
    - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app`
    - **Cloudflare**: `https://open-inspect-web-{deployment_name}.{your-subdomain}.workers.dev`
    - **Cloudflare with `cloudflare_custom_domain` set**: `https://{your-custom-domain}`
@@ -593,14 +591,14 @@ linear_client_id       = ""          # From Step 4b (required if enabled)
 linear_client_secret   = ""          # From Step 4b (required if enabled)
 linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 
-# Classifier key. Required when the Slack/Linear classifier runs on Anthropic;
-# optional otherwise. By default also injected into Modal/OpenComputer sandboxes.
+# API Keys. Optional: leave blank to add model credentials as secrets in the web
+# app instead. Required only when the Slack/Linear classifier runs on Anthropic.
 anthropic_api_key = "sk-ant-..."
-# inject_anthropic_api_key_into_sandboxes = false # Keep classifier key out of sandboxes
+# classification_anthropic_api_key = ""   # Classifier-only key; never reaches sandboxes
 
 # Slack/Linear classifier provider, chosen by classification_model.
-# An OpenAI model requires classification_openai_api_key. An Anthropic model
-# needs no new value — it is served by anthropic_api_key above.
+# An OpenAI model requires classification_openai_api_key. An Anthropic model is
+# served by classification_anthropic_api_key, falling back to anthropic_api_key.
 # classification_model = "claude-haiku-4-5"   # e.g. "gpt-5.4-mini" to classify on OpenAI
 classification_openai_api_key = ""   # Required when classification_model is an OpenAI id
 
@@ -1163,7 +1161,8 @@ Secrets for credentials:
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
 | `LINEAR_API_KEY`                   | Optional Linear API key used as a comment-posting fallback                                  |
-| `ANTHROPIC_API_KEY`                | Required for an Anthropic classifier; injected into Modal/OpenComputer by default           |
+| `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; classifier fallback                     |
+| `CLASSIFICATION_ANTHROPIC_API_KEY` | Optional classifier-only Anthropic key; never reaches sandboxes                             |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
 | `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
 | `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
@@ -1190,11 +1189,9 @@ Secrets for credentials:
 Secrets and variables → Actions → _Variables_ to point the Slack/Linear classifiers at a different
 model (for example `gpt-5.4-mini`). Leave it unset to keep the Terraform default. An OpenAI value
 also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is served by
-`ANTHROPIC_API_KEY`.
-
-Set `INJECT_ANTHROPIC_API_KEY_INTO_SANDBOXES=false` as an Actions variable if the classifier uses
-Anthropic but sandbox model credentials should come only from Open-Inspect's scoped secret store.
-The Anthropic classifier still needs `ANTHROPIC_API_KEY`.
+`CLASSIFICATION_ANTHROPIC_API_KEY`, falling back to `ANTHROPIC_API_KEY`. To keep the classifier key
+out of Modal and OpenComputer sandboxes, set `CLASSIFICATION_ANTHROPIC_API_KEY` and leave
+`ANTHROPIC_API_KEY` unset; sandboxes then take model credentials from Open-Inspect's secret store.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

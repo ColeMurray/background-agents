@@ -23,6 +23,7 @@
     "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
     "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",
     "test:terraform-workflow-contract": "node --test scripts/terraform-workflow-contract.test.mjs",
+    "test:modal-create-secrets": "node --test scripts/modal-create-secrets.test.mjs",
     "test:node-version-workflow-contract": "node --test scripts/node-version-workflow-contract.test.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration": "npm run test:integration --workspaces --if-present",

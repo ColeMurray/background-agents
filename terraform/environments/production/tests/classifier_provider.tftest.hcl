@@ -57,11 +57,6 @@ run "anthropic_classifier_by_default" {
   command = plan
 
   assert {
-    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "test-anthropic-key" }
-    error_message = "Existing deployments must still inject the classifier key into Modal by default."
-  }
-
-  assert {
     condition     = !local.classifier_uses_openai
     error_message = "The default classification model must resolve to Anthropic."
   }
@@ -109,29 +104,32 @@ run "anthropic_classifier_by_default" {
   }
 }
 
-run "anthropic_classifier_without_sandbox_injection" {
+# A classifier-only deployment sets the dedicated key and leaves the sandbox key
+# blank: the bots keep their credential while no sandbox path receives one.
+run "dedicated_classifier_key_stays_out_of_sandboxes" {
   command = plan
 
   variables {
-    inject_anthropic_api_key_into_sandboxes = false
-    sandbox_provider                        = "opencomputer"
-    opencomputer_api_url                    = "https://api.opencomputer.example"
-    opencomputer_api_key                    = "test-opencomputer-key"
-    opencomputer_template                   = "test-template"
-  }
-
-  assert {
-    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "" }
-    error_message = "Modal must receive an empty Anthropic key so --force clears the old sandbox credential."
+    classification_anthropic_api_key = "test-classifier-key"
+    anthropic_api_key                = ""
+    sandbox_provider                 = "opencomputer"
+    opencomputer_api_url             = "https://api.opencomputer.example"
+    opencomputer_api_key             = "test-opencomputer-key"
+    opencomputer_template            = "test-template"
   }
 
   assert {
     condition = (
-      local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == var.anthropic_api_key &&
+      local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == "test-classifier-key" &&
       contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
       contains(module.linear_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
     )
-    error_message = "Disabling sandbox injection must not remove the Anthropic classifier key."
+    error_message = "The classifier bots must bind the dedicated classifier key."
+  }
+
+  assert {
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "" }
+    error_message = "The dedicated classifier key must not reach Modal sandboxes."
   }
 
   assert {
@@ -139,19 +137,41 @@ run "anthropic_classifier_without_sandbox_injection" {
       contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
       !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
     )
-    error_message = "Disabling sandbox injection must omit the OpenComputer Anthropic binding."
+    error_message = "The dedicated classifier key must not reach OpenComputer sandboxes."
   }
 }
 
-run "sandbox_opt_out_does_not_bypass_classifier_validation" {
+# With both keys configured, each stays in its own trust domain.
+run "dedicated_classifier_key_takes_precedence" {
   command = plan
 
   variables {
-    inject_anthropic_api_key_into_sandboxes = false
-    anthropic_api_key                       = ""
+    classification_anthropic_api_key = "test-classifier-key"
   }
 
-  expect_failures = [var.anthropic_api_key]
+  assert {
+    condition     = local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == "test-classifier-key"
+    error_message = "A configured classifier key must take precedence over anthropic_api_key."
+  }
+
+  assert {
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "test-anthropic-key" }
+    error_message = "Sandboxes must keep receiving anthropic_api_key, not the classifier key."
+  }
+}
+
+# Whitespace is not a credential: the classifier falls back to anthropic_api_key.
+run "blank_classifier_key_falls_back" {
+  command = plan
+
+  variables {
+    classification_anthropic_api_key = "   "
+  }
+
+  assert {
+    condition     = local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == var.anthropic_api_key
+    error_message = "A whitespace-only classifier key must fall back to anthropic_api_key."
+  }
 }
 
 run "openai_classifier_binds_openai_key" {

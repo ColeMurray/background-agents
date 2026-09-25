@@ -202,10 +202,10 @@ module "control_plane_worker" {
     local.opencomputer_enabled ? {
       OPENCOMPUTER_API_KEY = { value = var.opencomputer_api_key }
     } : {},
-    # OpenComputer sandboxes take the optional Anthropic key from the control
-    # plane only when injection is enabled; an unset binding must not shadow
-    # the key a repository supplies through the secret store.
-    local.opencomputer_enabled && var.inject_anthropic_api_key_into_sandboxes && trimspace(var.anthropic_api_key) != "" ? {
+    # OpenComputer sandboxes take the deployment-wide Anthropic key from the
+    # control plane. It is optional, and an unset one must not shadow the key a
+    # repository supplies through the secret store.
+    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? {
       ANTHROPIC_API_KEY = { value = var.anthropic_api_key }
     } : {},
     var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? {

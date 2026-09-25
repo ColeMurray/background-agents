@@ -267,5 +267,5 @@ run "anthropic_api_key_blank" {
     anthropic_api_key    = ""
   }
 
-  expect_failures = [var.anthropic_api_key]
+  expect_failures = [var.classification_anthropic_api_key]
 }
