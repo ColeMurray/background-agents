@@ -56,8 +56,8 @@ export class SandboxStreamingEventHandler {
     this.updateLastActivity(context.now);
     this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
-      await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
       this.usageRepository.recordStepUsage(event, context.messageId, context.now);
+      await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
     }
   }
 

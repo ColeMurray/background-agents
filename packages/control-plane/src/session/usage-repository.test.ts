@@ -91,6 +91,27 @@ describe("UsageRepository", () => {
     ]);
   });
 
+  it("records negative or non-finite step costs as unknown, but preserves zero", () => {
+    for (const [stepId, cost] of [
+      ["negative", -0.05],
+      ["non-finite", Number.POSITIVE_INFINITY],
+      ["zero", 0],
+    ] as const) {
+      usage.recordStepUsage(
+        { type: "step_finish", sandboxId: "s", messageId: "m", stepId, timestamp: 1, cost },
+        "m",
+        100
+      );
+    }
+    expect(
+      usage.listStepUsage(null, 10).items.map(({ id, stepCostUsd }) => [id, stepCostUsd])
+    ).toEqual([
+      ["negative", null],
+      ["non-finite", null],
+      ["zero", 0],
+    ]);
+  });
+
   it("keeps unknown tokens null and does not overwrite an existing step on resend", () => {
     const event = {
       type: "step_finish" as const,
@@ -159,6 +180,24 @@ describe("UsageRepository", () => {
       items: [expect.objectContaining({ id: "c" })],
       nextCursor: null,
     });
+  });
+
+  it("rejects invalid limits and cursors before querying", () => {
+    usage.recordStepUsage(
+      { type: "step_finish", sandboxId: "s", messageId: "m", timestamp: 1 },
+      "m",
+      100
+    );
+    for (const limit of [0, -1, 1.5, Number.NaN, 101]) {
+      expect(() => usage.listStepUsage(null, limit)).toThrow("Invalid step usage limit");
+    }
+    for (const cursor of [
+      { createdAt: -1, id: "m:1" },
+      { createdAt: Number.NaN, id: "m:1" },
+      { createdAt: 100, id: "" },
+    ]) {
+      expect(() => usage.listStepUsage(cursor, 1)).toThrow("Invalid step usage cursor");
+    }
   });
 
   it("rejects malformed persisted rows", () => {

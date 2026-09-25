@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
 import { SessionStorageIntegrityError } from "./types";
 
+const MAX_STEP_USAGE_PAGE_SIZE = 100;
+
 const stepUsageRowSchema = z.object({
   id: z.string(),
   message_id: z.string().nullable(),
@@ -97,7 +99,7 @@ export class UsageRepository {
         tokens.cacheReadTokens,
         tokens.cacheWriteTokens,
         tokens.totalTokens,
-        event.cost != null && Number.isFinite(event.cost) ? event.cost : null,
+        event.cost != null && Number.isFinite(event.cost) && event.cost >= 0 ? event.cost : null,
         event.messageCostUsd != null && Number.isFinite(event.messageCostUsd)
           ? event.messageCostUsd
           : null,
@@ -142,6 +144,18 @@ export class UsageRepository {
     items: StepUsage[];
     nextCursor: StepUsageCursor | null;
   } {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_STEP_USAGE_PAGE_SIZE) {
+      throw new RangeError("Invalid step usage limit");
+    }
+    if (
+      cursor &&
+      (!Number.isSafeInteger(cursor.createdAt) ||
+        cursor.createdAt < 0 ||
+        typeof cursor.id !== "string" ||
+        cursor.id.length === 0)
+    ) {
+      throw new TypeError("Invalid step usage cursor");
+    }
     const rows = (
       cursor
         ? this.sql.exec(
