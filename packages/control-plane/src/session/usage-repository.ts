@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
 import { SessionStorageIntegrityError } from "./types";
 
-const MAX_STEP_USAGE_PAGE_SIZE = 100;
+export const MAX_STEP_USAGE_PAGE_SIZE = 100;
 
 const stepUsageRowSchema = z.object({
   id: z.string(),

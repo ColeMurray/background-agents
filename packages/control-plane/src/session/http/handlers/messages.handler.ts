@@ -7,9 +7,11 @@ import {
   type EnqueuePromptRequest,
 } from "../../enqueue-prompt-contract";
 import type { MessageService } from "../../services/message.service";
+import { parseCreatedAtCursor } from "../../../created-at-cursor";
 import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { MAX_STEP_USAGE_PAGE_SIZE } from "../../usage-repository";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
@@ -19,7 +21,7 @@ import {
 } from "../../message-queue";
 
 /**
- * HTTP boundary for the prompt/event/artifact/message endpoints: parses
+ * HTTP boundary for the prompt/event/artifact/message/usage endpoints: parses
  * requests, delegates to the message service, and maps thrown domain errors
  * to statuses.
  */
@@ -107,12 +109,8 @@ export class MessagesHandler {
 
   listMessages(url: URL): Response {
     const cursorResult = parseMessageListCursor(url.searchParams.get("cursor"));
-    const rawLimit = url.searchParams.get("limit") ?? "50";
-    if (!/^[1-9]\d*$/.test(rawLimit)) {
-      return Response.json({ error: "Invalid limit" }, { status: 400 });
-    }
-    const limit = Number(rawLimit);
-    if (!Number.isSafeInteger(limit) || limit > 100) {
+    const limit = parsePageLimit(url.searchParams.get("limit"), 50, 100);
+    if (limit === null) {
       return Response.json({ error: "Invalid limit" }, { status: 400 });
     }
     const status = url.searchParams.get("status");
@@ -129,4 +127,34 @@ export class MessagesHandler {
 
     return Response.json(result);
   }
+
+  listUsage(url: URL): Response {
+    const limit = parsePageLimit(
+      url.searchParams.get("limit"),
+      MAX_STEP_USAGE_PAGE_SIZE,
+      MAX_STEP_USAGE_PAGE_SIZE
+    );
+    if (limit === null) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
+
+    const cursorResult = parseCreatedAtCursor(url.searchParams.get("cursor"));
+    if (!cursorResult.ok) {
+      return Response.json({ error: cursorResult.error }, { status: 400 });
+    }
+
+    return Response.json(this.messageService.listUsage({ cursor: cursorResult.cursor, limit }));
+  }
+}
+
+/** A positive integer page size up to `maxLimit`, or null when the query value is malformed. */
+function parsePageLimit(
+  rawLimit: string | null,
+  defaultLimit: number,
+  maxLimit: number
+): number | null {
+  const value = rawLimit ?? String(defaultLimit);
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit <= maxLimit ? limit : null;
 }

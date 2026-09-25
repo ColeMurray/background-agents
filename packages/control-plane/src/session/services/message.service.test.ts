@@ -1,10 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StepUsage } from "@open-inspect/shared";
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
 import type { MessageRepository } from "../message-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
+import type { UsageRepository } from "../usage-repository";
+import { stepUsagePageSchema } from "../contracts";
 import { MessageService } from "./message.service";
+
+function stepUsage(id: string, createdAt: number): StepUsage {
+  return {
+    id,
+    messageId: "m1",
+    model: "anthropic/claude-sonnet-5",
+    harness: "opencode",
+    inputTokens: 10,
+    outputTokens: null,
+    reasoningTokens: null,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    totalTokens: 10,
+    stepCostUsd: null,
+    messageCostUsd: null,
+    isSubtask: false,
+    childSessionId: null,
+    taskCallId: null,
+    reason: null,
+    createdAt,
+  };
+}
 
 function createService() {
   const repository = {
@@ -17,6 +42,9 @@ function createService() {
     listArtifacts: vi.fn(),
     getArtifactById: vi.fn(),
   } as unknown as ArtifactRepository;
+  const usageRepository = {
+    listStepUsage: vi.fn(),
+  } as unknown as UsageRepository;
 
   const messageQueue = {
     enqueuePromptFromApi: vi.fn(),
@@ -30,6 +58,7 @@ function createService() {
       repository,
       eventRepository,
       artifactRepository,
+      usageRepository,
       messageQueue,
       stopExecution,
       parseArtifactMetadata,
@@ -37,6 +66,7 @@ function createService() {
     repository,
     eventRepository,
     artifactRepository,
+    usageRepository,
     messageQueue,
     stopExecution,
     parseArtifactMetadata,
@@ -303,5 +333,32 @@ describe("MessageService", () => {
     const result = service.listMessages({ cursor: null, limit: 1, status: null });
 
     expect(result.messages).toEqual([expect.objectContaining({ attachments: null })]);
+  });
+
+  it("encodes the repository's next usage cursor on a non-terminal page", () => {
+    const { service, usageRepository } = createService();
+    const items = [stepUsage("s1", 1000), stepUsage("s:2", 1000)];
+    vi.mocked(usageRepository.listStepUsage).mockReturnValue({
+      items,
+      nextCursor: { createdAt: 1000, id: "s:2" },
+    });
+
+    const result = service.listUsage({ cursor: { createdAt: 500, id: "s0" }, limit: 2 });
+
+    expect(result).toEqual({ usage: items, hasMore: true, cursor: "1000:s%3A2" });
+    expect(stepUsagePageSchema.safeParse(result).success).toBe(true);
+    expect(usageRepository.listStepUsage).toHaveBeenCalledWith({ createdAt: 500, id: "s0" }, 2);
+  });
+
+  it("ends usage paging without a cursor when the repository has no next page", () => {
+    const { service, usageRepository } = createService();
+    const items = [stepUsage("s1", 1000)];
+    vi.mocked(usageRepository.listStepUsage).mockReturnValue({ items, nextCursor: null });
+
+    const result = service.listUsage({ cursor: null, limit: 50 });
+
+    expect(result).toEqual({ usage: items, hasMore: false });
+    expect(stepUsagePageSchema.safeParse(result).success).toBe(true);
+    expect(usageRepository.listStepUsage).toHaveBeenCalledWith(null, 50);
   });
 });
