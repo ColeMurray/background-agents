@@ -10,6 +10,7 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "./contracts";
+import { SessionDraftExpiryClient } from "./abandoned-draft-sweep";
 import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
 import type { SessionSkillManifestInput } from "./skill-resolution";
@@ -289,7 +290,14 @@ export async function initializeSession(
       }
     );
   } catch (transportError) {
-    await compensateFailedDoInit(sessionStore, ctx.db, input, ctx.trace_id);
+    // The runtime may have committed init — and scheduled sandbox warming —
+    // before the transport failed, so the fence row may still be the only
+    // handle a sweep or the reaper has on a live session. Delete it only once
+    // the session is confirmed unable to run.
+    await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
+    if (input.githubReview && (await isSessionRetiredAfterLostInit(env, ctx, input.sessionId))) {
+      await deleteFailedReviewFence(ctx.db, input.githubReview, input.sessionId, ctx.trace_id);
+    }
     throw transportError;
   }
 
@@ -380,6 +388,27 @@ async function markSessionFailed(
       error:
         compensationError instanceof Error ? compensationError.message : String(compensationError),
     });
+  }
+}
+
+/**
+ * After a DO init whose response was lost: whether the session is confirmed
+ * unable to run — no runtime exists, or its never-prompted runtime has just
+ * been archived, which rejects any later prompt. Any other answer, including
+ * another failure, is not a confirmation.
+ */
+async function isSessionRetiredAfterLostInit(
+  env: Env,
+  ctx: RequestContext,
+  sessionId: string
+): Promise<boolean> {
+  try {
+    const outcome = await new SessionDraftExpiryClient(
+      createSessionRuntimeClient(env, ctx)
+    ).expireDraft(sessionId);
+    return outcome === "archived" || outcome === "missing";
+  } catch {
+    return false;
   }
 }
 

@@ -420,12 +420,53 @@ describe("initializeSession", () => {
       expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
     });
 
-    it("deletes the review fence when DO init throws", async () => {
+    /** DO init rejects in transport; the draft-expiry probe answers with `probe`. */
+    function initRejectsThenProbe(probe: () => Promise<Response>) {
+      return vi.fn(async (req: Request) =>
+        req.url.includes("/internal/expire-draft")
+          ? probe()
+          : Promise.reject(new Error("transport"))
+      );
+    }
+
+    it("retains the review fence when DO init throws and the session cannot be confirmed idle", async () => {
+      // The runtime may have committed init and scheduled warming before the transport failed.
       const { db, deletes } = createReviewDb({ latestGeneration: 1 });
-      stubFetchMock.mockRejectedValue(new Error("transport failed"));
+      stubFetchMock = initRejectsThenProbe(() => Promise.reject(new Error("still down")));
 
       await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
-        "transport failed"
+        "transport"
+      );
+
+      expect(deletes).toEqual([]);
+      expect(updateStatusMock).toHaveBeenCalledWith("session-123", "failed");
+    });
+
+    it("retains the review fence when DO init throws but the session reports it is not a draft", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+      stubFetchMock = initRejectsThenProbe(async () =>
+        Response.json({ outcome: "not_draft", status: "active" })
+      );
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        "transport"
+      );
+
+      expect(deletes).toEqual([]);
+    });
+
+    it.each([
+      ["no session exists behind it (404)", () => Response.json({}, { status: 404 })],
+      [
+        "its never-prompted session was archived",
+        () => Response.json({ outcome: "archived", status: "archived" }),
+      ],
+    ])("deletes the review fence when DO init throws and %s", async (_name, probe) => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+      stubFetchMock = initRejectsThenProbe(async () => probe());
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        "transport"
       );
 
       expect(deletes).toEqual([[7, 9, 1]]);
