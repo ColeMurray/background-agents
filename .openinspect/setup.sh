@@ -28,10 +28,10 @@ check_cmd npm
 
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
 if (( NODE_MAJOR < 24 )); then
-  error "Node.js >= 24 required (found $(node -v)). Please upgrade."
-  exit 1
+  warn "Node.js >= 24 required (found $(node -v)). Please upgrade; continuing setup."
+else
+  info "Node $(node -v) ✓"
 fi
-info "Node $(node -v) ✓"
 
 # ---------------------------------------------------------------------------
 # 2. Install npm dependencies (also triggers husky via prepare script)
