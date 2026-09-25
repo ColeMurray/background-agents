@@ -6,6 +6,7 @@ import {
   SCOPED_PERMISSION_PAIRS,
   effectiveAuthorizationSchema,
   hasScopedPermission,
+  isCustomRolePermission,
   permissionsForBuiltInRole,
   resolveScopedPermission,
   replaceMemberRoleInputSchema,
@@ -61,7 +62,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(44);
+    expect(PERMISSION_IDS).toHaveLength(45);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -132,6 +133,15 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("administrator")).toContain("sessions.bulk_archive");
     expect(permissionsForBuiltInRole("member")).not.toContain("sessions.bulk_archive");
     expect(permissionsForBuiltInRole("viewer")).not.toContain("sessions.bulk_archive");
+  });
+
+  it("reserves session export for Owner, Administrator, and eligible custom roles", () => {
+    expect(PERMISSION_IDS).toContain("sessions.export");
+    expect(permissionsForBuiltInRole("owner")).toContain("sessions.export");
+    expect(permissionsForBuiltInRole("administrator")).toContain("sessions.export");
+    expect(permissionsForBuiltInRole("member")).not.toContain("sessions.export");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("sessions.export");
+    expect(isCustomRolePermission("sessions.export")).toBe(true);
   });
 
   it("makes Member a superset of Viewer", () => {
