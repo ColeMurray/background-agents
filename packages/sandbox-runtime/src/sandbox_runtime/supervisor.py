@@ -497,6 +497,9 @@ class SandboxSupervisor:
         except Exception as error:
             self.log.warn("opencode_models.refresh_failed", exc=error)
             return
+        if exit_code != 0:
+            self.log.warn("opencode_models.refresh_failed", exit_code=exit_code)
+            return
         self.log.info("opencode_models.refresh_finished", exit_code=exit_code)
 
     async def _run_image_build_execution(

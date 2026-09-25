@@ -221,6 +221,18 @@ async def test_models_catalog_refresh_failure_is_not_fatal(tmp_path, monkeypatch
     assert isinstance(supervisor.log.warn.call_args.kwargs["exc"], error)
 
 
+async def test_models_catalog_refresh_nonzero_exit_is_logged_as_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        supervisor_module, "OPENCODE_MODELS_REFRESH_COMMAND", ("sh", "-c", "exit 3")
+    )
+    supervisor, *_ = _supervisor(tmp_path, [])
+
+    await supervisor._refresh_models_catalog()
+
+    supervisor.log.warn.assert_called_once_with("opencode_models.refresh_failed", exit_code=3)
+    supervisor.log.info.assert_not_called()
+
+
 async def test_graceful_bridge_exit_requests_shutdown(tmp_path):
     supervisor, _repository, _opencode_server, agent_bridge, *_ = _supervisor(tmp_path, [])
     agent_bridge.exit_code.return_value = 0
