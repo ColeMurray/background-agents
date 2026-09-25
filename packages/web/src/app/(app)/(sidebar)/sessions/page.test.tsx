@@ -330,9 +330,11 @@ describe("SessionsPage", () => {
     chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "All");
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?lifecycle=all", { scroll: false });
     expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveTextContent("All");
+    expect(screen.getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
     chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Not archived");
     expect(mockReplace).toHaveBeenCalledTimes(2);
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
+    expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
 
     // Re-selecting the state already written is not a navigation.
     chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Not archived");

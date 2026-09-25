@@ -230,7 +230,7 @@ function SessionsContent() {
                   query={controlsQuery}
                   repositories={repositoryOptions}
                   environments={environments}
-                  hasFilters={hasFilters}
+                  hasFilters={hasSessionDiscoveryFilters(controlsQuery)}
                   onChange={updateQuery}
                   onClear={clearFilters}
                 />
