@@ -54,7 +54,13 @@ export interface GitHubAppConfig {
   userAgent?: string;
 }
 
-export type CommitStatusPostResult = { ok: true } | { ok: false; status?: number; error: string };
+export type CommitStatusPostResult =
+  | { ok: true }
+  /**
+   * `status` is absent when the request itself failed. `rateLimited` marks a rejection GitHub
+   * documents as a rate limit, which a later attempt can clear.
+   */
+  | { ok: false; status?: number; error: string; rateLimited?: boolean };
 
 function base64UrlEncode(input: Uint8Array | string): string {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
@@ -217,6 +223,23 @@ export async function postReaction(
   }
 }
 
+/**
+ * GitHub answers an exceeded primary or secondary rate limit with 429 or 403
+ * (https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit),
+ * so a 403 alone does not mean the request can never succeed.
+ */
+async function isRateLimited(response: Response): Promise<boolean> {
+  if (response.status === 429) return true;
+  if (response.status !== 403) return false;
+  if (
+    response.headers.get("x-ratelimit-remaining") === "0" ||
+    response.headers.has("retry-after")
+  ) {
+    return true;
+  }
+  return /rate limit/i.test(await response.text());
+}
+
 export async function postCommitStatus(
   token: string,
   owner: string,
@@ -257,6 +280,7 @@ export async function postCommitStatus(
       ok: false,
       status: response.status,
       error: `GitHub API returned ${response.status}`,
+      rateLimited: await isRateLimited(response),
     };
   } catch (error) {
     return {

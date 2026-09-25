@@ -63,6 +63,7 @@ function grantResponse(overrides: Partial<ReviewCloseOutGrant> = {}): Response {
     description: "Review did not finish: Execution timed out (stuck processing)",
     superseded: false,
     leaseExpiresInMs: 120_000,
+    grantId: "close-out:session-1:grant-1",
     ...overrides,
   });
 }
@@ -78,6 +79,7 @@ function grant(overrides: Partial<ReviewCloseOutGrant> = {}): ReviewCloseOutGran
     description: "Review did not finish: Execution timed out (stuck processing)",
     superseded: false,
     leaseExpiresInMs: 120_000,
+    grantId: "close-out:session-1:grant-1",
     requestedAt: Date.now(),
     ...overrides,
   };
@@ -240,11 +242,41 @@ describe("completeCloseOut", () => {
     expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
   });
 
+  it("keeps the close-out for a retry when GitHub rate-limits the status write", async () => {
+    vi.mocked(postCommitStatus).mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      error: "GitHub API returned 403",
+      rateLimited: true,
+    });
+    const { env, cpFetch } = createEnv();
+
+    const limited = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+    const retried = await completeCloseOut(env, createMockLogger(), grant(), "trace-2");
+
+    expect([limited, retried]).toEqual(["status_write_failed", "closed_out"]);
+    expect(finalizeOutcomes(cpFetch)).toEqual(["retry", "done"]);
+  });
+
+  it("finalizes the exact grant it holds", async () => {
+    const { env, cpFetch } = createEnv();
+
+    await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+
+    const [, init] = cpFetch.mock.calls.find(([url]) => url === FINALIZE_URL)!;
+    expect(JSON.parse((init as { body: string }).body)).toEqual({
+      sessionId: "session-1",
+      grantId: "close-out:session-1:grant-1",
+      outcome: "done",
+    });
+  });
+
   it("abandons a status write GitHub rejects outright", async () => {
     vi.mocked(postCommitStatus).mockResolvedValue({
       ok: false,
       status: 422,
       error: "GitHub API returned 422",
+      rateLimited: false,
     });
     const { env, cpFetch } = createEnv();
     const log = createMockLogger();

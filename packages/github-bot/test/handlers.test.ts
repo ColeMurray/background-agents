@@ -107,6 +107,7 @@ function defaultReviewSupersessionResponse(url: string): Response | null {
       description: "Review failed to start",
       superseded: false,
       leaseExpiresInMs: 120_000,
+      grantId: "close-out:session-123:grant-1",
     });
   }
   if (url === FINALIZE_URL) return new Response(null, { status: 204 });
@@ -479,7 +480,7 @@ describe("handlePullRequestReviewTrigger", () => {
       "Open-Inspect"
     );
     expect(controlPlaneBodies(cpFetch, FINALIZE_URL)).toEqual([
-      { sessionId: "session-123", outcome: "done" },
+      { sessionId: "session-123", grantId: "close-out:session-123:grant-1", outcome: "done" },
     ]);
   });
 

@@ -231,7 +231,11 @@ describe("postCommitStatus", () => {
   });
 
   it("returns GitHub's status code when the status is rejected", async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ message: "Resource not accessible by integration" }), {
+        status: 403,
+      })
+    );
 
     const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
       state: "pending",
@@ -243,7 +247,30 @@ describe("postCommitStatus", () => {
       ok: false,
       status: 403,
       error: "GitHub API returned 403",
+      rateLimited: false,
     });
+  });
+
+  it.each([
+    ["a 429", 429, {}, ""],
+    ["a 403 with no primary quota left", 403, { "x-ratelimit-remaining": "0" }, ""],
+    ["a 403 asking to retry later", 403, { "retry-after": "60" }, ""],
+    [
+      "a 403 naming a secondary rate limit",
+      403,
+      {},
+      JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
+    ],
+  ])("reports %s as rate limited", async (_name, status, headers, body) => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(body, { status, headers }));
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "error",
+      context: "open-inspect",
+      description: "Review did not publish",
+    });
+
+    expect(result).toMatchObject({ ok: false, status, rateLimited: true });
   });
 
   it("returns the network error when the request fails", async () => {

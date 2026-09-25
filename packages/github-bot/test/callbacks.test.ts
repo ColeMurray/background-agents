@@ -26,6 +26,7 @@ const GRANT: ReviewCloseOutGrant = {
   description: "Review did not finish: Execution timed out (stuck processing)",
   superseded: false,
   leaseExpiresInMs: 120_000,
+  grantId: "close-out:session-1:grant-1",
   requestedAt: 1_788_183_214_615,
 };
 

@@ -193,7 +193,8 @@ bot (see [Review Close-Out](#review-close-out)).
 
 Every terminal `open-inspect` status is written by the holder of its PR's submission lease: the
 review's agent (its `success`, or the stale-PR `error`), or a close-out holding the lease as
-`close-out:<sessionId>`. A close-out replaces only a status that is still `pending`.
+`close-out:<sessionId>:<nonce>` — a fresh id per grant. A close-out replaces only a status that is
+still `pending`.
 
 A review prompt carries a `github` callback context naming the PR and the head SHA its pending
 status sits on. When the session's turn ends — published, timed out as stuck, cancelled, or lost its
@@ -203,9 +204,10 @@ sends it to `POST /callbacks/complete`. The bot then:
 1. Requests the close-out (`POST /internal/github-reviews/close-out`) before acknowledging, and
    answers 503 if the control plane cannot record it, so the callback is redelivered. The request is
    stored on the session's fence row; from then on the agent can no longer take the lease.
-2. On `200` it holds the lease. `202` means another holder's lease is live, or a superseded session
-   is not yet confirmed cancelled; `409` means a newer review of the same head owns the status. Both
-   write nothing now: the control plane's reaper re-drives an owed close-out every minute through
+2. On `200` it holds the lease, named by the grant's `grantId`. `202` means another holder's lease
+   is live, or a superseded session is not yet confirmed cancelled; `409` means nothing is owed (a
+   newer review of the same head owns the status, or it was already closed out). Neither writes
+   anything now: the control plane's reaper re-drives an owed close-out every minute through
    `POST /callbacks/review-close-out` until it is granted.
 3. After acknowledging, it reads the commit's combined status and leaves anything but a
    still-pending `open-inspect` alone, and leaves a merged or closed PR alone.
@@ -213,13 +215,16 @@ sends it to `POST /callbacks/complete`. The bot then:
    `Review did not finish: <the session's reason>`; or "Review did not publish" for a turn that
    ended successfully without replacing the status. It never starts that write with less than a
    request timeout plus 5 seconds of the lease left.
-5. It finalizes the close-out (`POST /internal/github-reviews/close-out/finalize`): `done` once
-   GitHub shows a terminal status, which deletes the fence row, or `retry`, which releases the lease
-   and keeps the row for the reaper.
+5. It finalizes its grant (`POST /internal/github-reviews/close-out/finalize` with the `grantId`):
+   `done` once GitHub shows a terminal status, which deletes the fence row, or `retry`, which
+   releases the lease and keeps the row for the reaper. A rejection GitHub can clear later — a
+   timeout, a 5xx, or a rate limit (429, or 403 with rate-limit headers or message) — is `retry`;
+   any other 4xx is abandoned as `done`. Either outcome acts only while that grant still holds the
+   lease, so a late finalize from an earlier attempt is a no-op.
 
-Fence rows older than a day are dropped by the reaper, so a close-out that can never succeed stops
-being retried. A completion callback that fails both delivery attempts is never recorded; that
-status stays pending.
+Fence rows older than a day are dropped by the reaper (unless a close-out holds the lease for them
+at that moment), so a close-out that can never succeed stops being retried. A completion callback
+that fails both delivery attempts is never recorded; that status stays pending.
 
 ### Session Target
 

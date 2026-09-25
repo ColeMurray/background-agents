@@ -54,6 +54,8 @@ const closeOutGrantResponseSchema = z.object({
   description: z.string().nullable(),
   superseded: z.boolean(),
   leaseExpiresInMs: z.number(),
+  /** Names this grant's lease: finalize acts only while this grant still holds it. */
+  grantId: z.string().min(1),
 });
 
 /** The right to write one review's terminal status, held as the PR's submission lease. */
@@ -129,14 +131,15 @@ async function finalizeCloseOut(
   env: Env,
   log: Logger,
   traceId: string,
-  sessionId: string,
+  grant: ReviewCloseOutGrant,
   outcome: "done" | "retry"
 ): Promise<void> {
+  const { sessionId, grantId } = grant;
   try {
     const response = await signedControlPlaneFetch(env, {
       method: "POST",
       url: "https://internal/internal/github-reviews/close-out/finalize",
-      body: JSON.stringify({ sessionId, outcome }),
+      body: JSON.stringify({ sessionId, grantId, outcome }),
       traceId,
     });
     if (!response.ok) {
@@ -157,9 +160,17 @@ async function finalizeCloseOut(
   }
 }
 
-/** A GitHub rejection no retry can fix; 408 and 429 are transient. */
-function isPermanentRejection(status: number | undefined): boolean {
-  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+/** A GitHub rejection no retry can fix: a 4xx that is neither a timeout nor a rate limit. */
+function isPermanentRejection(result: { status?: number; rateLimited?: boolean }): boolean {
+  const { status } = result;
+  return (
+    status !== undefined &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429 &&
+    !result.rateLimited
+  );
 }
 
 async function writeTerminalStatus(
@@ -225,7 +236,7 @@ async function writeTerminalStatus(
     ...(result.status === undefined ? {} : { github_status: result.status }),
     error: result.error,
   };
-  if (isPermanentRejection(result.status)) {
+  if (isPermanentRejection(result)) {
     log.error("review_close_out.abandoned", failureMeta);
     return { outcome: "status_write_rejected", finalize: "done" };
   }
@@ -258,7 +269,7 @@ export async function completeCloseOut(
     finalize = result.finalize;
     return result.outcome;
   } finally {
-    await finalizeCloseOut(env, log, traceId, grant.sessionId, finalize);
+    await finalizeCloseOut(env, log, traceId, grant, finalize);
   }
 }
 
