@@ -1,0 +1,15 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "getting-started",
+    "prompting",
+    "sessions",
+    "configure",
+    "models",
+    "automations",
+    "integrations",
+    "administration",
+    "reference"
+  ]
+}

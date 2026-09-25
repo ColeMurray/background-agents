@@ -1,0 +1,153 @@
+---
+title: Limits reference
+description: Every documented limit, cap, and default in OpenInspect, grouped by area, with where each one applies.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/shared/src/types/repositories.ts
+  - packages/shared/src/types/session-attachments.ts
+  - packages/shared/src/types/prompts.ts
+  - packages/shared/src/types/session-api.ts
+  - packages/shared/src/types/integrations.ts
+  - packages/shared/src/types/automations.ts
+  - packages/shared/src/types/github-autofix.ts
+  - packages/shared/src/types/analytics.ts
+  - packages/control-plane/src/session/message-queue.ts
+  - packages/control-plane/src/sandbox/execution-budget.ts
+  - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/types.ts
+  - packages/linear-bot/src/kv-store.ts
+  - docs/HOW_IT_WORKS.md
+  - docs/SECRETS.md
+  - docs/MANAGED_SKILLS.md
+  - docs/AUTOMATIONS.md
+  - docs/IMAGE_PREBUILD.md
+  - docs/integrations/SLACK.md
+  - docs/integrations/LINEAR.md
+---
+
+This page collects the limits and defaults that OpenInspect enforces. Values marked as settings can be changed by an administrator; the rest are fixed.
+
+## Sessions
+
+| Limit                                | Value                                                       | Where it applies                                                                                                             |
+| ------------------------------------ | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Repositories per session target      | 10                                                          | Ad-hoc multi-repository sets and environments                                                                                |
+| Prompt length                        | 64,000 characters                                           | Web prompts and child follow-up prompts sent with `send-child-prompt`                                                        |
+| Unfinished prompts per session       | 50                                                          | Prompts that are pending or processing. A further prompt is rejected with "A session may have at most 50 unfinished prompts" |
+| Images per prompt                    | 6                                                           | Web and Slack prompts                                                                                                        |
+| Image size                           | 10 MiB each                                                 | PNG, JPEG, WebP, or GIF                                                                                                      |
+| Concurrent child sessions per parent | 5 by default                                                | Sandbox setting `maxConcurrentChildSessions`                                                                                 |
+| Total child sessions per parent      | 15 by default                                               | Sandbox setting `maxTotalChildSessions`                                                                                      |
+| Session cost limit                   | Blank by default (no limit); a positive USD amount when set | Sandbox setting `maxSessionCostUsd`, overridable per session from the Budget sidebar section                                 |
+
+## Boot and sandbox
+
+| Limit                             | Value                                                                                                                                                       | Where it applies                                                                                                           |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Connect watchdog                  | 4 minutes                                                                                                                                                   | From sandbox creation until the runtime first connects. Covers the provider launching the container, not your scripts      |
+| Boot budget                       | 30 minutes by default                                                                                                                                       | From sandbox creation until ready, including `setup.sh` and `start.sh`. Operators change it with `SANDBOX_BOOT_TIMEOUT_MS` |
+| Heartbeat timeout                 | 90 seconds                                                                                                                                                  | While connected (booting or ready), a runtime that stops sending heartbeats for this long is marked `stale` and stopped    |
+| Heartbeat interval                | 30 seconds                                                                                                                                                  | How often the runtime reports in while connected                                                                           |
+| Tunnel ports                      | 10                                                                                                                                                          | Sandbox setting `tunnelPorts`                                                                                              |
+| Tunnel URL wait before `start.sh` | 30 seconds by default                                                                                                                                       | `TUNNEL_WAIT_TIMEOUT_SECONDS` in the sandbox; `start.sh` runs without fresh URLs if it expires                             |
+| Final snapshot buffer             | 10 minutes by default, 5 minutes minimum                                                                                                                    | Sandbox setting `finalSnapshotBufferMs`: time reserved before provider expiry to save state                                |
+| Sandbox lifetime                  | Blank: 2 hours on Modal and E2B, 45 minutes (the maximum) on Vercel, the provider's own default on OpenComputer. When set: whole seconds, at least 1 second | Sandbox setting `sandboxTimeoutMs`                                                                                         |
+| Prompt execution timeout          | The configured sandbox timeout; otherwise the operator's `EXECUTION_TIMEOUT_MS`; otherwise 2 hours                                                          | How long a message may stay processing before it is failed                                                                 |
+
+## Secrets
+
+| Limit                      | Value                                                                                                                                                                                                                                                     | Where it applies                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Secrets per scope          | 50                                                                                                                                                                                                                                                        | Global, repository, and environment scopes                                                                               |
+| Key length                 | 256 characters                                                                                                                                                                                                                                            | Any scope                                                                                                                |
+| Key format                 | Letters, digits, and underscores; cannot start with a digit                                                                                                                                                                                               | Any scope                                                                                                                |
+| Value size                 | 16 KB                                                                                                                                                                                                                                                     | One secret                                                                                                               |
+| Total value size per scope | 64 KB                                                                                                                                                                                                                                                     | One scope                                                                                                                |
+| Combined size per session  | 128 KB                                                                                                                                                                                                                                                    | Global plus the session target's secrets after merging. A larger payload fails the spawn with a per-scope byte breakdown |
+| Reserved keys              | `PYTHONUNBUFFERED`, `SANDBOX_ID`, `CONTROL_PLANE_URL`, `SANDBOX_AUTH_TOKEN`, `REPO_OWNER`, `REPO_NAME`, `GITHUB_APP_TOKEN`, `SESSION_CONFIG`, `RESTORED_FROM_SNAPSHOT`, `OPENCODE_CONFIG_CONTENT`, `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `PWD`, `LANG` | Cannot be saved as secrets; the form shows a validation error                                                            |
+
+## Managed skills
+
+| Limit                              | Value                                                                                                                            | Where it applies                                                                                                                   |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Canonical name                     | 64 characters                                                                                                                    | Must be unique. `agent-browser`, `record-video`, `upload-screenshot`, `visual-verification`, and `customize-opencode` are reserved |
+| Description                        | 1,024 characters                                                                                                                 | Skill metadata                                                                                                                     |
+| License                            | 200 characters                                                                                                                   | Skill metadata                                                                                                                     |
+| Compatibility                      | 500 characters                                                                                                                   | Skill metadata                                                                                                                     |
+| Metadata key / value               | 100 / 500 characters                                                                                                             | Skill metadata                                                                                                                     |
+| Supporting files                   | 99 per skill revision                                                                                                            | Files beside the generated `SKILL.md`                                                                                              |
+| Individual file                    | 256 KiB                                                                                                                          | One supporting file                                                                                                                |
+| Complete skill revision            | 1 MiB                                                                                                                            | Instructions plus supporting files                                                                                                 |
+| Managed skill content in a session | 5 MiB                                                                                                                            | All installed skills together                                                                                                      |
+| Supporting-file path               | Relative, `/` separators, no `.` or `..` segments, at most 10 segments or 240 UTF-8 bytes, no control characters, not `SKILL.md` | Each supporting file                                                                                                               |
+
+## Automations
+
+| Limit                                        | Value                                                                                                                                                                                  | Where it applies                                                                                                                                                                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name length                                  | 200 characters                                                                                                                                                                         | Any automation                                                                                                                                                                                                    |
+| Instructions length                          | 15,000 characters                                                                                                                                                                      | Any automation                                                                                                                                                                                                    |
+| Repositories and environments per automation | 10 combined                                                                                                                                                                            | Multi-select is available on schedule triggers only                                                                                                                                                               |
+| Minimum schedule interval                    | 15 minutes                                                                                                                                                                             | Cron schedules                                                                                                                                                                                                    |
+| Webhook payload size                         | 64 KB                                                                                                                                                                                  | Inbound webhook triggers                                                                                                                                                                                          |
+| Concurrent runs                              | 1 per automation                                                                                                                                                                       | Scheduled and manual firings; a firing during an active run is recorded as Skipped                                                                                                                                |
+| Consecutive failures before auto-pause       | 3                                                                                                                                                                                      | Timed-out runs count as failures; partial failures never reset the counter                                                                                                                                        |
+| Run execution timeout                        | The session's execution budget (the configured sandbox timeout for the run's scope, otherwise the operator's `EXECUTION_TIMEOUT_MS`, otherwise 2 hours), plus a 100-minute sweep grace | The session fails its own prompt at the budget. If that result never reaches the scheduler, a sweep fails the run with `execution_timeout` once the grace has also passed. Timed-out runs count toward auto-pause |
+| Slack thread continuation                    | 7 days                                                                                                                                                                                 | Replies in a triggering thread continue the same session                                                                                                                                                          |
+| Slack thread context                         | 20 earlier messages, 1,024 characters each                                                                                                                                             | Passed to the agent when the triggering message is a reply                                                                                                                                                        |
+| Automations list page                        | 25 by default, 100 at most                                                                                                                                                             | `GET /automations`                                                                                                                                                                                                |
+| Invocation history page                      | 100 at most                                                                                                                                                                            | `GET /automations/:id/invocations`                                                                                                                                                                                |
+
+## Prebuilt images
+
+| Limit                | Value                                     | Where it applies                                                                                      |
+| -------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Build timeout        | 30 minutes by default, 60 minutes at most | Sandbox setting `buildTimeoutSeconds`; covers clone and `setup.sh`                                    |
+| Vercel build cap     | 35 minutes                                | Vercel limits sandbox lifetime to 45 minutes, so execution is capped to keep the finalization reserve |
+| Finalization reserve | 10 minutes on top of the build timeout    | Callback delivery and snapshot or checkpoint capture                                                  |
+| Rebuild scheduler    | Every 30 minutes                          | Checks each enabled scope for new commits, a missing image, or an outdated runtime                    |
+| Builds per scope     | 1 at a time                               | A trigger while a build is in flight is a no-op                                                       |
+
+## Slack
+
+| Limit                                          | Value                                    | Where it applies                                                                                           |
+| ---------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Images per message                             | 6, 10 MiB each                           | Attached images and images inside forwarded messages, PNG, JPEG, WebP, or GIF                              |
+| Forwarded messages per request                 | 10                                       | Each shared message's text is truncated at 4,000 characters                                                |
+| Generated media per completion                 | 5 files, 10 MiB per file, 25 MiB total   | Media delivery, when the operator enables it                                                               |
+| Target dropdown lifetime                       | 1 hour                                   | The original request is kept while you pick a repository or environment                                    |
+| Thread-to-session mapping                      | About 7 days                             | Replies after that may start target selection again                                                        |
+| Thread messages included with a follow-up      | Up to 10                                 | Messages posted after the previous prompt and before the new request                                       |
+| Thread context for channel-message automations | Up to 20 messages, 1,024 characters each | Only when the triggering message is a reply                                                                |
+| Session instructions                           | 10,000 characters                        | Settings › Integrations › Slack › Session Instructions, appended to the first prompt of new Slack sessions |
+| Routing rules                                  | 100 rules, 100-character keywords        | Settings › Integrations › Slack › Routing rules                                                            |
+
+## Linear
+
+| Limit                    | Value  | Where it applies                                              |
+| ------------------------ | ------ | ------------------------------------------------------------- |
+| Issue-to-session mapping | 7 days | After it expires, a new agent request may start a new session |
+
+## PR Feedback Autofix
+
+| Limit                             | Value                      | Where it applies                                                                                   |
+| --------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------- |
+| Attempts per pull request         | 30 per 24 hours by default | Settings › Integrations › GitHub › PR Feedback Autofix; "No Autofix attempt limit" removes the cap |
+| Review comments per feedback item | 100                        | One submitted review                                                                               |
+| Diff hunk per review comment      | 4,000 characters           | Longer hunks are truncated and flagged                                                             |
+| Prompt size                       | 200,000 bytes              | The follow-up prompt built from the feedback                                                       |
+
+## Analytics
+
+| Limit      | Value                                    | Where it applies   |
+| ---------- | ---------------------------------------- | ------------------ |
+| Time range | 7, 14, 30, or 90 days; 30 is the default | The Analytics page |
+
+## Next steps
+
+- [Sandbox settings](/configure/sandbox-settings)
+- [Secrets](/configure/secrets)
+- [Status reference](/reference/statuses)

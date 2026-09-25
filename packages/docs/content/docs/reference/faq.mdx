@@ -1,0 +1,120 @@
+---
+title: FAQ
+description: Short answers to the questions people ask most about OpenInspect sessions, configuration, models, integrations, and administration.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/AUTH.md
+  - docs/SECRETS.md
+  - docs/AUTOMATIONS.md
+  - docs/IMAGE_PREBUILD.md
+  - docs/MANAGED_SKILLS.md
+  - docs/AVAILABLE_MODELS.md
+  - docs/CLAUDE_AGENT.md
+  - docs/GROK_MODELS.md
+  - docs/integrations/SLACK.md
+  - docs/integrations/GITHUB.md
+  - README.md
+---
+
+Short answers to common questions, with a link to the page that goes deeper.
+
+## Getting started
+
+### Does closing my browser stop the session?
+
+No. Sessions are persistent: the agent keeps working in its sandbox, and the session's messages, events, and artifacts are stored server-side. Come back later and the session picks up where it was. See [Core concepts](/getting-started/core-concepts).
+
+### Can I run several sessions at once?
+
+Yes. Each session has its own sandbox. Cost limits apply per session. See [Session page](/sessions/session-page).
+
+## Sessions
+
+### Why did my session start from a snapshot?
+
+After each successful turn the sandbox filesystem is snapshotted. A later prompt restores that snapshot instead of cloning again, which is why follow-ups start much faster than the first prompt. The restored checkout, including uncommitted work, is kept and the session branch is fetched. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+
+### Why is setup.sh not running?
+
+`setup.sh` runs only for image builds and fresh sessions. It is skipped for prebuilt-image starts (it already ran during the build) and for snapshot restores. `start.sh` runs on every non-build start. Check `OPENINSPECT_BOOT_MODE` in the script if you need to branch on this. See [Lifecycle scripts](/configure/lifecycle-scripts).
+
+### What happens if I send a prompt while the agent is busy?
+
+It queues. Prompts are processed in order, and a session may hold up to 50 unfinished prompts. To change course instead, use the stop button, which stops the current prompt while queued prompts continue. See [Follow-ups and stopping](/sessions/follow-ups-and-stopping).
+
+### Who can see my session?
+
+Everyone in the workspace with session read access, which includes Viewers. Sessions are workspace resources, not private ones; the creator shown on a session is attribution, not an access list. Owners, Administrators, and Members can also prompt any session. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
+
+### My prompt failed with a message naming a boot phase. What now?
+
+The boot budget (30 minutes by default), the 4-minute connect watchdog, or the 90-second boot heartbeat tripped. Send the prompt again; it starts a new sandbox. If `setup.sh` is slow, shorten it or enable a prebuilt image. See [Recover from a failed run](/sessions/recover-from-failed-run).
+
+### Can the agent merge its own PR?
+
+No. The agent's pull-request tool creates and updates pull requests; there is no merge tool. When you signed in with GitHub, the PR is opened with your OAuth identity, so review and merging follow your normal GitHub workflow. See [Reviewing changes](/sessions/reviewing-changes).
+
+## Configuration
+
+### Where do secrets go?
+
+Add them under Settings › Secrets (global or per repository) or on an environment's Secrets tab. They are stored encrypted and injected into the sandbox as environment variables at spawn. A session receives global secrets plus its target's secrets, and repository or environment values override global ones with the same key. Values are never shown back in the browser. See [Secrets](/configure/secrets).
+
+### Why is my session not using the prebuilt image?
+
+For a repository, the image must be Ready and the session must be on the default branch. For an environment, the image must be Ready and the environment must not have been edited since the build. Ad-hoc "Multiple repositories" sessions never use prebuilt images; save the set as an environment instead. See [Prebuilt images](/configure/prebuilt-images).
+
+### I edited a managed skill. Why does my session not have the change?
+
+Skills are pinned to the revisions that existed when the session was created, and restarting or restoring the session keeps those revisions. Start a new session to pick up the edit. See [Managed skills](/configure/managed-skills).
+
+## Models and accounts
+
+### Why is a model missing from the picker?
+
+Three common causes. The model belongs to an opt-in group (xAI/SuperGrok, OpenCode Zen, OpenCode Go, Z.AI Coding Plan, DeepSeek) that must be enabled under Settings › Models. The session runs on the Claude Agent harness, which lists Anthropic models only. Or the prebuilt image is older than the model; trigger a manual rebuild. See [Choosing a model](/models/choosing-a-model).
+
+### Do I need an API key to use OpenAI or Grok models?
+
+Not necessarily. Connect a ChatGPT or SuperGrok subscription under Settings › Accounts and the session receives short-lived tokens from the control plane instead of a key. API-key mode (`OPENAI_API_KEY` or `XAI_API_KEY` as a secret) remains available. See [Provider accounts](/models/provider-accounts).
+
+### What is the difference between OpenCode and Claude Agent?
+
+OpenCode is the default harness and runs any catalog model. Claude Agent runs Anthropic models only, can use a connected Claude subscription, and reads the repository's `CLAUDE.md` natively. The harness is chosen at session creation and cannot be changed afterwards. Slack, GitHub, and Linear launches use OpenCode; automations use the harness chosen on the automation (OpenCode by default). See [Agent harnesses](/models/agent-harnesses).
+
+## Integrations
+
+### Does a Slack thread reply start a new session?
+
+No, as long as you reply inside the thread of the original request within about 7 days. The reply is sent to the same session as a follow-up. A fresh top-level message, or a reply after the mapping expires, may start target selection and a new session. See [Slack](/integrations/slack).
+
+### Why did the Slack bot ask which repository to use?
+
+It could not decide from the message. Name the repository or environment in the request, ask an administrator to add a routing rule for the keyword, or choose from the dropdown within an hour. See [Slack](/integrations/slack).
+
+### Why did a PR comment resume my session?
+
+PR Feedback Autofix is enabled under Settings › Integrations › GitHub. A human review or comment on an open PR that a session created is queued into that session as a follow-up, and the timeline shows "Resumed by PR feedback". Attempts are capped at 30 per PR per 24 hours by default. See [GitHub](/integrations/github).
+
+## Administration
+
+### How do I stop an automation that keeps failing?
+
+Pause it from the automations list or its detail page. An automation that fails 3 times in a row is paused automatically and shows Paused; fix the cause, use Trigger Now to verify while it is still paused, then Resume, which resets the failure counter. See [Automations](/automations).
+
+### Who can change settings, secrets, and integrations?
+
+Owners and Administrators. Members can create sessions and their own automations but cannot administer shared configuration, and Viewers have read-only access. Only Owners can transfer ownership or change who holds the Owner role. See [Workspace access](/administration/workspace-access).
+
+### Can I get an archived session back?
+
+Yes. Open Settings › Data Controls, find the session in the archived list, and restore it. Restoring needs session lifecycle permission. See [Data controls](/administration/data-controls).
+
+## Next steps
+
+- [Glossary](/reference/glossary)
+- [Session troubleshooting](/sessions/troubleshooting)

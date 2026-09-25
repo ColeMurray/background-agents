@@ -1,0 +1,118 @@
+---
+title: Glossary
+description: Short definitions of the terms used across OpenInspect, each linked to the page that explains it.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/AUTOMATIONS.md
+  - docs/MANAGED_SKILLS.md
+  - docs/IMAGE_PREBUILD.md
+  - docs/AUTH.md
+  - docs/CLAUDE_AGENT.md
+  - docs/AVAILABLE_MODELS.md
+  - packages/shared/src/harnesses.ts
+  - packages/shared/src/types/artifacts.ts
+  - packages/shared/src/types/integrations.ts
+  - packages/shared/src/git.ts
+---
+
+Definitions of the terms you meet in the OpenInspect app and documentation, in alphabetical order.
+
+**Agent harness**
+The program that runs the model inside the sandbox. OpenInspect offers OpenCode (the default, any model family) and Claude Agent (Anthropic models only). The harness is fixed when a session is created and child sessions inherit it. See [Agent harnesses](/models/agent-harnesses).
+
+**Artifact**
+An output the session records beside its messages: a pull request, a branch, a screenshot, a video, or a preview. Pull requests and branches appear in the sidebar; screenshots and videos appear under Media. See [Reviewing changes](/sessions/reviewing-changes).
+
+**Automation**
+A saved instruction that starts sessions without a person present, fired by a schedule, an inbound webhook, a GitHub event, a Slack message, or a Sentry alert. See [Automations](/automations).
+
+**Boot budget**
+The 30-minute default allowance from sandbox creation until the sandbox is ready, covering cloning, `setup.sh`, `start.sh`, skills, and agent start. When it runs out the sandbox fails and the waiting prompt fails with the phase that was running. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+
+**Child session**
+A session an agent spawns with `spawn-child` to work on part of a task in its own sandbox and branch. It inherits the parent's harness, provider auth, and skills. Limits come from the sandbox settings. See [Child sessions](/sessions/child-sessions).
+
+**Environment**
+A named, reusable ordered set of up to 10 repositories with its own secrets scope and optional prebuilt image, managed under Settings › Environments. Sessions snapshot the environment at creation, so later edits do not change existing sessions. See [Environments](/configure/environments).
+
+**Fingerprint (prebuilt image)**
+The identity of the repository set an image was built for: the ordered repositories and their base branches. A session uses an image only when its own set has the same fingerprint, and editing an environment retires the old image. See [Prebuilt images](/configure/prebuilt-images).
+
+**Follow-up**
+Any prompt sent to a session after its first one. Follow-ups queue behind the running turn and are processed in order. See [Follow-ups and stopping](/sessions/follow-ups-and-stopping).
+
+**Inbox**
+The sidebar view of your sessions grouped into Needs attention, In progress, and Recent, with an Unread badge per viewer. See [Inbox and search](/sessions/inbox-and-search).
+
+**Managed skill**
+Reusable instructions and supporting files stored in OpenInspect and installed into a session before the agent starts. Skills are assigned globally or to repositories and environments, and the revisions are pinned when the session is created. See [Managed skills](/configure/managed-skills).
+
+**MCP server**
+A Model Context Protocol server the agent can call as a tool source, configured under Settings › MCP Servers as a local command or a remote URL, for all repositories or selected ones. See [MCP servers](/configure/mcp-servers).
+
+**Multi-repository session**
+A session whose sandbox holds several repositories cloned side by side under `/workspace`, either an ad-hoc "Multiple repositories" pick or an environment. Pushes and pull requests are per repository. See [Core concepts](/getting-started/core-concepts).
+
+**Participant**
+A user who has joined a session. Participants see the same event stream, and each prompt is attributed to the participant who sent it. Participant labels record who contributed; they are not an access list. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
+
+**Prebuilt image**
+A provider image built ahead of time for a repository or environment with the clone and `setup.sh` already done. Sessions that match its fingerprint boot from it and skip setup. Rebuilt on a 30-minute schedule when commits land. See [Prebuilt images](/configure/prebuilt-images).
+
+**Primary repository**
+The first repository in a multi-repository session or environment. It drives which settings apply and wins secret key collisions in ad-hoc sets. See [Environments](/configure/environments).
+
+**Provider account**
+A connected OpenAI, xAI (SuperGrok), or Claude subscription stored installation-wide under Settings › Accounts. Sessions bound to an account receive short-lived access tokens instead of an API key. See [Provider accounts](/models/provider-accounts).
+
+**Reasoning effort**
+A per-session or per-message setting that selects how much reasoning a model applies. Each model lists the efforts it supports and a default. See [Choosing a model](/models/choosing-a-model).
+
+**Routing rule (Slack)**
+A keyword-to-repository mapping under Settings › Integrations › Slack › Routing rules. A whole-word, case-insensitive match routes a Slack request straight to that repository, ahead of the channel's default. See [Slack](/integrations/slack).
+
+**Run (automation)**
+One session started by an automation firing. A multi-repository firing has one run per repository, and the firing row summarises them with statuses such as Completed, Failed, or Partial failure. See [Automations](/automations).
+
+**Sandbox**
+The isolated development container a session's agent works in. A session has many sandboxes over its lifetime; the sandbox status (Ready, Stopped, and so on) is separate from the session status. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+
+**Sandbox provider**
+The backend that runs sandboxes for a deployment: Modal, Vercel, OpenComputer, E2B, or Daytona. Providers differ in how they resume sessions and which resource settings they honour. See [Sandbox providers](/configure/sandbox-providers).
+
+**Session**
+The unit of work in OpenInspect: a persistent, multiplayer conversation with an agent, tied to a session target, that holds messages, events, artifacts, participants, and a reference to its current sandbox. See [Core concepts](/getting-started/core-concepts).
+
+**Session branch**
+The branch a session commits to when it has no named branch: `open-inspect/<session id>`, derived from the session ID. See [Your first pull request](/getting-started/first-pull-request).
+
+**Session target**
+What a session works on, chosen when it is created: a single repository, an ad-hoc set of up to 10 repositories, an environment, or no repository. The target decides which secrets and settings the session receives. See [Core concepts](/getting-started/core-concepts).
+
+**Skill profile**
+A personal saved subset of shared managed skills, selectable in the new-session skill picker. Entries that are disabled or not assigned to the chosen target are ignored. See [Managed skills](/configure/managed-skills).
+
+**Snapshot**
+A saved copy of the sandbox filesystem taken after a successful turn and before an inactivity shutdown. A later prompt restores it, keeping installed dependencies and uncommitted work, so `setup.sh` does not run again. Failed boots never produce one. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+
+**Spend limit**
+The maximum reported cost in USD a session may accumulate, set as the sandbox setting `maxSessionCostUsd` (blank means no limit) or overridden for one session from the Budget sidebar section. See [Spend limits](/sessions/spend-limits).
+
+**Tunnel**
+A public HTTPS URL for a port inside the sandbox, enabled through the `tunnelPorts` sandbox setting (up to 10). URLs appear in the Tunnel URLs sidebar section and in `/workspace/.tunnels.env`. See [Sandbox tools](/sessions/sandbox-tools).
+
+**Unattended mode**
+A per-provider policy that decides whether launches with no person choosing (Slack, GitHub, Linear, and unpinned automation runs) use the provider's default account or API-key mode. See [Provider accounts](/models/provider-accounts).
+
+**Workspace**
+Two meanings. In the sandbox, `/workspace` is the directory holding the session's clones. In administration, the workspace is the OpenInspect installation whose members hold the Owner, Administrator, Member, or Viewer role. See [Workspace access](/administration/workspace-access).
+
+## Next steps
+
+- [Core concepts](/getting-started/core-concepts)
+- [Status reference](/reference/statuses)
+- [FAQ](/reference/faq)

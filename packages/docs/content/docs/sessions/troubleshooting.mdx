@@ -1,0 +1,313 @@
+---
+title: Troubleshooting
+description: Symptom-keyed fixes for starting sessions, running them, reviewing results, integrations, and the inbox.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/HOW_IT_WORKS.md
+  - docs/SECRETS.md
+  - docs/IMAGE_PREBUILD.md
+  - docs/MANAGED_SKILLS.md
+  - docs/AUTH.md
+  - docs/integrations/SLACK.md
+  - docs/integrations/GITHUB.md
+  - docs/integrations/LINEAR.md
+  - docs/OPENAI_MODELS.md
+  - docs/CLAUDE_AGENT.md
+---
+
+Find your symptom below; each entry gives the usual cause and what to check, in order.
+
+## Starting a session
+
+<Accordions>
+<Accordion title="Access Denied after sign-in">
+Cause: your account is outside the workspace allowlist, or your membership was suspended. Suspension denies new browser and bot operations and invalidates existing sign-ins.
+
+Check, in order:
+
+1. Ask a workspace Owner or Administrator whether your user, email, email domain, or GitHub organization is allowed.
+2. If the deployment allows by GitHub organization, the operator must also grant the GitHub App the organization Members read permission and approve it on the installation.
+3. Ask whether your membership was suspended. Existing sessions and authorship remain intact; only access is removed.
+
+See [Workspace access](/administration/workspace-access).
+
+</Accordion>
+
+<Accordion title="No repositories in the picker">
+Cause: the GitHub App is not installed on the repositories you expect, or your role cannot use them.
+
+Check, in order:
+
+1. Creating a session requires permission to use the selected repository or environment; a role may view existing sessions without being able to create new ones. Confirm your role under Settings › Workspace access.
+2. Ask the operator to confirm the GitHub App installation covers the repository. The integration's **Repository Scope** setting can also narrow it to selected repositories.
+3. Try picking a saved environment or **No repository** to confirm the picker itself works.
+
+</Accordion>
+
+<Accordion title="A model is missing from the picker">
+Cause: the model catalog inside a prebuilt image is as old as the image, or the model is not available on the session's harness.
+
+Check, in order:
+
+1. The Claude Agent harness lists Anthropic models only; OpenCode lists every family. See [Agent harnesses](/models/agent-harnesses).
+2. Prebuilt images are rebuilt every 30 minutes when new commits are detected, so a newly published model reaches a quiet repository only on its next rebuild. Trigger a manual rebuild with the refresh button under Settings › Images or Settings › Environments.
+3. Confirm the provider is configured under Settings › Models and Settings › Accounts.
+
+</Accordion>
+
+<Accordion title='"Model not found"'>
+Cause: the selected model has no working credential in the session's scope.
+
+Check, in order:
+
+1. Confirm the provider authentication mode. For provider-account mode, verify the account under Settings › Accounts and its model entitlement.
+2. For API-key mode, add the key under Settings › Secrets in the session's scope: `OPENAI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `ZHIPU_API_KEY`, or `OPENCODE_API_KEY` (an `opencode-go/*` model also needs an active Go subscription on that key).
+3. New secrets reach new sandboxes only; start a new session or wait for the current sandbox to stop before retrying.
+
+See [Secrets](/configure/secrets).
+
+</Accordion>
+
+<Accordion title='Session stuck at "Cloning repository" or "Running setup.sh"'>
+Cause: the boot is still running. There is no fixed limit on `setup.sh`; the sandbox fails only when the 30-minute boot budget runs out or the runtime stops heartbeating for 90 seconds.
+
+Check, in order:
+
+1. Read the header: it names the phase and, in multi-repository sessions, the repository. The status popover says what just finished.
+2. Wait for the boot budget; if it trips, the prompt fails with the phase and your next prompt starts a new sandbox.
+3. If `setup.sh` is slow, enable a prebuilt image so setup runs at build time. See [Prebuilt images](/configure/prebuilt-images).
+
+</Accordion>
+
+<Accordion title="Boot failed with a phase in the error">
+Cause: the boot budget, the 4-minute connect watchdog, or the 90-second heartbeat tripped, or the runtime reported a fatal error (clone failed, the first repository's `start.sh` failed, or the agent would not start).
+
+Check, in order:
+
+1. Send the prompt again. No snapshot was taken from the failed boot, and the next prompt starts a new sandbox.
+2. If the phase was `start.sh`, fix `.openinspect/start.sh` in the first repository; a fatal failure there ends the boot. A `setup.sh` failure is only a warning.
+3. If it fails repeatedly before any prompt runs, collect the session ID and phase for your operator. See [Recover from a failed run](/sessions/recover-from-failed-run).
+
+</Accordion>
+</Accordions>
+
+## During a run
+
+<Accordions>
+<Accordion title="A follow-up was ignored">
+Cause: follow-ups are queued, not injected. Both harnesses hold a follow-up until the running turn completes, and a parent's follow-up never interrupts a child's running turn.
+
+Check, in order:
+
+1. Look for the prompt in the queue below the composer; it dispatches when the current turn ends.
+2. To act now, stop the current prompt first ("Stop current prompt; queued prompts will continue"), then send the correction.
+3. From Slack, reply inside the original thread; thread mappings last about 7 days, after which a reply starts a new session.
+
+</Accordion>
+
+<Accordion title="The agent lost credentials for a provider account">
+Cause: the account's OAuth grant was revoked, expired, or rotated elsewhere ("Token refresh failed"), or the account was disabled or archived.
+
+Check, in order:
+
+1. Open Settings › Accounts and use **Reconnect** on the account. Reconnect must use the same provider identity; a different identity needs a new account.
+2. For Claude Agent sessions, a disabled account fails the prompt with reconnect guidance; an archived account cannot be recovered for that session, so start a new one.
+3. Send the follow-up. A new sandbox picks up the refreshed credential.
+
+See [Provider accounts](/models/provider-accounts).
+
+</Accordion>
+
+<Accordion title="A secret is not present in the sandbox">
+Cause: wrong scope, a reserved key name, or a sandbox that predates the secret.
+
+Check, in order:
+
+1. Verify the secret is saved under the correct scope: global, the specific repository, or the environment.
+2. Check that the key is not on the reserved list. Keys are uppercased when saved (`my_api_key` becomes `MY_API_KEY`).
+3. New secrets apply to new sandboxes only; start a new session.
+4. For sessions launched from an environment, repository secrets do not flow in. Add the key to the environment, or import it from the repository on the environment's Secrets tab.
+
+See [Secrets](/configure/secrets).
+
+</Accordion>
+
+<Accordion title="A managed skill is missing or ignored">
+Cause: the profile entry is disabled, the skill's assignments do not match the session's repository or environment, the session predates the change, or a name collision.
+
+Check, in order:
+
+1. Under Settings › Skills › My profiles, confirm the entries are enabled, then confirm each shared skill's assignments match the session's repository or environment.
+2. Managed skills are pinned at session creation; start a new session to receive a newer revision or changed assignments.
+3. If a managed skill shares a name with a repository, user, or bundled skill, the discovered skill wins and the managed one is dropped. Rename one of them.
+
+See [Managed skills](/configure/managed-skills).
+
+</Accordion>
+
+<Accordion title="MCP server tools are missing">
+Cause: the server is disabled, scoped to other repositories, or its local package could not be prepared.
+
+Check, in order:
+
+1. Under Settings › MCP Servers, confirm the server is **Enabled** and its scope is "All repositories" or includes this session's repository.
+2. For local servers started with `npx`, unversioned packages are refreshed on every sandbox boot; a failed install is retried on the next boot. Pin an exact version in the command and in `.openinspect/setup.sh`, then rebuild the image to preinstall it.
+3. MCP settings are not baked into prebuilt images; a changed pinned version installs at boot until the image is rebuilt.
+
+See [MCP servers](/configure/mcp-servers).
+
+</Accordion>
+</Accordions>
+
+## Results
+
+<Accordions>
+<Accordion title="The diff is unavailable">
+Cause: the diff refresh failed, or the file has no renderable text patch.
+
+Check, in order:
+
+1. Click **Retry** in the notice at the top of the changes panel.
+2. A file that reads "This patch is too large to display safely." or "This binary file changed, but it does not have a text diff." cannot be rendered; review it in the pull request or the terminal.
+3. "This file is no longer part of the latest changes." means a later turn reverted it; move to the next changed file.
+
+See [Reviewing changes](/sessions/reviewing-changes).
+
+</Accordion>
+
+<Accordion title="The pull request was not created as expected">
+Cause: the PR is created with your GitHub OAuth identity when you signed in with GitHub; otherwise it is created as the GitHub App. A second call from the same branch updates the existing PR instead of opening another.
+
+Check, in order:
+
+1. If the PR is authored by the App and you wanted it under your name, sign in with GitHub before the next request that creates a PR; existing PRs keep their author.
+2. If you expected a second PR, ask the agent to create a new branch first; the same branch always updates its open PR.
+3. Use **Sync PR status** in the Pull requests section if the sidebar looks stale.
+
+See [Your first pull request](/getting-started/first-pull-request) and [GitHub](/integrations/github).
+
+</Accordion>
+
+<Accordion title="The prebuilt image was not used">
+Cause: image building is off, the image is not Ready, the session is on a non-default branch, the environment was edited, or you picked an ad-hoc repository set.
+
+Check, in order:
+
+1. Repository session: image building is enabled under Settings › Images, the status is **Ready**, and the session is on the repository's default branch. Other branches use the normal startup flow.
+2. Environment session: the **prebuild** toggle is on, the image is Ready, and the environment's repositories, order, and base branches have not changed since the build (an edit retires the image until the rebuild completes).
+3. You launched the session by picking the environment; ad-hoc "Multiple repositories" selections never use prebuilt images.
+
+See [Prebuilt images](/configure/prebuilt-images).
+
+</Accordion>
+
+<Accordion title='Commits show "Partially verified"'>
+Cause: with commit signing enabled, the author and committer are intentionally different, and GitHub vigilant mode labels such commits Partially verified.
+
+Check, in order:
+
+1. This is expected behavior, not a signing failure.
+2. GitHub-created merge or squash commits follow the repository's merge-signing behavior; the branch commit's signature does not carry onto them.
+
+See [Source control](/configure/source-control).
+
+</Accordion>
+</Accordions>
+
+## Integrations
+
+<Accordions>
+<Accordion title="The Slack bot is silent">
+Cause: the bot is not in the channel, the message did not mention it, DMs are not subscribed, or the message only matches an automation.
+
+Check, in order:
+
+1. In a channel, invite the bot and `@mention` it. An ordinary channel message starts a session only when it matches a Slack Message automation.
+2. For DMs, the app needs the direct message event subscription; then a plain DM works without a mention.
+3. If the bot asked which target to use, pick from the dropdown within an hour or resend with the target included.
+4. If setup was just changed, the operator should confirm the event subscription and interactivity URLs.
+
+See [Slack](/integrations/slack).
+
+</Accordion>
+
+<Accordion title="A GitHub mention was ignored">
+Cause: the mention was on an issue, used the wrong name, or the repository or user is outside the bot's allowed scope.
+
+Check, in order:
+
+1. Mention the bot in a pull request conversation comment or review thread; mentions on ordinary issues are ignored.
+2. Use the full username including `[bot]`, such as `@my-app[bot]`.
+3. Under Settings › Integrations › GitHub, confirm the repository is in scope and the user is allowed.
+4. An eyes reaction means the request was accepted; open the web session to see progress or failure.
+
+See [GitHub](/integrations/github).
+
+</Accordion>
+
+<Accordion title="Linear stays Working after the session completed">
+Cause: Linear leaves Working only when the bot delivers a terminal response or error activity; a completion without a Linear callback destination cannot repair itself.
+
+Check, in order:
+
+1. Open **View Session** from Linear and confirm the web session is complete.
+2. Send another follow-up through the same Linear Agent session to produce a new terminal activity, or start a new Agent session if the issue mapping has expired.
+3. Give your operator the session ID; they can trace the callback through the control-plane and Linear bot logs.
+
+See [Linear](/integrations/linear).
+
+</Accordion>
+</Accordions>
+
+## Sessions and inbox
+
+<Accordions>
+<Accordion title="A session is stuck at Running or Active">
+Cause: `active` means a prompt is pending or processing. Either the turn is genuinely running, or the sandbox is still booting or waiting on a stop confirmation.
+
+Check, in order:
+
+1. Read the header. A boot phase means the sandbox is booting; the 30-minute boot budget fails the prompt if it never becomes ready.
+2. If the agent is working but you want it to stop, use the stop button in the composer.
+3. If the queue is empty and nothing is running, send a short follow-up; the status settles to Completed or Failed when the turn ends.
+4. Still stuck: collect the session ID and timestamp for your operator.
+
+See [Session lifecycle and statuses](/sessions/lifecycle-and-statuses).
+
+</Accordion>
+
+<Accordion title="Cannot prompt an archived session">
+Cause: archived sessions do not accept prompts.
+
+Check, in order:
+
+1. Open Settings › Data Controls and click **Unarchive** on the session (requires lifecycle permission), or find it on the Sessions page with Lifecycle set to Archived.
+2. For an archived child session, unarchive it before the parent sends it a follow-up.
+3. Send the prompt again.
+
+See [Data controls](/administration/data-controls).
+
+</Accordion>
+
+<Accordion title="The unread badge does not clear">
+Cause: opening a session marks its latest finished turn read only while the tab is visible; a hidden tab waits.
+
+Check, in order:
+
+1. Bring the session tab to the front and leave it open for a moment.
+2. Use **Mark as read** from the row's menu in the sidebar.
+3. If a newer turn finished after you read the previous one, the session is unread again by design.
+
+See [Inbox, sessions list, and search](/sessions/inbox-and-search).
+
+</Accordion>
+</Accordions>
+
+## Next steps
+
+- [Recover from a failed run](/sessions/recover-from-failed-run)
+- [Session lifecycle and statuses](/sessions/lifecycle-and-statuses)
+- [FAQ](/reference/faq)

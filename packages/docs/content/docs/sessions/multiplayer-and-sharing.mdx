@@ -1,0 +1,88 @@
+---
+title: Multiplayer and sharing
+description: How sessions are shared across the workspace, what presence and prompt attribution show, and how roles affect what each person can do in a session.
+audience: user
+owner: control-plane
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/web/src/app/(app)/(sidebar)/sessions/page.tsx
+  - docs/AUTH.md
+  - docs/HOW_IT_WORKS.md
+  - packages/shared/src/rbac.ts
+  - packages/web/src/components/sidebar/participants-section.tsx
+  - packages/web/src/components/session-actions.ts
+---
+
+This page explains who can see and prompt a session, how to bring a colleague into one, and what each person's role lets them do.
+
+## Sessions belong to the workspace
+
+A session is a workspace resource, not a private document. Every admitted member with session read access can open every session in the workspace. There is no per-session sharing list and no way to make a session private.
+
+The creator shown on a session and the participant labels on its prompts are attribution, not access control. They record who started the session and who contributed; they do not grant or remove anyone's access. The **Mine** filter in the sessions list is a convenience for finding sessions you created, not a security boundary.
+
+Creating a session also requires permission to use its repository or environment, so a person may be able to open an existing session without being able to start a new one on the same repository.
+
+## Sharing a session
+
+To bring someone in, send them the session link. Use **Copy link** (in the More menu above the composer on desktop, or in the "Session actions" menu on phones); it copies the session's URL. Anyone with session read access who opens the link joins the session.
+
+There is nothing to accept or approve. The other person sees the same timeline, the same sandbox status, and the same sidebar you do.
+
+## Presence
+
+The **Participants** section at the top of the right sidebar shows who is in the session: an avatar for each participant (up to four) and a count such as "2 prompt engineers". A green dot on an avatar means that person is connected right now. Presence updates live as people open and close the page.
+
+Everyone connected receives the same event stream, so a prompt sent by one person and the agent's response to it appear for all participants at the same time.
+
+## Prompt attribution
+
+Each prompt in the timeline is labeled with its author: "You" for your own prompts, and the other person's name and avatar for theirs. The attribution is carried all the way into git. Commits the agent makes while working on a prompt use that prompt author's SCM name and email as the commit author, so a branch that two people steered has both of them in its history. Pull requests are opened with the prompting user's GitHub identity when one is connected. See [reviewing changes](/sessions/reviewing-changes) for how attribution and commit signing interact.
+
+Prompts queued by PR Feedback Autofix carry a "Resumed by PR feedback" header that names the source (a review or a PR comment, from a human or a bot).
+
+## Collaboration patterns
+
+- **Start and steer.** One person writes the initial prompt and moves on. A colleague opens the link later, reads the timeline, and sends the follow-up that corrects course. Follow-ups queue behind the running turn regardless of who sent them.
+- **Pair debugging.** Two people watch the same run. One reads tool output in the timeline while the other checks the diff in the Changes panel, and either can stop the turn if it goes wrong.
+- **Hand-off.** Share the link at the end of your day. The next person sees the full history, the queued prompts, and the current sandbox state, and continues in the same branch.
+- **Teaching.** Newer team members can open any session to see how others prompt and how the agent works through a task.
+
+Because follow-ups are queued in order, agree on who is steering before both of you send corrections at once. The queued prompt stack above the composer shows what is waiting, and anyone with lifecycle access can remove a queued prompt.
+
+## What not to put in a session
+
+Everything in a session is visible to every member with session read access, including Viewers:
+
+- The text of every prompt and every attached image.
+- The agent's responses, tool calls, and command output, including anything printed by a script.
+- Screenshots and recordings.
+- The diff and the branch.
+
+Do not paste data into a prompt that other members of the workspace must not see, and do not ask the agent to print secrets in the sandbox. Secrets configured under Settings › Secrets are injected as environment variables; keep credentials there rather than in prompts, and be aware that a command that echoes an environment variable puts its value in the timeline.
+
+## Role effects inside a session
+
+| Role                    | In a session                                                                                                                                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Viewer                  | Read only. Can open the session, watch the timeline, and read the diff and media. Cannot prompt, stop, rename, archive, or use sandbox tools.                                                                                     |
+| Member                  | Can prompt and contribute, and can stop turns, remove queued prompts, rename, archive and unarchive (`sessions.lifecycle`), retry a failed diff, and use the terminal, code-server, VNC, and tunnels (`sessions.sandbox_access`). |
+| Administrator and Owner | Everything a Member can do in a session, plus workspace administration.                                                                                                                                                           |
+
+Lifecycle actions (stop, rename, archive, unarchive, remove a queued prompt, retry the diff) need `sessions.lifecycle`. Prompting needs `sessions.collaborate`. Both are part of the Member role, so in practice every non-Viewer can do all of these in any session.
+
+Role changes and suspensions take effect on the next request. A browser that already has the session open is rechecked at least every five minutes, so someone whose access was removed can keep a live connection for up to five minutes.
+
+## Troubleshooting
+
+| Symptom                                                                                   | Cause                                                                                                                                                 | Fix                                                                                                       |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The Sessions page says "You do not have permission to view sessions."                     | Your account holds no role that can read sessions. Every built-in role, Viewer included, can, so your workspace access has been removed or suspended. | Ask a workspace Owner or Administrator to check your account under Settings › Workspace access.           |
+| A person whose access was removed or suspended still sees live updates in an open session | Live connections are rechecked at least every five minutes, not on every event.                                                                       | Wait up to five minutes; the connection closes on the next recheck. New requests are refused immediately. |
+
+## Next steps
+
+- [Workspace access](/administration/workspace-access)
+- [Follow-ups, stopping, and cancelling](/sessions/follow-ups-and-stopping)
+- [Inbox and search](/sessions/inbox-and-search)

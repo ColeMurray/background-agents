@@ -1,0 +1,184 @@
+---
+title: Inbound webhooks
+description: Trigger an automation from any system with an authenticated JSON POST, filter payloads with JSONPath conditions, and deduplicate retries.
+audience: team-owner
+owner: control-plane
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/AUTOMATIONS.md
+  - packages/shared/src/triggers/types.ts
+  - packages/shared/src/triggers/webhook/normalizer.ts
+  - packages/shared/src/triggers/webhook/context.ts
+  - packages/web/src/components/automations/webhook-config.tsx
+  - packages/web/src/components/automations/condition-builder.tsx
+  - packages/control-plane/src/webhooks/automation-webhook.ts
+  - packages/control-plane/src/routes/automation-keys.ts
+  - packages/control-plane/src/scheduler/scheduler.ts
+---
+
+An Inbound Webhook automation gives you a URL and API key; any system that can send a JSON `POST` can start a session.
+
+## How it works
+
+1. Create an automation with **Trigger Type** set to **Inbound Webhook**.
+2. After creation, copy the **Webhook URL** and **API Key** shown on the page.
+3. Send an authenticated `POST` with a JSON body.
+4. OpenInspect checks the request against the automation's conditions and, if they pass, starts a session whose prompt is your saved instructions followed by a context block containing the payload.
+
+```mermaid
+flowchart TB
+    accTitle: How an inbound webhook request is authenticated, filtered, and turned into a run
+    post["POST with a JSON body"] --> auth{"Bearer API key valid?"}
+    auth -->|No| unauthorized["401"]
+    auth -->|Yes| paused{"Automation paused?"}
+    paused -->|Yes| nothing["Accepted, nothing starts"]
+    paused -->|No| filters{"Every JSONPath filter matches?"}
+    filters -->|No| none["ok: true, triggered: 0"]
+    filters -->|Yes| dedupe{"idempotencyKey already seen?"}
+    dedupe -->|Yes| skipped["ok: true, skipped: 1"]
+    dedupe -->|No| session["Session: instructions, then the payload context block"]
+    session --> triggered["ok: true, triggered: 1"]
+```
+
+Webhook automations do not use a schedule or timezone.
+
+## Setup notes
+
+- The **Webhook URL** and **API Key** appear only after the automation is created. The page shows a **Copy** button next to each and a **Copy curl** button that produces a ready-to-run test request.
+- The API key is shown once: the form warns you to save it because it is not shown again after you leave the page. Only a hash is stored.
+- If the key is lost or leaked, click **Regenerate Key** on the detail page. The old key stops working immediately and the new key is displayed once.
+- The detail page always shows the webhook path (`POST /webhooks/automation/<automation-id>`) for reference.
+
+## Request requirements
+
+| Requirement            | Value              |
+| ---------------------- | ------------------ |
+| Method                 | `POST`             |
+| `Content-Type` header  | `application/json` |
+| `Authorization` header | `Bearer <api-key>` |
+| Maximum body size      | 64 KB              |
+| Body                   | Any valid JSON     |
+
+Example:
+
+```bash
+curl -X POST "https://<your-worker-url>/webhooks/automation/<automation-id>" \
+  -H "Authorization: Bearer <api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"event":"deploy.failed","service":"api","environment":"prod"}'
+```
+
+## What the agent receives
+
+The session prompt is your instructions, then a separator, then a context block, then a guardrail line telling the agent to treat the context as untrusted. The context block contains:
+
+- A line stating the automation was triggered by an inbound webhook.
+- The time the request was received.
+- The JSON payload, pretty-printed and truncated after 4,096 characters.
+- A warning that the payload is untrusted input data, not instructions.
+
+Write instructions that tell the agent which payload fields matter and what to do with them. For example:
+
+```text
+A deployment event has arrived (see the payload below). If `event` is
+"deploy.failed", check out the commit named in `sha`, run the test suite,
+and open a pull request with a fix if a test fails. Otherwise do nothing.
+```
+
+## Filtering with conditions
+
+Webhook automations support one condition type, **JSONPath Filter**. A condition holds one or more filters; every filter must match for the run to start. Add filters with **Add filter** in the condition builder.
+
+### Operators
+
+| Operator (UI) | Stored as  | Matches when                                                    |
+| ------------- | ---------- | --------------------------------------------------------------- |
+| `=`           | `eq`       | The value equals the filter value                               |
+| `!=`          | `neq`      | The value differs from the filter value                         |
+| `>`           | `gt`       | The value is a number greater than the filter value             |
+| `>=`          | `gte`      | The value is a number greater than or equal to the filter value |
+| `<`           | `lt`       | The value is a number less than the filter value                |
+| `<=`          | `lte`      | The value is a number less than or equal to the filter value    |
+| `contains`    | `contains` | The value is a string containing the filter text                |
+| `exists`      | `exists`   | The path resolves to any value                                  |
+
+A missing path fails every operator except `exists`. When you type a numeric value in the filter box it is stored as a number, so `$.count = 3` compares against the number 3, not the string "3".
+
+### Path syntax
+
+Paths are simple dot notation starting with `$.`, for example `$.event.type` or `$.deployment.environment`.
+
+Not supported:
+
+- Array indexing such as `$.items[0]`
+- Recursive descent such as `$..id`
+- Filter expressions or any other full JSONPath syntax
+
+### Examples
+
+| Goal                                    | Path                    | Operator   | Value        |
+| --------------------------------------- | ----------------------- | ---------- | ------------ |
+| Run only for production                 | `$.environment`         | `=`        | `production` |
+| Run only for failed deploys             | `$.status`              | `=`        | `failed`     |
+| Run only when a field is present        | `$.pull_request.number` | `exists`   | (none)       |
+| Run only for severe alerts              | `$.severity`            | `>=`       | `3`          |
+| Run when the message mentions a service | `$.message`             | `contains` | `checkout`   |
+
+## Idempotency and duplicate deliveries
+
+If your sender may retry, include a top-level `idempotencyKey` string in the body.
+
+- Deliveries that share an `idempotencyKey` are treated as the same event. Re-sending it does not create a second run; the duplicate is counted as skipped.
+- The `idempotencyKey` stays in the stored body but is removed from the context block the agent sees.
+- Without an `idempotencyKey`, every delivery gets its own key, so separate deliveries to the same automation can run concurrently.
+
+## Responses
+
+A successful request returns:
+
+```json
+{ "ok": true, "triggered": 1, "skipped": 0, "steered": 0 }
+```
+
+| Field       | Meaning                                                                                            |
+| ----------- | -------------------------------------------------------------------------------------------------- |
+| `triggered` | Runs started by this delivery                                                                      |
+| `skipped`   | Matching runs not started because of duplicate delivery or concurrency protection                  |
+| `steered`   | Replies routed into an existing session; used by Slack thread replies and 0 for webhook deliveries |
+
+A request whose conditions do not match returns `ok: true` with `triggered: 0`.
+
+### Error responses
+
+| Status | Meaning                                                    |
+| ------ | ---------------------------------------------------------- |
+| `400`  | Invalid JSON body                                          |
+| `401`  | Missing or invalid API key                                 |
+| `404`  | Automation not found, or not an Inbound Webhook automation |
+| `413`  | Body larger than 64 KB                                     |
+| `415`  | `Content-Type` was not `application/json`                  |
+
+A paused automation accepts the request but starts nothing.
+
+## Security
+
+- Treat the API key like a password. Anyone holding it can start sessions against the automation's repository under the owner's authority. Use **Regenerate Key** if it is exposed.
+- The payload reaches the agent as untrusted data inside the prompt. Keep instructions specific about which fields to act on, and do not ask the agent to follow instructions contained in the payload.
+- Runs execute with the automation owner's permissions; the sender's identity is not checked beyond the key.
+
+## Troubleshooting
+
+| Symptom                       | Cause                                                                | Fix                                                                          |
+| ----------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `401`                         | Missing `Authorization: Bearer` header, or the key was regenerated   | Copy the current key from the detail page; regenerate if it is lost          |
+| `415`                         | The `Content-Type` header is missing or not `application/json`       | Set the header explicitly; some HTTP clients default to form encoding        |
+| `404`                         | Wrong automation id, or the automation uses a different trigger type | Copy the URL from the detail page                                            |
+| `ok: true` but `triggered: 0` | A JSONPath filter did not match, or the automation is paused         | Compare the filter path with the actual payload; check the automation status |
+| Retries create no run         | The retry reused an `idempotencyKey` that already fired              | Expected; use a new key for a genuinely new event                            |
+
+## Next steps
+
+- [Sentry alerts](/automations/sentry-alerts)
+- [GitHub event triggers](/automations/github-events)
+- [Secrets](/configure/secrets)

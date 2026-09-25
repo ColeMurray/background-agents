@@ -1,0 +1,11 @@
+{
+  "title": "Writing effective prompts",
+  "defaultOpen": false,
+  "pages": [
+    "when-to-delegate",
+    "writing-prompts",
+    "good-vs-bad-prompts",
+    "prompt-templates",
+    "workflow-recipes"
+  ]
+}

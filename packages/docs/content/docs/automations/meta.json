@@ -1,0 +1,15 @@
+{
+  "title": "Automations",
+  "defaultOpen": false,
+  "pages": [
+    "index",
+    "first-automation",
+    "schedules",
+    "inbound-webhooks",
+    "github-events",
+    "slack-messages",
+    "sentry-alerts",
+    "multi-repository",
+    "templates"
+  ]
+}
