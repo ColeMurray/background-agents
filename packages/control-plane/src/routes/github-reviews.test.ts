@@ -86,7 +86,7 @@ function createFakeDb(
             },
             async run<T>() {
               if (trimmed.startsWith("DELETE FROM github_review_sessions")) {
-                deletedSessionIds.push(values[2] as string);
+                deletedSessionIds.push(values[0] as string);
               }
               if (
                 trimmed.startsWith("UPDATE github_review_state\n         SET latest_generation")

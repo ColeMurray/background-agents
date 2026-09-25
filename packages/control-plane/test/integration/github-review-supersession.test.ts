@@ -15,6 +15,7 @@ import {
   reapSupersededReviewSessions,
 } from "../../src/routes/github-reviews";
 import type { RequestContext } from "../../src/routes/shared";
+import type { SessionRuntimeClient } from "../../src/session/runtime-client";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
@@ -258,6 +259,7 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     description: string | null;
     superseded: boolean;
     leaseExpiresInMs: number;
+    grantId: string;
   }
 
   function closeOut(
@@ -272,15 +274,36 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     });
   }
 
+  async function grantOf(response: Promise<Response>): Promise<Grant> {
+    const granted = await response;
+    expect(granted.status).toBe(200);
+    return granted.json<Grant>();
+  }
+
   function finalize(
     sessionId: string,
+    grantId: string,
     outcome: "done" | "retry",
     service: "github-bot" | "slack-bot" = "github-bot"
   ) {
     return serviceFetch("https://test.local/internal/github-reviews/close-out/finalize", {
       method: "POST",
       service,
-      body: JSON.stringify({ sessionId, outcome }),
+      body: JSON.stringify({ sessionId, grantId, outcome }),
+    });
+  }
+
+  async function leaseHolder(repoId: number, prNumber: number) {
+    return env.DB.prepare(
+      "SELECT lease_session_id, lease_expires_at FROM github_review_state WHERE repo_id = ? AND pr_number = ?"
+    )
+      .bind(repoId, prNumber)
+      .first<{ lease_session_id: string | null; lease_expires_at: number | null }>();
+  }
+
+  function runReaper(fetch: SessionRuntimeClient["fetch"]): Promise<void> {
+    return reapSupersededReviewSessions(sqlDatabase(env.DB), { fetch }, {} as Env, {
+      submit: () => {},
     });
   }
 
@@ -343,9 +366,8 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
   it("grants the latest review's close-out as a lease, fencing its agent until finalized", async () => {
     const sessionId = await createLatestReview(616161, 5, "sha-a");
 
-    const grant = await closeOut(sessionId, REQUEST);
-    expect(grant.status).toBe(200);
-    await expect(grant.json<Grant>()).resolves.toEqual({
+    const grant = await grantOf(closeOut(sessionId, REQUEST));
+    expect(grant).toEqual({
       outcome: "granted",
       owner: "acme",
       repo: "widgets",
@@ -354,13 +376,14 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
       description: REQUEST.description,
       superseded: false,
       leaseExpiresInMs: expect.any(Number),
+      grantId: expect.any(String),
     });
     // An agent that wakes after its turn ended can no longer take the lease.
     expect((await agentAcquire(sessionId)).status).toBe(409);
     // A duplicate drive waits behind the close-out's own live lease.
     expect((await closeOut(sessionId)).status).toBe(202);
 
-    expect((await finalize(sessionId, "done")).status).toBe(204);
+    expect((await finalize(sessionId, grant.grantId, "done")).status).toBe(204);
     expect(await fenceRows(616161, 5)).toEqual([]);
     // A redelivered completion finds nothing left to own.
     expect((await closeOut(sessionId, REQUEST)).status).toBe(409);
@@ -371,12 +394,12 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     const repoId = 617171;
     const prNumber = 5;
     const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
-    expect((await closeOut(sessionA, REQUEST)).status).toBe(200);
+    const grantA = await grantOf(closeOut(sessionA, REQUEST));
 
     const sessionB = await createLatestReview(repoId, prNumber, "sha-a");
     expect((await agentAcquire(sessionB)).status).toBe(423);
 
-    expect((await finalize(sessionA, "done")).status).toBe(204);
+    expect((await finalize(sessionA, grantA.grantId, "done")).status).toBe(204);
     expect((await agentAcquire(sessionB)).status).toBe(204);
   });
 
@@ -461,9 +484,9 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     const repoId = 646464;
     const prNumber = 8;
     const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
-    expect((await closeOut(sessionId, REQUEST)).status).toBe(200);
+    const grant = await grantOf(closeOut(sessionId, REQUEST));
 
-    expect((await finalize(sessionId, "retry")).status).toBe(204);
+    expect((await finalize(sessionId, grant.grantId, "retry")).status).toBe(204);
 
     const [row] = await fenceRows(repoId, prNumber);
     expect(row.session_id).toBe(sessionId);
@@ -538,29 +561,95 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     expect((await new SessionIndexStore(env.DB).get(sessionA))?.status).toBe("cancelled");
   });
 
-  it("garbage-collects fence rows older than a day", async () => {
+  it("keeps an aged fence row while its close-out holds the lease, and collects it after", async () => {
+    // R4: age is no proof the row's newly granted close-out is inactive.
     const repoId = 628282;
     const prNumber = 6;
     const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+    const grant = await grantOf(closeOut(sessionId, REQUEST));
     await env.DB.prepare("UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?")
       .bind(Date.now() - 25 * 60 * 60 * 1000, sessionId)
       .run();
+    const noCancel = vi.fn(async () => new Response(null, { status: 404 }));
 
-    await reapSupersededReviewSessions(
-      sqlDatabase(env.DB),
-      { fetch: vi.fn(async () => new Response(null, { status: 404 })) },
-      {} as Env,
-      { submit: () => {} }
-    );
+    await runReaper(noCancel);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
 
+    expect((await finalize(sessionId, grant.grantId, "retry")).status).toBe(204);
+    await runReaper(noCancel);
     expect(await fenceRows(repoId, prNumber)).toEqual([]);
+  });
+
+  it("keeps a stale row whose close-out was recorded while the reaper was cancelling it", async () => {
+    // R1: the reaper's retirement must not act on its pre-cancel snapshot.
+    const repoId = 629292;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    await createLatestReview(repoId, prNumber, "sha-b");
+    let grantDuringCancel: Grant | undefined;
+    const cancelWhileCloseOutLands = vi.fn(async (sessionId: string) => {
+      if (sessionId === sessionA && !grantDuringCancel) {
+        grantDuringCancel = await grantOf(closeOut(sessionA, REQUEST));
+      }
+      return Response.json({ status: "cancelled" });
+    });
+
+    await runReaper(cancelWhileCloseOutLands);
+
+    expect(grantDuringCancel).toMatchObject({ headSha: "sha-a", superseded: true });
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toContain(sessionA);
+    // A failed attempt is still retryable.
+    expect((await finalize(sessionA, grantDuringCancel!.grantId, "retry")).status).toBe(204);
+    await expect(grantOf(closeOut(sessionA))).resolves.toMatchObject({ headSha: "sha-a" });
+  });
+
+  it("ignores a late finalize from an earlier grant of the same session", async () => {
+    // R3: finalize names the grant, not the session.
+    const repoId = 630303;
+    const prNumber = 6;
+    const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+    const first = await grantOf(closeOut(sessionId, REQUEST));
+    await expireLease(repoId, prNumber);
+    const second = await grantOf(closeOut(sessionId));
+    const secondLease = await leaseHolder(repoId, prNumber);
+
+    expect((await finalize(sessionId, first.grantId, "retry")).status).toBe(204);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(secondLease);
+    expect((await finalize(sessionId, first.grantId, "done")).status).toBe(204);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(secondLease);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
+
+    expect((await finalize(sessionId, second.grantId, "done")).status).toBe(204);
+    expect(await fenceRows(repoId, prNumber)).toEqual([]);
+    expect(await leaseHolder(repoId, prNumber)).toEqual({
+      lease_session_id: null,
+      lease_expires_at: null,
+    });
+  });
+
+  it("keeps an agent's release and a close-out's finalize off each other's lease", async () => {
+    const repoId = 631313;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionA)).status).toBe(204);
+    const agentLease = await leaseHolder(repoId, prNumber);
+
+    expect((await finalize(sessionA, sessionA, "retry")).status).toBe(400);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(agentLease);
+
+    expect((await agentRelease(sessionA)).status).toBe(204);
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-b");
+    await grantOf(closeOut(sessionB, REQUEST));
+    const closeOutLease = await leaseHolder(repoId, prNumber);
+    expect((await agentRelease(sessionB)).status).toBe(204);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(closeOutLease);
   });
 
   it("rejects a close-out or finalize from any caller other than the github-bot service", async () => {
     const sessionId = await createLatestReview(646464, 8, "sha-a");
 
     expect((await closeOut(sessionId, REQUEST, "slack-bot")).status).toBe(403);
-    expect((await finalize(sessionId, "done", "slack-bot")).status).toBe(403);
+    expect((await finalize(sessionId, "grant", "done", "slack-bot")).status).toBe(403);
 
     expect((await fenceRows(646464, 8)).map((row) => row.session_id)).toEqual([sessionId]);
   });

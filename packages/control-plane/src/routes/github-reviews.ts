@@ -12,7 +12,7 @@
  * token that permits writing one is the PR's submission lease in
  * github_review_state (one slot per PR). An agent takes it under its own
  * session id, only while its session is the latest generation and its turn
- * has not been closed out. A close-out takes it under `close-out:<sessionId>`,
+ * has not been closed out. A close-out takes it under `close-out:<sessionId>:…`,
  * only while that session's fence row is the newest row for its head. The
  * only unleased status write is the admitting handler's "pending".
  *
@@ -85,6 +85,8 @@ const closeOutBodySchema = z.object({
 
 const closeOutFinalizeBodySchema = z.object({
   sessionId: z.string().trim().min(1),
+  /** The `grantId` returned with the close-out's grant. */
+  grantId: z.string().min(1),
   outcome: z.enum(["done", "retry"]),
 });
 
@@ -96,9 +98,55 @@ interface StaleReviewSessionRow {
   lease_expires_at: number | null;
 }
 
-/** Lease holder id for a close-out of `sessionId`; never equal to any session id. */
-function closeOutHolder(sessionId: string): string {
-  return `close-out:${sessionId}`;
+/**
+ * Lease holder ids of close-outs of `sessionId` start with this prefix; it
+ * never equals a session id, so an agent's lease release cannot clear one.
+ */
+function closeOutHolderPrefix(sessionId: string): string {
+  return `close-out:${sessionId}:`;
+}
+
+/**
+ * SQL condition: the state row `st` holds a live close-out lease for the fence
+ * row `row`. Binds one parameter: now.
+ */
+function liveCloseOutLeaseOf(row: string): string {
+  const prefix = `'close-out:' || ${row}.session_id || ':'`;
+  return `substr(st.lease_session_id, 1, length(${prefix})) = ${prefix}
+    AND st.lease_expires_at >= ?`;
+}
+
+/**
+ * Retire a stale fence row once its session is cancelled — unless, since it
+ * was read, a close-out has become owed for its head (a request was recorded
+ * and no newer review took the head) or a close-out holds the lease for it.
+ * Decided in the DELETE itself, never from the pre-cancel snapshot.
+ */
+async function retireFenceRow(db: SqlDatabase, sessionId: string): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `DELETE FROM github_review_sessions
+       WHERE session_id = ?
+         AND (
+           close_out_request IS NULL
+           OR EXISTS (
+             SELECT 1 FROM github_review_sessions newer
+             WHERE newer.repo_id = github_review_sessions.repo_id
+               AND newer.pr_number = github_review_sessions.pr_number
+               AND newer.generation > github_review_sessions.generation
+               AND newer.head_sha = github_review_sessions.head_sha
+           )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM github_review_state st
+           WHERE st.repo_id = github_review_sessions.repo_id
+             AND st.pr_number = github_review_sessions.pr_number
+             AND ${liveCloseOutLeaseOf("github_review_sessions")}
+         )`
+    )
+    .bind(sessionId, Date.now())
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
 }
 
 /**
@@ -379,13 +427,12 @@ export async function handleSweepStaleReviews(
       continue;
     }
     cancelledSessionIds.push(sessionId);
-    if (owesCloseOut && outcome === "cancelled") continue;
-    await ctx.db
-      .prepare(
-        `DELETE FROM github_review_sessions WHERE repo_id = ? AND pr_number = ? AND session_id = ?`
-      )
-      .bind(repoId, prNumber, sessionId)
-      .run();
+    if (owesCloseOut) {
+      // Its DO never existed, so no status was ever posted for it: nothing is owed.
+      if (outcome === "orphaned") await deleteFenceRow(ctx.db, sessionId);
+      continue;
+    }
+    await retireFenceRow(ctx.db, sessionId);
   }
 
   return json({ cancelledSessionIds, deferredSessionIds, failedSessionIds });
@@ -451,9 +498,9 @@ async function deleteFenceRow(db: SqlDatabase, sessionId: string): Promise<void>
  * first request's details win). Once recorded, the review's agent can never
  * take the lease again, and the row is kept until finalize reports a terminal
  * status. The grant is the PR's submission lease, held as
- * `close-out:<sessionId>`, and is given only while the session's row is the
- * newest registered for its head, a stale session is confirmed cancelled,
- * and no other holder's lease is live.
+ * `close-out:<sessionId>:<nonce>` (returned as `grantId`), and is given only
+ * while the session's row is the newest registered for its head, a stale
+ * session is confirmed cancelled, and no other holder's lease is live.
  *
  * 200 `granted`: the caller holds the lease for `leaseExpiresInMs` and may
  * replace a status it reads as pending, then must call finalize.
@@ -524,6 +571,8 @@ export async function handleCloseOutReview(
     if (outcome !== "cancelled") return deferred(`stale_session_${outcome}`);
   }
 
+  // Each grant holds the lease under its own id, which finalize must present.
+  const holder = `${closeOutHolderPrefix(sessionId)}${crypto.randomUUID()}`;
   const now = Date.now();
   const acquired = await ctx.db
     .prepare(
@@ -544,14 +593,7 @@ export async function handleCloseOutReview(
          )
        RETURNING latest_generation`
     )
-    .bind(
-      closeOutHolder(sessionId),
-      now + REVIEW_SUBMISSION_LEASE_MS,
-      row.repo_id,
-      row.pr_number,
-      now,
-      sessionId
-    )
+    .bind(holder, now + REVIEW_SUBMISSION_LEASE_MS, row.repo_id, row.pr_number, now, sessionId)
     .first<{ latest_generation: number }>();
 
   if (!acquired) {
@@ -579,15 +621,19 @@ export async function handleCloseOutReview(
     description: closeOut.data.description,
     superseded,
     leaseExpiresInMs: REVIEW_SUBMISSION_LEASE_MS,
+    grantId: holder,
   });
 }
 
 /**
  * POST /internal/github-reviews/close-out/finalize
- * Ends a granted close-out. `done` (GitHub shows a terminal status, written
- * or observed) deletes the fence row and releases the lease; `retry` only
- * releases the lease, keeping the row and its request for the reaper. Only a
- * lease still held as this close-out is touched. Always 204.
+ * Ends one granted close-out, named by its `grantId`. `done` (GitHub shows a
+ * terminal status, written or observed) deletes the fence row and releases
+ * the lease; `retry` only releases the lease, keeping the row and its request
+ * for the reaper. Both act only while that exact grant still holds the lease,
+ * so a late finalize from an earlier grant never touches a later one's lease
+ * or row: it is a 204 no-op. 400 when `grantId` is not a close-out of
+ * `sessionId`.
  */
 export async function handleFinalizeCloseOut(
   request: Request,
@@ -601,23 +647,37 @@ export async function handleFinalizeCloseOut(
     "Invalid close-out finalize body"
   );
   if (parsed instanceof Response) return parsed;
-  const { sessionId, outcome } = parsed;
-  const holder = closeOutHolder(sessionId);
+  const { sessionId, grantId, outcome } = parsed;
+  // Only a close-out holder of this session can be finalized: never an agent's lease.
+  if (!grantId.startsWith(closeOutHolderPrefix(sessionId))) {
+    return error("Invalid close-out grant", 400);
+  }
 
   if (outcome === "done") {
     await ctx.db.batch([
-      ctx.db.prepare(`DELETE FROM github_review_sessions WHERE session_id = ?`).bind(sessionId),
+      ctx.db
+        .prepare(
+          `DELETE FROM github_review_sessions
+           WHERE session_id = ?
+             AND EXISTS (
+               SELECT 1 FROM github_review_state st
+               WHERE st.repo_id = github_review_sessions.repo_id
+                 AND st.pr_number = github_review_sessions.pr_number
+                 AND st.lease_session_id = ?
+             )`
+        )
+        .bind(sessionId, grantId),
       ctx.db
         .prepare(
           `UPDATE github_review_state SET lease_session_id = NULL, lease_expires_at = NULL
            WHERE lease_session_id = ?`
         )
-        .bind(holder),
+        .bind(grantId),
     ]);
   } else {
     await ctx.db
       .prepare(`UPDATE github_review_state SET lease_expires_at = ? WHERE lease_session_id = ?`)
-      .bind(Date.now() - 1, holder)
+      .bind(Date.now() - 1, grantId)
       .run();
   }
   logger.info("review_close_out.finalized", {
@@ -735,10 +795,12 @@ export async function handleReviewLeaseRelease(
  * Cron-driven reaper: the durable retry owner for review fence rows, so no
  * retained row depends on another PR event ever arriving. Each pass:
  *
- * 1. Drops rows older than REVIEW_FENCE_MAX_AGE_MS.
+ * 1. Drops rows older than REVIEW_FENCE_MAX_AGE_MS, except one whose
+ *    close-out currently holds the lease: it goes once that lease ends.
  * 2. Retries the cancellation of superseded sessions that owe no close-out
  *    (cancel unconfirmed, fresh-404 grace, or a creator's failed
- *    self-cancel), deleting each once cancelled — the sweep's rule.
+ *    self-cancel), retiring each once cancelled — the sweep's rule, decided
+ *    at deletion time, since a close-out may become owed meanwhile.
  * 3. Re-drives every owed close-out whose PR has no live lease, by asking
  *    the github-bot to run it (a signed POST, as a background task).
  *    Duplicate drives are harmless: a second request finds the first one's
@@ -752,8 +814,18 @@ export async function reapSupersededReviewSessions(
 ): Promise<void> {
   const now = Date.now();
   const expired = await db
-    .prepare(`DELETE FROM github_review_sessions WHERE created_at < ? RETURNING session_id`)
-    .bind(now - REVIEW_FENCE_MAX_AGE_MS)
+    .prepare(
+      `DELETE FROM github_review_sessions
+       WHERE created_at < ?
+         AND NOT EXISTS (
+           SELECT 1 FROM github_review_state st
+           WHERE st.repo_id = github_review_sessions.repo_id
+             AND st.pr_number = github_review_sessions.pr_number
+             AND ${liveCloseOutLeaseOf("github_review_sessions")}
+         )
+       RETURNING session_id`
+    )
+    .bind(now - REVIEW_FENCE_MAX_AGE_MS, now)
     .all<{ session_id: string }>();
   for (const row of expired.results) {
     logger.warn("review_reaper.expired", {
@@ -788,7 +860,7 @@ export async function reapSupersededReviewSessions(
       continue;
     }
     if (outcome !== "cancelled" && outcome !== "orphaned") continue;
-    await deleteFenceRow(db, row.session_id);
+    if (!(await retireFenceRow(db, row.session_id))) continue;
     logger.info("review_reaper.reaped", {
       event: "review_reaper.reaped",
       session_id: row.session_id,
