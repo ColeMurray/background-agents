@@ -188,12 +188,21 @@ stack left in the machine's image cache (`docker image ls | grep minio` lists th
        done && echo "both buckets match"'
    ```
 
-4. Remove the old MinIO container and start the rest of the stack. Delete the old volume once the
-   app serves its media and Litestream logs `snapshot written`:
+4. Remove the old MinIO container and start the rest of the stack. If this fails, stop here; the old
+   volume is still intact.
 
    ```bash
-   docker rm -f minio-old
-   docker compose up -d --wait
+   docker rm -f minio-old && docker compose up -d --wait
+   ```
+
+   Then check both things the old volume is kept for. Litestream is replicating to the new store
+   once `docker compose logs litestream | grep "snapshot written"` prints a line, usually within
+   seconds of starting. The media came across if a session from before the move shows its images in
+   the web app.
+
+5. Only after both checks pass, delete the old volume:
+
+   ```bash
    docker volume rm "${P}_minio-data"
    ```
 
