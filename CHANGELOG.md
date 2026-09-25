@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 25, 2026
+
+### Changed
+
+Bulk session export now requires `sessions.export` instead of `sessions.read`. Owners,
+Administrators, and users granted the permission through a custom role may export; Viewers, Members,
+and bot services cannot.
+
 ## September 23, 2026
 
 **Sessions discovery across full history.** A new **Sessions** destination in the sidebar (above
