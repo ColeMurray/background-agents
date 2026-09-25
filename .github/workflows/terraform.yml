@@ -10,6 +10,7 @@ on:
       - "packages/slack-bot/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
+      - "packages/discord-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
       - "packages/opencomputer-infra/**"
@@ -30,6 +31,7 @@ on:
       - "packages/slack-bot/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
+      - "packages/discord-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
       - "packages/opencomputer-infra/**"
@@ -185,6 +187,7 @@ jobs:
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
+          npm run build -w @open-inspect/discord-bot
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -276,6 +279,14 @@ jobs:
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           TF_VAR_linear_api_key: ${{ secrets.LINEAR_API_KEY }}
           TF_VAR_linear_bot_default_model: "${{ vars.LINEAR_BOT_DEFAULT_MODEL || secrets.LINEAR_BOT_DEFAULT_MODEL || 'claude-sonnet-4-6' }}"
+          TF_VAR_enable_discord_bot: "${{ vars.ENABLE_DISCORD_BOT || secrets.ENABLE_DISCORD_BOT || 'false' }}"
+          TF_VAR_discord_application_id: ${{ vars.DISCORD_APPLICATION_ID || secrets.DISCORD_APPLICATION_ID }}
+          TF_VAR_discord_public_key: ${{ vars.DISCORD_PUBLIC_KEY || secrets.DISCORD_PUBLIC_KEY }}
+          TF_VAR_discord_bot_token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          TF_VAR_discord_allowed_role_ids: ${{ vars.DISCORD_ALLOWED_ROLE_IDS || secrets.DISCORD_ALLOWED_ROLE_IDS }}
+          TF_VAR_discord_allowed_channel_ids: ${{ vars.DISCORD_ALLOWED_CHANNEL_IDS || secrets.DISCORD_ALLOWED_CHANNEL_IDS }}
+          TF_VAR_discord_bot_default_model: "${{ vars.DISCORD_BOT_DEFAULT_MODEL || secrets.DISCORD_BOT_DEFAULT_MODEL || 'anthropic/claude-opus-5' }}"
+          TF_VAR_discord_bot_harness: "${{ vars.DISCORD_BOT_HARNESS || secrets.DISCORD_BOT_HARNESS || 'claude' }}"
           TF_VAR_web_platform: "${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM || 'vercel' }}"
           TF_VAR_enable_durable_object_bindings: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
           TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"
@@ -374,6 +385,7 @@ jobs:
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
+          npm run build -w @open-inspect/discord-bot
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v8.2.0
@@ -466,6 +478,14 @@ jobs:
           TF_VAR_linear_webhook_secret: ${{ secrets.LINEAR_WEBHOOK_SECRET }}
           TF_VAR_linear_api_key: ${{ secrets.LINEAR_API_KEY }}
           TF_VAR_linear_bot_default_model: "${{ vars.LINEAR_BOT_DEFAULT_MODEL || secrets.LINEAR_BOT_DEFAULT_MODEL || 'claude-sonnet-4-6' }}"
+          TF_VAR_enable_discord_bot: "${{ vars.ENABLE_DISCORD_BOT || secrets.ENABLE_DISCORD_BOT || 'false' }}"
+          TF_VAR_discord_application_id: ${{ vars.DISCORD_APPLICATION_ID || secrets.DISCORD_APPLICATION_ID }}
+          TF_VAR_discord_public_key: ${{ vars.DISCORD_PUBLIC_KEY || secrets.DISCORD_PUBLIC_KEY }}
+          TF_VAR_discord_bot_token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          TF_VAR_discord_allowed_role_ids: ${{ vars.DISCORD_ALLOWED_ROLE_IDS || secrets.DISCORD_ALLOWED_ROLE_IDS }}
+          TF_VAR_discord_allowed_channel_ids: ${{ vars.DISCORD_ALLOWED_CHANNEL_IDS || secrets.DISCORD_ALLOWED_CHANNEL_IDS }}
+          TF_VAR_discord_bot_default_model: "${{ vars.DISCORD_BOT_DEFAULT_MODEL || secrets.DISCORD_BOT_DEFAULT_MODEL || 'anthropic/claude-opus-5' }}"
+          TF_VAR_discord_bot_harness: "${{ vars.DISCORD_BOT_HARNESS || secrets.DISCORD_BOT_HARNESS || 'claude' }}"
           TF_VAR_web_platform: "${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM || 'vercel' }}"
           TF_VAR_enable_durable_object_bindings: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
           TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"

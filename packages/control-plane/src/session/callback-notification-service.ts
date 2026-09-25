@@ -39,8 +39,10 @@ export interface CallbackServiceEnv {
   // destination's own.
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_DISCORD_BOT?: string;
   SLACK_BOT?: FetchClient;
   LINEAR_BOT?: FetchClient;
+  DISCORD_BOT?: FetchClient;
 }
 
 export type AutomationRunCompletionHandler = (completion: AutomationRunCompletion) => Promise<void>;
@@ -150,17 +152,23 @@ export class CallbackNotificationService {
    * Where a non-automation callback goes and which key signs it — one
    * decision, so destination and signing key cannot diverge (the CP signs
    * with the DESTINATION bot's secret). Automation callbacks
-   * are routed to the automation scheduler before this is consulted. Non-linear
-   * sources default to the slack bot for backward compatibility (web
+   * are routed to the automation scheduler before this is consulted. Sources
+   * other than linear and discord default to the slack bot for backward compatibility (web
    * sources, etc.).
    */
   private resolveCallbackRoute(source: string | null): {
     binding: FetchClient | undefined;
     secret: string | undefined;
   } {
-    const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";
+    const destination: CallbackDestination =
+      source === "linear" ? "linear-bot" : source === "discord" ? "discord-bot" : "slack-bot";
+    const bindings: Record<CallbackDestination, FetchClient | undefined> = {
+      "slack-bot": this.env.SLACK_BOT,
+      "linear-bot": this.env.LINEAR_BOT,
+      "discord-bot": this.env.DISCORD_BOT,
+    };
     return {
-      binding: destination === "linear-bot" ? this.env.LINEAR_BOT : this.env.SLACK_BOT,
+      binding: bindings[destination],
       secret: callbackSigningSecret(this.env, destination),
     };
   }

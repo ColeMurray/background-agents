@@ -82,6 +82,11 @@ module "control_plane_worker" {
       LINEAR_BOT = {
         service_name = "open-inspect-linear-bot-${local.name_suffix}"
       }
+    } : {},
+    var.enable_discord_bot ? {
+      DISCORD_BOT = {
+        service_name = "open-inspect-discord-bot-${local.name_suffix}"
+      }
     } : {}
   )
 
@@ -178,10 +183,11 @@ module "control_plane_worker" {
       # Pepper for image-build callback token hashes (see service-auth.tf)
       IMAGE_CALLBACK_TOKEN_PEPPER = { value = random_password.image_callback_token_pepper.result }
       # Per-service sig1 verification keys
-      SERVICE_AUTH_SECRET_WEB        = { value = random_password.service_auth_secret_web.result }
-      SERVICE_AUTH_SECRET_SLACK_BOT  = { value = random_password.service_auth_secret_slack_bot.result }
-      SERVICE_AUTH_SECRET_GITHUB_BOT = { value = random_password.service_auth_secret_github_bot.result }
-      SERVICE_AUTH_SECRET_LINEAR_BOT = { value = random_password.service_auth_secret_linear_bot.result }
+      SERVICE_AUTH_SECRET_WEB         = { value = random_password.service_auth_secret_web.result }
+      SERVICE_AUTH_SECRET_SLACK_BOT   = { value = random_password.service_auth_secret_slack_bot.result }
+      SERVICE_AUTH_SECRET_GITHUB_BOT  = { value = random_password.service_auth_secret_github_bot.result }
+      SERVICE_AUTH_SECRET_LINEAR_BOT  = { value = random_password.service_auth_secret_linear_bot.result }
+      SERVICE_AUTH_SECRET_DISCORD_BOT = { value = random_password.service_auth_secret_discord_bot.result }
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
       GITHUB_APP_ID              = { value = var.github_app_id }
       GITHUB_APP_PRIVATE_KEY     = { value = var.github_app_private_key }
@@ -245,6 +251,7 @@ module "control_plane_worker" {
     module.session_index_kv,
     null_resource.d1_migrations,
     module.linear_bot_worker,
+    module.discord_bot_worker,
     module.daytona_infra,
     module.e2b_infra,
     module.vercel_sandbox_infra,

@@ -11,7 +11,13 @@ import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
 import { z } from "zod";
 
 /** Spawn sources that represent direct human-initiated sessions. */
-export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
+export const HUMAN_SPAWN_SOURCES: SpawnSource[] = [
+  "user",
+  "slack-bot",
+  "linear-bot",
+  "github-bot",
+  "discord-bot",
+];
 
 export interface AnalyticsFilters {
   startAt: number;

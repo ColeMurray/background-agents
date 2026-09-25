@@ -53,6 +53,7 @@ export const messageSourceSchema = z.enum([
   "web",
   "slack",
   "linear",
+  "discord",
   "extension",
   "github",
   "automation",
@@ -69,6 +70,7 @@ export const spawnSourceSchema = z.enum([
   "github-bot",
   "linear-bot",
   "slack-bot",
+  "discord-bot",
 ]);
 export type SpawnSource = z.infer<typeof spawnSourceSchema>;
 

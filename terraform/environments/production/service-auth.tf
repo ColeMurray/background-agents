@@ -26,6 +26,11 @@ resource "random_password" "service_auth_secret_linear_bot" {
   special = false
 }
 
+resource "random_password" "service_auth_secret_discord_bot" {
+  length  = 64
+  special = false
+}
+
 # Dedicated pepper for image-build callback token hashes.
 resource "random_password" "image_callback_token_pepper" {
   length  = 64

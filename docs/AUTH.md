@@ -134,8 +134,8 @@ See [Automations](AUTOMATIONS.md) for trigger setup and run behavior.
 
 ## Bots and Integrations
 
-Slack, GitHub, and Linear integrations act on behalf of a workspace user when they handle a user
-request. Their effective access is limited by both:
+Slack, GitHub, Linear, and Discord integrations act on behalf of a workspace user when they handle a
+user request. Their effective access is limited by both:
 
 - The acting user's current role
 - The integration's fixed set of allowed operations
@@ -146,7 +146,9 @@ specific integration route explicitly permits that operation.
 
 Some integrations also apply their own ingress rules. For example, the GitHub integration may
 require an allowed trigger user or sufficient repository collaborator access before it sends a
-request to Open-Inspect.
+request to Open-Inspect. The Discord integration admits only members holding an allowed Discord
+role; each one acts as a workspace Member (`discord:<user id>`), so the role is the admission gate.
+See [Discord Integration](integrations/DISCORD.md#who-can-submit-tasks).
 
 ## Suspension
 

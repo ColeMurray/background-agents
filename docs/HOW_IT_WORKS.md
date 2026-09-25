@@ -232,6 +232,8 @@ can make HTTP requests and maintain WebSocket connections can participate.
   attachments, classifies repos, and posts results
 - **GitHub**: Bot that reviews PRs and responds to PR `@mentions`
 - **Linear**: Agent workflow that starts sessions from Linear issue activity
+- **Discord**: `/task` slash command that starts a session, streams progress into a thread, and
+  posts the result
 
 All clients see the same session state. Send a prompt from Slack or GitHub, watch the results on
 web. This works because state lives in the control plane, not the client.

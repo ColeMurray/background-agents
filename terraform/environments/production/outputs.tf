@@ -69,6 +69,11 @@ output "linear_bot_webhook_url" {
   value       = var.enable_linear_bot ? "${module.linear_bot_worker[0].worker_url}/webhook" : null
 }
 
+output "discord_bot_interactions_url" {
+  description = "Discord Interactions Endpoint URL (Developer Portal → General Information)"
+  value       = var.enable_discord_bot ? "${module.discord_bot_worker[0].worker_url}/interactions" : null
+}
+
 output "linear_bot_oauth_authorize_url" {
   description = "Visit this URL to install the Linear agent in your workspace (requires admin)"
   value       = var.enable_linear_bot ? "${module.linear_bot_worker[0].worker_url}/oauth/authorize" : null

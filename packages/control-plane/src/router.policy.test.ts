@@ -103,7 +103,11 @@ describe("route policy table", () => {
   });
 
   it.each([
-    ["GET", "/repos", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    [
+      "GET",
+      "/repos",
+      [{ service: "slack-bot" }, { service: "linear-bot" }, { service: "discord-bot" }],
+    ],
     ["GET", "/repos/acme/widgets/metadata", [{ service: "github-bot" }]],
     ["GET", "/environments", [{ service: "slack-bot" }, { service: "linear-bot" }]],
     ["GET", "/environments/env-1", [{ service: "github-bot" }]],
@@ -118,8 +122,16 @@ describe("route policy table", () => {
     ],
     ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
     ["GET", "/model-preferences", [{ service: "slack-bot" }]],
-    ["GET", "/sessions/session-1/events", [{ service: "slack-bot" }, { service: "linear-bot" }]],
-    ["GET", "/sessions/session-1/artifacts", [{ service: "slack-bot" }, { service: "linear-bot" }]],
+    [
+      "GET",
+      "/sessions/session-1/events",
+      [{ service: "slack-bot" }, { service: "linear-bot" }, { service: "discord-bot" }],
+    ],
+    [
+      "GET",
+      "/sessions/session-1/artifacts",
+      [{ service: "slack-bot" }, { service: "linear-bot" }, { service: "discord-bot" }],
+    ],
   ])("declares the exact actorless grants for %s %s", (method, path, expected) => {
     const authorization = routeFor(method, path)?.authorization;
     expect(["active-user", "active-global"]).toContain(authorization?.kind);
