@@ -21,7 +21,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^4.1.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
