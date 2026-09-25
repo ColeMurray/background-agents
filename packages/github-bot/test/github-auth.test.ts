@@ -205,6 +205,7 @@ describe("postCommitStatus", () => {
           context: "open-inspect",
           description: "Review in progress",
         }),
+        signal: expect.any(AbortSignal),
       }
     );
   });

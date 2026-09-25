@@ -249,6 +249,7 @@ export async function postCommitStatus(
           "User-Agent": userAgent,
         },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
       }
     );
     if (response.ok) return { ok: true };
@@ -334,6 +335,7 @@ export async function getPullRequestSnapshot(
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": userAgent,
         },
+        signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
       }
     );
     if (!response.ok) {

@@ -164,6 +164,16 @@ export const githubReviewCompletionCallbackSchema =
 
 export type GitHubReviewCompletionCallback = z.infer<typeof githubReviewCompletionCallbackSchema>;
 
+/**
+ * The control plane's reaper asking the github-bot to run a review close-out it still owes: a
+ * completion that was deferred behind a live lease, or an attempt that failed after its grant.
+ */
+export const githubReviewCloseOutDriveSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  timestamp: z.number().refine(Number.isFinite),
+  signature: nonEmptyStringSchema,
+});
+
 export const callbackContextSchema = z.union([
   slackCallbackContextSchema,
   linearCallbackContextSchema,

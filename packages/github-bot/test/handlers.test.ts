@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import type * as GitHubAuthModule from "../src/github-auth";
 import type {
   Env,
   PullRequestReviewTriggerPayload,
@@ -9,13 +10,8 @@ import type {
 import type { Logger } from "../src/logger";
 import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
 
-vi.mock("../src/github-auth", () => ({
-  REVIEW_COMPLETED_DESCRIPTION: "Review completed",
-  REVIEW_PENDING_DESCRIPTION: "Review in progress",
-  REVIEW_START_FAILED_DESCRIPTION: "Review failed to start",
-  REVIEW_STALE_DESCRIPTION: "Review skipped: PR changed before submission",
-  REVIEW_SUPERSEDED_DESCRIPTION: "Superseded by a newer commit",
-  REVIEW_STATUS_CONTEXT: "open-inspect",
+vi.mock("../src/github-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof GitHubAuthModule>()),
   generateInstallationToken: vi.fn().mockResolvedValue("test-installation-token"),
   postCommitStatus: vi.fn().mockResolvedValue({ ok: true }),
   postReaction: vi.fn().mockResolvedValue(true),
@@ -23,6 +19,7 @@ vi.mock("../src/github-auth", () => ({
   getPullRequestSnapshot: vi
     .fn()
     .mockResolvedValue({ ok: true, headSha: "abc123", state: "open", draft: false }),
+  getReviewStatusState: vi.fn().mockResolvedValue({ ok: true, state: "pending" }),
 }));
 
 vi.mock("../src/utils/integration-config", () => ({
@@ -72,8 +69,18 @@ function createMockLogger(): Logger {
   };
 }
 
+const CLOSE_OUT_URL = "https://internal/internal/github-reviews/close-out";
+const FINALIZE_URL = "https://internal/internal/github-reviews/close-out/finalize";
+
+/** JSON bodies of every control-plane call to `url`, in call order. */
+function controlPlaneBodies(cpFetch: Mock, url: string): unknown[] {
+  return cpFetch.mock.calls
+    .filter(([calledUrl]: [string]) => calledUrl === url)
+    .map(([, init]: [string, { body: string }]) => JSON.parse(init.body));
+}
+
 /**
- * Default 200 responses for the review-supersession claim/sweep routes.
+ * Default responses for the review-supersession claim/sweep/close-out routes.
  * Shared by every custom control-plane fetch mock below so new-session
  * fencing never derails a test whose focus is elsewhere.
  */
@@ -90,6 +97,19 @@ function defaultReviewSupersessionResponse(url: string): Response | null {
       { status: 200 }
     );
   }
+  if (url === CLOSE_OUT_URL) {
+    return Response.json({
+      outcome: "granted",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 42,
+      headSha: "abc123",
+      description: "Review failed to start",
+      superseded: false,
+      leaseExpiresInMs: 120_000,
+    });
+  }
+  if (url === FINALIZE_URL) return new Response(null, { status: 204 });
   return null;
 }
 
@@ -236,66 +256,33 @@ beforeEach(() => {
 });
 
 describe("handlePullRequestReviewTrigger", () => {
-  it("closes out the replaced head's status so it cannot stay pending forever", async () => {
-    // The review for the previous head is cancelled by the sweep, and nothing else ever returns to
-    // its status — so without this it keeps "Review in progress" on that commit permanently.
+  it("leaves a replaced head's status to that review's own close-out", async () => {
+    // The replaced head's review is closed out under the submission lease, through its fence
+    // row: the handler writes nothing to that commit, and names the repository so the sweep can
+    // record the close-out.
     const env = createMockEnv();
     const log = createMockLogger();
-    const payload: PullRequestReviewTriggerPayload = {
+    const payload = {
       ...pullRequestReviewTriggerPayload,
       action: "synchronize",
       before: "oldsha1",
-    };
+    } as PullRequestReviewTriggerPayload;
 
     await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
 
-    expect(postCommitStatus).toHaveBeenCalledWith(
-      "test-installation-token",
-      "acme",
-      "widgets",
-      "oldsha1",
-      {
-        state: "error",
-        context: "open-inspect",
-        description: "Superseded by a newer commit",
-      },
-      "Open-Inspect"
+    expect(
+      vi.mocked(postCommitStatus).mock.calls.filter(([, , , sha]) => sha === "oldsha1")
+    ).toEqual([]);
+    const sweepCalls = getControlPlaneFetch(env).mock.calls.filter(
+      ([url]: [string]) => url === "https://internal/internal/github-reviews/sweep"
     );
-  });
-
-  it("does not close out a replaced head when GitHub sends none", async () => {
-    // `review_requested` and the opened/reopened triggers carry no `before`; there is nothing to
-    // tidy and no commit to post against.
-    const env = createMockEnv();
-    const log = createMockLogger();
-    const payload: PullRequestReviewTriggerPayload = {
-      ...pullRequestReviewTriggerPayload,
-      action: "opened",
-    };
-
-    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
-
-    const errorStatuses = vi
-      .mocked(postCommitStatus)
-      .mock.calls.filter(([, , , , status]) => status.state === "error");
-    expect(errorStatuses).toEqual([]);
-  });
-
-  it("ignores the all-zero sha GitHub sends when there was no prior head", async () => {
-    const env = createMockEnv();
-    const log = createMockLogger();
-    const payload: PullRequestReviewTriggerPayload = {
-      ...pullRequestReviewTriggerPayload,
-      action: "synchronize",
-      before: "0000000000000000000000000000000000000000",
-    };
-
-    await handlePullRequestReviewTrigger(env, log, payload, "trace-0");
-
-    const errorStatuses = vi
-      .mocked(postCommitStatus)
-      .mock.calls.filter(([, , , , status]) => status.state === "error");
-    expect(errorStatuses).toEqual([]);
+    expect(JSON.parse(sweepCalls[0][1].body)).toEqual({
+      repoId: 501,
+      prNumber: 42,
+      generation: 1,
+      owner: "acme",
+      repo: "widgets",
+    });
   });
 
   it("posts a pending status for the synchronized head and starts a review", async () => {
@@ -440,7 +427,7 @@ describe("handlePullRequestReviewTrigger", () => {
     expect(postCommitStatus).not.toHaveBeenCalled();
   });
 
-  it("replaces pending with error when prompt delivery fails", async () => {
+  it("closes out through the lease when prompt delivery fails", async () => {
     const env = createMockEnv();
     const cpFetch = getControlPlaneFetch(env);
     cpFetch.mockImplementation((url: string) => {
@@ -473,6 +460,12 @@ describe("handlePullRequestReviewTrigger", () => {
       )
     ).rejects.toThrow("Prompt delivery failed: 503 Unavailable");
 
+    expect(controlPlaneBodies(cpFetch, CLOSE_OUT_URL)).toEqual([
+      {
+        sessionId: "session-123",
+        request: { owner: "acme", repo: "widgets", description: "Review failed to start" },
+      },
+    ]);
     expect(postCommitStatus).toHaveBeenLastCalledWith(
       "test-installation-token",
       "acme",
@@ -485,6 +478,43 @@ describe("handlePullRequestReviewTrigger", () => {
       },
       "Open-Inspect"
     );
+    expect(controlPlaneBodies(cpFetch, FINALIZE_URL)).toEqual([
+      { sessionId: "session-123", outcome: "done" },
+    ]);
+  });
+
+  it("writes no error status for a failed prompt delivery the close-out defers", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      if (url === CLOSE_OUT_URL) {
+        return Promise.resolve(Response.json({ outcome: "deferred" }, { status: 202 }));
+      }
+      const supersession = defaultReviewSupersessionResponse(url);
+      if (supersession) return Promise.resolve(supersession);
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(Response.json({ sessionId: "session-123", status: "created" }));
+      }
+      if (/\/sessions\/.+\/prompt$/.test(url)) {
+        return Promise.resolve(new Response("Unavailable", { status: 503 }));
+      }
+      return Promise.resolve(Response.json({ repo: "acme/widgets", metadata: null }));
+    });
+
+    await expect(
+      handlePullRequestReviewTrigger(
+        env,
+        createMockLogger(),
+        pullRequestReviewTriggerPayload,
+        "trace-prompt-deferred"
+      )
+    ).rejects.toThrow("Prompt delivery failed: 503 Unavailable");
+
+    const errorStatuses = vi
+      .mocked(postCommitStatus)
+      .mock.calls.filter(([, , , , status]) => status.state === "error");
+    expect(errorStatuses).toEqual([]);
+    expect(controlPlaneBodies(cpFetch, FINALIZE_URL)).toEqual([]);
   });
 
   it("returns early for draft PRs", async () => {
@@ -863,7 +893,7 @@ describe("handleReviewRequested", () => {
     );
   });
 
-  it("posts pending and error statuses when prompt delivery fails", async () => {
+  it("posts pending, then closes out through the lease, when prompt delivery fails", async () => {
     const env = createMockEnv();
     const cpFetch = getControlPlaneFetch(env);
     cpFetch.mockImplementation((url: string) => {
@@ -916,6 +946,12 @@ describe("handleReviewRequested", () => {
       },
       "Open-Inspect"
     );
+    expect(controlPlaneBodies(cpFetch, CLOSE_OUT_URL)).toEqual([
+      {
+        sessionId: "session-123",
+        request: { owner: "acme", repo: "widgets", description: "Review failed to start" },
+      },
+    ]);
   });
 
   it("returns early if reviewer is not the bot", async () => {

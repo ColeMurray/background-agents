@@ -1,21 +1,32 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type * as GitHubAuthModule from "../src/github-auth";
-import type { GitHubReviewCompletionCallback } from "@open-inspect/shared/types/session-api";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
 
 vi.mock("../src/github-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof GitHubAuthModule>()),
-  generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
+  generateInstallationToken: vi.fn(),
   getReviewStatusState: vi.fn(),
   getPullRequestSnapshot: vi.fn(),
   postCommitStatus: vi.fn(),
 }));
 
-import { getPullRequestSnapshot, getReviewStatusState, postCommitStatus } from "../src/github-auth";
-import { closeOutDescription, closeOutEndedReview } from "../src/review-close-out";
+import {
+  generateInstallationToken,
+  getPullRequestSnapshot,
+  getReviewStatusState,
+  postCommitStatus,
+} from "../src/github-auth";
+import {
+  closeOutDescription,
+  closeOutReviewStatus,
+  completeCloseOut,
+  requestCloseOut,
+  type ReviewCloseOutGrant,
+} from "../src/review-close-out";
 
 const CLOSE_OUT_URL = "https://internal/internal/github-reviews/close-out";
+const FINALIZE_URL = "https://internal/internal/github-reviews/close-out/finalize";
 
 function createMockLogger(): Logger {
   return {
@@ -27,8 +38,11 @@ function createMockLogger(): Logger {
   } as unknown as Logger;
 }
 
-function createEnv(closeOutStatus: number): { env: Env; cpFetch: ReturnType<typeof vi.fn> } {
-  const cpFetch = vi.fn(async () => new Response(null, { status: closeOutStatus }));
+/** The control plane: answers close-out with `closeOut`, and finalize with 204. */
+function createEnv(closeOut: () => Response = () => grantResponse()): { env: Env; cpFetch: Mock } {
+  const cpFetch = vi.fn(async (url: string) =>
+    url === FINALIZE_URL ? new Response(null, { status: 204 }) : closeOut()
+  );
   const env = {
     CONTROL_PLANE: { fetch: cpFetch },
     GITHUB_APP_ID: "12345",
@@ -39,43 +53,94 @@ function createEnv(closeOutStatus: number): { env: Env; cpFetch: ReturnType<type
   return { env, cpFetch };
 }
 
-function callback(
-  overrides: Partial<GitHubReviewCompletionCallback> = {}
-): GitHubReviewCompletionCallback {
+function grantResponse(overrides: Partial<ReviewCloseOutGrant> = {}): Response {
+  return Response.json({
+    outcome: "granted",
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 42,
+    headSha: "abc123",
+    description: "Review did not finish: Execution timed out (stuck processing)",
+    superseded: false,
+    leaseExpiresInMs: 120_000,
+    ...overrides,
+  });
+}
+
+function grant(overrides: Partial<ReviewCloseOutGrant> = {}): ReviewCloseOutGrant {
   return {
+    outcome: "granted",
     sessionId: "session-1",
-    messageId: "msg-1",
-    success: false,
-    error: "Execution timed out (stuck processing)",
-    timestamp: 1_788_183_214_615,
-    signature: "sig",
-    context: { source: "github", owner: "acme", repo: "widgets", prNumber: 42, headSha: "abc123" },
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 42,
+    headSha: "abc123",
+    description: "Review did not finish: Execution timed out (stuck processing)",
+    superseded: false,
+    leaseExpiresInMs: 120_000,
+    requestedAt: Date.now(),
     ...overrides,
   };
 }
 
-describe("closeOutEndedReview", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(getReviewStatusState).mockResolvedValue({ ok: true, state: "pending" });
-    vi.mocked(getPullRequestSnapshot).mockResolvedValue({
-      ok: true,
-      headSha: "abc123",
-      state: "open",
-      draft: false,
+function finalizeOutcomes(cpFetch: Mock): string[] {
+  return cpFetch.mock.calls
+    .filter(([url]) => url === FINALIZE_URL)
+    .map(([, init]) => JSON.parse((init as { body: string }).body).outcome);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(generateInstallationToken).mockResolvedValue("installation-token");
+  vi.mocked(getReviewStatusState).mockResolvedValue({ ok: true, state: "pending" });
+  vi.mocked(getPullRequestSnapshot).mockResolvedValue({
+    ok: true,
+    headSha: "abc123",
+    state: "open",
+    draft: false,
+  });
+  vi.mocked(postCommitStatus).mockResolvedValue({ ok: true });
+});
+
+describe("requestCloseOut", () => {
+  it("records the request and returns the granted lease", async () => {
+    const { env, cpFetch } = createEnv();
+    const request = { owner: "acme", repo: "widgets", description: "Review failed to start" };
+
+    const result = await requestCloseOut(env, "trace-1", "session-1", request);
+
+    expect(result).toEqual({
+      outcome: "granted",
+      grant: expect.objectContaining({
+        sessionId: "session-1",
+        headSha: "abc123",
+        requestedAt: expect.any(Number),
+      }),
     });
-    vi.mocked(postCommitStatus).mockResolvedValue({ ok: true });
+    expect(cpFetch.mock.calls[0][0]).toBe(CLOSE_OUT_URL);
+    expect(JSON.parse(cpFetch.mock.calls[0][1].body)).toEqual({ sessionId: "session-1", request });
   });
 
-  it("replaces a still-pending status with an error carrying the session's reason", async () => {
-    const { env, cpFetch } = createEnv(204);
+  it.each([
+    [202, "deferred"],
+    [409, "not_owned"],
+    [500, "request_failed"],
+  ])("maps a %i from the control plane to %s", async (status, outcome) => {
+    const { env } = createEnv(() => Response.json({}, { status }));
 
-    const outcome = await closeOutEndedReview(env, createMockLogger(), callback(), "trace-1");
+    await expect(requestCloseOut(env, "trace-1", "session-1")).resolves.toMatchObject({
+      outcome,
+    });
+  });
+});
+
+describe("completeCloseOut", () => {
+  it("replaces a still-pending status with an error carrying the ending's reason", async () => {
+    const { env, cpFetch } = createEnv();
+
+    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
 
     expect(outcome).toBe("closed_out");
-    const [url, init] = cpFetch.mock.calls[0] as unknown as [string, { body: string }];
-    expect(url).toBe(CLOSE_OUT_URL);
-    expect(JSON.parse(init.body)).toEqual({ sessionId: "session-1" });
     expect(postCommitStatus).toHaveBeenCalledWith(
       "installation-token",
       "acme",
@@ -88,69 +153,42 @@ describe("closeOutEndedReview", () => {
       },
       "Open-Inspect"
     );
+    expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
   });
 
-  it("closes out a cancelled review the same way", async () => {
-    const { env } = createEnv(204);
+  it("names a superseded review's head as superseded", async () => {
+    const { env } = createEnv();
 
-    await closeOutEndedReview(
-      env,
-      createMockLogger(),
-      callback({ error: "Execution was cancelled" }),
-      "trace-1"
-    );
+    await completeCloseOut(env, createMockLogger(), grant({ superseded: true }), "trace-1");
 
-    expect(postCommitStatus).toHaveBeenCalledWith(
-      "installation-token",
-      "acme",
-      "widgets",
-      "abc123",
-      expect.objectContaining({
-        state: "error",
-        description: "Review did not finish: Execution was cancelled",
-      }),
-      "Open-Inspect"
+    expect(vi.mocked(postCommitStatus).mock.calls[0][4].description).toBe(
+      "Superseded by a newer commit"
     );
   });
 
-  it("writes nothing when the review already published or closed itself out", async () => {
-    vi.mocked(getReviewStatusState).mockResolvedValue({ ok: true, state: "success" });
-    const { env } = createEnv(204);
+  it("falls back to unpublished when the ending recorded no reason", async () => {
+    const { env } = createEnv();
 
-    const outcome = await closeOutEndedReview(
-      env,
-      createMockLogger(),
-      callback({ success: true, error: undefined }),
-      "trace-1"
-    );
+    await completeCloseOut(env, createMockLogger(), grant({ description: null }), "trace-1");
 
-    expect(outcome).toBe("already_terminal");
-    expect(postCommitStatus).not.toHaveBeenCalled();
-  });
-
-  it("writes nothing, and reads nothing from GitHub, when the control plane declines the close-out", async () => {
-    const { env } = createEnv(409);
-
-    const outcome = await closeOutEndedReview(env, createMockLogger(), callback(), "trace-1");
-
-    expect(outcome).toBe("not_owned");
-    expect(getReviewStatusState).not.toHaveBeenCalled();
-    expect(postCommitStatus).not.toHaveBeenCalled();
-  });
-
-  it("writes nothing when the close-out claim itself fails", async () => {
-    const { env } = createEnv(500);
-    const log = createMockLogger();
-
-    const outcome = await closeOutEndedReview(env, log, callback(), "trace-1");
-
-    expect(outcome).toBe("close_out_claim_failed");
-    expect(postCommitStatus).not.toHaveBeenCalled();
-    expect(log.warn).toHaveBeenCalledWith(
-      "review_close_out.claim_failed",
-      expect.objectContaining({ session_id: "session-1" })
+    expect(vi.mocked(postCommitStatus).mock.calls[0][4].description).toBe(
+      "Review did not publish — push again to retry"
     );
   });
+
+  it.each(["success", "failure", "error"])(
+    "never replaces a %s status, and finalizes it as done",
+    async (state) => {
+      vi.mocked(getReviewStatusState).mockResolvedValue({ ok: true, state });
+      const { env, cpFetch } = createEnv();
+
+      const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+
+      expect(outcome).toBe("already_terminal");
+      expect(postCommitStatus).not.toHaveBeenCalled();
+      expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
+    }
+  );
 
   it.each(["closed", "merged"])("leaves a %s pull request's status alone", async (state) => {
     vi.mocked(getPullRequestSnapshot).mockResolvedValue({
@@ -159,56 +197,110 @@ describe("closeOutEndedReview", () => {
       state,
       draft: false,
     });
-    const { env } = createEnv(204);
+    const { env, cpFetch } = createEnv();
 
-    const outcome = await closeOutEndedReview(env, createMockLogger(), callback(), "trace-1");
+    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
 
     expect(outcome).toBe("pr_not_open");
     expect(postCommitStatus).not.toHaveBeenCalled();
+    expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
   });
 
   it("still closes out when the pull request's state cannot be read", async () => {
-    vi.mocked(getPullRequestSnapshot).mockResolvedValue({
-      ok: false,
-      error: "GitHub API returned 502",
-    });
-    const { env } = createEnv(204);
+    vi.mocked(getPullRequestSnapshot).mockResolvedValue({ ok: false, error: "boom" });
+    const { env } = createEnv();
 
-    const outcome = await closeOutEndedReview(env, createMockLogger(), callback(), "trace-1");
-
-    expect(outcome).toBe("closed_out");
-    expect(postCommitStatus).toHaveBeenCalled();
+    await expect(completeCloseOut(env, createMockLogger(), grant(), "trace-1")).resolves.toBe(
+      "closed_out"
+    );
   });
 
-  it("writes nothing when the current status cannot be read", async () => {
-    vi.mocked(getReviewStatusState).mockResolvedValue({
-      ok: false,
-      error: "GitHub API returned 502",
-    });
-    const { env } = createEnv(204);
+  it("keeps the close-out for a retry when the current status cannot be read", async () => {
+    vi.mocked(getReviewStatusState).mockResolvedValue({ ok: false, error: "boom" });
+    const { env, cpFetch } = createEnv();
 
-    const outcome = await closeOutEndedReview(env, createMockLogger(), callback(), "trace-1");
+    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
 
     expect(outcome).toBe("status_unreadable");
     expect(postCommitStatus).not.toHaveBeenCalled();
+    expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
   });
 
-  it("reports a failed status write", async () => {
+  it("keeps the close-out for a retry when the status write fails transiently", async () => {
+    vi.mocked(postCommitStatus).mockResolvedValue({
+      ok: false,
+      status: 502,
+      error: "GitHub API returned 502",
+    });
+    const { env, cpFetch } = createEnv();
+
+    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+
+    expect(outcome).toBe("status_write_failed");
+    expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
+  });
+
+  it("abandons a status write GitHub rejects outright", async () => {
     vi.mocked(postCommitStatus).mockResolvedValue({
       ok: false,
       status: 422,
       error: "GitHub API returned 422",
     });
-    const { env } = createEnv(204);
+    const { env, cpFetch } = createEnv();
     const log = createMockLogger();
 
-    const outcome = await closeOutEndedReview(env, log, callback(), "trace-1");
+    const outcome = await completeCloseOut(env, log, grant(), "trace-1");
 
-    expect(outcome).toBe("status_write_failed");
+    expect(outcome).toBe("status_write_rejected");
+    expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
     expect(log.error).toHaveBeenCalledWith(
-      "review_close_out.status_write_failed",
+      "review_close_out.abandoned",
       expect.objectContaining({ github_status: 422 })
     );
+  });
+
+  it("keeps the close-out for a retry when the installation token cannot be minted", async () => {
+    vi.mocked(generateInstallationToken).mockRejectedValue(new Error("token failure"));
+    const { env, cpFetch } = createEnv();
+
+    await expect(completeCloseOut(env, createMockLogger(), grant(), "trace-1")).rejects.toThrow(
+      "token failure"
+    );
+    expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
+  });
+
+  it("writes nothing once too little of the lease is left to finish a write inside it", async () => {
+    const { env, cpFetch } = createEnv();
+
+    const outcome = await completeCloseOut(
+      env,
+      createMockLogger(),
+      grant({ requestedAt: Date.now() - 110_000 }),
+      "trace-1"
+    );
+
+    expect(outcome).toBe("lease_budget_exhausted");
+    expect(postCommitStatus).not.toHaveBeenCalled();
+    expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
+  });
+});
+
+describe("closeOutReviewStatus", () => {
+  it.each([
+    [202, "deferred"],
+    [409, "not owned"],
+  ])("touches nothing on GitHub when the close-out is %i (%s)", async (status) => {
+    const { env, cpFetch } = createEnv(() => Response.json({}, { status }));
+
+    await closeOutReviewStatus(env, createMockLogger(), "trace-1", {
+      sessionId: "session-1",
+      request: { owner: "acme", repo: "widgets", description: "Review failed to start" },
+    });
+
+    expect(generateInstallationToken).not.toHaveBeenCalled();
+    expect(getReviewStatusState).not.toHaveBeenCalled();
+    expect(postCommitStatus).not.toHaveBeenCalled();
+    expect(finalizeOutcomes(cpFetch)).toEqual([]);
   });
 });
 

@@ -103,14 +103,17 @@ export async function releaseReviewGeneration(
 
 /**
  * Cancel every review session recorded for this PR with a generation older
- * than `generation`. Best-effort: a sweep failure must never block the new
- * review session that was already created, so this never throws.
+ * than `generation`. `owner`/`repo` let the control plane record a close-out
+ * for a review whose head a push replaced, so its pending status is closed
+ * out under the submission lease like any other ending. Best-effort: a sweep
+ * failure must never block the new review session that was already created,
+ * so this never throws.
  */
 export async function sweepStaleReviews(
   env: Env,
   log: Logger,
   traceId: string,
-  params: ReviewIdentity & { generation: number }
+  params: ReviewIdentity & { generation: number; owner: string; repo: string }
 ): Promise<void> {
   const meta = {
     trace_id: traceId,
@@ -127,6 +130,8 @@ export async function sweepStaleReviews(
         repoId: params.repoId,
         prNumber: params.prNumber,
         generation: params.generation,
+        owner: params.owner,
+        repo: params.repo,
       }),
       traceId,
     });

@@ -1,13 +1,18 @@
 /**
  * Close out the commit status of a review session whose turn has ended.
  *
- * The bot writes "pending" when a review starts, and until now only the agent itself ever replaced
- * it — from inside its prompt. A turn the control plane ends from outside (the stuck-processing
- * timeout, a cancel, a lost sandbox) never reaches that step, so the status stayed pending forever:
- * indistinguishable from a review still running. The control plane's completion callback reaches
- * this module on every ending, and this is the one place a terminal status is written for it.
+ * The bot writes "pending" when a review starts, and the agent replaces it only when it publishes.
+ * A turn that ends any other way — the stuck-processing timeout, a cancel, a lost sandbox, a failed
+ * submission, a push that replaced its head — is closed out here instead.
+ *
+ * A close-out is a writer like the agent, so it follows the same ownership rule: it writes only
+ * while holding the PR's submission lease, which the control plane grants (as
+ * `close-out:<sessionId>`) only to the newest review of its head. It replaces only a status it
+ * reads as pending, and reports back — finalize — so the control plane keeps the review's fence row
+ * until GitHub shows a terminal status, and re-drives the close-out from its reaper until then.
  */
 
+import { z } from "zod";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import type { GitHubReviewCompletionCallback } from "@open-inspect/shared/types/session-api";
 import {
@@ -15,23 +20,66 @@ import {
   generateInstallationToken,
   getPullRequestSnapshot,
   getReviewStatusState,
+  GITHUB_API_REQUEST_TIMEOUT_MS,
   postCommitStatus,
   REVIEW_DID_NOT_FINISH_PREFIX,
   REVIEW_NOT_PUBLISHED_DESCRIPTION,
   REVIEW_STATUS_CONTEXT,
+  REVIEW_SUPERSEDED_DESCRIPTION,
 } from "./github-auth";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Logger } from "./logger";
 import type { Env } from "./types";
 
+/**
+ * Slack kept between the last status write and the lease's expiry: a write is started only while
+ * at least one full request timeout plus this margin of the lease remains.
+ */
+const CLOSE_OUT_LEASE_MARGIN_MS = 5_000;
+
+/** Why a review's turn ended, recorded once so every later attempt writes the same thing. */
+export interface ReviewCloseOutRequest {
+  owner: string;
+  repo: string;
+  /** Null when the ending carried no reason of its own. */
+  description: string | null;
+}
+
+const closeOutGrantResponseSchema = z.object({
+  outcome: z.literal("granted"),
+  owner: z.string(),
+  repo: z.string(),
+  prNumber: z.number(),
+  headSha: z.string(),
+  description: z.string().nullable(),
+  superseded: z.boolean(),
+  leaseExpiresInMs: z.number(),
+});
+
+/** The right to write one review's terminal status, held as the PR's submission lease. */
+export interface ReviewCloseOutGrant extends z.infer<typeof closeOutGrantResponseSchema> {
+  sessionId: string;
+  /** When the grant was requested: the lease's expiry is measured from here, conservatively. */
+  requestedAt: number;
+}
+
+export type ReviewCloseOutRequestResult =
+  | { outcome: "granted"; grant: ReviewCloseOutGrant }
+  /** Another holder's lease is live, or a stale session is not yet cancelled: the reaper retries. */
+  | { outcome: "deferred" }
+  /** Nothing is owed: a newer review owns this head's status, or it was already closed out. */
+  | { outcome: "not_owned" }
+  /** The control plane could not answer; `status` is absent when the request itself failed. */
+  | { outcome: "request_failed"; status?: number };
+
 export type ReviewCloseOutOutcome =
   | "closed_out"
-  | "not_owned"
   | "already_terminal"
   | "pr_not_open"
-  | "close_out_claim_failed"
+  | "lease_budget_exhausted"
   | "status_unreadable"
-  | "status_write_failed";
+  | "status_write_failed"
+  | "status_write_rejected";
 
 /**
  * The description for a review that ended with its status still pending. A turn that reported
@@ -51,54 +99,81 @@ export function closeOutDescription(
 }
 
 /**
- * Ask the control plane for the right to write this session's terminal status. It is granted only
- * while the session is still its PR's latest review and holds no live submission lease, and
- * granting it fences the session out of any later write — so an agent that wakes after its turn
- * was failed cannot publish over the close-out, and a successor's own status is never touched.
+ * Ask the control plane for a review's close-out lease. `request`, when given, is recorded durably
+ * first — it declares the review's turn over, fencing its agent out of the lease for good — so a
+ * deferred or failed attempt is re-driven by the control plane's reaper. Without it, this only
+ * retries a close-out already requested. Transport failures throw.
  */
-async function claimCloseOut(
+export async function requestCloseOut(
   env: Env,
   traceId: string,
-  sessionId: string
-): Promise<"owned" | "not_owned" | "failed"> {
+  sessionId: string,
+  request?: ReviewCloseOutRequest
+): Promise<ReviewCloseOutRequestResult> {
+  const requestedAt = Date.now();
   const response = await signedControlPlaneFetch(env, {
     method: "POST",
     url: "https://internal/internal/github-reviews/close-out",
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify(request ? { sessionId, request } : { sessionId }),
     traceId,
   });
-  if (response.status === 204) return "owned";
-  if (response.status === 409) return "not_owned";
-  return "failed";
+  if (response.status === 202) return { outcome: "deferred" };
+  if (response.status === 409) return { outcome: "not_owned" };
+  if (response.status !== 200) return { outcome: "request_failed", status: response.status };
+  const parsed = closeOutGrantResponseSchema.safeParse(await response.json());
+  if (!parsed.success) return { outcome: "request_failed", status: response.status };
+  return { outcome: "granted", grant: { ...parsed.data, sessionId, requestedAt } };
 }
 
-export async function closeOutEndedReview(
+async function finalizeCloseOut(
   env: Env,
   log: Logger,
-  callback: GitHubReviewCompletionCallback,
-  traceId: string
-): Promise<ReviewCloseOutOutcome> {
-  const { owner, repo, prNumber, headSha } = callback.context;
-  const meta = {
-    trace_id: traceId,
-    session_id: callback.sessionId,
-    message_id: callback.messageId,
-    repo: `${owner}/${repo}`.toLowerCase(),
-    pull_number: prNumber,
-    head_sha: headSha,
-    success: callback.success,
-  };
-
-  // The claim comes before the status read, never after: once it is granted the agent can no longer
-  // publish, so the state read next is final. Read first and a verdict could land in between, only
-  // to be overwritten by the error written below.
-  const claim = await claimCloseOut(env, traceId, callback.sessionId);
-  if (claim === "not_owned") return "not_owned";
-  if (claim === "failed") {
-    log.warn("review_close_out.claim_failed", meta);
-    return "close_out_claim_failed";
+  traceId: string,
+  sessionId: string,
+  outcome: "done" | "retry"
+): Promise<void> {
+  try {
+    const response = await signedControlPlaneFetch(env, {
+      method: "POST",
+      url: "https://internal/internal/github-reviews/close-out/finalize",
+      body: JSON.stringify({ sessionId, outcome }),
+      traceId,
+    });
+    if (!response.ok) {
+      log.warn("review_close_out.finalize_failed", {
+        session_id: sessionId,
+        finalize: outcome,
+        status: response.status,
+      });
+    }
+  } catch (error) {
+    // The lease still expires on its own, and the row still carries its request: the reaper
+    // re-drives it, and the next attempt finds the status already terminal.
+    log.warn("review_close_out.finalize_failed", {
+      session_id: sessionId,
+      finalize: outcome,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
   }
+}
 
+/** A GitHub rejection no retry can fix; 408 and 429 are transient. */
+function isPermanentRejection(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+async function writeTerminalStatus(
+  env: Env,
+  log: Logger,
+  grant: ReviewCloseOutGrant,
+  meta: Record<string, unknown>
+): Promise<{ outcome: ReviewCloseOutOutcome; finalize: "done" | "retry" }> {
+  const { owner, repo, prNumber, headSha } = grant;
+  const deadline =
+    grant.requestedAt +
+    grant.leaseExpiresInMs -
+    GITHUB_API_REQUEST_TIMEOUT_MS -
+    CLOSE_OUT_LEASE_MARGIN_MS;
   const userAgent = resolveAppName(env);
   const token = await generateInstallationToken({
     appId: env.GITHUB_APP_ID,
@@ -110,18 +185,29 @@ export async function closeOutEndedReview(
   const status = await getReviewStatusState(token, owner, repo, headSha, userAgent);
   if (!status.ok) {
     log.warn("review_close_out.status_unreadable", { ...meta, error: status.error });
-    return "status_unreadable";
+    return { outcome: "status_unreadable", finalize: "retry" };
   }
-  // The agent published its verdict, or already closed the status out itself.
-  if (status.state !== "pending") return "already_terminal";
+  // The agent published its verdict or marked its PR stale, or an earlier attempt closed it out.
+  if (status.state !== "pending") return { outcome: "already_terminal", finalize: "done" };
 
   // A review abandoned because its PR merged or closed first is the common ending, and an error
   // on a commit nobody is waiting for is noise. An unreadable PR is not evidence it closed, so the
   // close-out proceeds: a stray status on a closed PR costs less than a pending one on an open PR.
   const pullRequest = await getPullRequestSnapshot(token, owner, repo, prNumber, userAgent);
-  if (pullRequest.ok && pullRequest.state !== "open") return "pr_not_open";
+  if (pullRequest.ok && pullRequest.state !== "open") {
+    return { outcome: "pr_not_open", finalize: "done" };
+  }
 
-  const description = closeOutDescription(callback);
+  // GitHub statuses have no compare-and-swap: a write that could land after the lease expires
+  // could overwrite the next holder's verdict, so it is never started that late.
+  if (Date.now() > deadline) {
+    log.warn("review_close_out.lease_budget_exhausted", meta);
+    return { outcome: "lease_budget_exhausted", finalize: "retry" };
+  }
+
+  const description = grant.superseded
+    ? REVIEW_SUPERSEDED_DESCRIPTION
+    : (grant.description ?? REVIEW_NOT_PUBLISHED_DESCRIPTION);
   const result = await postCommitStatus(
     token,
     owner,
@@ -130,14 +216,75 @@ export async function closeOutEndedReview(
     { state: "error", context: REVIEW_STATUS_CONTEXT, description },
     userAgent
   );
-  if (!result.ok) {
-    log.error("review_close_out.status_write_failed", {
-      ...meta,
-      ...(result.status === undefined ? {} : { github_status: result.status }),
-      error: result.error,
-    });
-    return "status_write_failed";
+  if (result.ok) {
+    log.info("review_close_out.closed_out", { ...meta, description });
+    return { outcome: "closed_out", finalize: "done" };
   }
-  log.info("review_close_out.closed_out", { ...meta, description });
-  return "closed_out";
+  const failureMeta = {
+    ...meta,
+    ...(result.status === undefined ? {} : { github_status: result.status }),
+    error: result.error,
+  };
+  if (isPermanentRejection(result.status)) {
+    log.error("review_close_out.abandoned", failureMeta);
+    return { outcome: "status_write_rejected", finalize: "done" };
+  }
+  log.error("review_close_out.status_write_failed", failureMeta);
+  return { outcome: "status_write_failed", finalize: "retry" };
+}
+
+/**
+ * Write a granted close-out's terminal status, then finalize it: `done` once GitHub shows a
+ * terminal status (written, or already there), `retry` otherwise — including when anything here
+ * throws — so the control plane keeps the review for its reaper.
+ */
+export async function completeCloseOut(
+  env: Env,
+  log: Logger,
+  grant: ReviewCloseOutGrant,
+  traceId: string
+): Promise<ReviewCloseOutOutcome> {
+  const meta = {
+    trace_id: traceId,
+    session_id: grant.sessionId,
+    repo: `${grant.owner}/${grant.repo}`.toLowerCase(),
+    pull_number: grant.prNumber,
+    head_sha: grant.headSha,
+    superseded: grant.superseded,
+  };
+  let finalize: "done" | "retry" = "retry";
+  try {
+    const result = await writeTerminalStatus(env, log, grant, meta);
+    finalize = result.finalize;
+    return result.outcome;
+  } finally {
+    await finalizeCloseOut(env, log, traceId, grant.sessionId, finalize);
+  }
+}
+
+/**
+ * Request and, when granted, complete a close-out inline — for callers already running in the
+ * background, such as a webhook whose review prompt could not be delivered. Never throws: the
+ * request is recorded before any failure that matters, and the reaper owns every retry.
+ */
+export async function closeOutReviewStatus(
+  env: Env,
+  log: Logger,
+  traceId: string,
+  params: { sessionId: string; request: ReviewCloseOutRequest }
+): Promise<void> {
+  const meta = { trace_id: traceId, session_id: params.sessionId };
+  try {
+    const result = await requestCloseOut(env, traceId, params.sessionId, params.request);
+    const outcome =
+      result.outcome === "granted"
+        ? await completeCloseOut(env, log, result.grant, traceId)
+        : result.outcome;
+    log.info("review_close_out.handled", { ...meta, outcome });
+  } catch (error) {
+    log.warn("review_close_out.error", {
+      ...meta,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+  }
 }

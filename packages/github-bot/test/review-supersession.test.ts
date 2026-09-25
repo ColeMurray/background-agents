@@ -139,7 +139,9 @@ describe("releaseReviewGeneration", () => {
 });
 
 describe("sweepStaleReviews", () => {
-  it("posts repoId/prNumber/generation and logs the cancelled sessions", async () => {
+  const SWEEP = { repoId: 501, prNumber: 42, generation: 3, owner: "acme", repo: "widgets" };
+
+  it("posts the PR, generation, and repository, and logs the cancelled sessions", async () => {
     const env = createMockEnv(
       async () =>
         new Response(
@@ -153,12 +155,12 @@ describe("sweepStaleReviews", () => {
     );
     const log = createMockLogger();
 
-    await sweepStaleReviews(env, log, "trace-sweep", { repoId: 501, prNumber: 42, generation: 3 });
+    await sweepStaleReviews(env, log, "trace-sweep", SWEEP);
 
     const fetchMock = getFetch(env);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://internal/internal/github-reviews/sweep");
-    expect(JSON.parse(init.body)).toEqual({ repoId: 501, prNumber: 42, generation: 3 });
+    expect(JSON.parse(init.body)).toEqual(SWEEP);
     expect(log.info).toHaveBeenCalledWith(
       "review_sweep.completed",
       expect.objectContaining({
@@ -175,9 +177,7 @@ describe("sweepStaleReviews", () => {
     });
     const log = createMockLogger();
 
-    await expect(
-      sweepStaleReviews(env, log, "trace-sweep-error", { repoId: 501, prNumber: 42, generation: 3 })
-    ).resolves.toBeUndefined();
+    await expect(sweepStaleReviews(env, log, "trace-sweep-error", SWEEP)).resolves.toBeUndefined();
     expect(log.warn).toHaveBeenCalledWith(
       "review_sweep.error",
       expect.objectContaining({ generation: 3 })
@@ -188,9 +188,7 @@ describe("sweepStaleReviews", () => {
     const env = createMockEnv(async () => new Response("boom", { status: 503 }));
     const log = createMockLogger();
 
-    await expect(
-      sweepStaleReviews(env, log, "trace-sweep-503", { repoId: 501, prNumber: 42, generation: 3 })
-    ).resolves.toBeUndefined();
+    await expect(sweepStaleReviews(env, log, "trace-sweep-503", SWEEP)).resolves.toBeUndefined();
     expect(log.warn).toHaveBeenCalledWith(
       "review_sweep.request_failed",
       expect.objectContaining({ status: 503 })
@@ -211,11 +209,7 @@ describe("sweepStaleReviews", () => {
     );
     const log = createMockLogger();
 
-    await sweepStaleReviews(env, log, "trace-sweep-partial", {
-      repoId: 501,
-      prNumber: 42,
-      generation: 3,
-    });
+    await sweepStaleReviews(env, log, "trace-sweep-partial", SWEEP);
 
     expect(log.warn).toHaveBeenCalledWith(
       "review_sweep.partial_failure",
