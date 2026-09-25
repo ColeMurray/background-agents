@@ -346,12 +346,12 @@ export class SessionStatusService {
     const activeDurationMs = this.messageRepository.getActiveDurationMs();
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
-    // The index keeps aggregate-friendly zeros; "unknown" lives in the usage rows.
-    const tokens = this.usageRepository.getSessionTotals();
 
     this.backgroundTasks.submit(
-      () =>
-        this.sessionIndex.updateMetrics(sessionId, {
+      () => {
+        // The index keeps aggregate-friendly zeros; "unknown" lives in the usage rows.
+        const tokens = this.usageRepository.getSessionTotals();
+        return this.sessionIndex.updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,
           activeDurationMs,
           messageCount,
@@ -361,7 +361,8 @@ export class SessionStatusService {
           reasoningTokens: tokens.reasoningTokens ?? 0,
           cacheReadTokens: tokens.cacheReadTokens ?? 0,
           cacheWriteTokens: tokens.cacheWriteTokens ?? 0,
-        }),
+        });
+      },
       {
         name: "session_index.update_metrics",
         context: { session_id: sessionId },

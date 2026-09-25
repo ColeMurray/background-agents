@@ -257,6 +257,22 @@ describe("SessionStatusService.transition", () => {
     );
   });
 
+  it("absorbs a usage totals read failure in the metrics background task", async () => {
+    const h = harness({
+      session: createSession({ status: "active", parent_session_id: "parent-1" }),
+    });
+    const error = new Error("Malformed step usage totals row");
+    h.usageRepository.getSessionTotals.mockImplementation(() => {
+      throw error;
+    });
+
+    expect(await h.service.transition("completed")).toBe(true);
+
+    expect(h.backgroundTasks.failures).toEqual([error]);
+    expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
+    expect(h.parentFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("syncs metrics even when already in the terminal status", async () => {
     const h = harness({ session: createSession({ status: "failed" }) });
 
