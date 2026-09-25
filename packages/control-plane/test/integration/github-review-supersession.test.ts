@@ -15,7 +15,11 @@ import {
   reapSupersededReviewSessions,
 } from "../../src/routes/github-reviews";
 import type { RequestContext } from "../../src/routes/shared";
-import type { SessionRuntimeClient } from "../../src/session/runtime-client";
+import {
+  createSessionRuntimeClientOver,
+  type SessionRuntimeClient,
+} from "../../src/session/runtime-client";
+import { createDurableObjectSessionRuntimeDispatch } from "../../src/cloudflare/session-runtime-dispatch";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
@@ -51,6 +55,8 @@ function createReviewSession(params: {
   prNumber: number;
   generation: number;
   headSha: string;
+  owner?: string;
+  repo?: string;
 }): Promise<Response> {
   return serviceFetch("https://test.local/sessions", {
     method: "POST",
@@ -643,6 +649,93 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     const closeOutLease = await leaseHolder(repoId, prNumber);
     expect((await agentRelease(sessionB)).status).toBe(204);
     expect(await leaseHolder(repoId, prNumber)).toEqual(closeOutLease);
+  });
+
+  describe("a review whose prompt never arrived", () => {
+    const TEN_MINUTES_AGO_AND_MORE = Date.now() - 11 * 60 * 1000;
+
+    /** The real session Durable Objects, as the reaper reaches them in production. */
+    const realSessions = createSessionRuntimeClientOver(
+      createDurableObjectSessionRuntimeDispatch(env.SESSION),
+      { trace_id: "trace-id", request_id: "request-id" }
+    );
+
+    async function createUnpromptedReview(repoId: number, prNumber: number) {
+      const generation = await claimGeneration(repoId, prNumber);
+      const create = await createReviewSession({
+        repoId,
+        prNumber,
+        generation,
+        headSha: "sha-a",
+        owner: "acme",
+        repo: "widgets",
+      });
+      expect(create.status).toBe(201);
+      const { sessionId } = await create.json<CreateSessionResponse>();
+      await env.DB.prepare("UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?")
+        .bind(TEN_MINUTES_AGO_AND_MORE, sessionId)
+        .run();
+      return sessionId;
+    }
+
+    async function reapWithBot(sessions: SessionRuntimeClient) {
+      const botFetch = vi.fn(async () => Response.json({ ok: true }));
+      const drives: Promise<unknown>[] = [];
+      await reapSupersededReviewSessions(
+        sqlDatabase(env.DB),
+        sessions,
+        {
+          GITHUB_BOT: { fetch: botFetch },
+          SERVICE_AUTH_SECRET_GITHUB_BOT: "reaper-test-secret",
+        } as unknown as Env,
+        { submit: (task) => void drives.push(task()) }
+      );
+      await Promise.all(drives);
+      return botFetch;
+    }
+
+    it("archives the never-prompted session and closes its status out as failed to start", async () => {
+      const repoId = 632323;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+
+      const botFetch = await reapWithBot(realSessions);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual({
+        owner: "acme",
+        repo: "widgets",
+        description: "Review failed to start",
+      });
+      expect(botFetch).toHaveBeenCalledTimes(1);
+      // Archived: a prompt that arrives late is rejected, so no agent can ever start.
+      const state = await realSessions.fetch(sessionId, "/internal/state");
+      expect((await state.json<{ status: string }>()).status).toBe("archived");
+    });
+
+    it("never archives or closes out a review that received its prompt", async () => {
+      const repoId = 633333;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const prompt = await realSessions.fetch(sessionId, "/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "Review PR #6", authorId: "github:1", source: "github" }),
+      });
+      expect(prompt.status).toBe(200);
+      // Even with the index still reading `created`, the session itself decides.
+      await env.DB.prepare("UPDATE sessions SET status = 'created' WHERE id = ?")
+        .bind(sessionId)
+        .run();
+
+      const botFetch = await reapWithBot(realSessions);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(row.close_out_request).toBeNull();
+      expect(botFetch).not.toHaveBeenCalled();
+      const state = await realSessions.fetch(sessionId, "/internal/state");
+      expect((await state.json<{ status: string }>()).status).not.toBe("archived");
+    });
   });
 
   it("rejects a close-out or finalize from any caller other than the github-bot service", async () => {

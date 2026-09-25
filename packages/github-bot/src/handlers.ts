@@ -65,7 +65,14 @@ async function createSession(
     scmLogin: string;
     scmUserId: string;
     scmAvatarUrl: string;
-    githubReview?: { repoId: number; prNumber: number; generation: number; headSha: string };
+    githubReview?: {
+      repoId: number;
+      prNumber: number;
+      generation: number;
+      headSha: string;
+      owner: string;
+      repo: string;
+    };
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -389,7 +396,14 @@ export async function handleReviewRequested(
           scmLogin: sender.login,
           scmUserId: String(sender.id),
           scmAvatarUrl: sender.avatar_url,
-          githubReview: { repoId: repo.id, prNumber: pr.number, generation, headSha: pr.head.sha },
+          githubReview: {
+            repoId: repo.id,
+            prNumber: pr.number,
+            generation,
+            headSha: pr.head.sha,
+            owner,
+            repo: repoName,
+          },
         });
       } catch (error) {
         if (error instanceof ReviewSupersededError) {
@@ -561,7 +575,14 @@ export async function handlePullRequestReviewTrigger(
           scmLogin: sender.login,
           scmUserId: String(sender.id),
           scmAvatarUrl: sender.avatar_url,
-          githubReview: { repoId: repo.id, prNumber: pr.number, generation, headSha: pr.head.sha },
+          githubReview: {
+            repoId: repo.id,
+            prNumber: pr.number,
+            generation,
+            headSha: pr.head.sha,
+            owner,
+            repo: repoName,
+          },
         });
       } catch (error) {
         if (error instanceof ReviewSupersededError) {

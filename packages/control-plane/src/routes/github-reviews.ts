@@ -33,6 +33,7 @@ import type { BackgroundTasks } from "../platform-ports";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
+import { SessionDraftExpiryClient, type DraftSweepOutcome } from "../session/abandoned-draft-sweep";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { parseBody } from "./body";
@@ -179,9 +180,82 @@ const REVIEW_FENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** Rows the reaper handles per pass, so one tick stays bounded. */
 const REAPER_STALE_BATCH = 20;
 const REAPER_CLOSE_OUT_BATCH = 10;
+const REAPER_UNPROMPTED_BATCH = 10;
 
 /** Timeout for one reaper-driven close-out request to the github-bot. */
 const CLOSE_OUT_DRIVE_TIMEOUT_MS = 10_000;
+
+/**
+ * Recorded as the close-out description of a review whose prompt never
+ * reached its session. Matches the github-bot's REVIEW_START_FAILED_DESCRIPTION.
+ */
+const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
+
+/**
+ * Close out the latest review of a PR whose session never received its
+ * prompt. The bot posts "pending" before delivering the prompt; if delivery
+ * fails and the bot also cannot record the close-out, no turn ever ends, so
+ * no completion callback will record it either, and the status would stay
+ * pending. The same holds for a fence a lost DO init kept (initialize.ts).
+ *
+ * Candidates are latest-generation rows with no close-out request and a
+ * recorded repository, past REVIEW_FENCE_ORPHAN_GRACE_MS (no create or
+ * prompt delivery is still in flight by then), whose index status says the
+ * session never started. The index can lag, so each session decides for
+ * itself through its draft expiry: it archives itself only when it holds no
+ * message and is still `created`, and an archived session rejects any later
+ * prompt, so no agent can start after the request is recorded. A session
+ * that received its prompt answers `not_draft` or `has_work` and is left
+ * alone, its index row repaired; a missing one never had a runtime.
+ */
+async function closeOutUnpromptedReviews(
+  db: SqlDatabase,
+  sessionRuntime: SessionRuntimeClient,
+  now: number
+): Promise<void> {
+  const candidates = await db
+    .prepare(
+      `SELECT grs.session_id, grs.repo_owner, grs.repo_name
+       FROM github_review_sessions grs
+       JOIN github_review_state st
+         ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
+       JOIN sessions s ON s.id = grs.session_id
+       WHERE grs.generation = st.latest_generation
+         AND grs.close_out_request IS NULL
+         AND grs.repo_owner IS NOT NULL AND grs.repo_name IS NOT NULL
+         AND grs.created_at < ?
+         AND s.status IN ('created', 'failed')
+       ORDER BY grs.created_at ASC, grs.session_id ASC
+       LIMIT ?`
+    )
+    .bind(now - REVIEW_FENCE_ORPHAN_GRACE_MS, REAPER_UNPROMPTED_BATCH)
+    .all<{ session_id: string; repo_owner: string; repo_name: string }>();
+  const drafts = new SessionDraftExpiryClient(sessionRuntime);
+  for (const row of candidates.results) {
+    let outcome: DraftSweepOutcome;
+    try {
+      outcome = await drafts.expireDraft(row.session_id);
+    } catch (probeError) {
+      logger.warn("review_reaper.unprompted_probe_failed", {
+        event: "review_reaper.unprompted_probe_failed",
+        session_id: row.session_id,
+        error: probeError instanceof Error ? probeError.message : String(probeError),
+      });
+      continue;
+    }
+    if (outcome !== "archived" && outcome !== "missing") continue;
+    await recordCloseOutRequest(db, row.session_id, {
+      owner: row.repo_owner,
+      repo: row.repo_name,
+      description: REVIEW_START_FAILED_DESCRIPTION,
+    });
+    logger.warn("review_reaper.unprompted_closed_out", {
+      event: "review_reaper.unprompted_closed_out",
+      session_id: row.session_id,
+      outcome,
+    });
+  }
+}
 
 /**
  * POST /internal/github-reviews/claim
@@ -801,7 +875,10 @@ export async function handleReviewLeaseRelease(
  *    (cancel unconfirmed, fresh-404 grace, or a creator's failed
  *    self-cancel), retiring each once cancelled — the sweep's rule, decided
  *    at deletion time, since a close-out may become owed meanwhile.
- * 3. Re-drives every owed close-out whose PR has no live lease, by asking
+ * 3. Records a close-out for the latest review of a PR whose prompt never
+ *    arrived (see closeOutUnpromptedReviews): no completion callback will
+ *    ever come for it.
+ * 4. Re-drives every owed close-out whose PR has no live lease, by asking
  *    the github-bot to run it (a signed POST, as a background task).
  *    Duplicate drives are harmless: a second request finds the first one's
  *    lease live and is deferred.
@@ -866,6 +943,8 @@ export async function reapSupersededReviewSessions(
       session_id: row.session_id,
     });
   }
+
+  await closeOutUnpromptedReviews(db, sessionRuntime, now);
 
   const owed = await db
     .prepare(

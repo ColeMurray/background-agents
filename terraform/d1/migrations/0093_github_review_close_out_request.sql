@@ -3,3 +3,8 @@
 -- Once set, the review's agent can no longer take the submission lease, and the row is kept —
 -- and re-driven by the reaper — until a close-out has left a terminal commit status.
 ALTER TABLE github_review_sessions ADD COLUMN close_out_request TEXT;
+-- The repository whose commit status the review owns, recorded when the session is created, so
+-- the reaper can close out a review whose prompt never arrived (it has no completion callback).
+-- Null for rows created by a bot that predates it.
+ALTER TABLE github_review_sessions ADD COLUMN repo_owner TEXT;
+ALTER TABLE github_review_sessions ADD COLUMN repo_name TEXT;

@@ -104,6 +104,8 @@ export interface SessionInitInput {
     prNumber: number;
     generation: number;
     headSha: string;
+    owner?: string;
+    repo?: string;
   };
 }
 
@@ -195,11 +197,12 @@ export async function initializeSession(
   // obscure that boundary for one call site); on a later init failure the
   // orphaned review row is swept by the next claim's sweep (404 rule).
   if (input.githubReview) {
-    const { repoId, prNumber, generation, headSha } = input.githubReview;
+    const { repoId, prNumber, generation, headSha, owner, repo } = input.githubReview;
     const fenceResult = await ctx.db
       .prepare(
-        `INSERT INTO github_review_sessions (repo_id, pr_number, generation, session_id, head_sha, created_at)
-         SELECT ?, ?, ?, ?, ?, ? FROM github_review_state
+        `INSERT INTO github_review_sessions
+           (repo_id, pr_number, generation, session_id, head_sha, created_at, repo_owner, repo_name)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ? FROM github_review_state
          WHERE repo_id = ? AND pr_number = ? AND latest_generation = ?`
       )
       .bind(
@@ -209,6 +212,8 @@ export async function initializeSession(
         input.sessionId,
         headSha,
         now,
+        owner ?? null,
+        repo ?? null,
         repoId,
         prNumber,
         generation

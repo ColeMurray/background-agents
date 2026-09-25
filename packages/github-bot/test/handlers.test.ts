@@ -331,6 +331,15 @@ describe("handlePullRequestReviewTrigger", () => {
     expect(sessionBody.title).toContain("Review PR #42");
     expect(sessionBody.scmLogin).toBe("alice");
     expect(sessionBody.scmAvatarUrl).toBe("https://avatars.githubusercontent.com/u/1001");
+    // The repository its status lives on, so a review that never starts can still be closed out.
+    expect(sessionBody.githubReview).toEqual({
+      repoId: 501,
+      prNumber: 42,
+      generation: 1,
+      headSha: "abc123",
+      owner: "acme",
+      repo: "widgets",
+    });
     // Identity travels via the signed actor assertion, never the body.
     expect(sessionBody).not.toHaveProperty("scmUserId");
     expect(sessionBody).not.toHaveProperty("spawnSource");
