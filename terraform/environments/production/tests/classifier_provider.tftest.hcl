@@ -57,6 +57,11 @@ run "anthropic_classifier_by_default" {
   command = plan
 
   assert {
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "test-anthropic-key" }
+    error_message = "Existing deployments must still inject the classifier key into Modal by default."
+  }
+
+  assert {
     condition     = !local.classifier_uses_openai
     error_message = "The default classification model must resolve to Anthropic."
   }
@@ -102,6 +107,51 @@ run "anthropic_classifier_by_default" {
     )
     error_message = "An Anthropic classifier must bind the deployment-wide anthropic_api_key."
   }
+}
+
+run "anthropic_classifier_without_sandbox_injection" {
+  command = plan
+
+  variables {
+    inject_anthropic_api_key_into_sandboxes = false
+    sandbox_provider                        = "opencomputer"
+    opencomputer_api_url                    = "https://api.opencomputer.example"
+    opencomputer_api_key                    = "test-opencomputer-key"
+    opencomputer_template                   = "test-template"
+  }
+
+  assert {
+    condition     = local.modal_llm_secret_values == { ANTHROPIC_API_KEY = "" }
+    error_message = "Modal must receive an empty Anthropic key so --force clears the old sandbox credential."
+  }
+
+  assert {
+    condition = (
+      local.classifier_secret_bindings.ANTHROPIC_API_KEY.value == var.anthropic_api_key &&
+      contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      contains(module.linear_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "Disabling sandbox injection must not remove the Anthropic classifier key."
+  }
+
+  assert {
+    condition = (
+      contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
+      !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "Disabling sandbox injection must omit the OpenComputer Anthropic binding."
+  }
+}
+
+run "sandbox_opt_out_does_not_bypass_classifier_validation" {
+  command = plan
+
+  variables {
+    inject_anthropic_api_key_into_sandboxes = false
+    anthropic_api_key                       = ""
+  }
+
+  expect_failures = [var.anthropic_api_key]
 }
 
 run "openai_classifier_binds_openai_key" {

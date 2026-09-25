@@ -344,7 +344,7 @@ variable "linear_bot_default_model" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key for the Slack and Linear bot classifiers, also injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
+  description = "Anthropic API key for the Slack and Linear bot classifiers. By default also injected into Modal session sandboxes and OpenComputer sandboxes; set inject_anthropic_api_key_into_sandboxes = false to keep the classifier key out of sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
   type        = string
   sensitive   = true
   default     = ""
@@ -363,6 +363,13 @@ variable "anthropic_api_key" {
     )
     error_message = "anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
   }
+}
+
+variable "inject_anthropic_api_key_into_sandboxes" {
+  description = "Whether to inject anthropic_api_key into Modal session sandboxes and the OpenComputer control-plane binding. Defaults to true for existing deployments; set false to keep the classifier key only on the bots. Modal still receives ANTHROPIC_API_KEY with an empty value to clear an old credential on the next secret update."
+  type        = bool
+  default     = true
+  nullable    = false
 }
 
 variable "classification_model" {

@@ -300,9 +300,11 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    - **Webhook**: Leave "Active" unchecked for now. Step 7c enables it when
      `enable_github_bot = true` for GitHub automations or bot commands.
 4. If enabling GitHub sign-in, configure **Identifying and authorizing users** (OAuth):
+
    - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
 
    Your web app URL depends on `web_platform`:
+
    - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app`
    - **Cloudflare**: `https://open-inspect-web-{deployment_name}.{your-subdomain}.workers.dev`
    - **Cloudflare with `cloudflare_custom_domain` set**: `https://{your-custom-domain}`
@@ -591,9 +593,10 @@ linear_client_id       = ""          # From Step 4b (required if enabled)
 linear_client_secret   = ""          # From Step 4b (required if enabled)
 linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 
-# API Keys. Optional: leave blank to add model credentials as secrets in the web
-# app instead. Required only when the Slack/Linear classifier runs on Anthropic.
+# Classifier key. Required when the Slack/Linear classifier runs on Anthropic;
+# optional otherwise. By default also injected into Modal/OpenComputer sandboxes.
 anthropic_api_key = "sk-ant-..."
+# inject_anthropic_api_key_into_sandboxes = false # Keep classifier key out of sandboxes
 
 # Slack/Linear classifier provider, chosen by classification_model.
 # An OpenAI model requires classification_openai_api_key. An Anthropic model
@@ -1109,85 +1112,90 @@ may contain personal information; leave them in secrets if you prefer masking in
 The table below describes deployment settings and credentials; use Variables for the names above and
 Secrets for credentials:
 
-| Setting Name                       | Value                                                                                       |
-| ---------------------------------- | ------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`             | Your Cloudflare API token                                                                   |
-| `CLOUDFLARE_ACCOUNT_ID`            | Your Cloudflare account ID                                                                  |
-| `CLOUDFLARE_WORKER_SUBDOMAIN`      | Your workers.dev subdomain                                                                  |
-| `R2_MEDIA_LOCATION`                | R2 location hint for the media bucket (defaults to `ENAM`)                                  |
-| `R2_MEDIA_BUCKET_NAME`             | Optional media bucket name override for a pre-created bucket                                |
-| `DEPLOYMENT_NAME`                  | Your deployment name                                                                        |
-| `R2_ACCESS_KEY_ID`                 | R2 access key ID                                                                            |
-| `R2_SECRET_ACCESS_KEY`             | R2 secret access key                                                                        |
-| `WEB_PLATFORM`                     | `vercel` or `cloudflare`                                                                    |
-| `VERCEL_API_TOKEN`                 | Vercel API token _(only if `web_platform = "vercel"`)_                                      |
-| `VERCEL_TEAM_ID`                   | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                |
-| `VERCEL_PROJECT_ID`                | Vercel project ID _(only if `web_platform = "vercel"`)_                                     |
-| `MODAL_TOKEN_ID`                   | Modal token ID                                                                              |
-| `MODAL_TOKEN_SECRET`               | Modal token secret                                                                          |
-| `MODAL_WORKSPACE`                  | Modal workspace name                                                                        |
-| `MODAL_ENVIRONMENT`                | Modal environment name (defaults to `main`)                                                 |
-| `MODAL_ENVIRONMENT_WEB_SUFFIX`     | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `SANDBOX_PROVIDER`                 | `modal`, `daytona`, or `vercel`                                                             |
-| `SANDBOX_INACTIVITY_TIMEOUT_MS`    | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)        |
-| `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
-| `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
-| `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                  |
-| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                |
-| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB` | Base snapshot memory in GiB (defaults to `2`)                                               |
-| `DAYTONA_TARGET`                   | Optional Daytona target name                                                                |
-| `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports          |
-| `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)     |
-| `VERCEL_SANDBOX_TOKEN`             | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                  |
-| `VERCEL_SANDBOX_PROJECT_ID`        | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_            |
-| `VERCEL_SANDBOX_TEAM_ID`           | Optional Vercel team/account ID for sandbox sessions                                        |
-| `VERCEL_BASE_SNAPSHOT_ID`          | Optional manual Vercel base-runtime snapshot; skips Terraform-managed snapshot builds       |
-| `VERCEL_SANDBOX_RUNTIME`           | Optional Vercel Sandbox runtime (defaults to `node24`)                                      |
-| `VERCEL_SNAPSHOT_EXPIRATION_MS`    | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
-| `VERCEL_SANDBOX_API_BASE_URL`      | Optional advanced Vercel Sandbox API base URL override                                      |
-| `GH_OAUTH_CLIENT_ID`               | Optional GitHub sign-in client ID; set with `GH_OAUTH_CLIENT_SECRET`                        |
-| `GH_OAUTH_CLIENT_SECRET`           | Optional GitHub sign-in client secret; set with `GH_OAUTH_CLIENT_ID`                        |
-| `GOOGLE_CLIENT_ID`                 | Optional Google sign-in client ID; set with `GOOGLE_CLIENT_SECRET`                          |
-| `GOOGLE_CLIENT_SECRET`             | Optional Google sign-in client secret; set with `GOOGLE_CLIENT_ID`                          |
-| `GH_APP_ID`                        | Required GitHub App repository-access ID                                                    |
-| `GH_APP_PRIVATE_KEY`               | Required GitHub App repository-access private key (PKCS#8 format)                           |
-| `GH_APP_INSTALLATION_ID`           | Required GitHub App repository-access installation ID                                       |
-| `ENABLE_SLACK_BOT`                 | `true` to deploy Slack bot, `false` to skip (default: `true`)                               |
-| `SLACK_BOT_TOKEN`                  | Slack bot token (required if enabled)                                                       |
-| `SLACK_SIGNING_SECRET`             | Slack signing secret (required if enabled)                                                  |
-| `ENABLE_LINEAR_BOT`                | `true` to deploy Linear bot, `false` to skip (default: `false`)                             |
-| `LINEAR_CLIENT_ID`                 | Linear OAuth application client ID (required if Linear enabled)                             |
-| `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
-| `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
-| `LINEAR_API_KEY`                   | Optional Linear API key used as a comment-posting fallback                                  |
-| `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; required by an Anthropic classifier     |
-| `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |
-| `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                  |
-| `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                     |
-| `DEEPSEEK_API_KEY`                 | DeepSeek API key (optional, required only for DeepSeek models)                              |
-| `TOKEN_ENCRYPTION_KEY`             | Generated encryption key (OAuth tokens)                                                     |
-| `REPO_SECRETS_ENCRYPTION_KEY`      | Generated encryption key (repo secrets)                                                     |
-| `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` | Optional existing provider-account key override; Terraform generates one when omitted       |
-| `MODAL_API_SECRET`                 | Generated Modal API secret                                                                  |
-| `NEXTAUTH_SECRET`                  | Generated browser-auth secret (legacy Actions secret name)                                  |
-| `ALLOWED_USERS`                    | Comma-separated GitHub usernames (or empty for all users)                                   |
-| `ALLOWED_EMAIL_DOMAINS`            | Comma-separated email domains (or empty for all domains)                                    |
-| `ALLOWED_EMAILS`                   | Comma-separated exact email addresses (for individual users on shared domains)              |
-| `ALLOWED_GITHUB_ORGS`              | Comma-separated GitHub orgs whose active members can sign in                                |
-| `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)  |
-| `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                  |
-| `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                 |
-| `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                       |
-| `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                      |
-| `GH_BOT_USERNAME`                  | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)               |
-| `APP_NAME`                         | Optional display name for whitelabeling (default: `Open-Inspect`)                           |
-| `APP_ICON_URL`                     | Optional URL to a custom logo/favicon (default: built-in icon)                              |
+| Setting Name                              | Value                                                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`                    | Your Cloudflare API token                                                                         |
+| `CLOUDFLARE_ACCOUNT_ID`                   | Your Cloudflare account ID                                                                        |
+| `CLOUDFLARE_WORKER_SUBDOMAIN`             | Your workers.dev subdomain                                                                        |
+| `R2_MEDIA_LOCATION`                       | R2 location hint for the media bucket (defaults to `ENAM`)                                        |
+| `R2_MEDIA_BUCKET_NAME`                    | Optional media bucket name override for a pre-created bucket                                      |
+| `DEPLOYMENT_NAME`                         | Your deployment name                                                                              |
+| `R2_ACCESS_KEY_ID`                        | R2 access key ID                                                                                  |
+| `R2_SECRET_ACCESS_KEY`                    | R2 secret access key                                                                              |
+| `WEB_PLATFORM`                            | `vercel` or `cloudflare`                                                                          |
+| `VERCEL_API_TOKEN`                        | Vercel API token _(only if `web_platform = "vercel"`)_                                            |
+| `VERCEL_TEAM_ID`                          | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                      |
+| `VERCEL_PROJECT_ID`                       | Vercel project ID _(only if `web_platform = "vercel"`)_                                           |
+| `MODAL_TOKEN_ID`                          | Modal token ID                                                                                    |
+| `MODAL_TOKEN_SECRET`                      | Modal token secret                                                                                |
+| `MODAL_WORKSPACE`                         | Modal workspace name                                                                              |
+| `MODAL_ENVIRONMENT`                       | Modal environment name (defaults to `main`)                                                       |
+| `MODAL_ENVIRONMENT_WEB_SUFFIX`            | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty       |
+| `SANDBOX_PROVIDER`                        | `modal`, `daytona`, or `vercel`                                                                   |
+| `SANDBOX_INACTIVITY_TIMEOUT_MS`           | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)              |
+| `SANDBOX_BOOT_TIMEOUT_MS`                 | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)         |
+| `DAYTONA_API_URL`                         | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                        |
+| `DAYTONA_API_KEY`                         | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                        |
+| `DAYTONA_BASE_SNAPSHOT`                   | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                      |
+| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB`        | Base snapshot memory in GiB (defaults to `2`)                                                     |
+| `DAYTONA_TARGET`                          | Optional Daytona target name                                                                      |
+| `DAYTONA_TOOLBOX_API_URL`                 | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports                |
+| `DAYTONA_PREBUILDS_ENABLED`               | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)           |
+| `VERCEL_SANDBOX_TOKEN`                    | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                        |
+| `VERCEL_SANDBOX_PROJECT_ID`               | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_                  |
+| `VERCEL_SANDBOX_TEAM_ID`                  | Optional Vercel team/account ID for sandbox sessions                                              |
+| `VERCEL_BASE_SNAPSHOT_ID`                 | Optional manual Vercel base-runtime snapshot; skips Terraform-managed snapshot builds             |
+| `VERCEL_SANDBOX_RUNTIME`                  | Optional Vercel Sandbox runtime (defaults to `node24`)                                            |
+| `VERCEL_SNAPSHOT_EXPIRATION_MS`           | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)             |
+| `VERCEL_SANDBOX_API_BASE_URL`             | Optional advanced Vercel Sandbox API base URL override                                            |
+| `GH_OAUTH_CLIENT_ID`                      | Optional GitHub sign-in client ID; set with `GH_OAUTH_CLIENT_SECRET`                              |
+| `GH_OAUTH_CLIENT_SECRET`                  | Optional GitHub sign-in client secret; set with `GH_OAUTH_CLIENT_ID`                              |
+| `GOOGLE_CLIENT_ID`                        | Optional Google sign-in client ID; set with `GOOGLE_CLIENT_SECRET`                                |
+| `GOOGLE_CLIENT_SECRET`                    | Optional Google sign-in client secret; set with `GOOGLE_CLIENT_ID`                                |
+| `GH_APP_ID`                               | Required GitHub App repository-access ID                                                          |
+| `GH_APP_PRIVATE_KEY`                      | Required GitHub App repository-access private key (PKCS#8 format)                                 |
+| `GH_APP_INSTALLATION_ID`                  | Required GitHub App repository-access installation ID                                             |
+| `ENABLE_SLACK_BOT`                        | `true` to deploy Slack bot, `false` to skip (default: `true`)                                     |
+| `SLACK_BOT_TOKEN`                         | Slack bot token (required if enabled)                                                             |
+| `SLACK_SIGNING_SECRET`                    | Slack signing secret (required if enabled)                                                        |
+| `ENABLE_LINEAR_BOT`                       | `true` to deploy Linear bot, `false` to skip (default: `false`)                                   |
+| `LINEAR_CLIENT_ID`                        | Linear OAuth application client ID (required if Linear enabled)                                   |
+| `LINEAR_CLIENT_SECRET`                    | Linear OAuth application client secret (required if Linear enabled)                               |
+| `LINEAR_WEBHOOK_SECRET`                   | Linear webhook signing secret (required if Linear enabled)                                        |
+| `LINEAR_API_KEY`                          | Optional Linear API key used as a comment-posting fallback                                        |
+| `ANTHROPIC_API_KEY`                       | Classifier key; required for an Anthropic classifier, injected into Modal/OpenComputer by default |
+| `INJECT_ANTHROPIC_API_KEY_INTO_SANDBOXES` | Optional Actions variable; `false` keeps the classifier key out of sandboxes (default: `true`)    |
+| `CLASSIFICATION_OPENAI_API_KEY`           | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                      |
+| `OPENAI_API_KEY`                          | Optional OpenAI API key used when a session selects API-key authentication                        |
+| `XAI_API_KEY`                             | Optional xAI API key used when a session selects API-key authentication                           |
+| `DEEPSEEK_API_KEY`                        | DeepSeek API key (optional, required only for DeepSeek models)                                    |
+| `TOKEN_ENCRYPTION_KEY`                    | Generated encryption key (OAuth tokens)                                                           |
+| `REPO_SECRETS_ENCRYPTION_KEY`             | Generated encryption key (repo secrets)                                                           |
+| `PROVIDER_ACCOUNTS_ENCRYPTION_KEY`        | Optional existing provider-account key override; Terraform generates one when omitted             |
+| `MODAL_API_SECRET`                        | Generated Modal API secret                                                                        |
+| `NEXTAUTH_SECRET`                         | Generated browser-auth secret (legacy Actions secret name)                                        |
+| `ALLOWED_USERS`                           | Comma-separated GitHub usernames (or empty for all users)                                         |
+| `ALLOWED_EMAIL_DOMAINS`                   | Comma-separated email domains (or empty for all domains)                                          |
+| `ALLOWED_EMAILS`                          | Comma-separated exact email addresses (for individual users on shared domains)                    |
+| `ALLOWED_GITHUB_ORGS`                     | Comma-separated GitHub orgs whose active members can sign in                                      |
+| `UNSAFE_ALLOW_ALL_USERS`                  | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)        |
+| `ENABLE_DURABLE_OBJECT_BINDINGS`          | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                        |
+| `ENABLE_SERVICE_BINDINGS`                 | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                       |
+| `ENABLE_GITHUB_BOT`                       | `true` to deploy GitHub bot worker (or empty to skip)                                             |
+| `GH_WEBHOOK_SECRET`                       | GitHub webhook secret (required if GitHub bot enabled)                                            |
+| `GH_BOT_USERNAME`                         | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)                     |
+| `APP_NAME`                                | Optional display name for whitelabeling (default: `Open-Inspect`)                                 |
+| `APP_ICON_URL`                            | Optional URL to a custom logo/favicon (default: built-in icon)                                    |
 
 `CLASSIFICATION_MODEL` is an optional Actions **variable**, not a secret — add it under Settings →
 Secrets and variables → Actions → _Variables_ to point the Slack/Linear classifiers at a different
 model (for example `gpt-5.4-mini`). Leave it unset to keep the Terraform default. An OpenAI value
 also requires the `CLASSIFICATION_OPENAI_API_KEY` secret; an Anthropic value is served by
 `ANTHROPIC_API_KEY`.
+
+Set `INJECT_ANTHROPIC_API_KEY_INTO_SANDBOXES=false` as an Actions variable if the classifier uses
+Anthropic but sandbox model credentials should come only from Open-Inspect's scoped secret store.
+The Anthropic classifier still needs `ANTHROPIC_API_KEY`.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

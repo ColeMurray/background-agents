@@ -44,9 +44,8 @@ locals {
 
   # The bots derive their classifier's provider from the model id, so the
   # deployment binds exactly one provider credential to them: an Anthropic model
-  # gets ANTHROPIC_API_KEY, an OpenAI model gets OPENAI_API_KEY. This is scoped
-  # to the classifier — var.anthropic_api_key is still what Claude coding
-  # sessions and the opencomputer control-plane path use.
+  # gets ANTHROPIC_API_KEY, an OpenAI model gets OPENAI_API_KEY. Sandbox
+  # injection of the Anthropic classifier key can be disabled separately.
   classifier_uses_openai = (
     startswith(var.classification_model, "openai/") ||
     startswith(var.classification_model, "gpt-")
@@ -64,7 +63,7 @@ locals {
   # all. An empty value means sandboxes take that provider's credential from the
   # per-repository secret store, which overrides this secret either way.
   modal_llm_secret_values = {
-    ANTHROPIC_API_KEY = trimspace(var.anthropic_api_key)
+    ANTHROPIC_API_KEY = var.inject_anthropic_api_key_into_sandboxes ? trimspace(var.anthropic_api_key) : ""
   }
 
   # OpenComputer reads its sandbox credentials from the control plane rather than

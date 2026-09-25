@@ -53,6 +53,7 @@ brew install node@24
 ### 2. Cloudflare Setup
 
 1. **Create API Token** at [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens)
+
    - Required account permissions:
      - Workers Scripts: **Edit**
      - Workers KV Storage: **Edit**
@@ -63,6 +64,7 @@ brew install node@24
      - Workers Routes: **Edit**
 
 2. **Create R2 Bucket** for Terraform state:
+
    - Bucket name: `open-inspect-terraform-state`
    - Generate R2 API token with read/write permissions
 
@@ -273,8 +275,9 @@ LINEAR_WEBHOOK_SECRET
 LINEAR_API_KEY # Optional; fallback comment posting
 
 # API Keys
-ANTHROPIC_API_KEY # Optional; required only when classification_model is an Anthropic model and the Slack or Linear bot is enabled
+ANTHROPIC_API_KEY # Classifier key; required when classification_model is Anthropic and a classifier bot is enabled
 CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
+INJECT_ANTHROPIC_API_KEY_INTO_SANDBOXES # Optional Actions variable; set to false to keep the classifier key out of sandboxes (default: true)
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
@@ -348,6 +351,19 @@ Since Modal has no Terraform provider, the module uses `null_resource` with `loc
 
 - Changes are detected via source file hashing
 - Manual intervention may be needed for complex updates
+
+By default `anthropic_api_key` is used for the Slack/Linear Anthropic classifier and is also passed
+to Modal and OpenComputer sandboxes, preserving existing deployments. To use the key only for the
+classifier, set `inject_anthropic_api_key_into_sandboxes = false` in Terraform (or set the Actions
+variable `INJECT_ANTHROPIC_API_KEY_INTO_SANDBOXES` to `false`). Provide sandbox model credentials
+through Open-Inspect's scoped secret store instead. The classifier still requires
+`anthropic_api_key` when a bot is enabled with an Anthropic `classification_model`.
+
+With injection disabled, Terraform keeps `ANTHROPIC_API_KEY=""` in Modal's `llm-api-keys` secret to
+clear any previously configured value; Modal does not accept an empty secret. The OpenComputer
+control-plane binding is omitted. Do not edit Terraform-managed Modal secrets by hand: a change to
+any Modal secret causes Terraform to replace them with its configured values, discarding manual
+edits. Move any additional keys into Terraform before the next secret change.
 
 ## Verification
 
