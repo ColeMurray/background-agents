@@ -113,6 +113,9 @@ jobs:
       - name: Test SQL portability check
         run: npm run test:lint-sql-portability
 
+      - name: Test D1 migration ledger check
+        run: npm run test:d1-migrate
+
       - name: Test AWS deploy rollback
         run: npm run test:deploy-aws
 
