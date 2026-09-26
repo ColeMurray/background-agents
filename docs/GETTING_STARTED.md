@@ -321,20 +321,19 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > **bot** identity.
 
 5. Set **Repository permissions**:
-   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
-   - Checks: **Read-only** _(required for GitHub check-suite automations)_
    - Contents: **Read & Write**
-   - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
      session-created pull requests)_
    - Metadata: **Read-only**
+   - If enabling the GitHub bot, also grant Actions: **Read-only** _(workflow-run automations)_,
+     Checks: **Read-only** _(check-suite automations)_, and Issues: **Read & Write**.
 6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
    - Members: **Read-only**
    - For existing GitHub Apps, republish the permission change and request/approve installation
      updates before testing org membership sign-in.
-7. If GitHub sign-in uses `allowed_emails` or `allowed_email_domains`, set **Account permissions**:
-   - Email addresses: **Read-only** _(without it the app cannot read verified emails and those
-     allowlists deny every GitHub sign-in)_
+7. If enabling GitHub sign-in, set **Account permissions**:
+   - Email addresses: **Read-only** _(every GitHub sign-in requires a verified email, including
+     username-only, org-only, and intentionally open deployments)_
    - For existing GitHub Apps, republish the permission change and request/approve installation
      updates, otherwise the added permission does not apply to current installs.
 8. Click **"Create GitHub App"**
@@ -678,14 +677,15 @@ GitHub attribution unless the same verified email is also a linked GitHub identi
    URL exactly.
 3. On the OAuth consent screen, request only the `openid`, `email`, and `profile` scopes — these are
    non-sensitive, so Google requires no app-verification review.
-4. Set `google_client_id` and `google_client_secret` (both required together), and add at least one
-   allowed user to `allowed_emails` (exact addresses) or `allowed_email_domains`. Leave the GitHub
-   client pair empty for Google-only sign-in, or keep it configured to offer both providers. The
-   next request to `/login` reflects the deployed pair without a web flag or rebuild.
+4. Set `google_client_id` and `google_client_secret` (both required together). For restricted
+   access, admit Google users through `allowed_emails` (exact addresses) or `allowed_email_domains`;
+   for intentionally open access with no allowlists, set `unsafe_allow_all_users = true`. Leave the
+   GitHub client pair empty for Google-only sign-in, or keep it configured to offer both providers.
+   The next request to `/login` reflects the deployed pair without a web flag or rebuild.
 
-> **Security note**: Google sign-in is admitted only for **verified** emails that match an
-> allowlist. Because addresses on shared domains like `gmail.com` are generic, prefer
-> `allowed_emails` (exact match) over `allowed_email_domains` for those users.
+> **Security note**: Under restricted access, Google sign-in is admitted only for **verified**
+> emails that match an allowlist. Because addresses on shared domains like `gmail.com` are generic,
+> prefer `allowed_emails` (exact match) over `allowed_email_domains` for those users.
 
 ---
 
@@ -743,7 +743,8 @@ Terraform will update the workers with the required bindings.
 
 ## Step 7a: Bootstrap the Workspace Owner
 
-Owner assignment is an explicit operator action. After both deployment phases complete:
+Owner assignment is an explicit operator action. After both deployment phases and web app deployment
+complete (for Vercel, complete Step 8 before continuing):
 
 1. Have the intended Owner sign in to the deployed web application once. This creates their
    canonical user and default role assignment.
@@ -760,8 +761,7 @@ npm run rbac:bootstrap-owner -- \
   --user "<canonical-user-id>"
 ```
 
-5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
-   unsuspended Owner), then execute the same command with `--execute`:
+5. If the preflight is `ready`, confirm the target and execute the same command with `--execute`:
 
 ```bash
 npm run rbac:bootstrap-owner -- \
@@ -769,6 +769,9 @@ npm run rbac:bootstrap-owner -- \
   --user "<canonical-user-id>" \
   --execute
 ```
+
+If the preflight is `no-op`, the target is already the current unsuspended Owner; skip execution. If
+it is `refused`, stop and resolve the reported reason before retrying.
 
 The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
 `wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
@@ -778,14 +781,15 @@ replaces the target's assignment, and returns the exact audit-bound postconditio
 transaction. A no-op writes nothing. A lost batch response can leave the outcome uncertain; the
 command does not automatically retry writes or claim success without the postcondition.
 
-6. Verify the control-plane health response contains `"rbac":{"ownerAssignment":"present"}`:
+6. Rerun the dry run from step 4 and expect `no-op` for the selected unsuspended Owner:
 
 ```bash
-curl "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>"
 ```
 
-This health value reports current state: `present` means at least one Owner assignment belongs to an
-unsuspended user.
+The control-plane `/health` endpoint reports service liveness, not Owner status.
 
 ---
 
@@ -983,11 +987,11 @@ npx vercel --prod
 
 ## Step 9: Verify Deployment
 
-After deployment completes, verify each component:
+After deployment completes, verify each component from the repository root:
 
 ```bash
 # Get the verification commands from Terraform
-terraform output verification_commands
+terraform -chdir=terraform/environments/production output verification_commands
 ```
 
 Or manually:
@@ -1004,7 +1008,7 @@ curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Web app (should return 200)
-curl -I "$(terraform output -raw web_app_url)"
+curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
 ### Test the Full Flow
