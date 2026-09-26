@@ -3,6 +3,11 @@
 Cloudflare Workers + Hono + Durable Objects control plane for session management and real-time
 streaming.
 
+For Sandbox0, set `SANDBOX_PROVIDER=sandbox0`, `SANDBOX0_API_KEY` (secret), `SANDBOX0_TEMPLATE_ID`
+(verified runtime template), and optionally `SANDBOX0_API_URL` (defaults to
+`https://api.sandbox0.ai`). See the [Sandbox0 guide](../sandbox0-infra/README.md) for template
+construction, durable pause/resume, access security and capability limits.
+
 ## Overview
 
 The control plane provides:

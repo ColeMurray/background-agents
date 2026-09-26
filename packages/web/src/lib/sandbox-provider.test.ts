@@ -73,6 +73,22 @@ describe("sandbox-provider", () => {
     expect(supportsConfigurableSandboxTimeout()).toBe(true);
   });
 
+  it("recognizes Sandbox0 without exposing repo images or resource overrides", async () => {
+    process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "sandbox0";
+
+    const {
+      getPublicSandboxProvider,
+      supportsConfigurableSandboxResources,
+      supportsConfigurableSandboxTimeout,
+      supportsRepoImages,
+    } = await loadProvider();
+
+    expect(getPublicSandboxProvider()).toBe("sandbox0");
+    expect(supportsRepoImages()).toBe(false);
+    expect(supportsConfigurableSandboxResources()).toBe(false);
+    expect(supportsConfigurableSandboxTimeout()).toBe(true);
+  });
+
   it("supports opencomputer with repo images", async () => {
     delete process.env.NEXT_PUBLIC_SANDBOX_PROVIDER;
     process.env.SANDBOX_PROVIDER = "opencomputer";

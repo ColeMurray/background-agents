@@ -9,6 +9,7 @@ on:
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/sandbox0-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -28,6 +29,7 @@ on:
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/sandbox0-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -101,10 +103,10 @@ jobs:
           pip install -e "packages/modal-infra[dev]"
 
       - name: Run Ruff linter
-        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
+        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/ packages/sandbox0-infra/
 
       - name: Run Ruff formatter check
-        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
+        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/ packages/sandbox0-infra/
 
   typecheck-python:
     name: TypeCheck (Python)

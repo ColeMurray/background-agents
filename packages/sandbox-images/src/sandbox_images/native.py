@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -14,11 +15,20 @@ from .locks import update_locks
 
 
 def build_image(root: Path, provider: str) -> dict[str, Any]:
+    """Run the selected builder with checked locks and an isolated result handoff.
+
+    Provider builders own live verification. A successful subprocess must also
+    return a nonempty artifact reference before deployment can select it.
+    """
     if provider not in PROVIDERS:
         raise ValueError("Unknown image provider")
     update_locks(root, check=True)
     environment = dict(os.environ)
     commands = {
+        "sandbox0": (
+            root,
+            [sys.executable, "packages/sandbox0-infra/build-template.py"],
+        ),
         "modal": (
             root / "packages/modal-infra",
             ["uv", "run", "--frozen", "python", "deploy.py", "--build-sandbox-image"],

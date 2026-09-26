@@ -158,6 +158,10 @@ module "control_plane_worker" {
     local.use_vercel_backend && var.vercel_base_snapshot_id == "" ? {
       VERCEL_BASE_SNAPSHOT_NAME = { value = module.vercel_sandbox_infra[0].snapshot_name }
     } : {},
+    var.sandbox_provider == "sandbox0" ? {
+      SANDBOX0_API_URL     = { value = var.sandbox0_api_url }
+      SANDBOX0_TEMPLATE_ID = { value = var.sandbox0_template_id }
+    } : {},
     local.use_e2b_backend ? {
       E2B_API_URL                 = { value = var.e2b_api_url }
       E2B_TEMPLATE_ID             = { value = module.e2b_infra[0].template_id }
@@ -213,6 +217,9 @@ module "control_plane_worker" {
     } : {},
     local.use_e2b_backend ? {
       E2B_API_KEY = { value = var.e2b_api_key }
+    } : {},
+    var.sandbox_provider == "sandbox0" ? {
+      SANDBOX0_API_KEY = { value = var.sandbox0_api_key }
     } : {},
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same

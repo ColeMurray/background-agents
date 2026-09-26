@@ -11,24 +11,37 @@ function env(overrides: Partial<Env> = {}): Env {
   return createTestEnv(overrides);
 }
 
-/** Every value `resolveSandboxBackendName` accepts. */
-const SANDBOX_BACKENDS = ["modal", "vercel", "opencomputer", "e2b", "daytona"] as const;
+/** Sandbox backends that support repository image builds. */
+const IMAGE_BUILD_BACKENDS = ["modal", "vercel", "opencomputer", "e2b", "daytona"] as const;
 
 describe("resolveImageBuildProvider", () => {
-  it.each(SANDBOX_BACKENDS)("resolves %s as an image-build provider", (provider) => {
+  it.each(IMAGE_BUILD_BACKENDS)("resolves %s as an image-build provider", (provider) => {
     expect(resolveImageBuildProvider(provider)).toBe(provider);
   });
 
-  it("reports no unsupported provider: every sandbox backend now builds images", () => {
-    // The 501 path stays for a backend that lands without image support; as
-    // of Daytona there is none, so no configured deployment can reach it.
-    for (const provider of SANDBOX_BACKENDS) {
+  it("reports no unsupported message for image-build backends", () => {
+    for (const provider of IMAGE_BUILD_BACKENDS) {
       expect(getImageBuildsUnsupportedMessage(env({ SANDBOX_PROVIDER: provider }))).toBeNull();
     }
+  });
+
+  it("reports Sandbox0 repository image builds as unsupported", () => {
+    expect(resolveImageBuildProvider("sandbox0")).toBeNull();
+    expect(getImageBuildsUnsupportedMessage(env({ SANDBOX_PROVIDER: "sandbox0" }))).toEqual(
+      expect.any(String)
+    );
   });
 });
 
 describe("resolveImageBuildAdmission", () => {
+  it("keeps Sandbox0 admission closed even when Daytona prebuilds are enabled", () => {
+    expect(
+      resolveImageBuildAdmission(
+        env({ SANDBOX_PROVIDER: "sandbox0", DAYTONA_PREBUILDS_ENABLED: "true" })
+      )
+    ).toEqual({ provider: null, admitted: false, reason: "provider_unsupported" });
+  });
+
   it.each(["modal", "vercel", "opencomputer", "e2b"])(
     "admits %s without an operator flag",
     (provider) => {

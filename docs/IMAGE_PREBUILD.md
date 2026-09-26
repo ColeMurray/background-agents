@@ -38,12 +38,16 @@ Pre-built images are available when the deployment uses `sandbox_provider = "mod
 `sandbox_provider = "daytona"`. The artifact is stored per provider as a Modal image, Vercel
 snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
 
+Sandbox0 does not support repository or environment prebuilds in this integration. Its
+[runtime template build](../packages/sandbox0-infra/README.md) is a separate deployment step.
+
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
 controls stay visible and say so, and nothing starts a build. Read every "triggers a build"
 statement below as conditional on admission when the deployment is on Daytona: enabling a
 repository, saving an environment, the manual rebuild button and the 30-minute scheduler all record
-intent but start nothing until an operator opens it. On every other provider they are unconditional.
+intent but start nothing until an operator opens it. On the other supported image-build providers,
+they do not require this additional admission flag.
 
 ### Enable for a Repository
 
@@ -241,8 +245,8 @@ regularly, save it as an environment and enable prebuilds.
 
 ## Daytona prebuilds
 
-Daytona builds and boots prebuilt images through the same subsystem as every other provider, with
-two differences that come from how Daytona captures an image.
+Daytona builds and boots prebuilt images through the same subsystem as the other image-build
+providers, with two differences that come from how Daytona captures an image.
 
 **Capture is asynchronous, and it reads a stopped sandbox.** Finalization therefore stops the build
 source, waits for it to be stopped, reserves the snapshot's unique name in the build row, submits

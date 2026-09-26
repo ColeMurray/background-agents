@@ -15,7 +15,7 @@ from typing import Any, NamedTuple, TypedDict
 from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
 from .locks import update_locks
 
-PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer", "sandbox0")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -68,7 +68,10 @@ class PackedBundle(NamedTuple):
 
 
 def validate_toolchain(tools: dict[str, Any]) -> None:
+    """Reject floating tool versions and unchecked downloads before planning a build."""
+
     def version(value: str) -> tuple[int, ...]:
+        """Parse exact release components for comparison, rejecting ranges and tags."""
         if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){2,3}", value):
             raise ValueError(f"Image tools must have exact release versions: {value}")
         return tuple(int(part) for part in value.split("."))
@@ -105,6 +108,7 @@ def source_files(root: Path, paths: tuple[Path, ...]) -> list[Path]:
     """Only declared payload/source roots are eligible; reject escaping links."""
 
     def walk(path: Path) -> list[Path]:
+        """Enumerate eligible inputs without following links outside the checkout."""
         if path.is_symlink():
             if path.readlink().is_absolute() or not path.resolve().is_relative_to(root):
                 raise ValueError(f"Source symlink escapes checkout: {path}")
@@ -128,6 +132,11 @@ def source_files(root: Path, paths: tuple[Path, ...]) -> list[Path]:
 
 
 def plan_image(root: Path, provider: str) -> ImagePlan:
+    """Hash build inputs and resolve provider runtime settings without allocating resources.
+
+    The key includes source paths, executable bits, and symlink targets as well
+    as contents. Sandbox0 keeps credential caches outside its durable RootFS.
+    """
     root = root.resolve()
     if provider not in PROVIDERS:
         raise ValueError(f"Unsupported sandbox image provider: {provider}")
@@ -142,8 +151,10 @@ def plan_image(root: Path, provider: str) -> ImagePlan:
         IMAGE_PACKAGE / "uv.lock",
         IMAGE_PACKAGE / "targets.json",
         Path(f"packages/{provider}-infra"),
-        Path(f"terraform/modules/{INFRA_MODULES[provider]}"),
     )
+    # Sandbox0 templates are built explicitly, without a Terraform build module.
+    if provider in INFRA_MODULES:
+        paths += (Path(f"terraform/modules/{INFRA_MODULES[provider]}"),)
     if provider in ("vercel", "opencomputer"):
         paths += (Path("package-lock.json"),)
     if provider == "vercel":
@@ -161,13 +172,17 @@ def plan_image(root: Path, provider: str) -> ImagePlan:
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
         digest.update(str(stat.S_IMODE(path.lstat().st_mode)).encode() + b"\0")
         digest.update(hashlib.sha256(content).digest())
+    runtime_env = runtime_environment(target)
+    if provider == "sandbox0":
+        # Credential caches must not enter durable RootFS checkpoints.
+        runtime_env["OI_SCM_CRED_CACHE_DIR"] = "/tmp/oi-scm"
     return {
         "provider": provider,
         "target": target,
         "runtimeVersion": read_json(
             root / RUNTIME_PACKAGE / "src/sandbox_runtime/runtime_manifest.json"
         )["runtimeVersion"],
-        "runtimeEnv": runtime_environment(target),
+        "runtimeEnv": runtime_env,
         "buildHash": digest.hexdigest(),
     }
 

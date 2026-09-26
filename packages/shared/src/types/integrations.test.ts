@@ -29,7 +29,7 @@ describe("sandbox provider settings capabilities", () => {
     expect(supportsConfigurableSandboxResources(provider)).toBe(true);
   });
 
-  it.each(["daytona", "opencomputer", "e2b"])(
+  it.each(["daytona", "opencomputer", "e2b", "sandbox0"])(
     "does not expose resource overrides for %s",
     (provider) => {
       expect(supportsConfigurableSandboxResources(provider)).toBe(false);
@@ -44,6 +44,16 @@ describe("sandbox provider settings capabilities", () => {
   it("uses the explicit permissive fallback for unvalidated provider names", () => {
     expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
     expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
+  });
+
+  it("preserves Sandbox0 timeout settings but drops template-owned resource overrides", () => {
+    expect(supportsConfigurableSandboxTimeout("sandbox0")).toBe(true);
+    expect(
+      omitUnsupportedSandboxSettings(
+        { cpuCores: 2, memoryMib: 4096, sandboxTimeoutMs: 900_000, tunnelPorts: [3000] },
+        "sandbox0"
+      )
+    ).toEqual({ sandboxTimeoutMs: 900_000, tunnelPorts: [3000] });
   });
 
   it("drops unsupported Daytona settings while preserving supported settings", () => {
