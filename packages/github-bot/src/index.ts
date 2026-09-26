@@ -27,6 +27,7 @@ import {
   handleIssueComment,
   handleReviewComment,
   isReviewRequestedForBot,
+  reviewRequestLogins,
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
@@ -268,7 +269,7 @@ function dispatchHandler(
         return handlePullRequestOpened(env, log, parsed.data, traceId);
       }
       if (p.action === "review_requested") {
-        if (!isReviewRequestedForBot(payload, env.GITHUB_BOT_USERNAME)) {
+        if (!isReviewRequestedForBot(payload, reviewRequestLogins(env))) {
           return Promise.resolve({ outcome: "skipped", skip_reason: "review_not_for_bot" });
         }
         const parsed = reviewRequestedPayloadSchema.safeParse(payload);
