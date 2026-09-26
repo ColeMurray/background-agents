@@ -100,7 +100,8 @@ export class EventRepository {
     messageId: string,
     event: Extract<SandboxEvent, { type: TType }>,
     createdAt: number,
-    id = `${type}:${messageId}`
+    id = `${type}:${messageId}`,
+    preserveCreatedAt = false
   ): void {
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
@@ -108,7 +109,7 @@ export class EventRepository {
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
-         created_at = excluded.created_at`,
+         created_at = ${preserveCreatedAt ? "events.created_at" : "excluded.created_at"}`,
       id,
       type,
       JSON.stringify(event),
@@ -118,8 +119,10 @@ export class EventRepository {
   }
 
   upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
-    const id = event.partId ? `token:${messageId}:part:${event.partId}` : `token:${messageId}`;
-    this.upsertEventByMessageId("token", messageId, event, createdAt, id);
+    const id = event.partId
+      ? `token-part:${JSON.stringify([messageId, event.partId])}`
+      : `token:${messageId}`;
+    this.upsertEventByMessageId("token", messageId, event, createdAt, id, Boolean(event.partId));
   }
 
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {

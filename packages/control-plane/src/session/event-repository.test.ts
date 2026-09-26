@@ -389,24 +389,40 @@ describe("EventRepository token persistence", () => {
 
   afterEach(() => db.close());
 
-  it("keeps both text parts in a turn and updates each part in place", () => {
+  it("keeps both text parts in turn order when an earlier part is updated later", () => {
     repository.upsertTokenEvent("msg-1", { ...token, partId: "part-1" }, 100);
     repository.upsertTokenEvent("msg-1", { ...token, content: "last", partId: "part-2" }, 200);
     repository.upsertTokenEvent(
       "msg-1",
       { ...token, content: "first final", partId: "part-1" },
-      150
+      300
     );
 
     expect(repository.listEventPage({ limit: 10, type: "token" }).events).toEqual([
       expect.objectContaining({
-        id: "token:msg-1:part:part-2",
+        id: 'token-part:["msg-1","part-2"]',
+        created_at: 200,
         data: JSON.stringify({ ...token, content: "last", partId: "part-2" }),
       }),
       expect.objectContaining({
-        id: "token:msg-1:part:part-1",
+        id: 'token-part:["msg-1","part-1"]',
+        created_at: 100,
         data: JSON.stringify({ ...token, content: "first final", partId: "part-1" }),
       }),
+    ]);
+  });
+
+  it("distinguishes delimiter-containing identities and the legacy token key", () => {
+    repository.upsertTokenEvent("a", { ...token, messageId: "a", partId: "b:part:c" }, 100);
+    repository.upsertTokenEvent("a:part:b", { ...token, messageId: "a:part:b", partId: "c" }, 200);
+    repository.upsertTokenEvent('part:["a","b"]', { ...token, messageId: 'part:["a","b"]' }, 300);
+
+    expect(
+      repository.listEventPage({ limit: 10, type: "token" }).events.map((row) => row.id)
+    ).toEqual([
+      'token:part:["a","b"]',
+      'token-part:["a:part:b","c"]',
+      'token-part:["a","b:part:c"]',
     ]);
   });
 
@@ -432,12 +448,31 @@ describe("EventRepository token persistence", () => {
       createdAt: 120,
     });
     repository.upsertTokenEvent("msg-1", { ...token, content: "after" }, 130);
+    repository.upsertTokenEvent(
+      "msg-1",
+      { ...token, content: "before corrected", partId: "part-1" },
+      140
+    );
+    repository.upsertTokenEvent("msg-1", { ...token, content: "final", partId: "part-2" }, 150);
 
     expect(
       repository.listEventPage({ limit: 10, type: "token" }).events.map((row) => row.id)
-    ).toEqual(["token:msg-1", "token:msg-1:part:part-1", "token:msg-1:compaction-1"]);
-    expect(repository.listEventPage({ limit: 10 }).events.map((row) => row.id)).toContain(
-      "compaction-1"
-    );
+    ).toEqual([
+      'token-part:["msg-1","part-2"]',
+      "token:msg-1",
+      'token-part:["msg-1","part-1"]',
+      "token:msg-1:compaction-1",
+    ]);
+    expect(repository.getEventTimelinePage({ limit: 10 }).events.map((row) => row.id)).toEqual([
+      "token:msg-1:compaction-1",
+      'token-part:["msg-1","part-1"]',
+      "compaction-1",
+      "token:msg-1",
+      'token-part:["msg-1","part-2"]',
+    ]);
+    expect(repository.listEventPage({ limit: 10, type: "token" }).events[2]).toMatchObject({
+      created_at: 110,
+      data: JSON.stringify({ ...token, content: "before corrected", partId: "part-1" }),
+    });
   });
 });
