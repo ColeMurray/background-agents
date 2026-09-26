@@ -58,6 +58,7 @@ export interface AnalyticsBreakdownResponse {
 export interface SessionRun {
   rootSessionId: string;
   sessionCount: number;
+  /** Deepest descendant's distance from the root; 0 for a run with no children. */
   maxSpawnDepth: number;
   totalCost: number;
   totalPrs: number;
