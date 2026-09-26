@@ -171,8 +171,9 @@ export class UsageRepository {
     ) {
       throw new TypeError("Invalid step usage cursor");
     }
-    // Newest first, like messages and events: rows recorded after the first
-    // page sort ahead of every later cursor and cannot extend the scan.
+    // Newest first, like messages and events. created_at is the time the step
+    // was recorded, so a row recorded after the first page sorts ahead of every
+    // later cursor unless it shares the boundary row's millisecond.
     const rows = (
       cursor
         ? this.sql.exec(
