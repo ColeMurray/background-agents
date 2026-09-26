@@ -292,6 +292,37 @@ describe("SessionStatusService.transition", () => {
     expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
   });
 
+  it("leaves a live session's metrics to the settle that ends its turn", () => {
+    const h = harness({ session: createSession({ status: "active" }) });
+
+    h.service.refreshInactiveMetrics();
+
+    expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
+  });
+
+  it("writes usage that lands during a metrics write after it, never beside it", async () => {
+    const h = harness({ session: createSession({ status: "failed" }) });
+    let releaseFirstWrite!: () => void;
+    h.sessionIndex.updateMetrics.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (releaseFirstWrite = () => resolve(true)))
+    );
+
+    expect(await h.service.transition("failed")).toBe(false);
+    h.usageRepository.getSessionTotals.mockReturnValue(createUsageTotals({ inputTokens: 1500 }));
+    h.service.refreshInactiveMetrics();
+    h.service.refreshInactiveMetrics();
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(1);
+    releaseFirstWrite();
+    await h.backgroundTasks.settle();
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(2);
+    expect(h.sessionIndex.updateMetrics).toHaveBeenLastCalledWith(
+      "public-session-1",
+      expect.objectContaining({ inputTokens: 1500 })
+    );
+  });
+
   it("logs index sync failures without throwing", async () => {
     const h = harness({ session: createSession({ status: "created" }) });
     h.statusProjection.project.mockRejectedValue(new Error("d1 down"));

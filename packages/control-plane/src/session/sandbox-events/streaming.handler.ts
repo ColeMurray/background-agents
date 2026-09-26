@@ -13,8 +13,10 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
  * execution (tokens, steps, tool activity, compaction). Every event here is
  * broadcast to clients; the ones with a durable representation also record
  * to the timeline (steps renew activity, accumulate cost, and persist usage). Nothing
- * here transitions session state. Also owns the timeline-observer path
- * (`recordTimelineEvent`) for events that persist and broadcast unchanged.
+ * here transitions session state; a step that lands after its session settled
+ * refreshes the metrics projection that settle already wrote. Also owns the
+ * timeline-observer path (`recordTimelineEvent`) for events that persist and
+ * broadcast unchanged.
  */
 export class SandboxStreamingEventHandler {
   constructor(
@@ -24,7 +26,8 @@ export class SandboxStreamingEventHandler {
     private readonly messenger: SessionMessenger,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly budgetService: SessionBudgetService,
-    private readonly usageRepository: UsageRepository
+    private readonly usageRepository: UsageRepository,
+    private readonly refreshInactiveMetrics: () => void
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
@@ -56,19 +59,23 @@ export class SandboxStreamingEventHandler {
     this.updateLastActivity(context.now);
     this.messenger.broadcast({ type: "sandbox_event", event });
     if (event.type === "step_finish") {
-      let persistenceFailure: { error: unknown } | null = null;
       try {
-        this.usageRepository.recordStepUsage(event, context.messageId, context.now);
-      } catch (error) {
-        persistenceFailure = { error };
-      }
-      try {
-        await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
-      } catch (error) {
+        let persistenceFailure: { error: unknown } | null = null;
+        try {
+          this.usageRepository.recordStepUsage(event, context.messageId, context.now);
+        } catch (error) {
+          persistenceFailure = { error };
+        }
+        try {
+          await this.budgetService.ingestStepFinish(event, context.messageId, context.now);
+        } catch (error) {
+          if (persistenceFailure) throw persistenceFailure.error;
+          throw error;
+        }
         if (persistenceFailure) throw persistenceFailure.error;
-        throw error;
+      } finally {
+        this.refreshInactiveMetrics();
       }
-      if (persistenceFailure) throw persistenceFailure.error;
     }
   }
 
