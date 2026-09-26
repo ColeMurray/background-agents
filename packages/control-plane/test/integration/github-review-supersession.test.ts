@@ -919,6 +919,38 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
       expect(JSON.parse(row.close_out_request ?? "null")).toEqual(REQUEST);
     });
 
+    it("rotates reviews whose probe keeps failing behind the ones not yet probed", async () => {
+      // A batch of rows whose expiry probe always fails must not starve the review behind them.
+      const sessions: string[] = [];
+      for (let index = 0; index < 11; index += 1) {
+        const sessionId = await createUnpromptedReview(638400 + index, 6);
+        await env.DB.prepare(
+          "UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?"
+        )
+          .bind(TEN_MINUTES_AGO_AND_MORE - (11 - index) * 1000, sessionId)
+          .run();
+        sessions.push(sessionId);
+      }
+      const newest = sessions[10];
+      const probed: string[] = [];
+      const othersUnreachable: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          if (path === "/internal/expire-draft") {
+            probed.push(id);
+            if (id !== newest) throw new Error("unreachable");
+          }
+          return realSessions.fetch(id, path, init, search);
+        },
+      };
+
+      await reapWithBot(othersUnreachable);
+      await reapWithBot(othersUnreachable);
+
+      expect(probed).toContain(newest);
+      const newestRow = (await fenceRows(638410, 6))[0];
+      expect(JSON.parse(newestRow.close_out_request ?? "null")).toEqual(FAILED_TO_START);
+    });
+
     it("archives the never-prompted session and closes its status out as failed to start", async () => {
       const repoId = 632323;
       const prNumber = 6;

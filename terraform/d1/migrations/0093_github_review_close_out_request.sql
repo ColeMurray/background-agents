@@ -8,8 +8,8 @@ ALTER TABLE github_review_sessions ADD COLUMN close_out_request TEXT;
 -- Null for rows created by a bot that predates it.
 ALTER TABLE github_review_sessions ADD COLUMN repo_owner TEXT;
 ALTER TABLE github_review_sessions ADD COLUMN repo_name TEXT;
--- When the reaper last asked the github-bot to run this row's close-out: it drives the least
--- recently attempted first, so failing close-outs cannot starve the rest.
+-- When the reaper last probed this review's session or asked the github-bot to run its close-out:
+-- it handles the least recently attempted first, so failing rows cannot starve the rest.
 ALTER TABLE github_review_sessions ADD COLUMN close_out_attempted_at INTEGER;
 -- When the review's session finished initializing and was confirmed the latest generation. Only
 -- an admitted review takes over its head's status from an older review of the same head.

@@ -228,6 +228,8 @@ const REVIEW_START_FAILED_DESCRIPTION = "Review failed to start";
  * later prompt), has no runtime, or its turn already ended. An expiry whose
  * answer is lost leaves the marker provisional, so the next tick asks again;
  * an already archived session then answers `not_draft` and is promoted.
+ * Candidates are probed least recently attempted first, so a batch whose
+ * probes keep failing cannot starve the rest.
  */
 async function closeOutUnpromptedReviews(
   db: SqlDatabase,
@@ -248,7 +250,7 @@ async function closeOutUnpromptedReviews(
            (grs.close_out_request IS NULL AND s.status IN ('created', 'failed'))
            OR ${isProvisionalSql("grs.close_out_request")}
          )
-       ORDER BY grs.created_at ASC, grs.session_id ASC
+       ORDER BY COALESCE(grs.close_out_attempted_at, 0) ASC, grs.created_at ASC, grs.session_id ASC
        LIMIT ?`
     )
     .bind(now - REVIEW_FENCE_ORPHAN_GRACE_MS, REAPER_UNPROMPTED_BATCH)
@@ -256,6 +258,12 @@ async function closeOutUnpromptedReviews(
   const drafts = new SessionDraftExpiryClient(sessionRuntime);
   for (const row of candidates.results) {
     const sessionId = row.session_id;
+    // Least recently probed first, so rows whose probe keeps failing rotate
+    // behind the ones not yet probed.
+    await db
+      .prepare("UPDATE github_review_sessions SET close_out_attempted_at = ? WHERE session_id = ?")
+      .bind(now, sessionId)
+      .run();
     const request: CloseOutRequest = {
       owner: row.repo_owner,
       repo: row.repo_name,
