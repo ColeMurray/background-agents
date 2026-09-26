@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -47,6 +47,22 @@ describe("applyMigrations", () => {
     ).toMatchObject({ n: expect.any(Number) });
     // A second run finds everything recorded and applies nothing.
     expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual([]);
+  });
+
+  it("backfills stable export sequences before allocating new ones", () => {
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+      INSERT INTO sessions (id, created_at) VALUES ('later', 200), ('earlier', 100);`);
+    db.exec(readFileSync(join(MIGRATIONS_DIR, "0082_session_export_sequence.sql"), "utf8"));
+
+    expect(
+      db.prepare("SELECT id, export_sequence FROM sessions ORDER BY export_sequence").all()
+    ).toEqual([
+      { id: "earlier", export_sequence: 1 },
+      { id: "later", export_sequence: 2 },
+    ]);
+    expect(db.prepare("SELECT last_sequence FROM session_export_sequence").get()).toEqual({
+      last_sequence: 2,
+    });
   });
 
   it("applies files in version order and skips the ones already recorded", () => {

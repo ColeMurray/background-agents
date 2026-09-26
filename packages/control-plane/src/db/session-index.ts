@@ -221,8 +221,8 @@ export class SessionIndexStore {
 
     const sessionStmt = this.db
       .prepare(
-        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, repo_owner, repo_name, harness, model, reasoning_effort, base_branch, status, parent_session_id, root_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at, export_sequence)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN ? ELSE (SELECT root_session_id FROM sessions WHERE id = ?) END, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT last_sequence FROM session_export_sequence WHERE singleton = 1))`
       )
       .bind(
         session.id,
@@ -295,6 +295,9 @@ export class SessionIndexStore {
         )
     );
     const results = await this.db.batch([
+      this.db.prepare(
+        "UPDATE session_export_sequence SET last_sequence = last_sequence + 1 WHERE singleton = 1"
+      ),
       sessionStmt,
       ...repositoryStmts,
       ...manifestStmts,
@@ -303,7 +306,7 @@ export class SessionIndexStore {
 
     // Session ids are always freshly generated, so a skipped insert is a bug;
     // initialize.ts relies on D1 failures being caught before sandbox spawn.
-    if ((results[0]?.meta?.changes ?? 0) === 0) {
+    if ((results[1]?.meta?.changes ?? 0) === 0) {
       throw new Error(
         `Session index insert was skipped for session ${session.id} (duplicate id or constraint violation)`
       );

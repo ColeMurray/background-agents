@@ -46,6 +46,8 @@ type SessionRepositoryRow = {
 };
 
 const QUERY_PATTERNS = {
+  ALLOCATE_EXPORT_SEQUENCE:
+    /^UPDATE session_export_sequence SET last_sequence = last_sequence \+ 1/,
   INSERT_SESSION: /^INSERT INTO sessions/,
   INSERT_SESSION_REPO: /^INSERT INTO session_repositories/,
   SELECT_SESSION_REPOS: /^SELECT \* FROM session_repositories WHERE session_id IN/,
@@ -143,6 +145,10 @@ class FakeD1Database {
 
   run(query: string, args: unknown[]) {
     const normalized = normalizeQuery(query);
+
+    if (QUERY_PATTERNS.ALLOCATE_EXPORT_SEQUENCE.test(normalized)) {
+      return { meta: { changes: 1 } };
+    }
 
     if (QUERY_PATTERNS.INSERT_SESSION.test(normalized)) {
       if (this.rows.has(args[0] as string))

@@ -11,7 +11,7 @@ import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import { sessionRepositoryRowSchema, toSessionRepository } from "./session-list-metadata";
 import { decodeSessionPullRequest } from "./session-pull-request-store";
 import { sessionRowSchema, toSessionFields, type SessionRow } from "./session-row";
-import type { SessionExportCursor } from "./session-export-cursor";
+import type { RunsExportCursor, SessionExportCursor } from "./session-export-cursor";
 import type { SqlDatabase } from "./sql-database";
 
 /**
@@ -55,7 +55,11 @@ export interface SessionExportRow {
   updatedAt: number;
 }
 
-const exportPageRowSchema = sessionRowSchema.extend({ snapshot_max_row_id: z.number().optional() });
+const exportPageRowSchema = sessionRowSchema.extend({ snapshot_max: z.number().optional() });
+const runsExportPageRowSchema = exportPageRowSchema.extend({
+  root_session_id: z.string(),
+  root_created_at: z.number(),
+});
 
 function toExportRow(
   row: SessionRow,
@@ -72,39 +76,57 @@ function toExportRow(
   };
 }
 
-/** Filters and keyset pagination for an export page. */
-export interface ListSessionsForExportOptions {
-  cursor: SessionExportCursor | null;
+/** Shared filters for either export ordering. */
+interface ExportFilters {
   /** Page size; the store reads one extra row to answer hasMore. */
   limit: number;
-  /** Inclusive lower bound on created_at (epoch ms). */
+  /** Inclusive lower bound on session creation, or root creation in runs scope (epoch ms). */
   createdAfter?: number;
-  /** Inclusive upper bound on created_at (epoch ms). */
+  /** Inclusive upper bound on session creation, or root creation in runs scope (epoch ms). */
   createdBefore?: number;
 }
 
-export type ListSessionsForExportResult = { sessions: SessionExportRow[] } & (
+export type ExportSelection =
+  | { scope?: "sessions"; cursor: SessionExportCursor | null }
+  | { scope: "runs"; cursor: RunsExportCursor | null };
+export type ListSessionsForExportOptions = ExportFilters & ExportSelection;
+
+type ExportPage<Cursor> = { sessions: SessionExportRow[] } & (
   | { hasMore: false; nextCursor: null }
-  | { hasMore: true; nextCursor: SessionExportCursor }
+  | { hasMore: true; nextCursor: Cursor }
 );
 
-/**
- * Reads the session index newest-first behind an insertion fence so sessions
- * created during a paged export cannot extend it.
- */
+type SessionsPage = { scope: "sessions" } & ExportPage<SessionExportCursor>;
+export type RunsPage = { scope: "runs" } & ExportPage<RunsExportCursor>;
+export type ListSessionsForExportResult = SessionsPage | RunsPage;
+
+/** Pages sessions or root-first runs behind their respective insertion fences. */
 export class SessionExportStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  list(
+    options: ExportFilters & { scope: "runs"; cursor: RunsExportCursor | null }
+  ): Promise<RunsPage>;
+  list(
+    options: ExportFilters & { scope?: "sessions"; cursor: SessionExportCursor | null }
+  ): Promise<SessionsPage>;
+  list(options: ListSessionsForExportOptions): Promise<ListSessionsForExportResult>;
   async list(options: ListSessionsForExportOptions): Promise<ListSessionsForExportResult> {
+    return options.scope === "runs" ? this.listRuns(options) : this.listSessions(options);
+  }
+
+  private async listSessions(
+    options: ExportFilters & { scope?: "sessions"; cursor: SessionExportCursor | null }
+  ): Promise<SessionsPage> {
     const conditions: string[] = [];
     const bindings: (string | number)[] = [];
     const firstPage = options.cursor === null;
-
     if (options.cursor) {
+      const cursor = options.cursor;
       conditions.push("sessions.rowid <= ?");
-      bindings.push(options.cursor.snapshotMaxRowId);
+      bindings.push(cursor.snapshotMaxRowId);
       conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
-      bindings.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
     } else {
       conditions.push("sessions.rowid <= export_fence.max_row_id");
     }
@@ -116,37 +138,144 @@ export class SessionExportStore {
       conditions.push("created_at <= ?");
       bindings.push(options.createdBefore);
     }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const snapshotColumn = firstPage ? ", export_fence.max_row_id AS snapshot_max_row_id" : "";
+    const where = `WHERE ${conditions.join(" AND ")}`;
+    const snapshotColumn = firstPage ? ", export_fence.max_row_id AS snapshot_max" : "";
     const snapshotJoin = firstPage
       ? "CROSS JOIN (SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM sessions) export_fence"
       : "";
     const pageFrom = `FROM sessions ${snapshotJoin} ${where} ORDER BY created_at DESC, id DESC`;
-    const pageIds = `SELECT sessions.id ${pageFrom} LIMIT ?`;
+    return {
+      scope: "sessions",
+      ...(await this.loadPage({
+        select: `sessions.*${snapshotColumn}`,
+        pageFrom,
+        pageId: "sessions.id",
+        bindings,
+        limit: options.limit,
+        snapshotMax: options.cursor?.snapshotMaxRowId,
+        schema: exportPageRowSchema,
+        makeCursor: (last, snapshotMaxRowId) => ({
+          createdAt: last.created_at,
+          id: last.id,
+          snapshotMaxRowId,
+        }),
+      })),
+    };
+  }
+
+  private async listRuns(
+    options: ExportFilters & { scope: "runs"; cursor: RunsExportCursor | null }
+  ): Promise<RunsPage> {
+    const conditions: string[] = [];
+    const bindings: (string | number)[] = [];
+    const firstPage = options.cursor === null;
+    if (options.cursor) {
+      const cursor = options.cursor;
+      conditions.push("s.export_sequence <= ?", "root.export_sequence <= ?");
+      bindings.push(cursor.snapshotMaxSequence, cursor.snapshotMaxSequence);
+      conditions.push("root.created_at <= ?");
+      bindings.push(cursor.rootCreatedAt);
+      conditions.push(
+        `(root.created_at < ? OR (root.created_at = ? AND
+          (s.root_session_id > ? OR (s.root_session_id = ? AND
+            (s.spawn_depth > ? OR (s.spawn_depth = ? AND
+              (s.created_at > ? OR (s.created_at = ? AND s.id > ?))))))))`
+      );
+      bindings.push(
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootSessionId,
+        cursor.rootSessionId,
+        cursor.spawnDepth,
+        cursor.spawnDepth,
+        cursor.createdAt,
+        cursor.createdAt,
+        cursor.id
+      );
+    } else {
+      conditions.push(
+        "s.export_sequence <= export_fence.last_sequence",
+        "root.export_sequence <= export_fence.last_sequence"
+      );
+    }
+    if (options.createdAfter !== undefined) {
+      conditions.push("root.created_at >= ?");
+      bindings.push(options.createdAfter);
+    }
+    if (options.createdBefore !== undefined) {
+      conditions.push("root.created_at <= ?");
+      bindings.push(options.createdBefore);
+    }
+    const snapshotColumn = firstPage ? ", export_fence.last_sequence AS snapshot_max" : "";
+    const snapshotJoin = firstPage ? "CROSS JOIN session_export_sequence export_fence" : "";
+    const pageFrom = `FROM sessions root CROSS JOIN sessions s
+       ${snapshotJoin} WHERE s.root_session_id = root.id AND ${conditions.join(" AND ")}
+       ORDER BY root.created_at DESC, root.id ASC,
+                s.spawn_depth ASC, s.created_at ASC, s.id ASC`;
+    return {
+      scope: "runs",
+      ...(await this.loadPage({
+        select: `s.*, root.created_at AS root_created_at${snapshotColumn}`,
+        pageFrom,
+        pageId: "s.id",
+        bindings,
+        limit: options.limit,
+        snapshotMax: options.cursor?.snapshotMaxSequence,
+        schema: runsExportPageRowSchema,
+        makeCursor: (last, snapshotMaxSequence) => ({
+          scope: "runs",
+          rootCreatedAt: last.root_created_at,
+          rootSessionId: last.root_session_id,
+          spawnDepth: last.spawn_depth,
+          createdAt: last.created_at,
+          id: last.id,
+          snapshotMaxSequence,
+        }),
+      })),
+    };
+  }
+
+  private async loadPage<Row extends z.infer<typeof exportPageRowSchema>, Cursor>({
+    select,
+    pageFrom,
+    pageId,
+    bindings,
+    limit,
+    snapshotMax,
+    schema,
+    makeCursor,
+  }: {
+    select: string;
+    pageFrom: string;
+    pageId: string;
+    bindings: (string | number)[];
+    limit: number;
+    snapshotMax: number | undefined;
+    schema: z.ZodType<Row>;
+    makeCursor: (last: Row, snapshotMax: number) => Cursor;
+  }): Promise<ExportPage<Cursor>> {
+    const pageIds = `SELECT ${pageId} ${pageFrom} LIMIT ?`;
     const [sessionResult, repositoryResult, pullRequestResult] = await this.db.batch([
-      this.db
-        .prepare(`SELECT sessions.*${snapshotColumn} ${pageFrom} LIMIT ?`)
-        .bind(...bindings, options.limit + 1),
+      this.db.prepare(`SELECT ${select} ${pageFrom} LIMIT ?`).bind(...bindings, limit + 1),
       this.db
         .prepare(
           `WITH page AS (${pageIds})
            SELECT sr.* FROM session_repositories sr JOIN page ON page.id = sr.session_id
            ORDER BY sr.session_id, sr.position`
         )
-        .bind(...bindings, options.limit),
+        .bind(...bindings, limit),
       this.db
         .prepare(
           `WITH page AS (${pageIds})
            SELECT pr.* FROM session_pull_requests pr JOIN page ON page.id = pr.session_id
            ORDER BY pr.session_id, pr.pr_number, pr.artifact_id`
         )
-        .bind(...bindings, options.limit),
+        .bind(...bindings, limit),
     ]);
 
-    const rows = z.array(exportPageRowSchema).parse(sessionResult.results);
-    const hasMore = rows.length > options.limit;
-    const pageRows = hasMore ? rows.slice(0, options.limit) : rows;
+    const rows = z.array(schema).parse(sessionResult.results);
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
     const repositoriesBySession = new Map<string, SessionListRepository[]>();
     const pullRequestsBySession = new Map<string, ExportPullRequest[]>();
 
@@ -208,13 +337,12 @@ export class SessionExportStore {
     );
     if (!hasMore) return { sessions, hasMore: false, nextCursor: null };
 
-    const last = sessions[sessions.length - 1];
-    const snapshotMaxRowId = options.cursor?.snapshotMaxRowId ?? rows[0]?.snapshot_max_row_id;
-    if (snapshotMaxRowId === undefined) throw new Error("Session export page is missing its fence");
+    const snapshot = snapshotMax ?? rows[0]?.snapshot_max;
+    if (snapshot === undefined) throw new Error("Session export page is missing its fence");
     return {
       sessions,
       hasMore: true,
-      nextCursor: { createdAt: last.createdAt, id: last.id, snapshotMaxRowId },
+      nextCursor: makeCursor(pageRows[pageRows.length - 1], snapshot),
     };
   }
 }

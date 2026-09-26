@@ -1,19 +1,72 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SessionExportStore } from "../../src/db/session-export-store";
+import { SessionExportStore, type RunsPage } from "../../src/db/session-export-store";
+import type { RunsExportCursor } from "../../src/db/session-export-cursor";
+import { SessionIndexStore } from "../../src/db/session-index";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 import { sqlDatabase } from "./helpers";
 
 function insertSession(id: string, createdAt: number) {
-  return env.DB.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)")
-    .bind(id, createdAt, createdAt)
+  return env.DB.batch([
+    env.DB.prepare(
+      "UPDATE session_export_sequence SET last_sequence = last_sequence + 1 WHERE singleton = 1"
+    ),
+    env.DB.prepare(
+      `INSERT INTO sessions (id, created_at, updated_at, export_sequence)
+       VALUES (?, ?, ?, (SELECT last_sequence FROM session_export_sequence WHERE singleton = 1))`
+    ).bind(id, createdAt, createdAt),
+  ]);
+}
+
+async function insertDescendant(
+  id: string,
+  parentId: string,
+  rootId: string,
+  createdAt: number,
+  depth: number
+) {
+  await insertSession(id, createdAt);
+  await env.DB.prepare(
+    "UPDATE sessions SET parent_session_id = ?, root_session_id = ?, spawn_depth = ? WHERE id = ?"
+  )
+    .bind(parentId, rootId, depth, id)
     .run();
 }
 
 describe("SessionExportStore integration", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
+
+  it("allocates a non-reusable export sequence atomically with each session insert", async () => {
+    const store = new SessionIndexStore(sqlDatabase(env.DB));
+    const create = (id: string) =>
+      store.create({
+        id,
+        title: null,
+        repoOwner: null,
+        repoName: null,
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+    await create("first");
+    await create("second");
+    await store.delete("second");
+    await expect(create("first")).rejects.toThrow();
+    await create("third");
+
+    const result = await env.DB.prepare(
+      "SELECT id, export_sequence FROM sessions ORDER BY export_sequence"
+    ).all();
+    expect(result.results).toEqual([
+      { id: "first", export_sequence: 1 },
+      { id: "third", export_sequence: 3 },
+    ]);
+  });
 
   it("paginates timestamp ties without gaps or newly-created sessions", async () => {
     await insertSession("session-a", 200);
@@ -51,6 +104,215 @@ describe("SessionExportStore integration", () => {
     });
 
     expect(result.sessions.map(({ id }) => id)).toEqual(["session-end", "session-start"]);
+  });
+
+  it("windows by root and exports descendants outside createdBefore in depth order", async () => {
+    await insertSession("older-root", 100);
+    await insertSession("root", 200);
+    await insertDescendant("child-later", "root", "root", 500, 1);
+    await insertDescendant("child-earlier", "root", "root", 400, 1);
+    await insertDescendant("grandchild", "child-earlier", "root", 600, 2);
+    await insertDescendant("older-root-child", "older-root", "older-root", 250, 1);
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      scope: "runs",
+      cursor: null,
+      limit: 10,
+      createdAfter: 200,
+      createdBefore: 300,
+    });
+
+    expect(result.sessions.map(({ id, rootSessionId }) => [id, rootSessionId])).toEqual([
+      ["root", "root"],
+      ["child-earlier", "root"],
+      ["child-later", "root"],
+      ["grandchild", "root"],
+    ]);
+    expect(result).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("paginates a seven-session family across three pages without gaps or interleaving", async () => {
+    await insertSession("new-root", 300);
+    await insertSession("root", 200);
+    for (let index = 1; index <= 6; index++) {
+      await insertDescendant(`child-${index}`, "root", "root", 200 + index, 1);
+    }
+    await insertSession("old-root", 100);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const ids: string[] = [];
+    const pages: string[][] = [];
+    let cursor: RunsExportCursor | null = null;
+    do {
+      const page: RunsPage = await store.list({ scope: "runs", cursor, limit: 3 });
+      const pageIds = page.sessions.map(({ id }) => id);
+      pages.push(pageIds);
+      ids.push(...pageIds);
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(pages).toEqual([
+      ["new-root", "root", "child-1"],
+      ["child-2", "child-3", "child-4"],
+      ["child-5", "child-6", "old-root"],
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps tied root timestamps in root id order across page boundaries", async () => {
+    await insertSession("root-b", 200);
+    await insertDescendant("child-b", "root-b", "root-b", 250, 1);
+    await insertSession("root-a", 200);
+    await insertDescendant("child-a", "root-a", "root-a", 240, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    const second = await store.list({ scope: "runs", cursor: first.nextCursor, limit: 1 });
+    const third = await store.list({ scope: "runs", cursor: second.nextCursor, limit: 1 });
+    const fourth = await store.list({ scope: "runs", cursor: third.nextCursor, limit: 1 });
+
+    expect(
+      [first, second, third, fourth].flatMap((page) => page.sessions.map(({ id }) => id))
+    ).toEqual(["root-a", "child-a", "root-b", "child-b"]);
+    expect(first.nextCursor).toMatchObject({
+      rootCreatedAt: 200,
+      rootSessionId: "root-a",
+      spawnDepth: 0,
+    });
+    expect(fourth.nextCursor).toBeNull();
+  });
+
+  it("scans roots and members by index without sorting the full history", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child", "root", "root", 210, 1);
+    await env.DB.exec("ANALYZE sessions");
+    const raw = sqlDatabase(env.DB);
+    let pageSql: string | undefined;
+    const db: SqlDatabase = {
+      prepare(sql) {
+        if (sql.startsWith("SELECT s.*")) pageSql = sql;
+        return raw.prepare(sql);
+      },
+      batch(statements) {
+        return raw.batch(statements);
+      },
+    };
+    const store = new SessionExportStore(db);
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    if (!pageSql) throw new Error("Run page query was not prepared");
+
+    const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .bind(2)
+      .all<{ detail: string }>();
+    const details = plan.results.map(({ detail }) => detail);
+    expect(details).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("idx_sessions_export_roots"),
+        expect.stringContaining("idx_sessions_export_members"),
+      ])
+    );
+    expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const cursor = first.nextCursor;
+    if (!cursor) throw new Error("Expected a second run export page");
+    await store.list({ scope: "runs", cursor, limit: 1 });
+    if (!pageSql) throw new Error("Continuation query was not prepared");
+    const continuation = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .bind(
+        cursor.snapshotMaxSequence,
+        cursor.snapshotMaxSequence,
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootSessionId,
+        cursor.rootSessionId,
+        cursor.spawnDepth,
+        cursor.spawnDepth,
+        cursor.createdAt,
+        cursor.createdAt,
+        cursor.id,
+        2
+      )
+      .all<{ detail: string }>();
+    expect(continuation.results.map(({ detail }) => detail)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("SEARCH root USING INDEX idx_sessions_export_roots"),
+      ])
+    );
+  });
+
+  it("uses depth, creation time and id to resume within a run", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("z-child", "root", "root", 210, 1);
+    await insertDescendant("a-child", "root", "root", 210, 1);
+    await insertDescendant("grandchild", "a-child", "root", 205, 2);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const ids: string[] = [];
+    let cursor: RunsExportCursor | null = null;
+    do {
+      const page: RunsPage = await store.list({ scope: "runs", cursor, limit: 1 });
+      ids.push(...page.sessions.map(({ id }) => id));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(ids).toEqual(["root", "a-child", "z-child", "grandchild"]);
+  });
+
+  it("excludes a child inserted after the first page's snapshot fence", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child-1", "root", "root", 210, 1);
+    await insertDescendant("child-2", "root", "root", 230, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    await insertDescendant("late-child", "root", "root", 220, 1);
+    const second = await store.list({ scope: "runs", cursor: first.nextCursor, limit: 1 });
+    const third = await store.list({ scope: "runs", cursor: second.nextCursor, limit: 1 });
+
+    expect([first, second, third].flatMap((page) => page.sessions.map(({ id }) => id))).toEqual([
+      "root",
+      "child-1",
+      "child-2",
+    ]);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it("excludes a late descendant even when deletion reuses the fenced rowid", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child-1", "root", "root", 210, 1);
+    await insertDescendant("child-2", "root", "root", 230, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    const deleted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
+      .bind("child-2")
+      .first();
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("child-2").run();
+    await insertDescendant("late-child", "root", "root", 220, 1);
+    const inserted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
+      .bind("late-child")
+      .first();
+    expect(inserted).toEqual(deleted);
+    const second = await store.list({ scope: "runs", cursor: first.nextCursor, limit: 1 });
+
+    expect([first, second].flatMap((page) => page.sessions.map(({ id }) => id))).toEqual([
+      "root",
+      "child-1",
+    ]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it("excludes orphans whose root row no longer exists", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("orphan", "root", "root", 210, 1);
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("root").run();
+    // Simulate a persisted dangling root despite the legacy delete trigger's re-rooting.
+    await env.DB.prepare("UPDATE sessions SET root_session_id = ? WHERE id = ?")
+      .bind("root", "orphan")
+      .run();
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      scope: "runs",
+      cursor: null,
+      limit: 10,
+    });
+    expect(result.sessions).toEqual([]);
   });
 
   it("exports child identity, ordered repositories, merged PRs, and projected token totals", async () => {
