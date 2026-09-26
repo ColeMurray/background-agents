@@ -15,6 +15,7 @@ import {
 } from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_NAME_LENGTH,
   updateAutomationRequestSchema,
@@ -285,6 +286,9 @@ async function handleCreateAutomation(
     model,
     reasoning_effort: reasoningEffort,
     enabled: 1,
+    // Governs schedule firings and, for every trigger type, Trigger Now — an
+    // event firing is bounded by its own concurrency key instead.
+    max_concurrent_runs: body.maxConcurrentRuns ?? DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: nextRunAt,
     consecutive_failures: 0,
     created_by: enforced.participantUserId,
@@ -502,6 +506,11 @@ async function handleUpdateAutomation(
   if (body.model !== undefined) updateFields.model = nextModel;
   if (body.reasoningEffort !== undefined || body.model !== undefined) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
+  }
+  // Lowering it never touches firings already in flight — they hold their own
+  // children and finish; the new bound applies from the next admission.
+  if (body.maxConcurrentRuns !== undefined) {
+    updateFields.max_concurrent_runs = body.maxConcurrentRuns;
   }
 
   // Repository-set edits are UNCONDITIONAL — no cardinality freeze and no

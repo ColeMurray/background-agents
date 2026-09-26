@@ -373,9 +373,9 @@ consecutive failure counter (see [Auto-Pause](#auto-pause) below).
 
 Click **Trigger Now** to fire a one-off run immediately across the automation's full repository
 selection. For scheduled automations, this does not affect the next scheduled run time. Manual
-triggers follow the same concurrency rules as all other runs: if a run is already active, the
-trigger is rejected. Trigger Now also works while the automation is paused, so you can verify a fix
-before resuming.
+triggers follow the same concurrency rules as all other runs: if the automation is already at its
+**Concurrent runs** bound, the trigger is rejected. Trigger Now also works while the automation is
+paused, so you can verify a fix before resuming.
 
 ### Edit
 
@@ -433,9 +433,26 @@ Automations display one of three statuses:
 
 ## Concurrent Runs
 
-For scheduled and manual triggers, only one run per automation can be active at a time. If one of
-those triggers fires while a previous run is still in progress, the new run is recorded as
-**Skipped** with reason "concurrent run active".
+For scheduled and manual triggers, an automation admits up to **Concurrent runs** firings at once —
+a per-automation setting on the edit form, defaulting to **1**. At the default, a trigger that fires
+while a previous run is still in progress is recorded as **Skipped** with reason "concurrent run
+active"; raise it and the schedule keeps starting runs until that many are in flight, skipping only
+past the bound.
+
+Raise it only for an automation whose runs cannot tread on each other's work. Two runs of the same
+automation share nothing except whatever their instructions reach — a queue, a branch, an issue
+tracker — so an automation that picks "the next item" needs its instructions to claim that item
+before two runs can safely pick at the same time.
+
+The bound counts **firings**, not sessions. A multi-repository automation launches one session per
+repository within a single firing (see [Repository Context](#repository-context)), and those never
+count against each other.
+
+Concurrency builds up one interval at a time rather than all at once: a tick starts at most one
+firing per automation, because the firing advances the schedule past the slot it claimed. So at a
+bound of 3 on a `*/15` schedule, the three runs start fifteen minutes apart, not together.
+
+Lowering the setting never interrupts firings already in flight; it applies from the next one.
 
 Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
@@ -452,8 +469,11 @@ This prevents overlapping sessions from interfering with each other on the same 
 
 ## Auto-Pause
 
-If an automation fails **3 consecutive times**, it is automatically paused to prevent runaway
-failures. The status changes to **Paused** and no further runs will start until you resume it.
+If an automation fails **5 consecutive times**, it is automatically paused to prevent runaway
+failures. The threshold allows for concurrency: at a **Concurrent runs** setting above one, a single
+shared cause can fail every firing in flight at once, and those strikes land in a row with no
+success between them to reset the counter. The status changes to **Paused** and no further runs will
+start until you resume it.
 
 To re-enable the automation, click **Resume**. This resets the failure counter. Scheduled
 automations also compute their next run at that point.
@@ -479,6 +499,6 @@ auto-pause threshold.
 | Repositories per automation            | 10 (multi-select on schedule triggers) |
 | Minimum schedule interval              | 15 minutes                             |
 | Webhook payload size                   | 64 KB                                  |
-| Concurrent runs per automation         | 1 for scheduled/manual triggers only   |
-| Consecutive failures before auto-pause | 3                                      |
+| Concurrent runs per automation         | 1-10, default 1 (scheduled/manual)     |
+| Consecutive failures before auto-pause | 5                                      |
 | Run execution timeout                  | 90 minutes                             |

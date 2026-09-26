@@ -6,6 +6,7 @@ import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
 import { fetchRuns } from "./run-helpers";
 import { seedActiveUser } from "./helpers";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: "test-user",

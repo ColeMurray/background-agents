@@ -12,6 +12,7 @@ import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { seedRun, fetchRuns } from "./run-helpers";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 /** Default deadline the sweep holds a run to when the row carries none of its own. */
 const DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
@@ -29,6 +30,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",

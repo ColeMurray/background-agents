@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
-import type { AutomationListItem } from "@open-inspect/shared/types/automations";
+import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
+  type AutomationListItem,
+} from "@open-inspect/shared/types/automations";
 import { AutomationsList } from "./automations-list";
 
 expect.extend(matchers);
@@ -55,6 +58,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     model: "openai/gpt-5.4",
     reasoningEffort: null,
     enabled: true,
+    maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     nextRunAt: null,
     consecutiveFailures: 0,
     createdBy: "user-1",
