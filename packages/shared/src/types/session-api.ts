@@ -134,10 +134,51 @@ export const automationCallbackContextSchema = z.object({
 
 export type AutomationCallbackContext = z.infer<typeof automationCallbackContextSchema>;
 
+/**
+ * Attached by the github-bot to a review prompt so the review's end — however it ends — comes
+ * back to the bot that wrote its "pending" commit status. It names the commit that status sits on.
+ */
+export const githubReviewCallbackContextSchema = z.strictObject({
+  source: z.literal("github"),
+  owner: nonEmptyStringSchema,
+  repo: nonEmptyStringSchema,
+  prNumber: z.number().int().positive(),
+  headSha: nonEmptyStringSchema,
+});
+
+export type GitHubReviewCallbackContext = z.infer<typeof githubReviewCallbackContextSchema>;
+
+export const githubReviewCompletionCallbackPayloadSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  messageId: nonEmptyStringSchema,
+  success: z.boolean(),
+  error: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: githubReviewCallbackContextSchema,
+});
+
+export const githubReviewCompletionCallbackSchema =
+  githubReviewCompletionCallbackPayloadSchema.extend({
+    signature: nonEmptyStringSchema,
+  });
+
+export type GitHubReviewCompletionCallback = z.infer<typeof githubReviewCompletionCallbackSchema>;
+
+/**
+ * The control plane's reaper asking the github-bot to run a review close-out it still owes: a
+ * completion that was deferred behind a live lease, or an attempt that failed after its grant.
+ */
+export const githubReviewCloseOutDriveSchema = z.strictObject({
+  sessionId: nonEmptyStringSchema,
+  timestamp: z.number().refine(Number.isFinite),
+  signature: nonEmptyStringSchema,
+});
+
 export const callbackContextSchema = z.union([
   slackCallbackContextSchema,
   linearCallbackContextSchema,
   automationCallbackContextSchema,
+  githubReviewCallbackContextSchema,
 ]);
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
@@ -269,6 +310,21 @@ export const createSessionRequestSchema = createSessionRequestBaseSchema
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
+/**
+ * Review-generation fence for github-bot-originated review sessions (design:
+ * review-supersede). Accepted only from the github-bot service principal —
+ * routes/session-create.ts rejects it from any other caller with 403.
+ */
+export const createSessionGithubReviewSchema = z.object({
+  repoId: z.number().int().positive(),
+  prNumber: z.number().int().positive(),
+  generation: z.number().int().positive(),
+  headSha: z.string().min(1),
+  /** Where the review's commit status lives; lets a review that never started be closed out. */
+  owner: nonEmptyStringSchema.optional(),
+  repo: nonEmptyStringSchema.optional(),
+});
+
 export const createSessionInputSchema = createSessionRequestBaseSchema
   .extend({
     // Profile fields accompany the identity asserted by a verified principal;
@@ -281,6 +337,7 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    githubReview: createSessionGithubReviewSchema.optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

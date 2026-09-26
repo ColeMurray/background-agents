@@ -3,18 +3,18 @@
 A stateless Cloudflare Worker that translates GitHub webhook events into Open-Inspect coding agent
 sessions. It provides two capabilities:
 
-1. **Code Review** — Review newly opened PRs when auto-review is enabled and submit structured
-   feedback.
+1. **Code Review** — Review non-draft PRs when they open, reopen, become ready, or receive a new
+   commit, then submit structured feedback.
 2. **Comment-Triggered Actions** — @mention the bot in a PR comment; it reads the PR context and
    responds with analysis, a summary comment, or a review-thread reply.
 
 For day-to-day usage, see the user-facing
 [GitHub integration guide](../../docs/integrations/GITHUB.md).
 
-The bot is a **webhook-to-session translator** — it verifies webhooks, posts an acknowledgment
-reaction, creates a session via the control plane, and sends a prompt. The agent in the sandbox
-handles all GitHub interaction (posting reviews, comments, pushing code) directly using the `gh`
-CLI.
+The bot is a **webhook-to-session translator** — it verifies webhooks, posts a pending
+`open-inspect` commit status and an acknowledgment reaction, creates a session through the control
+plane, and sends a prompt. The agent in the sandbox posts the review and replaces the pending status
+with a successful status linked to that review.
 
 Webhook deliveries are deduplicated with Cloudflare KV using `X-GitHub-Delivery`, so GitHub retries
 and manual redeliveries do not create duplicate sessions.
@@ -46,9 +46,12 @@ strict cross-region lock.
 
 Key design decisions:
 
-- **Unidirectional service binding**: The bot calls the control plane to create sessions and send
-  prompts. There is no reverse binding — the agent posts results to GitHub directly from the
-  sandbox.
+- **Results from the sandbox, endings from the control plane**: The bot calls the control plane to
+  create sessions and send prompts, and the agent posts results to GitHub directly from the sandbox.
+  The calls back are the control plane's `GITHUB_BOT` binding to `POST /callbacks/complete`, sent
+  when a review session's turn ends, and to `POST /callbacks/review-close-out`, sent by its reaper
+  to retry a close-out, so the bot can close out a status the agent never replaced (see
+  [Review Close-Out](#review-close-out)).
 - **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Delivery
   dedupe is handled separately in KV using `X-GitHub-Delivery`.
 - **No PR context fetching**: The bot only uses metadata already in the webhook payload. The agent
@@ -61,7 +64,8 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 **Two-phase deployment** (same pattern as the Slack bot):
 
 1. Deploy with `enable_service_bindings = false` (creates the worker)
-2. Set `enable_service_bindings = true` and apply again (adds the `CONTROL_PLANE` binding)
+2. Set `enable_service_bindings = true` and apply again (adds the `CONTROL_PLANE` binding, and the
+   control plane's `GITHUB_BOT` binding back to this worker)
 
 ### Environment Bindings
 
@@ -85,7 +89,8 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 The GitHub bot uses the same repository permissions configured for the main GitHub App setup. In
 particular, it requires:
 
-**Permissions**: `Pull requests: Read & write`, `Issues: Read & write`
+**Permissions**: `Commit statuses: Read & write`, `Pull requests: Read & write`,
+`Issues: Read & write`
 
 The control plane does not need Issues permission to label session-created pull requests; the
 required `Pull requests: Read & write` permission authorizes those label operations. See the
@@ -116,37 +121,71 @@ access model and can authenticate auxiliary private repos on the configured SCM 
 
 ## Webhook Events
 
-| Event                         | Action             | Trigger                     | Handler                   |
-| ----------------------------- | ------------------ | --------------------------- | ------------------------- |
-| `pull_request`                | `opened`           | Non-draft PR opened         | `handlePullRequestOpened` |
-| `pull_request`                | `review_requested` | Compatibility event path    | `handleReviewRequested`   |
-| `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`      |
-| `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
+| Event                         | Action                                                  | Trigger                       | Handler                          |
+| ----------------------------- | ------------------------------------------------------- | ----------------------------- | -------------------------------- |
+| `pull_request`                | `opened`, `reopened`, `synchronize`, `ready_for_review` | Non-draft PR review lifecycle | `handlePullRequestReviewTrigger` |
+| `pull_request`                | `review_requested`                                      | Compatibility event path      | `handleReviewRequested`          |
+| `issue_comment`               | `created`                                               | @mention in a PR comment      | `handleIssueComment`             |
+| `pull_request_review_comment` | `created`                                               | @mention in a review thread   | `handleReviewComment`            |
 
 All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint returns
 200 immediately after signature verification and delivery dedupe.
 
 ### Handler Flows
 
-**Pull Request Opened (Auto-Review):**
+**Pull Request Review Trigger (Auto-Review):**
 
-1. Check `pull_request.draft` — skip draft PRs
-2. Apply the configured trigger-user gate — bot-created PRs are reviewed when the bot login is
-   explicitly listed in `allowedTriggerUsers`
-3. Post eyes reaction on the PR (fire-and-forget)
-4. Create session via control plane
-5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
-   PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
+1. Check `pull_request.draft` — skip draft PRs.
+2. Apply the configured trigger-user gate. The bot reviews bot-created PRs only when
+   `allowedTriggerUsers` includes its login.
+3. Post an eyes reaction on the PR.
+4. Re-read the PR from GitHub and skip when the head SHA, state, or draft flag no longer match the
+   webhook payload. This runs as the last step before the claim, so the narrowest possible window
+   remains in which a push or close can outrank the snapshot.
+5. Claim the next review generation for the PR from the control plane.
+6. Create a session through the control plane, fenced on that generation. A 409 means a newer
+   trigger already won, and the handler skips. Any other failure releases the claim — conditionally,
+   so a newer claim is never disturbed — before rethrowing.
+7. Sweep and cancel review sessions for the PR that hold an older generation, naming the repository.
+   An older review whose head a push replaced keeps its fence row with a close-out request, so its
+   pending status is closed out like any other ending (see [Review Close-Out](#review-close-out)).
+8. Post a pending `open-inspect` status on `pull_request.head.sha`. This is the only status write
+   made without the PR's submission lease.
+9. Send the code review prompt. Its submission step is one shell script that first takes the PR's
+   submission lease from the control plane: a 423 (another holder's lease is live) is retried for up
+   to 100 seconds, and a 409 (superseded, or the turn was already closed out) exits without writing.
+   Holding the lease, the script re-checks the PR; if the head, state, or draft flag changed, it
+   posts `error` ("Review skipped: PR changed before submission") and stops. Otherwise it posts the
+   review, then replaces the status with `success` linked to that review. It releases the lease
+   either way, and writes no status on any other failure: the review's close-out does. Reviews of
+   the bot's own PRs use `COMMENT`, because GitHub does not allow pull request authors to approve
+   their own PRs.
+
+If the control plane rejects the prompt (a 4xx), the handler requests the session's close-out
+itself, with "Review failed to start" as its description. A transport failure or 5xx is ambiguous
+(the prompt may have arrived), so it records nothing and leaves the review to the control plane's
+reaper, as it does when the close-out request itself fails: the session is created with the PR's
+repository on its fence row, and a latest review that has no close-out after 10 minutes gets a
+provisional "Review failed to start" marker, and then its session is asked to archive itself as an
+unprompted draft (so no prompt can start it). While the marker is provisional the agent's lease
+request gets 423 (wait), and no close-out is granted. The marker is withdrawn if the session turns
+out to hold a prompt or to be active; otherwise it becomes a close-out request and runs like any
+other. A lost archive answer leaves it provisional, and the next tick asks again.
 
 **Review Requested (compatibility path):**
 
 This handler is retained for webhook compatibility. The user-facing GitHub workflow does not ask
 people to request the GitHub App bot through the PR reviewer picker.
 
-1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not
-2. Post eyes reaction on the PR (fire-and-forget)
-3. Create session via control plane
-4. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not.
+2. Post an eyes reaction on the PR.
+3. Run the same freshness check, generation claim, fenced session creation (with conditional claim
+   release on failure), and stale-review sweep as the auto-review path.
+4. Post a pending `open-inspect` status on `pull_request.head.sha`.
+5. Send the code review prompt, which posts the successful status after the review.
+
+In both review flows, a review that ends without replacing its pending status is closed out by the
+bot (see [Review Close-Out](#review-close-out)).
 
 **Issue Comment:**
 
@@ -157,6 +196,45 @@ people to request the GitHub App bot through the PR reviewer picker.
 
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,
 `diffHunk`, and `commentId` for thread-specific context and reply threading.
+
+### Review Close-Out
+
+Every terminal `open-inspect` status is written by the holder of its PR's submission lease: the
+review's agent (its `success`, or the stale-PR `error`), or a close-out holding the lease as
+`close-out:<sessionId>:<nonce>` — a fresh id per grant. A close-out replaces only a status that is
+still `pending`.
+
+A review prompt carries a `github` callback context naming the PR and the head SHA its pending
+status sits on. When the session's turn ends — published, timed out as stuck, cancelled, or lost its
+sandbox — the control plane signs a completion callback with this bot's `SERVICE_AUTH_SECRET` and
+sends it to `POST /callbacks/complete`. The bot then:
+
+1. Requests the close-out (`POST /internal/github-reviews/close-out`) before acknowledging, and
+   answers 503 if the control plane cannot record it, so the callback is redelivered. The request is
+   stored on the session's fence row; from then on the agent can no longer take the lease.
+2. On `200` it holds the lease, named by the grant's `grantId`. `202` means another holder's lease
+   is live, or a superseded session is not yet confirmed cancelled; `409` means nothing is owed (a
+   newer admitted review of the same head owns the status, or it was already closed out). Neither
+   writes anything now: the control plane's reaper re-drives owed close-outs every minute through
+   `POST /callbacks/review-close-out`, least recently attempted first, until each is granted.
+3. After acknowledging, it reads the commit's `open-inspect` status (paging through the combined
+   status) and leaves a terminal one alone, and leaves a merged or closed PR alone. A commit with no
+   `open-inspect` status at all still gets the terminal write.
+4. Otherwise it posts `error`: "Superseded by a newer commit" for a review a push replaced;
+   `Review did not finish: <the session's reason>`; or "Review did not publish" for a turn that
+   ended successfully without replacing the status. It never starts that write with less than a
+   request timeout plus 5 seconds of the lease left.
+5. It finalizes its grant (`POST /internal/github-reviews/close-out/finalize` with the `grantId`):
+   `done` once GitHub shows a terminal status, which deletes the fence row, or `retry`, which
+   releases the lease and keeps the row for the reaper. Any failed status write is `retry`, logged
+   as an error. Either outcome acts only while that grant still holds the lease, so a late finalize
+   from an earlier attempt is a no-op.
+
+The reaper also records a close-out for a superseded review whose head no newer admitted review has
+taken over before retiring it, so a head a push replaced is closed out even when the successor's
+sweep never ran. Fence rows that owe no close-out are dropped after a day; a recorded close-out is
+retried for a week, then given up with an error log (never while a close-out holds the lease). A
+completion callback that fails both delivery attempts is never recorded; that status stays pending.
 
 ### Session Target
 

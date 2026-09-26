@@ -5,7 +5,7 @@
  * automated code review and comment-triggered actions via the coding agent.
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { Env } from "./types";
 import type { Logger } from "./logger";
 import { createLogger, parseLogLevel } from "./logger";
@@ -14,7 +14,8 @@ import { normalizeGitHubEvent } from "@open-inspect/shared/triggers";
 import { signedControlPlaneFetch } from "./internal-auth";
 import {
   issueCommentPayloadSchema,
-  pullRequestOpenedPayloadSchema,
+  pullRequestReviewTriggerPayloadSchema,
+  pullRequestReviewTriggerActionSchema,
   reviewCommentPayloadSchema,
   reviewRequestedPayloadSchema,
   webhookActionPayloadSchema,
@@ -22,7 +23,7 @@ import {
   type WebhookSummaryPayload,
 } from "./payload-schemas";
 import {
-  handlePullRequestOpened,
+  handlePullRequestReviewTrigger,
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
@@ -30,7 +31,19 @@ import {
   type HandlerResult,
 } from "./handlers";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { isSignedCallbackPayload, verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import {
+  githubReviewCloseOutDriveSchema,
+  githubReviewCompletionCallbackSchema,
+} from "@open-inspect/shared/types/session-api";
 import { toAutofixEnvelope } from "./autofix-ingress";
+import {
+  closeOutDescription,
+  completeCloseOut,
+  requestCloseOut,
+  type ReviewCloseOutRequest,
+  type ReviewCloseOutRequestResult,
+} from "./review-close-out";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -47,6 +60,114 @@ function ttlSecondsFromMs(ttlMs: number): number {
 }
 
 app.get("/health", (c) => c.json({ status: "healthy", service: "open-inspect-github-bot" }));
+
+/**
+ * Ask the control plane for a review's close-out and acknowledge; a granted close-out's GitHub
+ * writes run after the acknowledgment. A failed request is answered 503, so the caller's own
+ * retry — the completion callback's redelivery, or the next reaper tick — repeats it. Repeating a
+ * request is harmless: its details are recorded once, and a second grant waits out the first.
+ */
+async function acknowledgeCloseOut(
+  c: Context<{ Bindings: Env }>,
+  log: Logger,
+  traceId: string,
+  sessionId: string,
+  request?: ReviewCloseOutRequest
+): Promise<Response> {
+  let result: ReviewCloseOutRequestResult;
+  try {
+    result = await requestCloseOut(c.env, traceId, sessionId, request);
+  } catch (error) {
+    log.warn("callback.close_out_request_failed", {
+      session_id: sessionId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return c.json({ error: "close-out request failed" }, 503);
+  }
+  if (result.outcome === "request_failed") {
+    log.warn("callback.close_out_request_failed", { session_id: sessionId, status: result.status });
+    return c.json({ error: "close-out request failed" }, 503);
+  }
+  log.info("callback.close_out_requested", { session_id: sessionId, outcome: result.outcome });
+  if (result.outcome === "granted") {
+    c.executionCtx.waitUntil(
+      completeCloseOut(c.env, log, result.grant, traceId).then(
+        (outcome) => log.info("callback.close_out_completed", { session_id: sessionId, outcome }),
+        (error) =>
+          log.error("callback.close_out_completed", {
+            session_id: sessionId,
+            outcome: "error",
+            error: error instanceof Error ? error : new Error(String(error)),
+          })
+      )
+    );
+  }
+  return c.json({ ok: true });
+}
+
+/** The control plane's completion callback for a review session, sent whenever its turn ends. */
+app.post("/callbacks/complete", async (c) => {
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  const log = createLogger("callback", { trace_id: traceId }, parseLogLevel(c.env.LOG_LEVEL));
+
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    log.warn("callback.complete_rejected", { reject_reason: "invalid_json" });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  const parsed = githubReviewCompletionCallbackSchema.safeParse(payload);
+  if (!parsed.success || !isSignedCallbackPayload(payload)) {
+    log.warn("callback.complete_rejected", { reject_reason: "invalid_payload" });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  if (!(await verifyCallbackFromControlPlane(payload, c.env))) {
+    log.warn("callback.complete_rejected", {
+      reject_reason: "invalid_signature",
+      session_id: parsed.data.sessionId,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const { owner, repo } = parsed.data.context;
+  return acknowledgeCloseOut(c, log, traceId, parsed.data.sessionId, {
+    owner,
+    repo,
+    description: closeOutDescription(parsed.data),
+  });
+});
+
+/**
+ * The control plane's reaper re-driving a close-out it still owes — one deferred behind a live
+ * lease, or one whose earlier attempt failed after its grant.
+ */
+app.post("/callbacks/review-close-out", async (c) => {
+  const traceId = c.req.header("x-trace-id") || crypto.randomUUID();
+  const log = createLogger("callback", { trace_id: traceId }, parseLogLevel(c.env.LOG_LEVEL));
+
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    log.warn("callback.review_close_out_rejected", { reject_reason: "invalid_json" });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  const parsed = githubReviewCloseOutDriveSchema.safeParse(payload);
+  if (!parsed.success) {
+    log.warn("callback.review_close_out_rejected", { reject_reason: "invalid_payload" });
+    return c.json({ error: "invalid payload" }, 400);
+  }
+  if (!(await verifyCallbackFromControlPlane(parsed.data, c.env))) {
+    log.warn("callback.review_close_out_rejected", {
+      reject_reason: "invalid_signature",
+      session_id: parsed.data.sessionId,
+    });
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  return acknowledgeCloseOut(c, log, traceId, parsed.data.sessionId);
+});
 
 app.post("/webhooks/github", async (c) => {
   const log = createLogger("webhook", {}, parseLogLevel(c.env.LOG_LEVEL));
@@ -212,9 +333,9 @@ async function handleWebhook(
     if (result.outcome === "skipped") {
       wideEvent.skip_reason = result.skip_reason;
     } else {
-      wideEvent.session_id = result.session_id;
-      wideEvent.message_id = result.message_id;
       wideEvent.handler_action = result.handler_action;
+      if (result.session_id !== undefined) wideEvent.session_id = result.session_id;
+      if (result.message_id !== undefined) wideEvent.message_id = result.message_id;
     }
     log.info("webhook.handled", wideEvent);
   }
@@ -262,10 +383,10 @@ function dispatchHandler(
 ): Promise<HandlerResult> {
   switch (event) {
     case "pull_request":
-      if (p.action === "opened") {
-        const parsed = pullRequestOpenedPayloadSchema.safeParse(payload);
-        if (!parsed.success) throw new Error("Malformed pull_request opened payload");
-        return handlePullRequestOpened(env, log, parsed.data, traceId);
+      if (pullRequestReviewTriggerActionSchema.safeParse(p.action).success) {
+        const parsed = pullRequestReviewTriggerPayloadSchema.safeParse(payload);
+        if (!parsed.success) throw new Error("Malformed pull_request review trigger payload");
+        return handlePullRequestReviewTrigger(env, log, parsed.data, traceId);
       }
       if (p.action === "review_requested") {
         if (!isReviewRequestedForBot(payload, env.GITHUB_BOT_USERNAME)) {

@@ -1,0 +1,1006 @@
+/**
+ * End-to-end GitHub review supersession (design: review-supersede, fix A):
+ * claim a generation, fence a session-create on it, claim again, verify the
+ * now-stale generation is rejected, then sweep cancels the superseded
+ * session and drops its row while the current one survives.
+ */
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { env } from "cloudflare:test";
+import { verifyCallbackSignature } from "@open-inspect/shared/auth";
+import { SessionIndexStore } from "../../src/db/session-index";
+import {
+  handleReviewLeaseRelease,
+  handleReviewOwnership,
+  reapSupersededReviewSessions,
+} from "../../src/routes/github-reviews";
+import type { RequestContext } from "../../src/routes/shared";
+import {
+  createSessionRuntimeClientOver,
+  type SessionRuntimeClient,
+} from "../../src/session/runtime-client";
+import { createDurableObjectSessionRuntimeDispatch } from "../../src/cloudflare/session-runtime-dispatch";
+import type { Env } from "../../src/types";
+import { cleanD1Tables } from "./cleanup";
+import { serviceFetch, sqlDatabase } from "./helpers";
+
+const GITHUB_BOT_ACTOR = "github:90001";
+
+interface ClaimResponse {
+  generation: number;
+}
+
+interface CreateSessionResponse {
+  sessionId: string;
+}
+
+interface SweepResponse {
+  cancelledSessionIds: string[];
+  deferredSessionIds: string[];
+  failedSessionIds: string[];
+}
+
+async function claimGeneration(repoId: number, prNumber: number): Promise<number> {
+  const res = await serviceFetch("https://test.local/internal/github-reviews/claim", {
+    method: "POST",
+    service: "github-bot",
+    body: JSON.stringify({ repoId, prNumber }),
+  });
+  expect(res.status).toBe(200);
+  return (await res.json<ClaimResponse>()).generation;
+}
+
+function createReviewSession(params: {
+  repoId: number;
+  prNumber: number;
+  generation: number;
+  headSha: string;
+  owner?: string;
+  repo?: string;
+}): Promise<Response> {
+  return serviceFetch("https://test.local/sessions", {
+    method: "POST",
+    service: "github-bot",
+    actor: GITHUB_BOT_ACTOR,
+    body: JSON.stringify({
+      title: `Review PR #${params.prNumber} gen ${params.generation}`,
+      model: "anthropic/claude-haiku-4-5",
+      githubReview: params,
+    }),
+  });
+}
+
+describe("GitHub review supersession (claim -> fenced create -> sweep)", () => {
+  beforeEach(cleanD1Tables);
+
+  it("rejects a stale-generation create and sweeps the superseded session on the next claim", async () => {
+    const repoId = 424242;
+    const prNumber = 17;
+
+    const genA = await claimGeneration(repoId, prNumber);
+    expect(genA).toBe(1);
+    const createA = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: genA,
+      headSha: "sha-a",
+    });
+    expect(createA.status).toBe(201);
+    const { sessionId: sessionA } = await createA.json<CreateSessionResponse>();
+
+    const genB = await claimGeneration(repoId, prNumber);
+    expect(genB).toBe(2);
+
+    // A create still fenced on the now-superseded generation A must be
+    // rejected outright — no D1 session row, no DO.
+    const sessionCountBefore = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM sessions"
+    ).first<{ count: number }>();
+    const staleCreate = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: genA,
+      headSha: "sha-stale",
+    });
+    expect(staleCreate.status).toBe(409);
+    await expect(staleCreate.json()).resolves.toEqual({ error: "review generation superseded" });
+    const sessionCountAfter = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{
+      count: number;
+    }>();
+    expect(sessionCountAfter?.count).toBe(sessionCountBefore?.count);
+
+    const createB = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: genB,
+      headSha: "sha-b",
+    });
+    expect(createB.status).toBe(201);
+    const { sessionId: sessionB } = await createB.json<CreateSessionResponse>();
+
+    const sweep = await serviceFetch("https://test.local/internal/github-reviews/sweep", {
+      method: "POST",
+      service: "github-bot",
+      body: JSON.stringify({ repoId, prNumber, generation: genB }),
+    });
+    expect(sweep.status).toBe(200);
+    const sweepBody = await sweep.json<SweepResponse>();
+    expect(sweepBody).toEqual({
+      cancelledSessionIds: [sessionA],
+      deferredSessionIds: [],
+      failedSessionIds: [],
+    });
+
+    const sessionStore = new SessionIndexStore(env.DB);
+    expect((await sessionStore.get(sessionA))?.status).toBe("cancelled");
+    expect((await sessionStore.get(sessionB))?.status).not.toBe("cancelled");
+
+    const remainingReviewRows = await env.DB.prepare(
+      "SELECT session_id, generation FROM github_review_sessions WHERE repo_id = ? AND pr_number = ?"
+    )
+      .bind(repoId, prNumber)
+      .all<{ session_id: string; generation: number }>();
+    expect(remainingReviewRows.results).toEqual([{ session_id: sessionB, generation: genB }]);
+
+    // A second sweep at the same generation is idempotent: session B is not
+    // older than generation B, so nothing more is cancelled or deleted.
+    const secondSweep = await serviceFetch("https://test.local/internal/github-reviews/sweep", {
+      method: "POST",
+      service: "github-bot",
+      body: JSON.stringify({ repoId, prNumber, generation: genB }),
+    });
+    await expect(secondSweep.json()).resolves.toEqual({
+      cancelledSessionIds: [],
+      deferredSessionIds: [],
+      failedSessionIds: [],
+    });
+  });
+
+  it("assigns distinct generations to concurrent claims and only the winner's create survives", async () => {
+    const repoId = 515151;
+    const prNumber = 23;
+    const claimCount = 8;
+
+    // Concurrent webhook deliveries race the atomic UPSERT: every claim must
+    // get a unique, gap-free generation regardless of interleaving.
+    const generations = await Promise.all(
+      Array.from({ length: claimCount }, () => claimGeneration(repoId, prNumber))
+    );
+    expect([...generations].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: claimCount }, (_, i) => i + 1)
+    );
+
+    // Both racers proceed to create against their own generation; the fence
+    // admits only the highest one, in either arrival order.
+    const [loserGen, winnerGen] = [claimCount - 1, claimCount];
+    const winnerCreate = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: winnerGen,
+      headSha: "sha-winner",
+    });
+    expect(winnerCreate.status).toBe(201);
+    const { sessionId: winnerSession } = await winnerCreate.json<CreateSessionResponse>();
+
+    const loserCreate = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: loserGen,
+      headSha: "sha-loser",
+    });
+    expect(loserCreate.status).toBe(409);
+
+    // The winner's sweep sees no registered stale generations — the loser
+    // never got a session to leak.
+    const sweep = await serviceFetch("https://test.local/internal/github-reviews/sweep", {
+      method: "POST",
+      service: "github-bot",
+      body: JSON.stringify({ repoId, prNumber, generation: winnerGen }),
+    });
+    await expect(sweep.json()).resolves.toEqual({
+      cancelledSessionIds: [],
+      deferredSessionIds: [],
+      failedSessionIds: [],
+    });
+
+    const rows = await env.DB.prepare(
+      "SELECT session_id FROM github_review_sessions WHERE repo_id = ? AND pr_number = ?"
+    )
+      .bind(repoId, prNumber)
+      .all<{ session_id: string }>();
+    expect(rows.results).toEqual([{ session_id: winnerSession }]);
+  });
+
+  it("refuses claim, create, and sweep from callers other than the github-bot service", async () => {
+    const claimFromWrongService = await serviceFetch(
+      "https://test.local/internal/github-reviews/claim",
+      {
+        method: "POST",
+        service: "slack-bot",
+        body: JSON.stringify({ repoId: 1, prNumber: 1 }),
+      }
+    );
+    // Admission authorizes the service after authenticating it, so a wrong
+    // bot is 403 (forbidden), not 401 — same as the guarded create below.
+    expect(claimFromWrongService.status).toBe(403);
+
+    const createWithGithubReviewFromWrongService = await serviceFetch(
+      "https://test.local/sessions",
+      {
+        method: "POST",
+        service: "slack-bot",
+        actor: "slack:U0001",
+        body: JSON.stringify({
+          title: "Forged review session",
+          model: "anthropic/claude-haiku-4-5",
+          githubReview: { repoId: 1, prNumber: 1, generation: 1, headSha: "sha" },
+        }),
+      }
+    );
+    expect(createWithGithubReviewFromWrongService.status).toBe(403);
+
+    const sweepFromWrongService = await serviceFetch(
+      "https://test.local/internal/github-reviews/sweep",
+      {
+        method: "POST",
+        service: "slack-bot",
+        body: JSON.stringify({ repoId: 1, prNumber: 1, generation: 1 }),
+      }
+    );
+    expect(sweepFromWrongService.status).toBe(403);
+  });
+});
+
+describe("GitHub review close-out (who writes a review's terminal status)", () => {
+  beforeEach(cleanD1Tables);
+
+  const REQUEST = { owner: "acme", repo: "widgets", description: "Review did not finish: timeout" };
+
+  interface Grant {
+    outcome: "granted";
+    owner: string;
+    repo: string;
+    prNumber: number;
+    headSha: string;
+    description: string | null;
+    superseded: boolean;
+    leaseExpiresInMs: number;
+    grantId: string;
+  }
+
+  function closeOut(
+    sessionId: string,
+    request?: typeof REQUEST,
+    service: "github-bot" | "slack-bot" = "github-bot"
+  ) {
+    return serviceFetch("https://test.local/internal/github-reviews/close-out", {
+      method: "POST",
+      service,
+      body: JSON.stringify(request ? { sessionId, request } : { sessionId }),
+    });
+  }
+
+  async function grantOf(response: Promise<Response>): Promise<Grant> {
+    const granted = await response;
+    expect(granted.status).toBe(200);
+    return granted.json<Grant>();
+  }
+
+  function finalize(
+    sessionId: string,
+    grantId: string,
+    outcome: "done" | "retry",
+    service: "github-bot" | "slack-bot" = "github-bot"
+  ) {
+    return serviceFetch("https://test.local/internal/github-reviews/close-out/finalize", {
+      method: "POST",
+      service,
+      body: JSON.stringify({ sessionId, grantId, outcome }),
+    });
+  }
+
+  async function leaseHolder(repoId: number, prNumber: number) {
+    return env.DB.prepare(
+      "SELECT lease_session_id, lease_expires_at FROM github_review_state WHERE repo_id = ? AND pr_number = ?"
+    )
+      .bind(repoId, prNumber)
+      .first<{ lease_session_id: string | null; lease_expires_at: number | null }>();
+  }
+
+  function runReaper(fetch: SessionRuntimeClient["fetch"]): Promise<void> {
+    return reapSupersededReviewSessions(sqlDatabase(env.DB), { fetch }, {} as Env, {
+      submit: () => {},
+    });
+  }
+
+  async function createLatestReview(repoId: number, prNumber: number, headSha: string) {
+    const generation = await claimGeneration(repoId, prNumber);
+    const create = await createReviewSession({ repoId, prNumber, generation, headSha });
+    expect(create.status).toBe(201);
+    return (await create.json<CreateSessionResponse>()).sessionId;
+  }
+
+  function sandboxContext(sessionId: string): RequestContext {
+    return {
+      db: sqlDatabase(env.DB),
+      metrics: {},
+      request_id: "request-id",
+      trace_id: "trace-id",
+      executionCtx: { submit: () => {} },
+      principal: { kind: "sandbox", sessionId },
+    } as unknown as RequestContext;
+  }
+
+  /** The agent's own submission fence, run against the real D1 exactly as its route runs it. */
+  function agentAcquire(sessionId: string): Promise<Response> {
+    return handleReviewOwnership(
+      new Request(`https://test.local/sessions/${sessionId}/review-ownership`, { method: "POST" }),
+      env as unknown as Env,
+      { id: sessionId },
+      sandboxContext(sessionId)
+    );
+  }
+
+  function agentRelease(sessionId: string): Promise<Response> {
+    return handleReviewLeaseRelease(
+      new Request(`https://test.local/sessions/${sessionId}/review-ownership`, {
+        method: "DELETE",
+      }),
+      env as unknown as Env,
+      { id: sessionId },
+      sandboxContext(sessionId)
+    );
+  }
+
+  async function expireLease(repoId: number, prNumber: number) {
+    await env.DB.prepare(
+      "UPDATE github_review_state SET lease_expires_at = ? WHERE repo_id = ? AND pr_number = ?"
+    )
+      .bind(Date.now() - 1, repoId, prNumber)
+      .run();
+  }
+
+  async function fenceRows(repoId: number, prNumber: number) {
+    const rows = await env.DB.prepare(
+      "SELECT session_id, close_out_request FROM github_review_sessions WHERE repo_id = ? AND pr_number = ? ORDER BY generation"
+    )
+      .bind(repoId, prNumber)
+      .all<{ session_id: string; close_out_request: string | null }>();
+    return rows.results;
+  }
+
+  it("grants the latest review's close-out as a lease, fencing its agent until finalized", async () => {
+    const sessionId = await createLatestReview(616161, 5, "sha-a");
+
+    const grant = await grantOf(closeOut(sessionId, REQUEST));
+    expect(grant).toEqual({
+      outcome: "granted",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 5,
+      headSha: "sha-a",
+      description: REQUEST.description,
+      superseded: false,
+      leaseExpiresInMs: expect.any(Number),
+      grantId: expect.any(String),
+    });
+    // An agent that wakes after its turn ended can no longer take the lease.
+    expect((await agentAcquire(sessionId)).status).toBe(409);
+    // A duplicate drive waits behind the close-out's own live lease.
+    expect((await closeOut(sessionId)).status).toBe(202);
+
+    expect((await finalize(sessionId, grant.grantId, "done")).status).toBe(204);
+    expect(await fenceRows(616161, 5)).toEqual([]);
+    // A redelivered completion finds nothing left to own.
+    expect((await closeOut(sessionId, REQUEST)).status).toBe(409);
+  });
+
+  it("holds a same-head successor's agent off until the close-out finalizes", async () => {
+    // P1-a: the close-out's status read and write are serialized with the successor's publish.
+    const repoId = 617171;
+    const prNumber = 5;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    const grantA = await grantOf(closeOut(sessionA, REQUEST));
+
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionB)).status).toBe(423);
+
+    expect((await finalize(sessionA, grantA.grantId, "done")).status).toBe(204);
+    expect((await agentAcquire(sessionB)).status).toBe(204);
+  });
+
+  it("tells the latest review to wait (423) while an older review holds the lease", async () => {
+    // P1-b: lease-busy is not supersession.
+    const repoId = 618181;
+    const prNumber = 5;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionA)).status).toBe(204);
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-b");
+
+    const busy = await agentAcquire(sessionB);
+    expect(busy.status).toBe(423);
+    expect(Number(busy.headers.get("Retry-After"))).toBeGreaterThan(0);
+
+    expect((await agentRelease(sessionA)).status).toBe(204);
+    expect((await agentAcquire(sessionB)).status).toBe(204);
+  });
+
+  it("defers the latest review's close-out, keeping its fence, while an older review holds the lease", async () => {
+    // P1-b: a close-out never treats another session's live lease as free.
+    const repoId = 619191;
+    const prNumber = 5;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionA)).status).toBe(204);
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-b");
+
+    expect((await closeOut(sessionB, REQUEST)).status).toBe(202);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([
+      sessionA,
+      sessionB,
+    ]);
+
+    expect((await agentRelease(sessionA)).status).toBe(204);
+    const grant = await closeOut(sessionB);
+    expect(grant.status).toBe(200);
+    await expect(grant.json<Grant>()).resolves.toMatchObject({
+      headSha: "sha-b",
+      superseded: false,
+    });
+  });
+
+  it("records a close-out requested during the session's own lease, and the reaper re-drives it", async () => {
+    // P2-d: a completion that arrives mid-write is deferred, not dropped.
+    const repoId = 636363;
+    const prNumber = 7;
+    const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionId)).status).toBe(204);
+
+    expect((await closeOut(sessionId, REQUEST)).status).toBe(202);
+    const [row] = await fenceRows(repoId, prNumber);
+    expect(JSON.parse(row.close_out_request ?? "null")).toEqual(REQUEST);
+    // The turn is over: the agent cannot re-take the lease once it lapses or is released.
+    expect((await agentAcquire(sessionId)).status).toBe(409);
+
+    await expireLease(repoId, prNumber);
+    const botFetch = vi.fn(async () => Response.json({ ok: true }));
+    const drives: Promise<unknown>[] = [];
+    await reapSupersededReviewSessions(
+      sqlDatabase(env.DB),
+      { fetch: vi.fn(async () => new Response(null, { status: 404 })) },
+      {
+        GITHUB_BOT: { fetch: botFetch },
+        SERVICE_AUTH_SECRET_GITHUB_BOT: "reaper-test-secret",
+      } as unknown as Env,
+      { submit: (task) => void drives.push(task()) }
+    );
+    await Promise.all(drives);
+
+    expect(botFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = botFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://internal/callbacks/review-close-out");
+    const payload = JSON.parse(String(init.body)) as { sessionId: string; signature: string };
+    expect(payload.sessionId).toBe(sessionId);
+    await expect(verifyCallbackSignature(payload, "reaper-test-secret")).resolves.toBe(true);
+
+    expect((await closeOut(sessionId)).status).toBe(200);
+  });
+
+  it("keeps the fence and its request after a failed attempt, so the close-out can be retried", async () => {
+    // P2-e: nothing is deleted until GitHub has a terminal status.
+    const repoId = 646464;
+    const prNumber = 8;
+    const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+    const grant = await grantOf(closeOut(sessionId, REQUEST));
+
+    expect((await finalize(sessionId, grant.grantId, "retry")).status).toBe(204);
+
+    const [row] = await fenceRows(repoId, prNumber);
+    expect(row.session_id).toBe(sessionId);
+    expect(JSON.parse(row.close_out_request ?? "null")).toEqual(REQUEST);
+    expect((await closeOut(sessionId)).status).toBe(200);
+  });
+
+  it("retains a replaced head's review for its own close-out instead of deleting it on sweep", async () => {
+    // P2-c: the replaced head is closed out through its fence row, under the lease.
+    const repoId = 656565;
+    const prNumber = 9;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionA)).status).toBe(204);
+    const generationB = await claimGeneration(repoId, prNumber);
+    const createB = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: generationB,
+      headSha: "sha-b",
+    });
+    expect(createB.status).toBe(201);
+
+    const sweep = await serviceFetch("https://test.local/internal/github-reviews/sweep", {
+      method: "POST",
+      service: "github-bot",
+      body: JSON.stringify({ repoId, prNumber, generation: generationB, owner: "acme", repo: "w" }),
+    });
+    await expect(sweep.json()).resolves.toMatchObject({ deferredSessionIds: [sessionA] });
+    const [rowA] = await fenceRows(repoId, prNumber);
+    expect(rowA.session_id).toBe(sessionA);
+    expect(JSON.parse(rowA.close_out_request ?? "null")).toEqual({
+      owner: "acme",
+      repo: "w",
+      description: null,
+    });
+
+    // A's own lease is live: its in-flight write is never raced.
+    expect((await closeOut(sessionA)).status).toBe(202);
+    await expireLease(repoId, prNumber);
+    const grant = await closeOut(sessionA);
+    expect(grant.status).toBe(200);
+    await expect(grant.json<Grant>()).resolves.toMatchObject({
+      headSha: "sha-a",
+      superseded: true,
+    });
+  });
+
+  it("declines a superseded review whose head a newer review now owns, dropping its fence", async () => {
+    const repoId = 626262;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-a");
+
+    expect((await closeOut(sessionA, REQUEST)).status).toBe(409);
+
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionB]);
+    expect((await agentAcquire(sessionB)).status).toBe(204);
+  });
+
+  it("grants a superseded review on a replaced head once its session is cancelled", async () => {
+    const repoId = 627272;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    await createLatestReview(repoId, prNumber, "sha-b");
+
+    const grant = await closeOut(sessionA, REQUEST);
+    expect(grant.status).toBe(200);
+    await expect(grant.json<Grant>()).resolves.toMatchObject({
+      headSha: "sha-a",
+      superseded: true,
+    });
+    expect((await new SessionIndexStore(env.DB).get(sessionA))?.status).toBe("cancelled");
+  });
+
+  async function ageRow(sessionId: string, ageMs: number) {
+    await env.DB.prepare("UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?")
+      .bind(Date.now() - ageMs, sessionId)
+      .run();
+  }
+
+  async function reapDrivingBot(sessions: SessionRuntimeClient["fetch"]) {
+    const botFetch = vi.fn(async () => Response.json({ ok: true }));
+    const drives: Promise<unknown>[] = [];
+    await reapSupersededReviewSessions(
+      sqlDatabase(env.DB),
+      { fetch: sessions },
+      {
+        GITHUB_BOT: { fetch: botFetch },
+        SERVICE_AUTH_SECRET_GITHUB_BOT: "reaper-test-secret",
+      } as unknown as Env,
+      { submit: (task) => void drives.push(task()) }
+    );
+    await Promise.all(drives);
+    return (botFetch.mock.calls as unknown as [string, RequestInit][]).map(
+      ([, init]) => (JSON.parse(String(init.body)) as { sessionId: string }).sessionId
+    );
+  }
+
+  it("keeps an owed close-out past a day, and gives it up only after a week", async () => {
+    // R4: age is no proof the row's newly granted close-out is inactive.
+    // F6: a recorded close-out is kept until finalized, well past the one-day collection.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const repoId = 628282;
+    const prNumber = 6;
+    const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+    const grant = await grantOf(closeOut(sessionId, REQUEST));
+    await ageRow(sessionId, DAY_MS + 60 * 60 * 1000);
+    const idle = await createLatestReview(628283, 6, "sha-x");
+    await ageRow(idle, DAY_MS + 60 * 60 * 1000);
+    const noCancel = vi.fn(async () => new Response(null, { status: 404 }));
+
+    await runReaper(noCancel);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
+    // A day-old row that owes no close-out is collected.
+    expect(await fenceRows(628283, 6)).toEqual([]);
+
+    expect((await finalize(sessionId, grant.grantId, "retry")).status).toBe(204);
+    await runReaper(noCancel);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
+
+    await ageRow(sessionId, 8 * DAY_MS);
+    await runReaper(noCancel);
+    expect(await fenceRows(repoId, prNumber)).toEqual([]);
+  });
+
+  it("records a replaced head's close-out before the reaper retires its superseded review", async () => {
+    // F1: the successor's best-effort sweep never ran, so the reaper finds the stale review first.
+    const repoId = 628484;
+    const prNumber = 6;
+    const generationA = await claimGeneration(repoId, prNumber);
+    const createA = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: generationA,
+      headSha: "sha-a",
+      owner: "acme",
+      repo: "widgets",
+    });
+    expect(createA.status).toBe(201);
+    const { sessionId: sessionA } = await createA.json<CreateSessionResponse>();
+    await createLatestReview(repoId, prNumber, "sha-b");
+
+    const driven = await reapDrivingBot(async () => Response.json({ status: "cancelled" }));
+
+    const rowA = (await fenceRows(repoId, prNumber)).find((row) => row.session_id === sessionA);
+    expect(JSON.parse(rowA?.close_out_request ?? "null")).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      description: null,
+    });
+    expect(driven).toContain(sessionA);
+    // A's own completion still finds its close-out owed.
+    await expect(grantOf(closeOut(sessionA, REQUEST))).resolves.toMatchObject({
+      headSha: "sha-a",
+      superseded: true,
+    });
+  });
+
+  it("does not hand a head to a newer review of it whose init has not completed", async () => {
+    // F2: a same-head successor that may still fail to initialize has not taken the status over.
+    const repoId = 628585;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    const generationB = await claimGeneration(repoId, prNumber);
+    await env.DB.prepare(
+      `INSERT INTO github_review_sessions (repo_id, pr_number, generation, session_id, head_sha, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+      .bind(repoId, prNumber, generationB, "session-b-initializing", "sha-a", Date.now())
+      .run();
+
+    await expect(grantOf(closeOut(sessionA, REQUEST))).resolves.toMatchObject({
+      headSha: "sha-a",
+      superseded: true,
+    });
+  });
+
+  it("drives the least recently attempted close-outs first", async () => {
+    // F7: close-outs that keep failing cannot starve the ones behind them.
+    const sessions: string[] = [];
+    for (let index = 0; index < 11; index += 1) {
+      const sessionId = await createLatestReview(628600 + index, 6, "sha-a");
+      await env.DB.prepare(
+        "UPDATE github_review_sessions SET close_out_request = ? WHERE session_id = ?"
+      )
+        .bind(JSON.stringify(REQUEST), sessionId)
+        .run();
+      sessions.push(sessionId);
+    }
+    const noCancel = vi.fn(async () => new Response(null, { status: 404 }));
+
+    const firstTick = await reapDrivingBot(noCancel);
+    const secondTick = await reapDrivingBot(noCancel);
+
+    expect(firstTick).toHaveLength(10);
+    const neverDriven = sessions.filter((sessionId) => !firstTick.includes(sessionId));
+    expect(neverDriven).toHaveLength(1);
+    expect(secondTick).toContain(neverDriven[0]);
+  });
+
+  it("keeps a stale row whose close-out was recorded while the reaper was cancelling it", async () => {
+    // R1: the reaper's retirement must not act on its pre-cancel snapshot.
+    const repoId = 629292;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    await createLatestReview(repoId, prNumber, "sha-b");
+    let grantDuringCancel: Grant | undefined;
+    const cancelWhileCloseOutLands = vi.fn(async (sessionId: string) => {
+      if (sessionId === sessionA && !grantDuringCancel) {
+        grantDuringCancel = await grantOf(closeOut(sessionA, REQUEST));
+      }
+      return Response.json({ status: "cancelled" });
+    });
+
+    await runReaper(cancelWhileCloseOutLands);
+
+    expect(grantDuringCancel).toMatchObject({ headSha: "sha-a", superseded: true });
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toContain(sessionA);
+    // A failed attempt is still retryable.
+    expect((await finalize(sessionA, grantDuringCancel!.grantId, "retry")).status).toBe(204);
+    await expect(grantOf(closeOut(sessionA))).resolves.toMatchObject({ headSha: "sha-a" });
+  });
+
+  it("ignores a late finalize from an earlier grant of the same session", async () => {
+    // R3: finalize names the grant, not the session.
+    const repoId = 630303;
+    const prNumber = 6;
+    const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
+    const first = await grantOf(closeOut(sessionId, REQUEST));
+    await expireLease(repoId, prNumber);
+    const second = await grantOf(closeOut(sessionId));
+    const secondLease = await leaseHolder(repoId, prNumber);
+
+    expect((await finalize(sessionId, first.grantId, "retry")).status).toBe(204);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(secondLease);
+    expect((await finalize(sessionId, first.grantId, "done")).status).toBe(204);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(secondLease);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
+
+    expect((await finalize(sessionId, second.grantId, "done")).status).toBe(204);
+    expect(await fenceRows(repoId, prNumber)).toEqual([]);
+    expect(await leaseHolder(repoId, prNumber)).toEqual({
+      lease_session_id: null,
+      lease_expires_at: null,
+    });
+  });
+
+  it("keeps an agent's release and a close-out's finalize off each other's lease", async () => {
+    const repoId = 631313;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    expect((await agentAcquire(sessionA)).status).toBe(204);
+    const agentLease = await leaseHolder(repoId, prNumber);
+
+    expect((await finalize(sessionA, sessionA, "retry")).status).toBe(400);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(agentLease);
+
+    expect((await agentRelease(sessionA)).status).toBe(204);
+    const sessionB = await createLatestReview(repoId, prNumber, "sha-b");
+    await grantOf(closeOut(sessionB, REQUEST));
+    const closeOutLease = await leaseHolder(repoId, prNumber);
+    expect((await agentRelease(sessionB)).status).toBe(204);
+    expect(await leaseHolder(repoId, prNumber)).toEqual(closeOutLease);
+  });
+
+  describe("a review whose prompt never arrived", () => {
+    const TEN_MINUTES_AGO_AND_MORE = Date.now() - 11 * 60 * 1000;
+
+    /** The real session Durable Objects, as the reaper reaches them in production. */
+    const realSessions = createSessionRuntimeClientOver(
+      createDurableObjectSessionRuntimeDispatch(env.SESSION),
+      { trace_id: "trace-id", request_id: "request-id" }
+    );
+
+    async function createUnpromptedReview(repoId: number, prNumber: number) {
+      const generation = await claimGeneration(repoId, prNumber);
+      const create = await createReviewSession({
+        repoId,
+        prNumber,
+        generation,
+        headSha: "sha-a",
+        owner: "acme",
+        repo: "widgets",
+      });
+      expect(create.status).toBe(201);
+      const { sessionId } = await create.json<CreateSessionResponse>();
+      await env.DB.prepare("UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?")
+        .bind(TEN_MINUTES_AGO_AND_MORE, sessionId)
+        .run();
+      return sessionId;
+    }
+
+    async function reapWithBot(sessions: SessionRuntimeClient, db = sqlDatabase(env.DB)) {
+      const botFetch = vi.fn(async () => Response.json({ ok: true }));
+      const drives: Promise<unknown>[] = [];
+      await reapSupersededReviewSessions(
+        db,
+        sessions,
+        {
+          GITHUB_BOT: { fetch: botFetch },
+          SERVICE_AUTH_SECRET_GITHUB_BOT: "reaper-test-secret",
+        } as unknown as Env,
+        { submit: (task) => void drives.push(task()) }
+      );
+      await Promise.all(drives);
+      return botFetch;
+    }
+
+    const FAILED_TO_START = {
+      owner: "acme",
+      repo: "widgets",
+      description: "Review failed to start",
+    };
+
+    async function sessionStatus(sessionId: string) {
+      const state = await realSessions.fetch(sessionId, "/internal/state");
+      return (await state.json<{ status: string }>()).status;
+    }
+
+    it("resumes a close-out whose draft expiry committed but whose answer was lost", async () => {
+      const repoId = 634343;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      let answersLost = 0;
+      const firstAnswerLost: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          const response = await realSessions.fetch(id, path, init, search);
+          if (path === "/internal/expire-draft" && answersLost === 0) {
+            answersLost += 1;
+            throw new Error("response lost");
+          }
+          return response;
+        },
+      };
+
+      const firstTick = await reapWithBot(firstAnswerLost);
+      expect(await sessionStatus(sessionId)).toBe("archived");
+      expect(firstTick).not.toHaveBeenCalled();
+      const secondTick = await reapWithBot(firstAnswerLost);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual(FAILED_TO_START);
+      expect(secondTick).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the review for the next tick when its close-out cannot be recorded", async () => {
+      const repoId = 635353;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const realDb = sqlDatabase(env.DB);
+      const recordFails = {
+        ...realDb,
+        batch: realDb.batch.bind(realDb),
+        prepare(sql: string) {
+          if (sql.includes("WHERE session_id = ? AND close_out_request IS NULL")) {
+            throw new Error("D1 write failed");
+          }
+          return realDb.prepare(sql);
+        },
+      } as typeof realDb;
+
+      await reapWithBot(realSessions, recordFails);
+      expect((await fenceRows(repoId, prNumber))[0].close_out_request).toBeNull();
+      expect(await sessionStatus(sessionId)).toBe("created");
+
+      const botFetch = await reapWithBot(realSessions);
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual(FAILED_TO_START);
+      expect(botFetch).toHaveBeenCalledTimes(1);
+      expect(await sessionStatus(sessionId)).toBe("archived");
+    });
+
+    it("hands the review back to a session prompted between the record and the expiry", async () => {
+      const repoId = 636363;
+      const prNumber = 7;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const acquiresDuringExpiry: number[] = [];
+      const promptedMeanwhile: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          if (path === "/internal/expire-draft") {
+            const prompt = await realSessions.fetch(id, "/internal/prompt", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: "Review", authorId: "github:1", source: "github" }),
+            });
+            expect(prompt.status).toBe(200);
+            // The live agent asks for its lease while the reaper's marker is still provisional:
+            // it must be told to wait, never that it no longer owns the review.
+            acquiresDuringExpiry.push((await agentAcquire(id)).status);
+          }
+          return realSessions.fetch(id, path, init, search);
+        },
+      };
+
+      const botFetch = await reapWithBot(promptedMeanwhile);
+
+      expect(acquiresDuringExpiry).toEqual([423]);
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(row.close_out_request).toBeNull();
+      expect(botFetch).not.toHaveBeenCalled();
+      expect((await agentAcquire(sessionId)).status).toBe(204);
+    });
+
+    it("lets a real close-out request replace the reaper's provisional marker", async () => {
+      const repoId = 637373;
+      const prNumber = 7;
+      await createUnpromptedReview(repoId, prNumber);
+      const completionMeanwhile: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          if (path === "/internal/expire-draft") {
+            // The provisional marker is never granted, and a completion's request supersedes it.
+            await expect(grantOf(closeOut(id, REQUEST))).resolves.toMatchObject({
+              description: REQUEST.description,
+            });
+            return Response.json({ outcome: "not_draft", status: "active" });
+          }
+          return realSessions.fetch(id, path, init, search);
+        },
+      };
+
+      await reapWithBot(completionMeanwhile);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual(REQUEST);
+    });
+
+    it("rotates reviews whose probe keeps failing behind the ones not yet probed", async () => {
+      // A batch of rows whose expiry probe always fails must not starve the review behind them.
+      const sessions: string[] = [];
+      for (let index = 0; index < 11; index += 1) {
+        const sessionId = await createUnpromptedReview(638400 + index, 6);
+        await env.DB.prepare(
+          "UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?"
+        )
+          .bind(TEN_MINUTES_AGO_AND_MORE - (11 - index) * 1000, sessionId)
+          .run();
+        sessions.push(sessionId);
+      }
+      const newest = sessions[10];
+      const probed: string[] = [];
+      const othersUnreachable: SessionRuntimeClient = {
+        fetch: async (id, path, init, search) => {
+          if (path === "/internal/expire-draft") {
+            probed.push(id);
+            if (id !== newest) throw new Error("unreachable");
+          }
+          return realSessions.fetch(id, path, init, search);
+        },
+      };
+
+      await reapWithBot(othersUnreachable);
+      await reapWithBot(othersUnreachable);
+
+      expect(probed).toContain(newest);
+      const newestRow = (await fenceRows(638410, 6))[0];
+      expect(JSON.parse(newestRow.close_out_request ?? "null")).toEqual(FAILED_TO_START);
+    });
+
+    it("archives the never-prompted session and closes its status out as failed to start", async () => {
+      const repoId = 632323;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+
+      const botFetch = await reapWithBot(realSessions);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(JSON.parse(row.close_out_request ?? "null")).toEqual({
+        owner: "acme",
+        repo: "widgets",
+        description: "Review failed to start",
+      });
+      expect(botFetch).toHaveBeenCalledTimes(1);
+      // Archived: a prompt that arrives late is rejected, so no agent can ever start.
+      const state = await realSessions.fetch(sessionId, "/internal/state");
+      expect((await state.json<{ status: string }>()).status).toBe("archived");
+    });
+
+    it("never archives or closes out a review that received its prompt", async () => {
+      const repoId = 633333;
+      const prNumber = 6;
+      const sessionId = await createUnpromptedReview(repoId, prNumber);
+      const prompt = await realSessions.fetch(sessionId, "/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "Review PR #6", authorId: "github:1", source: "github" }),
+      });
+      expect(prompt.status).toBe(200);
+      // Even with the index still reading `created`, the session itself decides.
+      await env.DB.prepare("UPDATE sessions SET status = 'created' WHERE id = ?")
+        .bind(sessionId)
+        .run();
+
+      const botFetch = await reapWithBot(realSessions);
+
+      const [row] = await fenceRows(repoId, prNumber);
+      expect(row.close_out_request).toBeNull();
+      expect(botFetch).not.toHaveBeenCalled();
+      const state = await realSessions.fetch(sessionId, "/internal/state");
+      expect((await state.json<{ status: string }>()).status).not.toBe("archived");
+    });
+  });
+
+  it("rejects a close-out or finalize from any caller other than the github-bot service", async () => {
+    const sessionId = await createLatestReview(646464, 8, "sha-a");
+
+    expect((await closeOut(sessionId, REQUEST, "slack-bot")).status).toBe(403);
+    expect((await finalize(sessionId, "grant", "done", "slack-bot")).status).toBe(403);
+
+    expect((await fenceRows(646464, 8)).map((row) => row.session_id)).toEqual([sessionId]);
+  });
+});

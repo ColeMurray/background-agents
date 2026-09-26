@@ -82,6 +82,13 @@ module "control_plane_worker" {
       LINEAR_BOT = {
         service_name = "open-inspect-linear-bot-${local.name_suffix}"
       }
+    } : {},
+    # Review completion callbacks. By name only: the github-bot worker depends on
+    # this one, so a depends_on edge back would be a cycle.
+    var.enable_github_bot ? {
+      GITHUB_BOT = {
+        service_name = "open-inspect-github-bot-${local.name_suffix}"
+      }
     } : {}
   )
 
