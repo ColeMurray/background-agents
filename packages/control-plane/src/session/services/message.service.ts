@@ -2,6 +2,7 @@ import type { ArtifactRow, MessageRow } from "../types";
 import type { SessionMessage } from "@open-inspect/shared/types/sessions";
 import { encodeCreatedAtCursor, type CreatedAtCursor } from "../../created-at-cursor";
 import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
+import { compactEvent, createCompactionState } from "@open-inspect/shared";
 import type { NormalizedArtifactResponse } from "../artifacts";
 import type { MessageRepository } from "../message-repository";
 import type { ArtifactRepository } from "../artifact-repository";
@@ -18,6 +19,7 @@ import {
   type SessionTrace,
   type SessionTraceCollection,
   type SessionTraceExport,
+  type SessionTraceFormat,
 } from "../contracts";
 import type { StepUsageCursor, UsageRepository } from "../usage-repository";
 
@@ -185,7 +187,10 @@ export class MessageService {
    * session cannot change the trace between collections or pages. One byte
    * budget and one page cap bound them together.
    */
-  exportTrace(include: readonly SessionTraceCollection[]): SessionTraceExport {
+  exportTrace(
+    include: readonly SessionTraceCollection[],
+    format: SessionTraceFormat = "full"
+  ): SessionTraceExport {
     return this.deps.transaction((): SessionTraceExport => {
       const budget = new TraceExportBudget(include);
       const trace: SessionTrace = {};
@@ -211,13 +216,17 @@ export class MessageService {
         trace.messages = messages.items;
       }
       if (include.includes("events")) {
+        const compaction = format === "compact" ? createCompactionState() : null;
         const events = budget.readAll((cursor: EventTimelineCursor | null) => {
           const page = this.deps.eventRepository.listEventPage({
             cursor,
             limit: TRACE_EXPORT_PAGE_SIZE,
           });
           return {
-            items: page.events.map(toSessionEvent),
+            items: page.events.map((row) => {
+              const event = toSessionEvent(row);
+              return compaction ? compactEvent(event, compaction) : event;
+            }),
             nextCursor: page.hasMore ? page.nextCursor : null,
           };
         });

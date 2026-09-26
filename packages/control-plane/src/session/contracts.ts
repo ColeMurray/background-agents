@@ -46,6 +46,11 @@ export const sessionTraceIncludeSchema = z
     SESSION_TRACE_COLLECTIONS.filter((collection) => requested.includes(collection))
   );
 
+export const sessionTraceFormatSchema = z.enum(["full", "compact"], {
+  error: "format must be full or compact",
+});
+export type SessionTraceFormat = z.infer<typeof sessionTraceFormatSchema>;
+
 /** Upper bound on one session's serialized trace-export response. */
 export const MAX_INCLUDED_BYTES_PER_SESSION = 4 * 1024 * 1024;
 

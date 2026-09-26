@@ -467,7 +467,25 @@ describe("MessagesHandler", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, trace: { usage: [] } });
-    expect(messageService.exportTrace).toHaveBeenCalledWith(["messages", "events", "usage"]);
+    expect(messageService.exportTrace).toHaveBeenCalledWith(
+      ["messages", "events", "usage"],
+      "full"
+    );
+  });
+
+  it("passes compact format to the service and rejects invalid formats", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.exportTrace).mockReturnValue({ ok: true, trace: { events: [] } });
+    const compact = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=events&format=compact")
+    );
+    expect(compact.status).toBe(200);
+    expect(messageService.exportTrace).toHaveBeenCalledWith(["events"], "compact");
+    const invalid = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=events&format=unknown")
+    );
+    expect(invalid.status).toBe(400);
+    expect(messageService.exportTrace).toHaveBeenCalledTimes(1);
   });
 
   it.each(["", "?include=", "?include=prompts", "?include=messages,"])(

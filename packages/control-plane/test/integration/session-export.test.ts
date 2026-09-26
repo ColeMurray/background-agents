@@ -5,8 +5,9 @@ import { initSession, queryDO, seedEvents, seedMessage, serviceFetch } from "./h
 
 type ExportLine = Record<string, unknown>;
 
-async function exportLines(include: string): Promise<ExportLine[]> {
-  const response = await serviceFetch(`https://cp.test/sessions/export?include=${include}`);
+async function exportLines(include: string, format?: "full" | "compact"): Promise<ExportLine[]> {
+  const params = new URLSearchParams({ include, ...(format ? { format } : {}) });
+  const response = await serviceFetch(`https://cp.test/sessions/export?${params}`);
   expect(response.status).toBe(200);
   return (await response.text())
     .split("\n")
@@ -164,5 +165,78 @@ describe("GET /sessions/export with include", () => {
       ["fits-1", rowBytes],
       ["fits-2", rowBytes],
     ]);
+  });
+
+  it("exports real file-read events above the raw byte budget only in compact format", async () => {
+    const { stub, sessionName } = await initSession({ title: "Sample task" });
+    const [owner] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    await seedMessage(stub, {
+      id: "msg-1",
+      authorId: owner.id,
+      content: "Inspect the sample files",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+    const contents = "x".repeat(128 * 1024);
+    for (let index = 0; index < 33; index++) {
+      await postSandboxEvent(stub, {
+        type: "tool_call",
+        messageId: "msg-1",
+        tool: index % 2 ? "Read" : "read",
+        args:
+          index % 2
+            ? { file_path: `/workspace/sample-${index}.txt` }
+            : { filePath: `/workspace/sample-${index}.txt` },
+        callId: `read-${index}`,
+        status: "completed",
+        output: contents,
+      });
+    }
+    await postSandboxEvent(stub, {
+      type: "tool_call",
+      messageId: "msg-1",
+      tool: "Edit",
+      args: { old_string: "before", new_string: "after" },
+      callId: "edit-1",
+      status: "completed",
+      output: "updated",
+    });
+    await postSandboxEvent(stub, {
+      type: "token",
+      messageId: "msg-1",
+      content: "Updated the sample.",
+    });
+    await postSandboxEvent(stub, { type: "execution_complete", messageId: "msg-1", success: true });
+
+    expect(await exportLines("messages,events", "full")).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: sessionName,
+        reason: "message_budget_exceeded",
+      },
+    ]);
+    const compact = await exportLines("messages,events", "compact");
+    expect(compact).toHaveLength(1);
+    expect(compact[0]).toMatchObject({
+      type: "session",
+      id: sessionName,
+      messages: [{ content: "Inspect the sample files" }],
+    });
+    const events = compact[0].events as Array<{ type: string; data: Record<string, unknown> }>;
+    expect(events).toHaveLength(36);
+    expect(events[0].data).toMatchObject({
+      args: { filePath: "/workspace/sample-0.txt" },
+      compacted: { output: "file_read", originalChars: contents.length },
+    });
+    expect(events[0].data).not.toHaveProperty("output");
+    expect(events[33].data.args).toEqual({ old_string: "before", new_string: "after" });
+    expect(events[34].data).toMatchObject({ content: "Updated the sample." });
+    expect(events[35].data).toMatchObject({ success: true });
   });
 });

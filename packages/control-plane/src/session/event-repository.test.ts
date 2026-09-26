@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { sandboxEventSchema } from "@open-inspect/shared/types/sandbox-events";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
 import { initSchema } from "./schema";
@@ -132,6 +133,31 @@ describe("EventRepository", () => {
   });
 
   describe("upsertToolCallEvent", () => {
+    it("persists the truncation marker from a validated tool call", () => {
+      const marker = { fields: ["output", "args.content"], originalBytes: 2_000_000 };
+      const parsed = sandboxEventSchema.parse({
+        type: "tool_call",
+        tool: "Write",
+        args: { filePath: "/tmp/report", content: "partial" },
+        callId: "call-1",
+        status: "completed",
+        output: "",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+        truncated: marker,
+      });
+      if (parsed.type !== "tool_call") throw new Error("Expected a tool call");
+
+      repository.upsertToolCallEvent("msg-1", parsed, 1000);
+
+      const storedJson = mock.calls[0].params[2];
+      if (typeof storedJson !== "string") throw new Error("Expected stored event JSON");
+      const stored = JSON.parse(storedJson);
+      expect(stored.truncated).toEqual(marker);
+      expect(stored.args.filePath).toBe("/tmp/report");
+    });
+
     it("scopes child call IDs and preserves the first event position on updates", () => {
       const event = {
         type: "tool_call" as const,

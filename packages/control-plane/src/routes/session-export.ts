@@ -22,9 +22,11 @@ import {
   MAX_INCLUDED_BYTES_PER_SESSION,
   SessionInternalPaths,
   sessionTraceExportSchema,
+  sessionTraceFormatSchema,
   sessionTraceIncludeSchema,
   type SessionTrace,
   type SessionTraceCollection,
+  type SessionTraceFormat,
 } from "../session/contracts";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
@@ -68,6 +70,7 @@ const exportQuerySchema = z.object({
     })
     .optional(),
   include: sessionTraceIncludeSchema.optional(),
+  format: sessionTraceFormatSchema.optional(),
   createdAfter: epochMsQuery("createdAfter").optional(),
   createdBefore: epochMsQuery("createdBefore").optional(),
 });
@@ -148,6 +151,7 @@ async function readTrace(
   runtime: SessionRuntimeClient,
   sessionId: string,
   include: readonly SessionTraceCollection[],
+  format: SessionTraceFormat | undefined,
   log: Pick<Logger, "warn">,
   signal: AbortSignal
 ): Promise<TraceReadResult> {
@@ -156,7 +160,7 @@ async function readTrace(
       sessionId,
       SessionInternalPaths.traceExport,
       { signal: AbortSignal.any([signal, AbortSignal.timeout(TRACE_READ_TIMEOUT_MS)]) },
-      `?${new URLSearchParams({ include: include.join(",") })}`
+      `?${new URLSearchParams({ include: include.join(","), ...(format ? { format } : {}) })}`
     );
     if (!response.ok) {
       log.warn("session_export.trace_read_failed", {
@@ -251,7 +255,14 @@ async function handleExport(
             return;
           }
 
-          const result = await readTrace(ctx.sessionRuntime, row.id, include, log, signal);
+          const result = await readTrace(
+            ctx.sessionRuntime,
+            row.id,
+            include,
+            query.format,
+            log,
+            signal
+          );
           controller.enqueue(
             encodeLine(
               result.ok ? sessionLine(row, result.trace) : sessionErrorLine(row.id, result)

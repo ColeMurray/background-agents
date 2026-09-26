@@ -22,3 +22,4 @@ export * from "./sign-in-provider";
 export * from "./slack";
 export * from "./pull-request-tool";
 export * from "./rbac";
+export * from "./trace/compaction";

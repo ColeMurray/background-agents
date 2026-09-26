@@ -135,6 +135,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     callId: z.string(),
     status: z.string().optional(),
     output: z.string().optional(),
+    truncated: z
+      .object({ fields: z.array(z.string()), originalBytes: z.number().int().nonnegative() })
+      .optional(),
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
