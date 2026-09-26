@@ -173,6 +173,8 @@ export class SessionExportStore {
       const cursor = options.cursor;
       conditions.push("s.export_sequence <= ?", "root.export_sequence <= ?");
       bindings.push(cursor.snapshotMaxSequence, cursor.snapshotMaxSequence);
+      conditions.push("root.created_at <= ?");
+      bindings.push(cursor.rootCreatedAt);
       conditions.push(
         `(root.created_at < ? OR (root.created_at = ? AND
           (s.root_session_id > ? OR (s.root_session_id = ? AND
@@ -206,9 +208,9 @@ export class SessionExportStore {
     }
     const snapshotColumn = firstPage ? ", export_fence.last_sequence AS snapshot_max" : "";
     const snapshotJoin = firstPage ? "CROSS JOIN session_export_sequence export_fence" : "";
-    const pageFrom = `FROM sessions root JOIN sessions s ON s.root_session_id = root.id
-       ${snapshotJoin} WHERE ${conditions.join(" AND ")}
-       ORDER BY root.created_at DESC, s.root_session_id ASC,
+    const pageFrom = `FROM sessions root CROSS JOIN sessions s
+       ${snapshotJoin} WHERE s.root_session_id = root.id AND ${conditions.join(" AND ")}
+       ORDER BY root.created_at DESC, root.id ASC,
                 s.spawn_depth ASC, s.created_at ASC, s.id ASC`;
     return {
       scope: "runs",

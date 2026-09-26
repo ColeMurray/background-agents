@@ -180,6 +180,65 @@ describe("SessionExportStore integration", () => {
     expect(fourth.nextCursor).toBeNull();
   });
 
+  it("scans roots and members by index without sorting the full history", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child", "root", "root", 210, 1);
+    await env.DB.exec("ANALYZE sessions");
+    const raw = sqlDatabase(env.DB);
+    let pageSql: string | undefined;
+    const db: SqlDatabase = {
+      prepare(sql) {
+        if (sql.startsWith("SELECT s.*")) pageSql = sql;
+        return raw.prepare(sql);
+      },
+      batch(statements) {
+        return raw.batch(statements);
+      },
+    };
+    const store = new SessionExportStore(db);
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    if (!pageSql) throw new Error("Run page query was not prepared");
+
+    const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .bind(2)
+      .all<{ detail: string }>();
+    const details = plan.results.map(({ detail }) => detail);
+    expect(details).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("idx_sessions_export_roots"),
+        expect.stringContaining("idx_sessions_export_members"),
+      ])
+    );
+    expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+    const cursor = first.nextCursor;
+    if (!cursor) throw new Error("Expected a second run export page");
+    await store.list({ scope: "runs", cursor, limit: 1 });
+    if (!pageSql) throw new Error("Continuation query was not prepared");
+    const continuation = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .bind(
+        cursor.snapshotMaxSequence,
+        cursor.snapshotMaxSequence,
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootCreatedAt,
+        cursor.rootSessionId,
+        cursor.rootSessionId,
+        cursor.spawnDepth,
+        cursor.spawnDepth,
+        cursor.createdAt,
+        cursor.createdAt,
+        cursor.id,
+        2
+      )
+      .all<{ detail: string }>();
+    expect(continuation.results.map(({ detail }) => detail)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("SEARCH root USING INDEX idx_sessions_export_roots"),
+      ])
+    );
+  });
+
   it("uses depth, creation time and id to resume within a run", async () => {
     await insertSession("root", 200);
     await insertDescendant("z-child", "root", "root", 210, 1);
