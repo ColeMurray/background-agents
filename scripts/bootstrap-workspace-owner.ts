@@ -314,9 +314,7 @@ export async function run(
   if (postcondition.status !== "executed" || postcondition.audit_written !== 1) {
     throw new Error("Owner bootstrap execution did not prove its exact audit and assignment");
   }
-  console.error(
-    "Owner bootstrap command completed; verify by re-running without --execute and confirming the preflight status is no-op."
-  );
+  console.error("Owner bootstrap command completed; rerun the dry run and expect no-op.");
 }
 
 async function main(): Promise<void> {

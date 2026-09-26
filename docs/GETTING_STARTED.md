@@ -232,20 +232,19 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > **bot** identity.
 
 5. Set **Repository permissions**:
-   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
-   - Checks: **Read-only** _(required for GitHub check-suite automations)_
    - Contents: **Read & Write**
-   - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
      session-created pull requests)_
    - Metadata: **Read-only**
+   - If enabling the GitHub bot, also grant Actions: **Read-only** _(workflow-run automations)_,
+     Checks: **Read-only** _(check-suite automations)_, and Issues: **Read & Write**.
 6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
    - Members: **Read-only**
    - For existing GitHub Apps, republish the permission change and request/approve installation
      updates before testing org membership sign-in.
-7. If GitHub sign-in uses `allowed_emails` or `allowed_email_domains`, set **Account permissions**:
-   - Email addresses: **Read-only** _(without it the app cannot read verified emails and those
-     allowlists deny every GitHub sign-in)_
+7. If enabling GitHub sign-in, set **Account permissions**:
+   - Email addresses: **Read-only** _(every GitHub sign-in requires a verified email, including
+     username-only, org-only, and intentionally open deployments)_
    - For existing GitHub Apps, republish the permission change and request/approve installation
      updates, otherwise the added permission does not apply to current installs.
 8. Click **"Create GitHub App"**
@@ -591,10 +590,10 @@ npx vercel --prod
 
 ## Step 8: Verify Deployment
 
-After deployment completes, verify each component:
+After deployment completes, verify each component from the repository root:
 
 ```bash
-# Get the verification commands from Terraform (run from the repository root)
+# Get the verification commands from Terraform
 terraform -chdir=terraform/environments/production output verification_commands
 ```
 
@@ -640,8 +639,7 @@ npm run rbac:bootstrap-owner -- \
   --user "<canonical-user-id>"
 ```
 
-5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
-   unsuspended Owner), then execute the same command with `--execute`:
+5. If the preflight is `ready`, confirm the target and execute the same command with `--execute`:
 
 ```bash
 npm run rbac:bootstrap-owner -- \
@@ -649,6 +647,9 @@ npm run rbac:bootstrap-owner -- \
   --user "<canonical-user-id>" \
   --execute
 ```
+
+If the preflight is `no-op`, the target is already the current unsuspended Owner; skip execution. If
+it is `refused`, stop and resolve the reported reason before retrying.
 
 The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
 `wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
@@ -660,7 +661,7 @@ command does not automatically retry writes or claim success without the postcon
 
 A successful execution prints the postcondition row as JSON with `"status":"executed"`.
 
-6. Verify by re-running the dry run (without `--execute`):
+6. Rerun the dry run from step 4 and expect `no-op` for the selected unsuspended Owner:
 
 ```bash
 npm run rbac:bootstrap-owner -- \
@@ -668,9 +669,10 @@ npm run rbac:bootstrap-owner -- \
   --user "<canonical-user-id>"
 ```
 
-The preflight row should now report `"status":"no-op"` with the detail
+The preflight row should report `"status":"no-op"` with the detail
 `selected user is already the current unsuspended Owner`. If it reports `refused` instead, the
-command exits non-zero and the `detail` field gives the reason.
+command exits non-zero and the `detail` field gives the reason. The control-plane `/health` endpoint
+reports service liveness, not Owner status.
 
 ### Test the Full Flow
 
@@ -829,14 +831,15 @@ GitHub attribution unless the same verified email is also a linked GitHub identi
    URL exactly.
 3. On the OAuth consent screen, request only the `openid`, `email`, and `profile` scopes — these are
    non-sensitive, so Google requires no app-verification review.
-4. Set `google_client_id` and `google_client_secret` (both required together), and add at least one
-   allowed user to `allowed_emails` (exact addresses) or `allowed_email_domains`. Leave the GitHub
-   client pair empty for Google-only sign-in, or keep it configured to offer both providers. The
-   next request to `/login` reflects the deployed pair without a web flag or rebuild.
+4. Set `google_client_id` and `google_client_secret` (both required together). For restricted
+   access, admit Google users through `allowed_emails` (exact addresses) or `allowed_email_domains`;
+   for intentionally open access with no allowlists, set `unsafe_allow_all_users = true`. Leave the
+   GitHub client pair empty for Google-only sign-in, or keep it configured to offer both providers.
+   The next request to `/login` reflects the deployed pair without a web flag or rebuild.
 
-> **Security note**: Google sign-in is admitted only for **verified** emails that match an
-> allowlist. Because addresses on shared domains like `gmail.com` are generic, prefer
-> `allowed_emails` (exact match) over `allowed_email_domains` for those users.
+> **Security note**: Under restricted access, Google sign-in is admitted only for **verified**
+> emails that match an allowlist. Because addresses on shared domains like `gmail.com` are generic,
+> prefer `allowed_emails` (exact match) over `allowed_email_domains` for those users.
 
 ---
 
@@ -1047,7 +1050,7 @@ github_webhook_secret = "your-generated-value" # From Step 4
 github_bot_username   = "my-app[bot]"          # See "Find Your Bot Username" below
 ```
 
-The GitHub App also needs the Issues permission listed in Step 3.
+The GitHub App also needs the GitHub bot permissions listed in Step 3 (Actions, Checks, and Issues).
 
 After the GitHub bot worker is deployed, configure the GitHub App for webhook delivery.
 

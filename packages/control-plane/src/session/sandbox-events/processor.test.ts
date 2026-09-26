@@ -823,6 +823,29 @@ describe("SessionSandboxEventProcessor", () => {
       }
     });
 
+    it("persists a truncated tool call without sending incomplete arguments to callbacks", async () => {
+      const h = createProcessor();
+      await h.processor.processSandboxEvent({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "partial" },
+        callId: "call-1",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        truncated: { fields: ["args.command"], originalBytes: 2_000_000 },
+      });
+
+      expect(h.eventRepository.upsertToolCallEvent).toHaveBeenCalledWith(
+        "msg-1",
+        expect.objectContaining({
+          truncated: { fields: ["args.command"], originalBytes: 2_000_000 },
+        }),
+        expect.any(Number)
+      );
+      expect(h.callbackService.notifyToolCall).not.toHaveBeenCalled();
+    });
+
     it("resets activity timer on step_start", async () => {
       const h = createProcessor();
       await h.processor.processSandboxEvent({

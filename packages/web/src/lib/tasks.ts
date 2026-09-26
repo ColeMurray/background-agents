@@ -42,6 +42,7 @@ export function extractLatestTasks(events: SandboxEvent[]): Task[] {
   }
 
   const latestTodoWrite = todoWriteEvents[0];
+  if (latestTodoWrite.truncated?.fields.some((field) => field.startsWith("args."))) return [];
   const parsedArgs = todoWriteArgsSchema.safeParse(latestTodoWrite.args);
 
   if (!parsedArgs.success || !parsedArgs.data.todos) {

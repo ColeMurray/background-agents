@@ -83,7 +83,7 @@ export class SandboxStreamingEventHandler {
     }
     this.messenger.broadcast({ type: "sandbox_event", event });
 
-    if (messageId) {
+    if (messageId && !event.truncated?.fields.some((field) => field.startsWith("args."))) {
       this.backgroundTasks.submit(() => this.callbackService.notifyToolCall(messageId, event), {
         name: "callback.notify_tool_call",
         context: { message_id: messageId },
