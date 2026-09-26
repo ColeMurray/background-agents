@@ -11,16 +11,10 @@ import type { EnrichedRepository } from "@open-inspect/shared/types/repository-c
 import type { IntegrationId, IntegrationEntry } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { SettingsCardSection } from "../settings-card-section";
+import { AddRepositoryOverride } from "../add-repository-override";
 import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/form-controls";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -386,23 +380,12 @@ function RepoOverridesSection({
         <p className="text-sm text-muted-foreground mb-4">{copy.emptyOverrides}</p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <AddRepositoryOverride
+        value={addingRepo}
+        onValueChange={setAddingRepo}
+        repositories={availableForOverride}
+        onAdd={handleAdd}
+      />
     </div>
   );
 }
