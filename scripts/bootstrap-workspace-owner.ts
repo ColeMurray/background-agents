@@ -315,7 +315,7 @@ export async function run(
     throw new Error("Owner bootstrap execution did not prove its exact audit and assignment");
   }
   console.error(
-    "Owner bootstrap command completed; verify /health reports ownerAssignment=present."
+    "Owner bootstrap command completed; verify by re-running without --execute and confirming the preflight status is no-op."
   );
 }
 

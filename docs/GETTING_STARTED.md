@@ -537,7 +537,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "daytona", or "vercel"
+# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -553,6 +553,11 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
 # vercel_sandbox_runtime    = "node24"
 # vercel_snapshot_expiration_ms = 0
+
+# OpenComputer (only required when sandbox_provider = "opencomputer")
+# opencomputer_api_url      = "https://app.opencomputer.dev/api"
+# opencomputer_api_key      = "your-opencomputer-api-key"
+# opencomputer_template     = ""  # Empty lets Terraform build the runtime template
 
 # E2B (only required when sandbox_provider = "e2b")
 # e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
@@ -707,7 +712,7 @@ enable_service_bindings        = false
 
 ```bash
 # From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
 ```
 
 Then run:
@@ -778,14 +783,19 @@ replaces the target's assignment, and returns the exact audit-bound postconditio
 transaction. A no-op writes nothing. A lost batch response can leave the outcome uncertain; the
 command does not automatically retry writes or claim success without the postcondition.
 
-6. Verify the control-plane health response contains `"rbac":{"ownerAssignment":"present"}`:
+A successful execution prints the postcondition row as JSON with `"status":"executed"`.
+
+6. Verify by re-running the dry run (without `--execute`):
 
 ```bash
-curl "$(terraform -chdir=terraform/environments/production output -raw control_plane_url)/health"
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>"
 ```
 
-This health value reports current state: `present` means at least one Owner assignment belongs to an
-unsuspended user.
+The preflight row should now report `"status":"no-op"` with the detail
+`selected user is already the current unsuspended Owner`. If it reports `refused` instead, the
+command exits non-zero and the `detail` field gives the reason.
 
 ---
 
@@ -1001,7 +1011,8 @@ curl https://open-inspect-control-plane-{deployment_name}.YOUR-SUBDOMAIN.workers
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="YOUR-WORKSPACE" # or "YOUR-WORKSPACE-YOUR-MODAL-WEB-SUFFIX"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
+# Daytona, Vercel, OpenComputer, and E2B use their provider APIs directly, so there is no
+# Open-Inspect shim health URL.
 
 # 3. Web app (should return 200)
 curl -I "$(terraform output -raw web_app_url)"
@@ -1129,7 +1140,7 @@ Secrets for credentials:
 | `MODAL_WORKSPACE`                  | Modal workspace name                                                                        |
 | `MODAL_ENVIRONMENT`                | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`     | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `SANDBOX_PROVIDER`                 | `modal`, `daytona`, or `vercel`                                                             |
+| `SANDBOX_PROVIDER`                 | `modal` (default), `daytona`, `vercel`, `opencomputer`, or `e2b`                            |
 | `SANDBOX_INACTIVITY_TIMEOUT_MS`    | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)        |
 | `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
 | `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
@@ -1172,8 +1183,8 @@ Secrets for credentials:
 | `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` | Optional existing provider-account key override; Terraform generates one when omitted       |
 | `MODAL_API_SECRET`                 | Generated Modal API secret                                                                  |
 | `NEXTAUTH_SECRET`                  | Generated browser-auth secret (legacy Actions secret name)                                  |
-| `ALLOWED_USERS`                    | Comma-separated GitHub usernames (or empty for all users)                                   |
-| `ALLOWED_EMAIL_DOMAINS`            | Comma-separated email domains (or empty for all domains)                                    |
+| `ALLOWED_USERS`                    | Comma-separated GitHub usernames (empty = list unused; see note below)                      |
+| `ALLOWED_EMAIL_DOMAINS`            | Comma-separated email domains (empty = list unused; see note below)                         |
 | `ALLOWED_EMAILS`                   | Comma-separated exact email addresses (for individual users on shared domains)              |
 | `ALLOWED_GITHUB_ORGS`              | Comma-separated GitHub orgs whose active members can sign in                                |
 | `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)  |
@@ -1184,6 +1195,11 @@ Secrets for credentials:
 | `GH_BOT_USERNAME`                  | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)               |
 | `APP_NAME`                         | Optional display name for whitelabeling (default: `Open-Inspect`)                           |
 | `APP_ICON_URL`                     | Optional URL to a custom logo/favicon (default: built-in icon)                              |
+
+An empty allowlist only means that list is not used; it does not admit everyone. Terraform fails the
+plan unless at least one of `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_EMAILS`, or
+`ALLOWED_GITHUB_ORGS` is set, or `UNSAFE_ALLOW_ALL_USERS` is `true`. Each enabled sign-in provider
+also needs a compatible allowlist; see [Choose Sign-In Providers](#choose-sign-in-providers).
 
 `CLASSIFICATION_MODEL` is an optional Actions **variable**, not a secret — add it under Settings →
 Secrets and variables → Actions → _Variables_ to point the Slack/Linear classifiers at a different
