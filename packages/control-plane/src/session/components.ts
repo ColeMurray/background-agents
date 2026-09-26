@@ -550,7 +550,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     updateLastActivity,
     budgetService,
-    usageRepository
+    usageRepository,
+    () => statusService.refreshInactiveMetrics()
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,
