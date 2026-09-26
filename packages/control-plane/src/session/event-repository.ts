@@ -99,9 +99,9 @@ export class EventRepository {
     type: TType,
     messageId: string,
     event: Extract<SandboxEvent, { type: TType }>,
-    createdAt: number
+    createdAt: number,
+    id = `${type}:${messageId}`
   ): void {
-    const id = `${type}:${messageId}`;
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
        VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
@@ -118,7 +118,8 @@ export class EventRepository {
   }
 
   upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
-    this.upsertEventByMessageId("token", messageId, event, createdAt);
+    const id = event.partId ? `token:${messageId}:part:${event.partId}` : `token:${messageId}`;
+    this.upsertEventByMessageId("token", messageId, event, createdAt, id);
   }
 
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {

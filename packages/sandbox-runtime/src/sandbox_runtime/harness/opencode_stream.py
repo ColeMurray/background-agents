@@ -635,6 +635,7 @@ class OpenCodePromptStream:
                         "type": "token",
                         "content": state.cumulative_text[part_id],
                         "messageId": state.message_id,
+                        **({"partId": part_id} if isinstance(part_id, str) and part_id else {}),
                     }
                 )
 
@@ -988,6 +989,11 @@ class OpenCodePromptStream:
                                 "type": "token",
                                 "content": text,
                                 "messageId": state.message_id,
+                                **(
+                                    {"partId": part_id}
+                                    if isinstance(part_id, str) and part_id
+                                    else {}
+                                ),
                             }
 
         except Exception as e:
