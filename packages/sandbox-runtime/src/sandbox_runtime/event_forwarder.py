@@ -152,12 +152,12 @@ class BufferedEventForwarder:
         size_bytes = event_size_bytes(event)
         if size_bytes > MAX_EVENT_BYTES:
             if event_type == "tool_call":
+                self._log.warn(
+                    "bridge.event_oversized", event_type=event_type, size_bytes=size_bytes
+                )
                 try:
                     event = truncate_tool_call(event)
                 except ValueError:
-                    self._log.warn(
-                        "bridge.event_oversized", event_type=event_type, size_bytes=size_bytes
-                    )
                     return False
             elif is_critical:
                 self._log.warn(

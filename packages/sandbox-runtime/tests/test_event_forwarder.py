@@ -856,6 +856,11 @@ class TestOversizedEvents:
         assert event["truncated"]["originalBytes"] > MAX_EVENT_BYTES
         assert event["args"]["filePath"] == "/tmp/report"
         assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=event["truncated"]["originalBytes"],
+        )
 
     @pytest.mark.asyncio
     async def test_buffered_tool_call_is_truncated_before_reconnect(self):
@@ -875,6 +880,11 @@ class TestOversizedEvents:
         await forwarder.bind(ws)
         assert len(sent_events(ws)) == 1
         assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=sent_events(ws)[0]["truncated"]["originalBytes"],
+        )
 
     @pytest.mark.asyncio
     async def test_oversized_non_tool_event_warns_once_and_does_not_close_socket(self):
