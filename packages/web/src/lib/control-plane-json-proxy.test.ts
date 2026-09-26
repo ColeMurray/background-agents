@@ -46,6 +46,46 @@ describe("controlPlaneJsonGetProxy", () => {
     expect(await response.text()).toBe("");
   });
 
+  it("keeps the upstream status when an error body is not JSON", async () => {
+    // A gateway or platform layer can answer before the control plane does,
+    // with plain text or HTML. The caller acts on the status, so it must not
+    // be replaced by a parse failure of the body.
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("Unauthorized", {
+        status: 401,
+        headers: { "Content-Type": "text/plain", "X-Request-Id": "request-2" },
+      })
+    );
+
+    const response = await GET(new NextRequest("http://localhost/api/resources"));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "Unexpected response from control plane",
+    });
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("X-Request-Id")).toBe("request-2");
+  });
+
+  it("answers 502 for a success status whose body is not JSON", async () => {
+    // Relaying the 200 would tell the browser the request worked while
+    // handing it a body it cannot read.
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("<html>maintenance</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      })
+    );
+
+    const response = await GET(new NextRequest("http://localhost/api/resources"));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Unexpected response from control plane",
+    });
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
   it("keeps request failures distinct from upstream responses", async () => {
     vi.mocked(controlPlaneUserFetch).mockRejectedValue(new Error("authentication unavailable"));
 
