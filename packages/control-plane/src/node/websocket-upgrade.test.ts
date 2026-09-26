@@ -13,6 +13,8 @@ import {
   type UpgradeServingRuntime,
 } from "./websocket-upgrade";
 
+const CLOUDFLARE_MESSAGE_LIMIT_BYTES = 32 * 1024 * 1024;
+
 function fakeLogger(): Logger {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 }
@@ -215,7 +217,8 @@ describe("createSessionUpgradeHandler", () => {
     );
   });
 
-  it("delivers a message just under the Cloudflare limit", async () => {
+  it("delivers a message at the Cloudflare limit", async () => {
+    expect(MAX_MESSAGE_BYTES).toBe(CLOUDFLARE_MESSAGE_LIMIT_BYTES);
     let receive!: (data: Buffer) => void;
     const delivered = new Promise<Buffer>((resolve) => {
       receive = resolve;
@@ -230,9 +233,9 @@ describe("createSessionUpgradeHandler", () => {
     );
     const ws = connect("/sessions/s1/ws");
     await once(ws, "open");
-    ws.send(Buffer.alloc(MAX_MESSAGE_BYTES - 1, 0x61));
+    ws.send(Buffer.alloc(CLOUDFLARE_MESSAGE_LIMIT_BYTES, 0x61));
     const data = await delivered;
-    expect(data.byteLength).toBe(MAX_MESSAGE_BYTES - 1);
+    expect(data.byteLength).toBe(CLOUDFLARE_MESSAGE_LIMIT_BYTES);
     expect(data[0]).toBe(0x61);
     expect(data.at(-1)).toBe(0x61);
   }, 15_000);
@@ -251,7 +254,7 @@ describe("createSessionUpgradeHandler", () => {
     );
     const ws = connect("/sessions/s1/ws");
     await once(ws, "open");
-    ws.send(Buffer.alloc(MAX_MESSAGE_BYTES + 1));
+    ws.send(Buffer.alloc(CLOUDFLARE_MESSAGE_LIMIT_BYTES + 1));
     const [code] = await once(ws, "close");
     expect(code).toBe(1009);
     expect(onMessage).not.toHaveBeenCalled();
