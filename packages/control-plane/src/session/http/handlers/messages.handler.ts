@@ -10,7 +10,7 @@ import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
-import { sessionTraceIncludeSchema } from "../../contracts";
+import { sessionTraceFormatSchema, sessionTraceIncludeSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
@@ -136,7 +136,15 @@ export class MessagesHandler {
       );
     }
 
-    return Response.json(this.messageService.exportTrace(include.data));
+    const format = sessionTraceFormatSchema.safeParse(url.searchParams.get("format") ?? "full");
+    if (!format.success) {
+      return Response.json(
+        { error: format.error.issues[0]?.message ?? "Invalid format" },
+        { status: 400 }
+      );
+    }
+
+    return Response.json(this.messageService.exportTrace(include.data, format.data));
   }
 }
 

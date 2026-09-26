@@ -358,6 +358,19 @@ describe("GET /sessions/export", () => {
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=messages%2Cevents%2Cusage");
   });
 
+  it("forwards compact format to the session runtime", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    mocks.runtimeFetch.mockResolvedValueOnce(traceResponse({ events: [] }));
+    await readLines(await callExport({ include: "events", format: "compact" }));
+    expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
+  });
+
+  it("rejects invalid format before reading sessions", async () => {
+    const response = await callExport({ include: "events", format: "unknown" });
+    expect(response.status).toBe(400);
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
   it.each([["prompts"], ["messages,prompts"], ["messages,"], [""]])(
     "rejects include=%s without reading the store",
     async (include) => {

@@ -162,6 +162,32 @@ describe("MessageService.exportTrace", () => {
     );
   });
 
+  it("references the latest repeated output across event pages", () => {
+    seedEvent("earlier", 1_000, {
+      type: "tool_call",
+      tool: "bash",
+      args: { command: "run" },
+      callId: "earlier",
+      output: "same output",
+    });
+    for (let index = 0; index < TRACE_EXPORT_PAGE_SIZE - 1; index++) {
+      seedEvent(`token-${index}`, 1_001 + index, { type: "token", content: "part" });
+    }
+    seedEvent("latest", 2_000, {
+      type: "tool_call",
+      tool: "bash",
+      args: { command: "run" },
+      callId: "latest",
+      output: "same output",
+    });
+
+    const result = service.exportTrace(["events"], "compact");
+    expect(result.ok && result.trace.events?.[0].data).toMatchObject({
+      compacted: { output: "ref", ref: "latest" },
+    });
+    expect(result.ok && result.trace.events?.at(-1)?.data.output).toBe("same output");
+  });
+
   it("orders events that share a timestamp by timeline sequence, across pages", () => {
     for (let index = 0; index <= TRACE_EXPORT_PAGE_SIZE; index++) {
       seedEvent(`event-${index}`, 1_000, { type: "token", content: `part ${index}` });
@@ -226,6 +252,58 @@ describe("MessageService.exportTrace", () => {
       ok: false,
       reason: "message_budget_exceeded",
     });
+  });
+
+  it("charges compacted events instead of raw file reads, without changing full output", () => {
+    seedMessage("m1", 1_000);
+    const output = "x".repeat(MAX_INCLUDED_BYTES_PER_SESSION / 2 + 1);
+    for (let index = 0; index < 3; index++) {
+      seedEvent(`read-${index}`, 1_100 + index, {
+        type: "tool_call",
+        tool: "read",
+        args: { filePath: `/workspace/sample-${index}.txt` },
+        callId: `read-${index}`,
+        status: "completed",
+        output,
+      });
+    }
+    seedEvent("edit", 1_200, {
+      type: "tool_call",
+      tool: "edit",
+      args: { oldString: "before", newString: "after" },
+      callId: "edit",
+      status: "completed",
+      output: "done",
+    });
+
+    expect(service.exportTrace(["messages", "events"], "full")).toEqual({
+      ok: false,
+      reason: "message_budget_exceeded",
+    });
+    const compact = service.exportTrace(["messages", "events"], "compact");
+    expect(compact).toMatchObject({
+      ok: true,
+      trace: {
+        messages: [{ content: "Run the tests" }],
+        events: [
+          {
+            data: {
+              args: { filePath: "/workspace/sample-0.txt" },
+              compacted: { output: "file_read", originalChars: output.length },
+            },
+          },
+          { data: { compacted: { output: "file_read", originalChars: output.length } } },
+          { data: { compacted: { output: "file_read", originalChars: output.length } } },
+          { data: { args: { oldString: "before", newString: "after" }, output: "done" } },
+        ],
+      },
+    });
+    expect(sessionTraceExportSchema.parse(compact)).toEqual(compact);
+
+    db.prepare("DELETE FROM events WHERE id IN ('read-1', 'read-2')").run();
+    expect(JSON.stringify(service.exportTrace(["messages", "events"], "full"))).toBe(
+      JSON.stringify(service.exportTrace(["messages", "events"]))
+    );
   });
 
   it("charges the response envelope, so an item that alone fills the budget fails", () => {
