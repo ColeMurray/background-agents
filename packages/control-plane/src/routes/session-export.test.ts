@@ -19,11 +19,12 @@ import {
 } from "../router.test-support";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { SessionExportRow } from "../db/session-export-store";
+import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
 import {
-  MAX_MESSAGE_BYTES_PER_SESSION,
-  MAX_MESSAGE_EXPORT_LIMIT,
-  MAX_MESSAGE_PAGES_PER_SESSION,
+  MAX_INCLUDED_BYTES_PER_SESSION,
+  MAX_INCLUDED_EXPORT_LIMIT,
+  MAX_INCLUDED_PAGES_PER_SESSION,
   sessionExportRoutes,
 } from "./session-export";
 
@@ -145,16 +146,26 @@ const sampleRow = {
   updatedAt: 2_000,
 } satisfies SessionExportRow;
 
-function messagePage(
-  messages: Record<string, unknown>[],
+/** One runtime page, newest first, keyed by the collection it carries. */
+function runtimePage(
+  collection: "messages" | "events" | "usage",
+  items: Record<string, unknown>[],
   hasMore: boolean,
   cursor?: string
 ): Response {
-  return Response.json({ messages, hasMore, ...(cursor ? { cursor } : {}) });
+  return Response.json({ [collection]: items, hasMore, ...(cursor ? { cursor } : {}) });
+}
+
+/** Answers each runtime path with its queued pages in order; an unqueued fetch fails. */
+function serveRuntimePages(pages: Partial<Record<SessionInternalPath, Response[]>>): void {
+  mocks.runtimeFetch.mockImplementation((_sessionId: string, path: SessionInternalPath) => {
+    const page = pages[path]?.shift();
+    return page ? Promise.resolve(page) : Promise.reject(new Error(`unexpected ${path} fetch`));
+  });
 }
 
 /** A message record passing the runtime page schema — export fixtures need all fields. */
-function sampleMessage(id: string, content: string): Record<string, unknown> {
+function sampleMessage(id: string, content: string, createdAt = 1_000): Record<string, unknown> {
   return {
     id,
     authorId: "user-1",
@@ -162,9 +173,41 @@ function sampleMessage(id: string, content: string): Record<string, unknown> {
     source: "slack",
     attachments: null,
     status: "completed",
-    createdAt: 1_000,
-    startedAt: 1_100,
-    completedAt: 1_200,
+    createdAt,
+    startedAt: createdAt + 100,
+    completedAt: createdAt + 200,
+  };
+}
+
+/** A persisted timeline event as `/internal/events` returns it. */
+function sampleEvent(
+  id: string,
+  createdAt: number,
+  data: { type: string } & Record<string, unknown>
+): Record<string, unknown> {
+  return { id, type: data.type, data, messageId: "msg-1", createdAt };
+}
+
+/** A per-step usage row passing the runtime page schema. */
+function sampleUsage(id: string, createdAt: number, totalTokens: number): Record<string, unknown> {
+  return {
+    id,
+    messageId: "msg-1",
+    model: "anthropic/claude-sonnet-4-6",
+    harness: "opencode",
+    inputTokens: totalTokens - 100,
+    outputTokens: 100,
+    reasoningTokens: null,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    totalTokens,
+    stepCostUsd: 0.01,
+    messageCostUsd: 0.02,
+    isSubtask: false,
+    childSessionId: null,
+    taskCallId: null,
+    reason: "tool-calls",
+    createdAt,
   };
 }
 
@@ -179,6 +222,7 @@ async function readLines(response: Response): Promise<Record<string, unknown>[]>
 describe("GET /sessions/export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runtimeFetch.mockReset();
   });
 
   it("rejects a caller without sessions.export before touching the store", async () => {
@@ -284,11 +328,13 @@ describe("GET /sessions/export", () => {
     });
   });
 
-  it("inlines every message page when include=messages", async () => {
+  it("inlines every message page oldest first when include=messages", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
     mocks.runtimeFetch
-      .mockResolvedValueOnce(messagePage([sampleMessage("msg-1", "hello")], true, "5000"))
-      .mockResolvedValueOnce(messagePage([sampleMessage("msg-2", "done")], false));
+      .mockResolvedValueOnce(
+        runtimePage("messages", [sampleMessage("msg-2", "done", 2_000)], true, "5000")
+      )
+      .mockResolvedValueOnce(runtimePage("messages", [sampleMessage("msg-1", "hello")], false));
 
     const response = await callExport({ include: "messages" });
     const lines = await readLines(response);
@@ -296,21 +342,130 @@ describe("GET /sessions/export", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0].messages).toEqual([
       sampleMessage("msg-1", "hello"),
-      sampleMessage("msg-2", "done"),
+      sampleMessage("msg-2", "done", 2_000),
     ]);
+    expect(lines[0]).not.toHaveProperty("events");
+    expect(lines[0]).not.toHaveProperty("usage");
     expect(mocks.runtimeFetch).toHaveBeenCalledTimes(2);
     const [sessionId, path, , search] = mocks.runtimeFetch.mock.calls[0];
     expect(sessionId).toBe("session-1");
     expect(path).toBe("/internal/messages");
     expect(search).toBe("?limit=100");
     expect(mocks.runtimeFetch.mock.calls[1][3]).toBe("?limit=100&cursor=5000");
-    expect(mocks.list).toHaveBeenCalledWith({ cursor: null, limit: MAX_MESSAGE_EXPORT_LIMIT });
+    expect(mocks.list).toHaveBeenCalledWith({ cursor: null, limit: MAX_INCLUDED_EXPORT_LIMIT });
   });
+
+  it("inlines every event page in timeline order when include=events", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    const toolCall = sampleEvent("tool_call:call-1", 1_100, {
+      type: "tool_call",
+      tool: "bash",
+      args: { command: "npm test" },
+      callId: "call-1",
+      status: "completed",
+      output: "1 passed",
+    });
+    const token = sampleEvent("token:msg-1", 1_200, { type: "token", content: "Tests pass." });
+    const complete = sampleEvent("execution_complete:msg-1", 1_300, {
+      type: "execution_complete",
+      success: true,
+    });
+    mocks.runtimeFetch
+      .mockResolvedValueOnce(runtimePage("events", [complete, token], true, "1200:token:msg-1"))
+      .mockResolvedValueOnce(runtimePage("events", [toolCall], false, "1100:tool_call:call-1"));
+
+    const lines = await readLines(await callExport({ include: "events" }));
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0].events).toEqual([toolCall, token, complete]);
+    expect(lines[0]).not.toHaveProperty("messages");
+    expect(mocks.runtimeFetch.mock.calls.map(([, path, , search]) => [path, search])).toEqual([
+      ["/internal/events", "?limit=100"],
+      ["/internal/events", "?limit=100&cursor=1200%3Atoken%3Amsg-1"],
+    ]);
+    expect(mocks.list).toHaveBeenCalledWith({ cursor: null, limit: MAX_INCLUDED_EXPORT_LIMIT });
+  });
+
+  it("inlines every per-step usage row oldest first when include=usage", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    mocks.runtimeFetch
+      .mockResolvedValueOnce(
+        runtimePage("usage", [sampleUsage("step-2", 1_250, 2_000)], true, "1250:step-2")
+      )
+      .mockResolvedValueOnce(runtimePage("usage", [sampleUsage("step-1", 1_150, 1_000)], false));
+
+    const lines = await readLines(await callExport({ include: "usage" }));
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0].usage).toEqual([
+      sampleUsage("step-1", 1_150, 1_000),
+      sampleUsage("step-2", 1_250, 2_000),
+    ]);
+    expect(mocks.runtimeFetch.mock.calls.map(([, path, , search]) => [path, search])).toEqual([
+      ["/internal/usage", "?limit=100"],
+      ["/internal/usage", "?limit=100&cursor=1250%3Astep-2"],
+    ]);
+  });
+
+  it("inlines the prompt, tool activity, step tokens and outcome on one session line", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    const prompt = sampleMessage("msg-1", "Run the tests");
+    const toolCall = sampleEvent("tool_call:call-1", 1_150, {
+      type: "tool_call",
+      tool: "bash",
+      args: { command: "npm test" },
+      callId: "call-1",
+      status: "completed",
+      output: "1 passed",
+    });
+    const complete = sampleEvent("execution_complete:msg-1", 1_300, {
+      type: "execution_complete",
+      success: true,
+    });
+    const step = sampleUsage("step-1", 1_250, 2_300);
+    serveRuntimePages({
+      [SessionInternalPaths.messages]: [runtimePage("messages", [prompt], false)],
+      [SessionInternalPaths.events]: [runtimePage("events", [complete, toolCall], false)],
+      [SessionInternalPaths.usage]: [runtimePage("usage", [step], false)],
+    });
+
+    const lines = await readLines(await callExport({ include: "usage,events,messages" }));
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session",
+        ...sampleRow,
+        messages: [prompt],
+        events: [toolCall, complete],
+        usage: [step],
+      },
+    ]);
+    expect(mocks.runtimeFetch.mock.calls.map(([, path]) => path)).toEqual([
+      "/internal/messages",
+      "/internal/events",
+      "/internal/usage",
+    ]);
+  });
+
+  it.each([["prompts"], ["messages,prompts"], ["messages,"], [""]])(
+    "rejects include=%s without reading the store",
+    async (include) => {
+      const response = await callExport({ include });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "include must be a comma-separated list of messages, events, usage",
+      });
+      expect(mocks.list).not.toHaveBeenCalled();
+    }
+  );
 
   it("preserves validated message attachment metadata", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
     mocks.runtimeFetch.mockResolvedValueOnce(
-      messagePage(
+      runtimePage(
+        "messages",
         [
           {
             ...sampleMessage("msg-1", "inspect this"),
@@ -347,16 +502,21 @@ describe("GET /sessions/export", () => {
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
-  it("applies the smaller request budget when messages are included", async () => {
-    const response = await callExport({
-      include: "messages",
-      limit: String(MAX_MESSAGE_EXPORT_LIMIT + 1),
-    });
+  it.each([["messages"], ["events"], ["usage"], ["messages,events,usage"]])(
+    "applies the smaller request budget when include=%s",
+    async (include) => {
+      const response = await callExport({
+        include,
+        limit: String(MAX_INCLUDED_EXPORT_LIMIT + 1),
+      });
 
-    expect(response.status).toBe(400);
-    expect(await response.text()).toContain(`limit must be at most ${MAX_MESSAGE_EXPORT_LIMIT}`);
-    expect(mocks.list).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: `limit must be at most ${MAX_INCLUDED_EXPORT_LIMIT} when include is set`,
+      });
+      expect(mocks.list).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([["createdAfter"], ["createdBefore"]])(
     "rejects an empty %s instead of coercing it to epoch zero",
@@ -378,7 +538,7 @@ describe("GET /sessions/export", () => {
     });
     mocks.runtimeFetch
       .mockResolvedValueOnce(new Response("boom", { status: 503 }))
-      .mockResolvedValueOnce(messagePage([sampleMessage("msg-ok", "fine")], false));
+      .mockResolvedValueOnce(runtimePage("messages", [sampleMessage("msg-ok", "fine")], false));
 
     const response = await callExport({ include: "messages" });
     const lines = await readLines(response);
@@ -405,7 +565,7 @@ describe("GET /sessions/export", () => {
     });
     mocks.runtimeFetch
       .mockRejectedValueOnce(new Error("connection reset"))
-      .mockResolvedValueOnce(messagePage([sampleMessage("msg-ok", "fine")], false));
+      .mockResolvedValueOnce(runtimePage("messages", [sampleMessage("msg-ok", "fine")], false));
 
     const response = await callExport({ include: "messages" });
     expect(response.status).toBe(200);
@@ -431,7 +591,7 @@ describe("GET /sessions/export", () => {
       () => {
         const malformed = sampleMessage("msg-1", "hello");
         delete malformed.createdAt;
-        return messagePage([malformed], false);
+        return runtimePage("messages", [malformed], false);
       },
     ],
     [
@@ -458,8 +618,10 @@ describe("GET /sessions/export", () => {
   it("rejects a repeated runtime cursor instead of burning through the page cap", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
     mocks.runtimeFetch
-      .mockResolvedValueOnce(messagePage([sampleMessage("msg-1", "one")], true, "same"))
-      .mockResolvedValueOnce(messagePage([sampleMessage("msg-2", "two")], true, "same"));
+      .mockResolvedValueOnce(runtimePage("messages", [sampleMessage("msg-1", "one")], true, "same"))
+      .mockResolvedValueOnce(
+        runtimePage("messages", [sampleMessage("msg-2", "two")], true, "same")
+      );
 
     const lines = await readLines(await callExport({ include: "messages" }));
 
@@ -502,7 +664,11 @@ describe("GET /sessions/export", () => {
   it("does not retain a session whose messages exceed the byte budget", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
     mocks.runtimeFetch.mockResolvedValueOnce(
-      messagePage([sampleMessage("msg-large", "x".repeat(MAX_MESSAGE_BYTES_PER_SESSION))], false)
+      runtimePage(
+        "messages",
+        [sampleMessage("msg-large", "x".repeat(MAX_INCLUDED_BYTES_PER_SESSION))],
+        false
+      )
     );
 
     const lines = await readLines(await callExport({ include: "messages" }));
@@ -522,7 +688,7 @@ describe("GET /sessions/export", () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array(MAX_MESSAGE_BYTES_PER_SESSION + 1));
+        controller.enqueue(new Uint8Array(MAX_INCLUDED_BYTES_PER_SESSION + 1));
       },
       cancel() {
         cancelled = true;
@@ -545,7 +711,7 @@ describe("GET /sessions/export", () => {
 
   it("applies the response byte budget across all message pages", async () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
-    const padding = "x".repeat(MAX_MESSAGE_BYTES_PER_SESSION / 2);
+    const padding = "x".repeat(MAX_INCLUDED_BYTES_PER_SESSION / 2);
     mocks.runtimeFetch
       .mockResolvedValueOnce(
         Response.json({ messages: [], hasMore: true, cursor: "next", padding })
@@ -569,7 +735,9 @@ describe("GET /sessions/export", () => {
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
     let page = 0;
     mocks.runtimeFetch.mockImplementation(() =>
-      Promise.resolve(messagePage([sampleMessage(`msg-${page++}`, "part")], true, String(page)))
+      Promise.resolve(
+        runtimePage("messages", [sampleMessage(`msg-${page++}`, "part")], true, String(page))
+      )
     );
 
     const response = await callExport({ include: "messages" });
@@ -581,6 +749,116 @@ describe("GET /sessions/export", () => {
       sessionId: "session-1",
       reason: "page_cap_reached",
     });
-    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(MAX_MESSAGE_PAGES_PER_SESSION);
+    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(MAX_INCLUDED_PAGES_PER_SESSION);
+  });
+
+  it("shares one byte budget across messages and events", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    const overHalfBudget = "x".repeat(MAX_INCLUDED_BYTES_PER_SESSION / 2 + 1);
+    serveRuntimePages({
+      [SessionInternalPaths.messages]: [
+        runtimePage("messages", [sampleMessage("msg-1", overHalfBudget)], false),
+      ],
+      [SessionInternalPaths.events]: [
+        runtimePage(
+          "events",
+          [sampleEvent("token:msg-1", 1_100, { type: "token", content: overHalfBudget })],
+          false
+        ),
+      ],
+    });
+
+    const lines = await readLines(await callExport({ include: "messages,events" }));
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "message_budget_exceeded",
+      },
+    ]);
+    expect(mocks.runtimeFetch.mock.calls.map(([, path]) => path)).toEqual([
+      "/internal/messages",
+      "/internal/events",
+    ]);
+  });
+
+  it("starts each session with a fresh byte budget", async () => {
+    const secondRow = { ...sampleRow, id: "session-2", createdAt: 3_000 };
+    mocks.list.mockResolvedValue({
+      sessions: [sampleRow, secondRow],
+      hasMore: false,
+      nextCursor: null,
+    });
+    const overHalfBudget = "x".repeat(MAX_INCLUDED_BYTES_PER_SESSION / 2 + 1);
+    serveRuntimePages({
+      [SessionInternalPaths.messages]: [
+        runtimePage("messages", [sampleMessage("msg-1", overHalfBudget)], false),
+        runtimePage("messages", [sampleMessage("msg-2", overHalfBudget)], false),
+      ],
+    });
+
+    const lines = await readLines(await callExport({ include: "messages" }));
+
+    expect(lines).toMatchObject([
+      { type: "session", id: "session-1", messages: [{ id: "msg-1" }] },
+      { type: "session", id: "session-2", messages: [{ id: "msg-2" }] },
+    ]);
+  });
+
+  it("shares one page cap across included collections", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    let messagePages = 0;
+    let eventPages = 0;
+    mocks.runtimeFetch.mockImplementation((_sessionId: string, path: SessionInternalPath) => {
+      if (path === SessionInternalPaths.messages) {
+        messagePages++;
+        const last = messagePages === MAX_INCLUDED_PAGES_PER_SESSION - 1;
+        const message = sampleMessage(`msg-${messagePages}`, "part");
+        return Promise.resolve(
+          runtimePage("messages", [message], !last, last ? undefined : `m${messagePages}`)
+        );
+      }
+      eventPages++;
+      const event = sampleEvent(`event-${eventPages}`, 1_100, { type: "token", content: "part" });
+      return Promise.resolve(runtimePage("events", [event], true, `e${eventPages}`));
+    });
+
+    const lines = await readLines(await callExport({ include: "messages,events" }));
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "page_cap_reached",
+      },
+    ]);
+    expect(messagePages).toBe(MAX_INCLUDED_PAGES_PER_SESSION - 1);
+    expect(eventPages).toBe(1);
+  });
+
+  it("emits only a session_error line when a later collection fails", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    serveRuntimePages({
+      [SessionInternalPaths.messages]: [
+        runtimePage("messages", [sampleMessage("msg-1", "hello")], false),
+      ],
+      [SessionInternalPaths.events]: [new Response("boom", { status: 503 })],
+    });
+
+    const lines = await readLines(await callExport({ include: "messages,events,usage" }));
+
+    expect(lines).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "http_error",
+        status: 503,
+      },
+    ]);
+    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(2);
   });
 });

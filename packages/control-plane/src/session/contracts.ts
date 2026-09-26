@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { stepUsageSchema } from "@open-inspect/shared";
+import { eventResponseSchema } from "@open-inspect/shared/types/sandbox-events";
 import { sessionMessageSchema } from "@open-inspect/shared/types/sessions";
 
 /** SCM display fields forwarded from the authenticated route to the Session runtime. */
@@ -27,6 +28,19 @@ export const sessionMessagePageSchema = z.discriminatedUnion("hasMore", [
   }),
 ]);
 export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
+
+export const sessionEventPageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    events: z.array(eventResponseSchema),
+    hasMore: z.literal(true),
+    cursor: z.string().min(1),
+  }),
+  z.object({
+    events: z.array(eventResponseSchema),
+    hasMore: z.literal(false),
+    cursor: z.string().min(1).optional(),
+  }),
+]);
 
 export const stepUsagePageSchema = z.discriminatedUnion("hasMore", [
   z.object({
