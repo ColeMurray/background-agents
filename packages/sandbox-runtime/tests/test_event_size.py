@@ -135,8 +135,24 @@ def test_nested_file_content_can_shrink_without_changing_its_path():
     assert encoded_size(result) <= MAX_EVENT_BYTES
 
 
-def test_fragmented_args_do_not_reserialize_the_whole_event_per_field(monkeypatch):
-    event = tool_call(args={f"part_{i}": "x" * 1_000 for i in range(1_500)})
+@pytest.mark.parametrize("path_key", ["notebook_path", "notebookPath"])
+def test_notebook_edit_path_is_preserved_before_shrinking_content(path_key):
+    path = "/tmp/" + "p" * 4_000
+    event = tool_call(
+        tool="NotebookEdit",
+        args={path_key: path, "chunks": [{"content": "x" * 1_000} for _ in range(1_000)]},
+    )
+
+    result = truncate_tool_call(event)
+
+    assert result["args"][path_key] == path
+    assert not any(field.endswith(path_key) for field in result["truncated"]["fields"])
+    assert encoded_size(result) <= MAX_EVENT_BYTES
+
+
+@pytest.mark.parametrize("count,length", [(1_500, 1_000), (9_000, 110)])
+def test_fragmented_args_do_not_reserialize_the_whole_event_per_field(monkeypatch, count, length):
+    event = tool_call(args={f"part_{i}": "x" * length for i in range(count)})
     original = event_size.event_size_bytes
     calls = 0
 

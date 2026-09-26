@@ -11,9 +11,7 @@ from typing import Any, Final
 # packages/control-plane/src/node/websocket-upgrade.ts:34
 MAX_EVENT_BYTES: Final = 1_000_000
 
-_PATH_KEYS: Final = frozenset(
-    {"path", "filePath", "filepath", "file_path", "fileName", "filename", "file"}
-)
+_PATH_KEYS: Final = frozenset({"path", "filepath", "filename", "file", "notebookpath"})
 
 
 def event_size_bytes(event: dict[str, Any]) -> int:
@@ -27,7 +25,7 @@ def _arg_strings(
         for key, child in value.items():
             path = f"{location}.{key}"
             if isinstance(child, str) and child:
-                if key not in _PATH_KEYS:
+                if not isinstance(key, str) or key.replace("_", "").lower() not in _PATH_KEYS:
                     yield value, key, path, child
             else:
                 yield from _arg_strings(child, path)
