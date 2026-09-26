@@ -92,13 +92,16 @@ npm run build -w @open-inspect/shared
 
 # Install Python dependencies for Modal deployment (includes sandbox-runtime)
 cd packages/modal-infra && uv sync --frozen && cd -
+
+# Create your Terraform config files (edited in Step 5; never commit them)
+cp terraform/environments/production/terraform.tfvars.example terraform/environments/production/terraform.tfvars
+cp terraform/environments/production/backend.tfvars.example terraform/environments/production/backend.tfvars
 ```
 
 ---
 
-> **Tip**: Before proceeding, copy `terraform/environments/production/terraform.tfvars.example` to
-> `terraform.tfvars` and keep it open. As you collect credentials in the following steps, paste them
-> directly into this file.
+> **Tip**: Keep `terraform/environments/production/terraform.tfvars` open. As you collect
+> credentials in the following steps, paste them directly into this file.
 
 ---
 
@@ -304,13 +307,8 @@ Save these values somewhere secure—you'll need them in the next step.
 
 ## Step 5: Configure Terraform
 
-```bash
-cd terraform/environments/production
-
-# Copy the example files
-cp terraform.tfvars.example terraform.tfvars
-cp backend.tfvars.example backend.tfvars
-```
+Edit the `backend.tfvars` and `terraform.tfvars` files you created in Step 1, in
+`terraform/environments/production`.
 
 ### Configure `backend.tfvars`
 
@@ -596,8 +594,8 @@ npx vercel --prod
 After deployment completes, verify each component:
 
 ```bash
-# Get the verification commands from Terraform
-terraform output verification_commands
+# Get the verification commands from Terraform (run from the repository root)
+terraform -chdir=terraform/environments/production output verification_commands
 ```
 
 Or manually:
@@ -615,15 +613,11 @@ curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Open-Inspect shim health URL.
 
 # 3. Web app (should return 200)
-curl -I "$(terraform output -raw web_app_url)"
+curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
-### Test the Full Flow
-
-1. Visit your web app URL
-2. Sign in with each configured provider
-3. Create a new session with a repository
-4. Send a prompt and verify the sandbox starts
+Visit your web app URL and sign in with each configured provider. New users get the Member role,
+which cannot manage secrets, so the end-to-end session test comes after Step 9.
 
 ---
 
@@ -677,6 +671,15 @@ npm run rbac:bootstrap-owner -- \
 The preflight row should now report `"status":"no-op"` with the detail
 `selected user is already the current unsuspended Owner`. If it reports `refused` instead, the
 command exits non-zero and the `detail` field gives the reason.
+
+### Test the Full Flow
+
+1. As the Owner, add a model credential: go to **Settings > Secrets**, select **All Repositories
+   (Global)**, and add the key for your model (e.g. `ANTHROPIC_API_KEY` for Claude). Skip this if
+   you set `anthropic_api_key` in `terraform.tfvars` and will use a Claude model. See
+   [Secrets Management](SECRETS.md).
+2. Create a new session with a repository, selecting a model whose credential you added
+3. Send a prompt and verify the sandbox starts
 
 ---
 
