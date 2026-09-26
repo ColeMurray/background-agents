@@ -251,4 +251,45 @@ describe("session runs", () => {
       (await runs.list({ ...window, orderBy: "created" })).map((run) => run.rootSessionId)
     ).toEqual(["newer-cheap"]);
   });
+
+  it("measures spawn depth from the surviving root after the original root is deleted", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const createdAt = Date.now() - DAY_MS;
+    await seedSession(store, { id: "root", createdAt, updatedAt: createdAt }, 1, 0, 0);
+    await seedSession(
+      store,
+      {
+        id: "child",
+        parentSessionId: "root",
+        spawnDepth: 1,
+        createdAt: createdAt + 100,
+        updatedAt: createdAt + 100,
+      },
+      2,
+      0,
+      0
+    );
+    await seedSession(
+      store,
+      {
+        id: "grandchild",
+        parentSessionId: "child",
+        spawnDepth: 2,
+        createdAt: createdAt + 200,
+        updatedAt: createdAt + 200,
+      },
+      4,
+      0,
+      0
+    );
+
+    await store.delete("root");
+
+    expect(await new SessionRunStore(env.DB).get("child")).toMatchObject({
+      rootSessionId: "child",
+      sessionCount: 2,
+      maxSpawnDepth: 1,
+      totalCost: 6,
+    });
+  });
 });

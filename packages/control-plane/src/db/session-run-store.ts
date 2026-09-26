@@ -34,7 +34,9 @@ const runRowSchema = z.object({
 const RUN_SELECT = `SELECT
   root.id AS root_session_id,
   COUNT(*) AS session_count,
-  MAX(s.spawn_depth) AS max_spawn_depth,
+  -- spawn_depth is creation-time depth (it gates further spawns); a root promoted
+  -- by deleting its parent keeps its old depth, so measure from the root.
+  MAX(s.spawn_depth) - root.spawn_depth AS max_spawn_depth,
   COALESCE(SUM(s.total_cost), 0) AS total_cost,
   COALESCE(SUM(s.pr_count), 0) AS total_prs,
   COALESCE(SUM(s.input_tokens), 0) AS input_tokens,
@@ -49,7 +51,7 @@ const RUN_SELECT = `SELECT
 FROM sessions root
 JOIN sessions s ON s.root_session_id = root.id`;
 
-const RUN_GROUP = `GROUP BY root.id, root.user_id, root.scm_login, root.spawn_source,
+const RUN_GROUP = `GROUP BY root.id, root.spawn_depth, root.user_id, root.scm_login, root.spawn_source,
   root.automation_id, root.repo_owner, root.repo_name`;
 
 function toRun(value: unknown): SessionRun {
