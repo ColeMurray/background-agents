@@ -5,8 +5,7 @@
 
 import { z } from "zod";
 import { stepUsageSchema } from "@open-inspect/shared";
-import { eventResponseSchema } from "@open-inspect/shared/types/sandbox-events";
-import { sessionMessageSchema } from "@open-inspect/shared/types/sessions";
+import { sessionEventSchema, sessionMessageSchema } from "@open-inspect/shared/types/sessions";
 
 /** SCM display fields forwarded from the authenticated route to the Session runtime. */
 export const sessionScmDisplayFieldsSchema = z.object({
@@ -71,7 +70,7 @@ export const MAX_INCLUDED_BYTES_PER_SESSION = 4 * 1024 * 1024;
  */
 const sessionTraceSchema = z.object({
   messages: z.array(sessionMessageSchema).optional(),
-  events: z.array(eventResponseSchema).optional(),
+  events: z.array(sessionEventSchema).optional(),
   usage: z.array(stepUsageSchema).optional(),
 });
 export type SessionTrace = z.infer<typeof sessionTraceSchema>;

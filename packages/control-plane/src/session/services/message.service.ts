@@ -9,7 +9,7 @@ import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import type { EventTimelineCursor } from "../event-cursor";
-import { SessionEventStream, toEventResponse, type SessionEventListRequest } from "../event-stream";
+import { SessionEventStream, toSessionEvent, type SessionEventListRequest } from "../event-stream";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
 import type { MessageListCursor } from "../message-cursor";
 import {
@@ -235,7 +235,7 @@ export class MessageService {
             limit: TRACE_EXPORT_PAGE_SIZE,
           });
           return {
-            items: page.events.map(toEventResponse),
+            items: page.events.map(toSessionEvent),
             nextCursor: page.hasMore ? page.nextCursor : null,
           };
         });

@@ -517,7 +517,7 @@ describe("GET /internal/trace-export", () => {
         type: "execution_complete",
         data: JSON.stringify({ type: "execution_complete", messageId: "msg-1", success: true }),
         messageId: "msg-1",
-        createdAt: createdAt + 3,
+        createdAt: createdAt + 1,
       },
     ]);
     await seedStepUsage(stub, [
@@ -545,6 +545,9 @@ describe("GET /internal/trace-export", () => {
         usage: [{ id: "step:1" }, { id: "step:2" }],
       },
     });
+    // The two events share a timestamp; their timeline sequence is the tie-breaker.
+    const [first, second] = (body.ok && body.trace.events) || [];
+    expect(first.timelineSequence).toBeLessThan(second.timelineSequence);
   });
 
   it("returns only the requested collections", async () => {

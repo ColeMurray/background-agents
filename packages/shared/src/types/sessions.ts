@@ -1,6 +1,7 @@
 import { harnessIdSchema, type HarnessId } from "../harnesses";
 import { z } from "zod";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
+import { eventResponseSchema } from "./sandbox-events";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
 import type { PullRequestLifecycleState } from "./artifacts";
 
@@ -265,6 +266,15 @@ export const sessionMessageSchema = z.object({
   completedAt: z.number().nullable(),
 });
 export type SessionMessage = z.infer<typeof sessionMessageSchema>;
+
+/** A persisted event's timeline position; it orders events that share a timestamp. */
+export const timelineSequenceSchema = z.number().int().nonnegative().safe();
+
+/** A persisted timeline event as the session trace export lists it. */
+export const sessionEventSchema = eventResponseSchema.extend({
+  timelineSequence: timelineSequenceSchema,
+});
+export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
 export const sessionParticipantProfileSchema = z.object({
   userId: z.string(),

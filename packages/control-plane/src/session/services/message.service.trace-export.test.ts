@@ -123,9 +123,24 @@ describe("MessageService.exportTrace", () => {
           { id: "m1", content: "Run the tests", createdAt: 1_000 },
         ],
         events: [
-          { id: "tool_call:call-1", type: "tool_call", data: { output: "1 passed" } },
-          { id: "token:m1", type: "token", data: { content: "Tests pass." } },
-          { id: "execution_complete:m1", type: "execution_complete", messageId: "m1" },
+          {
+            id: "tool_call:call-1",
+            type: "tool_call",
+            data: { output: "1 passed" },
+            timelineSequence: 1,
+          },
+          {
+            id: "token:m1",
+            type: "token",
+            data: { content: "Tests pass." },
+            timelineSequence: 2,
+          },
+          {
+            id: "execution_complete:m1",
+            type: "execution_complete",
+            messageId: "m1",
+            timelineSequence: 3,
+          },
         ],
         usage: [
           { id: "step-1", messageId: "m1", inputTokens: 100, outputTokens: 20, createdAt: 1_150 },
@@ -144,6 +159,23 @@ describe("MessageService.exportTrace", () => {
 
     expect(result.ok && result.trace.events?.map((event) => event.id)).toEqual(
       Array.from({ length: TRACE_EXPORT_PAGE_SIZE + 1 }, (_, index) => `event-${index}`)
+    );
+  });
+
+  it("orders events that share a timestamp by timeline sequence, across pages", () => {
+    for (let index = 0; index <= TRACE_EXPORT_PAGE_SIZE; index++) {
+      seedEvent(`event-${index}`, 1_000, { type: "token", content: `part ${index}` });
+    }
+
+    const result = service.exportTrace(["events"]);
+
+    expect(
+      result.ok && result.trace.events?.map(({ id, timelineSequence }) => [id, timelineSequence])
+    ).toEqual(
+      Array.from({ length: TRACE_EXPORT_PAGE_SIZE + 1 }, (_, index) => [
+        `event-${index}`,
+        index + 1,
+      ])
     );
   });
 

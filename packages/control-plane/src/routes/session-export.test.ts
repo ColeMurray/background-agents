@@ -165,9 +165,10 @@ function sampleMessage(id: string, content: string, createdAt = 1_000): Record<s
 function sampleEvent(
   id: string,
   createdAt: number,
+  timelineSequence: number,
   data: { type: string } & Record<string, unknown>
 ): Record<string, unknown> {
-  return { id, type: data.type, data, messageId: "msg-1", createdAt };
+  return { id, type: data.type, data, messageId: "msg-1", createdAt, timelineSequence };
 }
 
 /** A per-step usage row passing the runtime trace schema. */
@@ -333,7 +334,7 @@ describe("GET /sessions/export", () => {
     const trace = {
       messages: [sampleMessage("msg-1", "Run the tests")],
       events: [
-        sampleEvent("tool_call:call-1", 1_150, {
+        sampleEvent("tool_call:call-1", 1_150, 1, {
           type: "tool_call",
           tool: "bash",
           args: { command: "npm test" },
@@ -341,7 +342,7 @@ describe("GET /sessions/export", () => {
           status: "completed",
           output: "1 passed",
         }),
-        sampleEvent("execution_complete:msg-1", 1_300, {
+        sampleEvent("execution_complete:msg-1", 1_300, 2, {
           type: "execution_complete",
           success: true,
         }),
@@ -499,6 +500,18 @@ describe("GET /sessions/export", () => {
         const malformed = sampleMessage("msg-1", "hello");
         delete malformed.createdAt;
         return traceResponse({ messages: [malformed] });
+      },
+    ],
+    [
+      "drops an event's timeline sequence",
+      () => {
+        const { timelineSequence: _timelineSequence, ...event } = sampleEvent(
+          "token:msg-1",
+          1_100,
+          1,
+          { type: "token", content: "hi" }
+        );
+        return traceResponse({ events: [event] });
       },
     ],
     [
