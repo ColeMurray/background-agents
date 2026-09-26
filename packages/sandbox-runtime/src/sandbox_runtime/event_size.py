@@ -2,6 +2,7 @@
 
 import copy
 import json
+from collections.abc import Iterator
 from typing import Any, Final
 
 # Keep event values below the Durable Object SQLite 2 MB string/BLOB/row limit:
@@ -19,14 +20,15 @@ def event_size_bytes(event: dict[str, Any]) -> int:
     return len(json.dumps(event).encode("utf-8"))
 
 
-def _arg_strings(value: Any, location: str = "args"):
+def _arg_strings(
+    value: Any, location: str = "args"
+) -> Iterator[tuple[dict[str, Any] | list[Any], str | int, str, str]]:
     if isinstance(value, dict):
         for key, child in value.items():
-            if key in _PATH_KEYS:
-                continue
             path = f"{location}.{key}"
             if isinstance(child, str) and child:
-                yield value, key, path, child
+                if key not in _PATH_KEYS:
+                    yield value, key, path, child
             else:
                 yield from _arg_strings(child, path)
     elif isinstance(value, list):
@@ -36,6 +38,38 @@ def _arg_strings(value: Any, location: str = "args"):
                 yield value, index, path, child
             else:
                 yield from _arg_strings(child, path)
+
+
+def _fit_json_string(text: str, max_bytes: int) -> str:
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if len(json.dumps(text[:mid])) <= max_bytes:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
+
+
+def truncate_critical_error(event: dict[str, Any], original_bytes: int) -> dict[str, Any] | None:
+    """Keep a critical event's identity and outcome when its diagnostic is too large."""
+    error = event.get("error")
+    if not isinstance(error, str):
+        return None
+    remaining = MAX_EVENT_BYTES - original_bytes + len(json.dumps(error))
+    if remaining < 2:
+        return None
+    result = {**event, "error": _fit_json_string(error, remaining)}
+    return result if event_size_bytes(result) <= MAX_EVENT_BYTES else None
+
+
+def _set_arg(container: dict[str, Any] | list[Any], key: str | int, text: str) -> None:
+    if isinstance(key, str):
+        assert isinstance(container, dict)
+        container[key] = text
+    else:
+        assert isinstance(container, list)
+        container[key] = text
 
 
 def truncate_tool_call(event: dict[str, Any]) -> dict[str, Any]:
@@ -51,30 +85,32 @@ def truncate_tool_call(event: dict[str, Any]) -> dict[str, Any]:
     result = {**event, "args": copy.deepcopy(event["args"])}
     fields: list[str] = []
     result["truncated"] = {"fields": fields, "originalBytes": original_bytes}
+    size_bytes = event_size_bytes(result)
 
-    def shrink(container: dict | list, key: str | int, path: str, text: str) -> None:
+    def shrink(container: dict[str, Any] | list[Any], key: str | int, path: str, text: str) -> None:
+        nonlocal size_bytes
+        size_bytes += len(json.dumps(path)) + (2 if fields else 0)
         fields.append(path)
-        low, high = 0, len(text)
-        while low < high:
-            mid = (low + high + 1) // 2
-            container[key] = text[:mid]
-            if event_size_bytes(result) <= MAX_EVENT_BYTES:
-                low = mid
-            else:
-                high = mid - 1
-        container[key] = text[:low]
+        without_text_bytes = size_bytes - len(json.dumps(text))
+        replacement = (
+            _fit_json_string(text, MAX_EVENT_BYTES - without_text_bytes)
+            if without_text_bytes + 2 <= MAX_EVENT_BYTES
+            else ""
+        )
+        _set_arg(container, key, replacement)
+        size_bytes = without_text_bytes + len(json.dumps(replacement))
 
     output = result.get("output")
     if isinstance(output, str) and output:
         shrink(result, "output", "output", output)
 
-    if event_size_bytes(result) > MAX_EVENT_BYTES:
+    if size_bytes > MAX_EVENT_BYTES:
         candidates = sorted(
             _arg_strings(result["args"]), key=lambda item: len(json.dumps(item[3])), reverse=True
         )
         for container, key, path, text in candidates:
             shrink(container, key, path, text)
-            if event_size_bytes(result) <= MAX_EVENT_BYTES:
+            if size_bytes <= MAX_EVENT_BYTES:
                 break
 
     if event_size_bytes(result) > MAX_EVENT_BYTES:

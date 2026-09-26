@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from sandbox_runtime import event_size
 from sandbox_runtime.event_size import MAX_EVENT_BYTES, truncate_tool_call
 
 
@@ -122,3 +123,31 @@ def test_protected_path_too_large_to_fit_raises_instead_of_corrupting_it():
 
     with pytest.raises(ValueError, match="protected"):
         truncate_tool_call(event)
+
+
+def test_nested_file_content_can_shrink_without_changing_its_path():
+    event = tool_call(args={"file": {"path": "/tmp/a", "content": "x" * MAX_EVENT_BYTES}})
+
+    result = truncate_tool_call(event)
+
+    assert result["truncated"]["fields"] == ["args.file.content"]
+    assert result["args"]["file"]["path"] == "/tmp/a"
+    assert encoded_size(result) <= MAX_EVENT_BYTES
+
+
+def test_fragmented_args_do_not_reserialize_the_whole_event_per_field(monkeypatch):
+    event = tool_call(args={f"part_{i}": "x" * 1_000 for i in range(1_500)})
+    original = event_size.event_size_bytes
+    calls = 0
+
+    def count_size(value):
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    monkeypatch.setattr(event_size, "event_size_bytes", count_size)
+    result = truncate_tool_call(event)
+
+    assert encoded_size(result) <= MAX_EVENT_BYTES
+    assert len(result["truncated"]["fields"]) > 100
+    assert calls <= 4
