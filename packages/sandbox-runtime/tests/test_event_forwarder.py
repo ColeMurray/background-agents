@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.event_size import MAX_EVENT_FRAME_BYTES, event_size_bytes
+from sandbox_runtime.event_size import MAX_EVENT_BYTES, event_size_bytes
 from tests.event_forwarder_fakes import (
     hung_ws,
     make_forwarder,
@@ -846,16 +846,16 @@ class TestOversizedEvents:
                 "messageId": "msg-1",
                 "status": "completed",
                 "args": {"filePath": "/tmp/report"},
-                "output": "x" * (MAX_EVENT_FRAME_BYTES + 1),
+                "output": "x" * (MAX_EVENT_BYTES + 1),
             }
         )
 
         assert delivered is True
         [event] = sent_events(ws)
         assert event["truncated"]["fields"] == ["output"]
-        assert event["truncated"]["originalBytes"] > MAX_EVENT_FRAME_BYTES
+        assert event["truncated"]["originalBytes"] > MAX_EVENT_BYTES
         assert event["args"]["filePath"] == "/tmp/report"
-        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_FRAME_BYTES
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
 
     @pytest.mark.asyncio
     async def test_buffered_tool_call_is_truncated_before_reconnect(self):
@@ -866,7 +866,7 @@ class TestOversizedEvents:
                 "tool": "Write",
                 "callId": "call-1",
                 "messageId": "msg-1",
-                "args": {"path": "/tmp/report", "content": "x" * MAX_EVENT_FRAME_BYTES},
+                "args": {"path": "/tmp/report", "content": "x" * MAX_EVENT_BYTES},
             }
         )
 
@@ -874,7 +874,7 @@ class TestOversizedEvents:
         ws = open_ws()
         await forwarder.bind(ws)
         assert len(sent_events(ws)) == 1
-        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_FRAME_BYTES
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
 
     @pytest.mark.asyncio
     async def test_oversized_non_tool_event_warns_once_and_does_not_close_socket(self):
@@ -882,7 +882,7 @@ class TestOversizedEvents:
         ws = open_ws()
         await forwarder.bind(ws)
 
-        event = {"type": "token", "content": "x" * MAX_EVENT_FRAME_BYTES}
+        event = {"type": "token", "content": "x" * MAX_EVENT_BYTES}
         delivered = await forwarder.send(event)
 
         assert delivered is False
@@ -908,7 +908,7 @@ class TestOversizedEvents:
             "tool": "Read",
             "callId": "call-1",
             "messageId": "msg-1",
-            "args": {"filePath": "p" * MAX_EVENT_FRAME_BYTES},
+            "args": {"filePath": "p" * MAX_EVENT_BYTES},
         }
         delivered = await forwarder.send(event)
 

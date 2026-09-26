@@ -4,10 +4,11 @@ import copy
 import json
 from typing import Any, Final
 
-# The Node host caps inbound messages at 1 MiB (node/websocket-upgrade.ts).
-# Cloudflare allows 32 MiB received WebSocket messages, but SQLite strings/rows
-# are limited to 2 MB: https://developers.cloudflare.com/durable-objects/platform/limits/
-MAX_EVENT_FRAME_BYTES: Final = 512 * 1024
+# Keep event values below the Durable Object SQLite 2 MB string/BLOB/row limit:
+# https://developers.cloudflare.com/durable-objects/platform/limits/#sql-storage-limits
+# This also fits the Node host's 1 MiB WebSocket message limit:
+# packages/control-plane/src/node/websocket-upgrade.ts:34
+MAX_EVENT_BYTES: Final = 1_000_000
 
 _PATH_KEYS: Final = frozenset(
     {"path", "filePath", "filepath", "file_path", "fileName", "filename", "file"}
@@ -44,7 +45,7 @@ def truncate_tool_call(event: dict[str, Any]) -> dict[str, Any]:
     caller warn and decline to send the untransmittable event.
     """
     original_bytes = event_size_bytes(event)
-    if original_bytes <= MAX_EVENT_FRAME_BYTES:
+    if original_bytes <= MAX_EVENT_BYTES:
         return event
 
     result = {**event, "args": copy.deepcopy(event["args"])}
@@ -57,7 +58,7 @@ def truncate_tool_call(event: dict[str, Any]) -> dict[str, Any]:
         while low < high:
             mid = (low + high + 1) // 2
             container[key] = text[:mid]
-            if event_size_bytes(result) <= MAX_EVENT_FRAME_BYTES:
+            if event_size_bytes(result) <= MAX_EVENT_BYTES:
                 low = mid
             else:
                 high = mid - 1
@@ -67,15 +68,15 @@ def truncate_tool_call(event: dict[str, Any]) -> dict[str, Any]:
     if isinstance(output, str) and output:
         shrink(result, "output", "output", output)
 
-    if event_size_bytes(result) > MAX_EVENT_FRAME_BYTES:
+    if event_size_bytes(result) > MAX_EVENT_BYTES:
         candidates = sorted(
             _arg_strings(result["args"]), key=lambda item: len(json.dumps(item[3])), reverse=True
         )
         for container, key, path, text in candidates:
             shrink(container, key, path, text)
-            if event_size_bytes(result) <= MAX_EVENT_FRAME_BYTES:
+            if event_size_bytes(result) <= MAX_EVENT_BYTES:
                 break
 
-    if event_size_bytes(result) > MAX_EVENT_FRAME_BYTES:
+    if event_size_bytes(result) > MAX_EVENT_BYTES:
         raise ValueError("tool_call protected fields exceed the event frame budget")
     return result

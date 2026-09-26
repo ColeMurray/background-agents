@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from websockets import State
 
-from .event_size import MAX_EVENT_FRAME_BYTES, event_size_bytes, truncate_tool_call
+from .event_size import MAX_EVENT_BYTES, event_size_bytes, truncate_tool_call
 
 if TYPE_CHECKING:
     from websockets import ClientConnection
@@ -145,7 +145,7 @@ class BufferedEventForwarder:
             event["ackId"] = self._make_ack_id(event)
 
         size_bytes = event_size_bytes(event)
-        if size_bytes > MAX_EVENT_FRAME_BYTES:
+        if size_bytes > MAX_EVENT_BYTES:
             if event_type == "tool_call":
                 try:
                     event = truncate_tool_call(event)
