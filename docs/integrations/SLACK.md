@@ -5,10 +5,9 @@ the same Slack thread, set personal defaults in App Home, and ask agents to post
 that workflow is enabled.
 
 This guide is for people using the Slack integration day to day. If you are installing the Slack app
-or deploying the worker, start with
-[Getting Started](../GETTING_STARTED.md#step-4-create-slack-app-optional) and
-[Complete Slack Setup](../GETTING_STARTED.md#step-7b-complete-slack-setup-if-using-slack). Optional
-notification controls and safety notes are covered near the end.
+or deploying the worker, start with [Getting Started](../GETTING_STARTED.md#create-the-slack-app)
+and [Complete Slack Setup](../GETTING_STARTED.md#complete-slack-setup). Optional notification
+controls and safety notes are covered near the end.
 
 ---
 
@@ -434,7 +433,7 @@ mentions the bot. An ordinary channel message only starts a session when it matc
 Slack Message automation; verify its watched channel and conditions.
 
 If setup was just changed, confirm the Slack app event subscriptions and interactivity URLs in
-[Complete Slack Setup](../GETTING_STARTED.md#step-7b-complete-slack-setup-if-using-slack).
+[Complete Slack Setup](../GETTING_STARTED.md#complete-slack-setup).
 
 ### DMs do not start sessions
 
