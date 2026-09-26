@@ -364,7 +364,8 @@ export class SessionStatusService {
    * Writes are last-write-wins, so at most one is in flight, and each reads
    * the session when it runs: a request made during a write only marks it
    * stale, and the write goes round again with the newer state instead of
-   * racing it to D1.
+   * racing it to D1. A failed pass still goes round when a newer request
+   * arrived during it; the first failure is reported once the writer drains.
    */
   private syncSessionMetrics(sessionId: string): void {
     if (this.metricsSyncInFlight) {
@@ -376,14 +377,17 @@ export class SessionStatusService {
     this.metricsSyncInFlight = true;
     this.backgroundTasks.submit(
       async () => {
-        try {
-          do {
-            this.metricsSyncStale = false;
+        let failure: { error: unknown } | null = null;
+        do {
+          this.metricsSyncStale = false;
+          try {
             await this.projectSessionMetrics(sessionId);
-          } while (this.metricsSyncStale);
-        } finally {
-          this.metricsSyncInFlight = false;
-        }
+          } catch (error) {
+            failure ??= { error };
+          }
+        } while (this.metricsSyncStale);
+        this.metricsSyncInFlight = false;
+        if (failure) throw failure.error;
       },
       {
         name: "session_index.update_metrics",
