@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SandboxShutdownState,
@@ -333,5 +333,62 @@ describe("SandboxShutdownBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
     expect(await screen.findByText("Recovery is no longer eligible")).toBeInTheDocument();
     expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
+  });
+
+  describe("recovery message lifetime", () => {
+    const failed: SandboxShutdownState = {
+      phase: "failed",
+      expiresAtMs: 2,
+      drainAtMs: 1,
+      availableRecoveryActions: ["retry"],
+    };
+    const unconfirmed = () =>
+      vi.fn(async () => ({ ok: false as const, reason: "timeout" as const }));
+
+    it("drops a stale message when a newer failure phase arrives", async () => {
+      const onRecover = unconfirmed();
+      const { rerender } = render(<Banner shutdown={failed} onRecover={onRecover} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+      expect(await screen.findByText(/Recovery was not confirmed/)).toBeInTheDocument();
+
+      rerender(<Banner shutdown={{ ...failed, phase: "unknown" }} onRecover={onRecover} />);
+
+      expect(screen.getByRole("alert")).toHaveTextContent("could not be confirmed");
+      expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
+    });
+
+    it("does not resurface a stale message after a routine phase in between", async () => {
+      const onRecover = unconfirmed();
+      const { rerender } = render(<Banner shutdown={failed} onRecover={onRecover} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+      expect(await screen.findByText(/Recovery was not confirmed/)).toBeInTheDocument();
+
+      rerender(<Banner shutdown={{ ...failed, phase: "restoring" }} onRecover={onRecover} />);
+      rerender(<Banner shutdown={failed} onRecover={onRecover} />);
+
+      expect(screen.getByRole("button", { name: "Retry shutdown" })).toBeEnabled();
+      expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
+    });
+
+    it("ignores a result that settles after the phase changed", async () => {
+      let settle!: (result: { ok: false; reason: "timeout" }) => void;
+      const onRecover = vi.fn(
+        () =>
+          new Promise<{ ok: false; reason: "timeout" }>((resolve) => {
+            settle = resolve;
+          })
+      );
+      const { rerender } = render(<Banner shutdown={failed} onRecover={onRecover} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+      expect(screen.getByRole("button", { name: "Retrying shutdown…" })).toBeDisabled();
+
+      rerender(<Banner shutdown={{ ...failed, phase: "unknown" }} onRecover={onRecover} />);
+      await act(async () => settle({ ok: false, reason: "timeout" }));
+
+      expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
+    });
   });
 });
