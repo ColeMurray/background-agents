@@ -28,8 +28,9 @@ Use TodoWrite to create a checklist tracking these phases:
 9. Post-deployment Slack setup (if enabled)
 10. Post-deployment GitHub Bot setup (if enabled)
 11. Web app deployment
-12. Verification
-13. CI/CD setup (optional)
+12. Workspace Owner bootstrap
+13. Verification
+14. CI/CD setup (optional)
 
 ## Phase 1: Initial Questions
 
@@ -50,7 +51,13 @@ Use AskUserQuestion to gather:
 4. **Slack integration** - Yes or No
 5. **GitHub bot integration** - Yes or No (automated PR reviews and comment-triggered actions)
 6. **Sign-in providers** - GitHub, Google, or both. At least one is required.
-7. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
+7. **Who may sign in** - Collect GitHub usernames, verified email domains, exact verified email
+   addresses, and/or GitHub organizations to allow. Ask about all providers selected above: Google
+   sign-in requires an email or domain allowlist unless access is explicitly open. Explain that
+   these rules are ORed and everyone authenticated can sign in only if the user explicitly opts into
+   `unsafe_allow_all_users = true` with no allowlists. Prefer exact emails over a shared domain such
+   as gmail.com.
+8. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
    Anthropic
 
 ## Phase 2: Repository Setup
@@ -61,7 +68,7 @@ Execute these commands (substitute values from Phase 1):
 mkdir -p {directory_path}
 gh repo create {github_account}/open-inspect-{name} --private --description "Open-Inspect deployment"
 cd {directory_path}
-git clone git@github.com:ColeMurray/open-inspect.git .
+git clone git@github.com:ColeMurray/background-agents.git .
 git remote rename origin upstream
 git remote add origin git@github.com:{github_account}/open-inspect-{name}.git
 git push -u origin main
@@ -82,7 +89,8 @@ Tell the user:
   `*.YOUR-SUBDOMAIN.workers.dev`
 - **API Token**: Create at https://dash.cloudflare.com/profile/api-tokens with template "Edit
   Cloudflare Workers" + permissions for Workers KV Storage (Edit), Workers R2 Storage (Edit), D1
-  (Edit)
+  (Edit), Queues (Edit). For a Cloudflare web app with a custom domain, also grant zone-level
+  Workers Routes (Edit).
 
 ### R2 Bucket
 
@@ -90,7 +98,7 @@ Check wrangler login status, then create bucket:
 
 ```bash
 wrangler whoami
-wrangler r2 bucket create open-inspect-{name}-tf-state
+wrangler r2 bucket create open-inspect-terraform-state
 ```
 
 Tell user to create R2 API Token at R2 → Overview → Manage R2 API Tokens with "Object Read & Write"
@@ -134,17 +142,19 @@ user selected GitHub:
 5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
    users"): `{deployed-web-app-url}/api/auth/callback/github`
    - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
-6. **Repository permissions**: Contents (Read & Write), Pull requests (Read & Write), Metadata
-   (Read-only), and Issues (Read & Write) only if the GitHub bot is enabled. Pull requests
-   permission also authorizes creating and applying labels to session-created pull requests;
-   labeling does not require Issues permission.
-7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
-   (Read-only)
-8. Create app, note **App ID**
-9. If GitHub sign-in is selected, generate a **Client Secret** and note the **Client ID** and
-   **Client Secret**. Otherwise leave both Terraform values empty.
-10. Generate **Private Key** (downloads .pem file)
-11. Install app on account, note **Installation ID** from URL
+6. **Repository permissions**: Actions (Read-only), Checks (Read-only), Contents (Read & Write),
+   Pull requests (Read & Write), Metadata (Read-only), and Issues (Read & Write) if the GitHub bot
+   is enabled. Pull requests permission also authorizes creating and applying labels to
+   session-created pull requests; labeling does not require Issues permission.
+7. If GitHub organizations are allowlisted, set **Organization permissions**: Members (Read-only).
+   Existing Apps need the permission change approved on their installations.
+8. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
+   (Read-only). Existing Apps need the permission change approved on their installations.
+9. Create app, note **App ID**
+10. If GitHub sign-in is selected, generate a **Client Secret** and note the **Client ID** and
+    **Client Secret**. Otherwise leave both Terraform values empty.
+11. Generate **Private Key** (downloads .pem file)
+12. Install app on account, note **Installation ID** from URL
 
 After receiving the .pem path, convert to PKCS#8:
 
@@ -204,7 +214,6 @@ to Slack. Reinstall the app whenever either scope is added to an existing instal
 ```bash
 echo "token_encryption_key: $(openssl rand -base64 32)"
 echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
-echo "internal_callback_secret: $(openssl rand -base64 32)"
 echo "nextauth_secret: $(openssl rand -base64 32)"
 echo "modal_api_secret: $(openssl rand -hex 32)"
 echo "github_webhook_secret: $(openssl rand -hex 32)"  # Only if GitHub bot enabled
@@ -212,12 +221,12 @@ echo "github_webhook_secret: $(openssl rand -hex 32)"  # Only if GitHub bot enab
 
 ## Phase 7: Terraform Configuration
 
-Create `terraform/environments/production/backend.tfvars`:
+Create `terraform/environments/production/backend.tfvars`. The bucket is already fixed as
+`open-inspect-terraform-state` in `backend.tf`; do not override it here:
 
 ```hcl
 access_key = "{r2_access_key}"
 secret_key = "{r2_secret_key}"
-bucket     = "open-inspect-{name}-tf-state"
 endpoints = {
   s3 = "https://{cloudflare_account_id}.r2.cloudflarestorage.com"
 }
@@ -229,6 +238,23 @@ Create `terraform/environments/production/terraform.tfvars` with all collected v
 enable_durable_object_bindings = false
 enable_service_bindings        = false
 ```
+
+Write the Phase 1 admission answers into these Terraform inputs (comma-separated strings; leave
+unused lists empty). Unless explicitly opting into open access, set at least one allowlist before
+applying, including for GitHub-only deployments. Google-only or combined GitHub/Google sign-in needs
+`allowed_emails` or `allowed_email_domains`; GitHub-only may also use usernames or organizations:
+
+```hcl
+allowed_users          = "{github_usernames_or_empty}"
+allowed_email_domains  = "{verified_email_domains_or_empty}"
+allowed_emails         = "{exact_verified_emails_or_empty}"
+allowed_github_orgs    = "{github_organizations_or_empty}"
+unsafe_allow_all_users = false
+```
+
+Only set `unsafe_allow_all_users = true` if the user explicitly chooses open access with all four
+allowlists empty. This admits any authenticated user. Do not assume GitHub-specific allowlists admit
+Google users.
 
 If GitHub bot is enabled, also set:
 
@@ -315,8 +341,8 @@ After Terraform deployment, guide user:
 3. **Webhook URL**:
    `https://open-inspect-github-bot-{deployment_name}.{subdomain}.workers.dev/webhooks/github`
 4. **Webhook secret**: Enter the `github_webhook_secret` value
-5. Under **Subscribe to events**, check: **Pull requests**, **Issue comments**, **Pull request
-   review comments**
+5. Under **Subscribe to events**, check: **Pull requests**, **Issues**, **Issue comments**, **Pull
+   request reviews**, **Pull request review comments**, **Check suites**, **Workflow runs**
 6. Save changes
 
 ### Find Bot Username
@@ -332,12 +358,43 @@ terraform.tfvars.
 
 ## Phase 11: Web App Deployment
 
+If `web_platform = "cloudflare"`, Terraform deploys the web app; no manual step is needed. If
+`web_platform = "vercel"`, deploy from the repository root:
+
 ```bash
 npx vercel link --project open-inspect-{deployment_name}
 npx vercel --prod
 ```
 
-## Phase 12: Verification
+## Phase 12: Bootstrap the Workspace Owner
+
+After the web app is deployed, ask the intended Owner to sign in once, then open
+`{web-app-url}/api/auth/get-session` while signed in and record their `user.id` (32 lowercase hex
+characters, not an email). From the repository root, run the remote D1 dry run:
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "{canonical-user-id}"
+```
+
+The command uses `wrangler login` or `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. If the
+preflight status is `ready`, review the target and execute:
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "{canonical-user-id}" \
+  --execute
+```
+
+If the preflight is `no-op`, the target is already the unsuspended Owner; skip execution. If it is
+`refused`, stop and resolve the reported reason (such as a missing/suspended user, invalid role
+assignment, or another unsuspended Owner). There is no force option. After execution, rerun the dry
+run and expect `no-op`. Do not use `/health` to verify ownership: it reports service liveness, not
+Owner status, even if the bootstrap command suggests checking it.
+
+## Phase 13: Verification
 
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
@@ -348,14 +405,23 @@ curl -I "$(terraform output -raw web_app_url)"
 Present a deployment summary table. Instruct the user to test: visit the web app, sign in with each
 configured provider, create a session, and send a prompt.
 
-## Phase 13: CI/CD Setup (Optional)
+## Phase 14: CI/CD Setup (Optional)
 
-Ask if user wants GitHub Actions CI/CD. If yes, use `gh secret set` for all required secrets.
+Ask if user wants GitHub Actions CI/CD. If yes, follow Step 10 of `docs/GETTING_STARTED.md` for the
+required GitHub Actions variables and secrets. Configure the same admission allowlists in CI
+(`ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_EMAILS`, `ALLOWED_GITHUB_ORGS`, or the explicit
+`UNSAFE_ALLOW_ALL_USERS` opt-in), or subsequent Terraform plans will fail. CI uses the same
+`open-inspect-terraform-state` R2 bucket as local Terraform.
 
 ## Error Handling
 
 - **"redirect_uri is not associated"**: Callback URL mismatch - update GitHub App settings
 - **Durable Object errors**: Must follow two-phase deployment
+- **"At least one access control allowlist must be configured"**: Set an appropriate `allowed_*`
+  Terraform value; Google sign-in requires an email/domain rule. Use `unsafe_allow_all_users` only
+  if open access is intentional. Set the matching `ALLOWED_*` CI variables/secrets too.
+- **Queue creation or binding permission errors**: Grant Account | Queues | Edit to the Cloudflare
+  API token and rerun `terraform apply`.
 - **Slack bot not responding**: Check Event Subscriptions URL verified, bot invited to channel,
   reinstall if scopes changed
 - **GitHub bot not responding**: Check webhook URL, secret, `enable_github_bot = true`, and
