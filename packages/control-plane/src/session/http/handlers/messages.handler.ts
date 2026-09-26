@@ -12,6 +12,7 @@ import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import { MAX_STEP_USAGE_PAGE_SIZE } from "../../usage-repository";
+import { sessionTraceIncludeSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
@@ -21,7 +22,7 @@ import {
 } from "../../message-queue";
 
 /**
- * HTTP boundary for the prompt/event/artifact/message/usage endpoints: parses
+ * HTTP boundary for the prompt/event/artifact/message/usage/trace endpoints: parses
  * requests, delegates to the message service, and maps thrown domain errors
  * to statuses.
  */
@@ -144,6 +145,18 @@ export class MessagesHandler {
     }
 
     return Response.json(this.messageService.listUsage({ cursor: cursorResult.cursor, limit }));
+  }
+
+  exportTrace(url: URL): Response {
+    const include = sessionTraceIncludeSchema.safeParse(url.searchParams.get("include") ?? "");
+    if (!include.success) {
+      return Response.json(
+        { error: include.error.issues[0]?.message ?? "Invalid include" },
+        { status: 400 }
+      );
+    }
+
+    return Response.json(this.messageService.exportTrace(include.data));
   }
 }
 

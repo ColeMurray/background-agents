@@ -62,6 +62,7 @@ function createService() {
       messageQueue,
       stopExecution,
       parseArtifactMetadata,
+      transaction: (closure) => closure(),
     }),
     repository,
     eventRepository,

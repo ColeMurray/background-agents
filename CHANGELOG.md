@@ -8,12 +8,9 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 Bulk session export accepts `include` as a comma-separated list of `messages`, `events`, and
 `usage`, so one session line can carry the prompt, the persisted timeline events, and per-step token
-usage. The included collections share one 4 MiB byte budget and one page cap per session, and any
-include limits the request to 5 sessions per page.
-
-### Changed
-
-Messages included in the bulk session export are now listed oldest first, matching events and usage.
+usage. Each session's included collections are read in one storage snapshot and share one 4 MiB byte
+budget and one page cap, and any include limits the request to 5 sessions per page. Messages keep
+their existing newest-first order; events and usage are listed in timeline order.
 
 ## September 25, 2026
 

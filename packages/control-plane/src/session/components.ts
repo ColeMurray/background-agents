@@ -527,6 +527,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     stopExecution: () => executionStop.stop(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
+    transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
   const budgetService = new SessionBudgetService(
@@ -860,6 +861,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
     listUsage: (_request, url) => messagesHandler.listUsage(url),
+    exportTrace: (_request, url) => messagesHandler.exportTrace(url),
     createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),
     pullRequestArtifactSnapshot: (request, url) =>
       pullRequestHandler.pullRequestArtifactSnapshot(request, url),

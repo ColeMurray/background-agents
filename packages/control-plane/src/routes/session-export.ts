@@ -3,16 +3,13 @@
  *
  * Each line is a complete session, a session-scoped include error, a page
  * cursor, or a terminal stream error. `include` inlines a session's messages,
- * timeline events and per-step usage, each oldest first; together they share
- * one byte budget and one page cap per session. A failed collection never
+ * timeline events and per-step usage, which the session runtime reads in one
+ * storage snapshot under one byte budget and page cap. A failed read never
  * turns a partial trace into a successful session record. Schema 1 session
  * lines gain additive fields; consumers must ignore fields they do not
  * recognize.
  */
 
-import type { StepUsage } from "@open-inspect/shared";
-import type { EventResponse } from "@open-inspect/shared/types/sandbox-events";
-import type { SessionMessage } from "@open-inspect/shared/types/sessions";
 import { Hono } from "hono";
 import { z } from "zod";
 import { encodeSessionExportCursor, parseSessionExportCursor } from "../db/session-export-cursor";
@@ -22,11 +19,12 @@ import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
+  MAX_INCLUDED_BYTES_PER_SESSION,
   SessionInternalPaths,
-  sessionEventPageSchema,
-  sessionMessagePageSchema,
-  stepUsagePageSchema,
-  type SessionInternalPath,
+  sessionTraceExportSchema,
+  sessionTraceIncludeSchema,
+  type SessionTrace,
+  type SessionTraceCollection,
 } from "../session/contracts";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
@@ -38,11 +36,7 @@ export const EXPORT_SCHEMA_VERSION = 1;
 const DEFAULT_EXPORT_LIMIT = 100;
 const MAX_EXPORT_LIMIT = 500;
 export const MAX_INCLUDED_EXPORT_LIMIT = 5;
-const INCLUDED_PAGE_LIMIT = 100;
-export const MAX_INCLUDED_PAGES_PER_SESSION = 25;
-export const MAX_INCLUDED_BYTES_PER_SESSION = 4 * 1024 * 1024;
-const INCLUDED_PAGE_TIMEOUT_MS = 10_000;
-const INCLUDED_COLLECTIONS = ["messages", "events", "usage"] as const;
+const TRACE_READ_TIMEOUT_MS = 10_000;
 const encoder = new TextEncoder();
 
 function epochMsQuery(paramName: string) {
@@ -73,68 +67,24 @@ const exportQuerySchema = z.object({
       error: `limit must be an integer between 1 and ${MAX_EXPORT_LIMIT}`,
     })
     .optional(),
-  include: z
-    .string()
-    .transform((raw) => raw.split(","))
-    .pipe(
-      z.array(
-        z.enum(INCLUDED_COLLECTIONS, {
-          error: `include must be a comma-separated list of ${INCLUDED_COLLECTIONS.join(", ")}`,
-        })
-      )
-    )
-    .transform((requested) =>
-      INCLUDED_COLLECTIONS.filter((collection) => requested.includes(collection))
-    )
-    .optional(),
+  include: sessionTraceIncludeSchema.optional(),
   createdAfter: epochMsQuery("createdAfter").optional(),
   createdBefore: epochMsQuery("createdBefore").optional(),
 });
 
-type IncludedCollection = (typeof INCLUDED_COLLECTIONS)[number];
-type IncludedCollections = {
-  messages?: SessionMessage[];
-  events?: EventResponse[];
-  usage?: StepUsage[];
-};
-/** One runtime page reduced to its items and the cursor of the page after it. */
-type IncludedPage<T> = { items: T[]; nextCursor: string | null };
-/** What one session's included collections have consumed, together. */
-type IncludedBudget = { pages: number; responseBytes: number; itemBytes: number };
-type IncludedFetchFailure =
+type TraceReadFailure =
   | { ok: false; reason: "http_error"; status: number }
   | {
       ok: false;
       reason: "runtime_failure" | "page_cap_reached" | "message_budget_exceeded";
     };
-type PagesFetchResult<T> = { ok: true; items: T[] } | IncludedFetchFailure;
-type IncludedFetchResult = { ok: true; included: IncludedCollections } | IncludedFetchFailure;
-type BoundedJson = { value: unknown; byteLength: number } | null;
-
-const messagePageSchema = sessionMessagePageSchema.transform(
-  (page): IncludedPage<SessionMessage> => ({
-    items: page.messages,
-    nextCursor: page.hasMore ? page.cursor : null,
-  })
-);
-const eventPageSchema = sessionEventPageSchema.transform(
-  (page): IncludedPage<EventResponse> => ({
-    items: page.events,
-    nextCursor: page.hasMore ? page.cursor : null,
-  })
-);
-const usagePageSchema = stepUsagePageSchema.transform(
-  (page): IncludedPage<StepUsage> => ({
-    items: page.usage,
-    nextCursor: page.hasMore ? page.cursor : null,
-  })
-);
+type TraceReadResult = { ok: true; trace: SessionTrace } | TraceReadFailure;
 
 type SessionExportLine = {
   schemaVersion: typeof EXPORT_SCHEMA_VERSION;
   type: "session";
 } & SessionExportRow &
-  IncludedCollections;
+  SessionTrace;
 type SessionErrorLineBase = {
   schemaVersion: typeof EXPORT_SCHEMA_VERSION;
   type: "session_error";
@@ -159,16 +109,16 @@ function encodeLine(line: ExportLine): Uint8Array {
   return encoder.encode(`${JSON.stringify(line)}\n`);
 }
 
-function sessionLine(row: SessionExportRow, included?: IncludedCollections): SessionExportLine {
+function sessionLine(row: SessionExportRow, trace?: SessionTrace): SessionExportLine {
   return {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     type: "session",
     ...row,
-    ...included,
+    ...trace,
   };
 }
 
-function sessionErrorLine(sessionId: string, failure: IncludedFetchFailure): SessionErrorLine {
+function sessionErrorLine(sessionId: string, failure: TraceReadFailure): SessionErrorLine {
   const line: SessionErrorLineBase = {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     type: "session_error",
@@ -179,133 +129,72 @@ function sessionErrorLine(sessionId: string, failure: IncludedFetchFailure): Ses
     : { ...line, reason: failure.reason };
 }
 
-async function readBoundedJson(response: Response, maxBytes: number): Promise<BoundedJson> {
+async function readBoundedJson(
+  response: Response,
+  maxBytes: number
+): Promise<{ value: unknown } | null> {
   const result = await readBoundedBytes(
     response.body,
     maxBytes,
     response.headers.get("content-length")
   );
   return result.ok
-    ? {
-        value: JSON.parse(new TextDecoder().decode(result.bytes)) as unknown,
-        byteLength: result.bytes.byteLength,
-      }
+    ? { value: JSON.parse(new TextDecoder().decode(result.bytes)) as unknown }
     : null;
 }
 
-/**
- * Reads every page of one runtime collection, charging the session's shared
- * `budget`. Runtime pages run newest first; the items come back oldest first.
- */
-async function fetchAllPages<T>(
+/** Reads one session's included collections from its runtime in a single snapshot. */
+async function readTrace(
   runtime: SessionRuntimeClient,
   sessionId: string,
-  path: SessionInternalPath,
-  pageSchema: z.ZodType<IncludedPage<T>>,
-  budget: IncludedBudget,
+  include: readonly SessionTraceCollection[],
   log: Pick<Logger, "warn">,
   signal: AbortSignal
-): Promise<PagesFetchResult<T>> {
-  const items: T[] = [];
-  const seenCursors = new Set<string>();
-  const logFields = { session_id: sessionId, path };
-  let cursor: string | undefined;
-
+): Promise<TraceReadResult> {
   try {
-    while (budget.pages < MAX_INCLUDED_PAGES_PER_SESSION) {
-      budget.pages++;
-      const search = new URLSearchParams({ limit: String(INCLUDED_PAGE_LIMIT) });
-      if (cursor) search.set("cursor", cursor);
-      const response = await runtime.fetch(
-        sessionId,
-        path,
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(INCLUDED_PAGE_TIMEOUT_MS)]) },
-        `?${search}`
-      );
-      if (!response.ok) {
-        log.warn("session_export.page_failed", { ...logFields, status: response.status });
-        return { ok: false, reason: "http_error", status: response.status };
-      }
-
-      const pageBody = await readBoundedJson(
-        response,
-        MAX_INCLUDED_BYTES_PER_SESSION - budget.responseBytes
-      );
-      if (!pageBody) {
-        log.warn("session_export.budget_exceeded", logFields);
-        return { ok: false, reason: "message_budget_exceeded" };
-      }
-      budget.responseBytes += pageBody.byteLength;
-
-      const parsed = pageSchema.safeParse(pageBody.value);
-      if (!parsed.success) {
-        log.warn("session_export.page_invalid", {
-          ...logFields,
-          error: parsed.error.issues[0]?.message,
-        });
-        return { ok: false, reason: "runtime_failure" };
-      }
-
-      for (const item of parsed.data.items) {
-        budget.itemBytes += encoder.encode(JSON.stringify(item)).byteLength + 1;
-        if (budget.itemBytes > MAX_INCLUDED_BYTES_PER_SESSION) {
-          log.warn("session_export.budget_exceeded", logFields);
-          return { ok: false, reason: "message_budget_exceeded" };
-        }
-        items.push(item);
-      }
-
-      const { nextCursor } = parsed.data;
-      if (nextCursor === null) return { ok: true, items: items.reverse() };
-      if (seenCursors.has(nextCursor)) {
-        log.warn("session_export.cursor_repeated", logFields);
-        return { ok: false, reason: "runtime_failure" };
-      }
-      seenCursors.add(nextCursor);
-      cursor = nextCursor;
+    const response = await runtime.fetch(
+      sessionId,
+      SessionInternalPaths.traceExport,
+      { signal: AbortSignal.any([signal, AbortSignal.timeout(TRACE_READ_TIMEOUT_MS)]) },
+      `?${new URLSearchParams({ include: include.join(",") })}`
+    );
+    if (!response.ok) {
+      log.warn("session_export.trace_read_failed", {
+        session_id: sessionId,
+        status: response.status,
+      });
+      return { ok: false, reason: "http_error", status: response.status };
     }
+
+    const body = await readBoundedJson(response, MAX_INCLUDED_BYTES_PER_SESSION);
+    if (!body) {
+      log.warn("session_export.trace_budget_exceeded", { session_id: sessionId });
+      return { ok: false, reason: "message_budget_exceeded" };
+    }
+
+    const parsed = sessionTraceExportSchema.safeParse(body.value);
+    if (!parsed.success) {
+      log.warn("session_export.trace_invalid", {
+        session_id: sessionId,
+        error: parsed.error.issues[0]?.message,
+      });
+      return { ok: false, reason: "runtime_failure" };
+    }
+    if (!parsed.data.ok) {
+      log.warn("session_export.trace_limit_reached", {
+        session_id: sessionId,
+        reason: parsed.data.reason,
+      });
+    }
+    return parsed.data;
   } catch (caught) {
     if (signal.aborted) throw caught;
-    log.warn("session_export.runtime_failure", {
-      ...logFields,
+    log.warn("session_export.trace_runtime_failure", {
+      session_id: sessionId,
       error: caught instanceof Error ? caught.message : String(caught),
     });
     return { ok: false, reason: "runtime_failure" };
   }
-
-  log.warn("session_export.page_cap_reached", logFields);
-  return { ok: false, reason: "page_cap_reached" };
-}
-
-/** Fetches each included collection in turn against one budget for the session. */
-async function fetchIncluded(
-  runtime: SessionRuntimeClient,
-  sessionId: string,
-  include: readonly IncludedCollection[],
-  log: Pick<Logger, "warn">,
-  signal: AbortSignal
-): Promise<IncludedFetchResult> {
-  const budget: IncludedBudget = { pages: 0, responseBytes: 0, itemBytes: 0 };
-  const fetchPages = <T>(path: SessionInternalPath, pageSchema: z.ZodType<IncludedPage<T>>) =>
-    fetchAllPages(runtime, sessionId, path, pageSchema, budget, log, signal);
-  const included: IncludedCollections = {};
-
-  if (include.includes("messages")) {
-    const result = await fetchPages(SessionInternalPaths.messages, messagePageSchema);
-    if (!result.ok) return result;
-    included.messages = result.items;
-  }
-  if (include.includes("events")) {
-    const result = await fetchPages(SessionInternalPaths.events, eventPageSchema);
-    if (!result.ok) return result;
-    included.events = result.items;
-  }
-  if (include.includes("usage")) {
-    const result = await fetchPages(SessionInternalPaths.usage, usagePageSchema);
-    if (!result.ok) return result;
-    included.usage = result.items;
-  }
-  return { ok: true, included };
 }
 
 async function handleExport(
@@ -362,10 +251,10 @@ async function handleExport(
             return;
           }
 
-          const result = await fetchIncluded(ctx.sessionRuntime, row.id, include, log, signal);
+          const result = await readTrace(ctx.sessionRuntime, row.id, include, log, signal);
           controller.enqueue(
             encodeLine(
-              result.ok ? sessionLine(row, result.included) : sessionErrorLine(row.id, result)
+              result.ok ? sessionLine(row, result.trace) : sessionErrorLine(row.id, result)
             )
           );
           return;

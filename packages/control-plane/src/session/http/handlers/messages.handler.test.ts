@@ -14,6 +14,7 @@ function createHandler() {
     getArtifact: vi.fn(),
     listMessages: vi.fn(),
     listUsage: vi.fn(),
+    exportTrace: vi.fn(),
   } as unknown as MessageService;
 
   const log = {
@@ -516,6 +517,36 @@ describe("MessagesHandler", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "Invalid limit" });
       expect(messageService.listUsage).not.toHaveBeenCalled();
+    }
+  );
+
+  it("exports the requested trace collections in canonical order", async () => {
+    const { handler, messageService } = createHandler();
+    vi.mocked(messageService.exportTrace).mockReturnValue({ ok: true, trace: { usage: [] } });
+
+    const response = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=usage,messages,events")
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, trace: { usage: [] } });
+    expect(messageService.exportTrace).toHaveBeenCalledWith(["messages", "events", "usage"]);
+  });
+
+  it.each(["", "?include=", "?include=prompts", "?include=messages,"])(
+    "rejects trace include %s",
+    async (search) => {
+      const { handler, messageService } = createHandler();
+
+      const response = handler.exportTrace(
+        new URL(`http://internal/internal/trace-export${search}`)
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "include must be a comma-separated list of messages, events, usage",
+      });
+      expect(messageService.exportTrace).not.toHaveBeenCalled();
     }
   );
 

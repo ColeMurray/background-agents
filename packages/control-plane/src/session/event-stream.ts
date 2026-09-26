@@ -114,7 +114,7 @@ function toEventStreamCursor(cursor: EventTimelineCursor): EventStreamCursor {
   };
 }
 
-function toEventResponse(event: EventRow): EventResponse {
+export function toEventResponse(event: EventRow): EventResponse {
   return eventResponseSchema.parse({
     id: event.id,
     type: event.type,
