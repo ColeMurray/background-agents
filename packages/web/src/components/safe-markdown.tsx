@@ -133,7 +133,7 @@ function RepositoryFileMarkdownLink({ href, children, ...props }: ComponentProps
       type="button"
       className="text-accent hover:underline cursor-pointer bg-transparent p-0 border-0 text-left font-[inherit]"
       title={selection.path}
-      onClick={() => fileLinks.open(selection)}
+      onClick={(event) => fileLinks.open(selection, event.currentTarget)}
     >
       {children}
     </button>
