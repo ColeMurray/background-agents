@@ -112,6 +112,7 @@ export interface SessionRun {
   rootSessionId: string;
   title: string | null;
   sessionCount: number;
+  /** Deepest descendant's distance from the root; 0 for a run with no children. */
   maxSpawnDepth: number;
   totalCost: number;
   totalPrs: number;
