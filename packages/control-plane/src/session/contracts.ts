@@ -28,20 +28,6 @@ export const sessionMessagePageSchema = z.discriminatedUnion("hasMore", [
 ]);
 export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 
-export const stepUsagePageSchema = z.discriminatedUnion("hasMore", [
-  z.object({
-    usage: z.array(stepUsageSchema),
-    hasMore: z.literal(true),
-    cursor: z.string().min(1),
-  }),
-  z.object({
-    usage: z.array(stepUsageSchema),
-    hasMore: z.literal(false),
-    cursor: z.string().min(1).optional(),
-  }),
-]);
-export type StepUsagePage = z.infer<typeof stepUsagePageSchema>;
-
 const SESSION_TRACE_COLLECTIONS = ["messages", "events", "usage"] as const;
 export type SessionTraceCollection = (typeof SESSION_TRACE_COLLECTIONS)[number];
 
@@ -100,7 +86,6 @@ export const SessionInternalPaths = {
   events: "/internal/events",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
-  usage: "/internal/usage",
   traceExport: "/internal/trace-export",
   createPr: "/internal/create-pr",
   // Static path + artifactId query param: the router matches paths as exact

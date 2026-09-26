@@ -7,11 +7,9 @@ import {
   type EnqueuePromptRequest,
 } from "../../enqueue-prompt-contract";
 import type { MessageService } from "../../services/message.service";
-import { parseCreatedAtCursor } from "../../../created-at-cursor";
 import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
-import { MAX_STEP_USAGE_PAGE_SIZE } from "../../usage-repository";
 import { sessionTraceIncludeSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
@@ -22,7 +20,7 @@ import {
 } from "../../message-queue";
 
 /**
- * HTTP boundary for the prompt/event/artifact/message/usage/trace endpoints: parses
+ * HTTP boundary for the prompt/event/artifact/message/trace endpoints: parses
  * requests, delegates to the message service, and maps thrown domain errors
  * to statuses.
  */
@@ -127,24 +125,6 @@ export class MessagesHandler {
     const result = this.messageService.listMessages({ cursor: cursorResult.cursor, limit, status });
 
     return Response.json(result);
-  }
-
-  listUsage(url: URL): Response {
-    const limit = parsePageLimit(
-      url.searchParams.get("limit"),
-      MAX_STEP_USAGE_PAGE_SIZE,
-      MAX_STEP_USAGE_PAGE_SIZE
-    );
-    if (limit === null) {
-      return Response.json({ error: "Invalid limit" }, { status: 400 });
-    }
-
-    const cursorResult = parseCreatedAtCursor(url.searchParams.get("cursor"));
-    if (!cursorResult.ok) {
-      return Response.json({ error: cursorResult.error }, { status: 400 });
-    }
-
-    return Response.json(this.messageService.listUsage({ cursor: cursorResult.cursor, limit }));
   }
 
   exportTrace(url: URL): Response {

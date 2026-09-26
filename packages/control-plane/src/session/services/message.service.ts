@@ -18,7 +18,6 @@ import {
   type SessionTrace,
   type SessionTraceCollection,
   type SessionTraceExport,
-  type StepUsagePage,
 } from "../contracts";
 import type { StepUsageCursor, UsageRepository } from "../usage-repository";
 
@@ -33,11 +32,6 @@ export interface ListMessagesRequest {
   cursor: MessageListCursor | null;
   limit: number;
   status: string | null;
-}
-
-export interface ListUsageRequest {
-  cursor: StepUsageCursor | null;
-  limit: number;
 }
 
 interface MessageServiceDeps {
@@ -184,18 +178,6 @@ export class MessageService {
       return { messages: responseMessages, cursor, hasMore: true };
     }
     return { messages: responseMessages, cursor, hasMore: false };
-  }
-
-  listUsage(request: ListUsageRequest): StepUsagePage {
-    const page = this.deps.usageRepository.listStepUsage(request.cursor, request.limit);
-    if (page.nextCursor) {
-      return {
-        usage: page.items,
-        hasMore: true,
-        cursor: encodeCreatedAtCursor(page.nextCursor),
-      };
-    }
-    return { usage: page.items, hasMore: false };
   }
 
   /**
