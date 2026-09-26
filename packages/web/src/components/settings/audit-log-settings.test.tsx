@@ -275,6 +275,16 @@ describe("AuditLogSettings", () => {
     expect(card.getByText("Not recorded")).toBeInTheDocument();
   });
 
+  it("names an access token that recorded no actor", () => {
+    // With no actor snapshot, the principal kind is all the card can show, so
+    // every kind needs its own label rather than a derived one.
+    const card = renderSingle(
+      createEvent("applied", { principalKind: "access-token", actorUserIdSnapshot: null })
+    );
+
+    expect(card.getByText("Access token principal")).toBeInTheDocument();
+  });
+
   it("keeps the raw operation result and metadata inspectable", async () => {
     const card = renderSingle(
       createAuthorizationEvent("authorization.request_allowed", "applied", decisionMetadata(409))

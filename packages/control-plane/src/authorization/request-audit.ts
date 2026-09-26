@@ -5,6 +5,7 @@ import {
   type AuthorizationDecisionMetadataV1,
 } from "@open-inspect/shared/types/audit-events";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import { canonicalUserIdOf } from "../auth/principal";
 import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
 
@@ -66,12 +67,13 @@ export async function auditRouteAuthorizationDecision(input: {
   const allowed = decision.kind === "allowed";
   const requiredPermission =
     decision.kind === "allowed" ? decision.effectivePermissions[0] : decision.failedPermission;
+  // An access token acts as its owner, so the audit row names that person.
+  // `canonicalUserIdOf` keeps this the same resolution the admission path
+  // uses; only the service fallback onto a loaded authorization is local.
   const actorUserId =
-    principal.kind === "user"
-      ? principal.userId
-      : principal.kind === "service"
-        ? (principal.actor?.canonicalUserId ?? input.ctx.authorization?.userId)
-        : null;
+    principal.kind === "service"
+      ? (principal.actor?.canonicalUserId ?? input.ctx.authorization?.userId ?? null)
+      : canonicalUserIdOf(principal);
   const action = allowed
     ? AUTHORIZATION_DECISION_ACTIONS.allowed
     : AUTHORIZATION_DECISION_ACTIONS.denied;

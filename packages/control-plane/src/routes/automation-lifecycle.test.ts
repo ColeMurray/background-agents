@@ -8,7 +8,9 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "../auth/authenticate";
+import type * as GitHubCredentialAuthorityModule from "../source-control/github-credential-authority";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
@@ -26,6 +28,7 @@ import {
   mockSchedulerTrigger,
   mockResolveGitHubCredentialAuthority,
   mockResolveGitHubEnrichmentForRequest,
+  ACCESS_TOKEN_PRINCIPAL,
   sampleRow,
   applyMockDefaults,
   automationRequest,
@@ -216,6 +219,76 @@ describe("automation lifecycle routes", () => {
 
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "Execution authorization required" });
+    });
+
+    it("triggers for an access token, as the owner the automation belongs to", async () => {
+      // Ownership admission accepts the token because a token is its owner, and
+      // the route declares accessTokenWrites so the POST survives the method
+      // gate. Both have to hold; either one missing is a 403.
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger", {
+        principal: ACCESS_TOKEN_PRINCIPAL,
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", undefined);
+    });
+
+    it("triggers for an access token through the real credential resolver", async () => {
+      // The sibling cases above stub the resolver, so a resolver that refuses
+      // access-token principals would still report 201 there. Run the genuine
+      // implementation to keep that failure visible: it throws outside the
+      // scheduler try/catch, which surfaces as a 500 and no launch at all.
+      const { resolveGitHubCredentialAuthority } = await vi.importActual<
+        typeof GitHubCredentialAuthorityModule
+      >("../source-control/github-credential-authority");
+      mockResolveGitHubCredentialAuthority.mockImplementation(resolveGitHubCredentialAuthority);
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockStore.getActiveRunForAutomation.mockResolvedValue(null);
+      mockResolveGitHubEnrichmentForRequest.mockResolvedValue(null);
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger", {
+        principal: ACCESS_TOKEN_PRINCIPAL,
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", undefined);
+    });
+
+    it("refuses an access token an automation it does not own", async () => {
+      // Scoped permissions decide this, exactly as they would for the browser
+      // user: the token inherits its owner's scope, never a wider one.
+      mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: "user-2" });
+
+      const res = await callRoute("POST", "/automations/auto-1/trigger", {
+        principal: ACCESS_TOKEN_PRINCIPAL,
+        permissions: PERMISSION_IDS.filter(
+          (permission) => permission !== "automations.trigger.any"
+        ),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        code: "permission_required",
+        permission: "automations.trigger.own",
+      });
+      expect(mockSchedulerTrigger).not.toHaveBeenCalled();
+    });
+
+    it("leaves pause and resume refused, so a token cannot silence a schedule", async () => {
+      for (const path of ["/automations/auto-1/pause", "/automations/auto-1/resume"]) {
+        mockStore.getById.mockResolvedValue(sampleRow);
+
+        const res = await callRoute("POST", path, { principal: ACCESS_TOKEN_PRINCIPAL });
+
+        expect(res.status, path).toBe(403);
+        await expect(res.json(), path).resolves.toEqual({
+          error: "This credential may only read",
+        });
+      }
     });
 
     it("returns 500 when the scheduler cannot launch the automation", async () => {
