@@ -11,6 +11,21 @@ function insertSession(id: string, createdAt: number) {
     .run();
 }
 
+async function insertDescendant(
+  id: string,
+  parentId: string,
+  rootId: string,
+  createdAt: number,
+  depth: number
+) {
+  await insertSession(id, createdAt);
+  await env.DB.prepare(
+    "UPDATE sessions SET parent_session_id = ?, root_session_id = ?, spawn_depth = ? WHERE id = ?"
+  )
+    .bind(parentId, rootId, depth, id)
+    .run();
+}
+
 describe("SessionExportStore integration", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
@@ -51,6 +66,132 @@ describe("SessionExportStore integration", () => {
     });
 
     expect(result.sessions.map(({ id }) => id)).toEqual(["session-end", "session-start"]);
+  });
+
+  it("windows by root and exports descendants outside createdBefore in depth order", async () => {
+    await insertSession("older-root", 100);
+    await insertSession("root", 200);
+    await insertDescendant("child-later", "root", "root", 500, 1);
+    await insertDescendant("child-earlier", "root", "root", 400, 1);
+    await insertDescendant("grandchild", "child-earlier", "root", 600, 2);
+    await insertDescendant("older-root-child", "older-root", "older-root", 250, 1);
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      scope: "runs",
+      cursor: null,
+      limit: 10,
+      createdAfter: 200,
+      createdBefore: 300,
+    });
+
+    expect(result.sessions.map(({ id, rootSessionId }) => [id, rootSessionId])).toEqual([
+      ["root", "root"],
+      ["child-earlier", "root"],
+      ["child-later", "root"],
+      ["grandchild", "root"],
+    ]);
+    expect(result).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("paginates a seven-session family across three pages without gaps or interleaving", async () => {
+    await insertSession("new-root", 300);
+    await insertSession("root", 200);
+    for (let index = 1; index <= 6; index++) {
+      await insertDescendant(`child-${index}`, "root", "root", 200 + index, 1);
+    }
+    await insertSession("old-root", 100);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const ids: string[] = [];
+    const pages: string[][] = [];
+    let cursor = null;
+    do {
+      const page = await store.list({ scope: "runs", cursor, limit: 3 });
+      const pageIds = page.sessions.map(({ id }) => id);
+      pages.push(pageIds);
+      ids.push(...pageIds);
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(pages).toEqual([
+      ["new-root", "root", "child-1"],
+      ["child-2", "child-3", "child-4"],
+      ["child-5", "child-6", "old-root"],
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps tied root timestamps in root id order across page boundaries", async () => {
+    await insertSession("root-b", 200);
+    await insertDescendant("child-b", "root-b", "root-b", 250, 1);
+    await insertSession("root-a", 200);
+    await insertDescendant("child-a", "root-a", "root-a", 240, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    const second = await store.list({ scope: "runs", cursor: first.nextCursor, limit: 1 });
+    const third = await store.list({ scope: "runs", cursor: second.nextCursor, limit: 1 });
+    const fourth = await store.list({ scope: "runs", cursor: third.nextCursor, limit: 1 });
+
+    expect(
+      [first, second, third, fourth].flatMap((page) => page.sessions.map(({ id }) => id))
+    ).toEqual(["root-a", "child-a", "root-b", "child-b"]);
+    expect(first.nextCursor).toMatchObject({
+      rootCreatedAt: 200,
+      rootSessionId: "root-a",
+      spawnDepth: 0,
+    });
+    expect(fourth.nextCursor).toBeNull();
+  });
+
+  it("uses depth, creation time and id to resume within a run", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("z-child", "root", "root", 210, 1);
+    await insertDescendant("a-child", "root", "root", 210, 1);
+    await insertDescendant("grandchild", "a-child", "root", 205, 2);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const ids: string[] = [];
+    let cursor = null;
+    do {
+      const page = await store.list({ scope: "runs", cursor, limit: 1 });
+      ids.push(...page.sessions.map(({ id }) => id));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(ids).toEqual(["root", "a-child", "z-child", "grandchild"]);
+  });
+
+  it("excludes a child inserted after the first page's snapshot fence", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child-1", "root", "root", 210, 1);
+    await insertDescendant("child-2", "root", "root", 230, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    await insertDescendant("late-child", "root", "root", 220, 1);
+    const second = await store.list({ scope: "runs", cursor: first.nextCursor, limit: 1 });
+    const third = await store.list({ scope: "runs", cursor: second.nextCursor, limit: 1 });
+
+    expect([first, second, third].flatMap((page) => page.sessions.map(({ id }) => id))).toEqual([
+      "root",
+      "child-1",
+      "child-2",
+    ]);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it("excludes orphans whose root row no longer exists", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("orphan", "root", "root", 210, 1);
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("root").run();
+    // Simulate a persisted dangling root despite the legacy delete trigger's re-rooting.
+    await env.DB.prepare("UPDATE sessions SET root_session_id = ? WHERE id = ?")
+      .bind("root", "orphan")
+      .run();
+
+    const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
+      scope: "runs",
+      cursor: null,
+      limit: 10,
+    });
+    expect(result.sessions).toEqual([]);
   });
 
   it("exports child identity, ordered repositories, merged PRs, and projected token totals", async () => {

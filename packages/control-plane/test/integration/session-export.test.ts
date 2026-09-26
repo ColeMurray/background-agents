@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_INCLUDED_BYTES_PER_SESSION } from "../../src/session/contracts";
 import { cleanD1Tables } from "./cleanup";
@@ -41,6 +42,53 @@ function largeTokenEvents(prefix: string, count: number, bytes: number, createdA
 describe("GET /sessions/export with include", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
+
+  it("emits a complete consecutive run across pages with and without include", async () => {
+    const root = await initSession({ title: "root" });
+    await env.DB.prepare("UPDATE sessions SET created_at = ? WHERE id = ?")
+      .bind(200, root.sessionName)
+      .run();
+    const children: string[] = [];
+    for (let index = 1; index <= 6; index++) {
+      const child = await initSession({ title: `child-${index}` });
+      children.push(child.sessionName);
+      await env.DB.prepare(
+        `UPDATE sessions SET parent_session_id = ?, root_session_id = ?, spawn_depth = ?, created_at = ?
+         WHERE id = ?`
+      )
+        .bind(root.sessionName, root.sessionName, 1, 300 + index, child.sessionName)
+        .run();
+    }
+    const older = await initSession({ title: "older root" });
+    await env.DB.prepare("UPDATE sessions SET created_at = ? WHERE id = ?")
+      .bind(100, older.sessionName)
+      .run();
+
+    for (const include of [null, "events"] as const) {
+      const lines: ExportLine[] = [];
+      let cursor: string | null = null;
+      do {
+        const params = new URLSearchParams({ scope: "runs", limit: "3", createdAfter: "200" });
+        if (cursor) params.set("cursor", cursor);
+        if (include) params.set("include", include);
+        const response = await serviceFetch(`https://cp.test/sessions/export?${params}`);
+        expect(response.status).toBe(200);
+        const page = new TextDecoder()
+          .decode(await response.arrayBuffer())
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as ExportLine);
+        lines.push(...page.filter((line) => line.type !== "cursor"));
+        const nextCursor = page.find((line) => line.type === "cursor")?.nextCursor;
+        cursor = typeof nextCursor === "string" ? nextCursor : null;
+      } while (cursor);
+
+      expect(lines.map((line) => line.id)).toEqual([root.sessionName, ...children]);
+      expect(lines.map((line) => line.rootSessionId)).toEqual(Array(7).fill(root.sessionName));
+      if (include)
+        expect(lines.map((line) => line.events)).toEqual(Array.from({ length: 7 }, () => []));
+    }
+  });
 
   it("exports the prompt, tool activity, step usage and outcome the session recorded", async () => {
     const { stub, sessionName } = await initSession({ title: "Run the tests" });

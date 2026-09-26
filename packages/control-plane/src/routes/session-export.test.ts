@@ -19,6 +19,7 @@ import {
 } from "../router.test-support";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { SessionExportRow } from "../db/session-export-store";
+import { encodeRunsExportCursor } from "../db/session-export-cursor";
 import { MAX_INCLUDED_BYTES_PER_SESSION } from "../session/contracts";
 import type { Env } from "../types";
 import { MAX_INCLUDED_EXPORT_LIMIT, sessionExportRoutes } from "./session-export";
@@ -282,7 +283,7 @@ describe("GET /sessions/export", () => {
       updatedAt: 2_000,
     });
     expect(lines[0]).not.toHaveProperty("messages");
-    expect(mocks.list).toHaveBeenCalledWith({ cursor: null, limit: 100 });
+    expect(mocks.list).toHaveBeenCalledWith({ scope: "sessions", cursor: null, limit: 100 });
   });
 
   it("emits a trailing cursor line when more pages remain, and parses it back", async () => {
@@ -305,6 +306,7 @@ describe("GET /sessions/export", () => {
     mocks.list.mockResolvedValue({ sessions: [], hasMore: false, nextCursor: null });
     await callExport({ cursor: "1000:session-1:42" });
     expect(mocks.list).toHaveBeenLastCalledWith({
+      scope: "sessions",
       cursor: { createdAt: 1_000, id: "session-1", snapshotMaxRowId: 42 },
       limit: 100,
     });
@@ -326,7 +328,11 @@ describe("GET /sessions/export", () => {
     expect(sessionId).toBe("session-1");
     expect(path).toBe("/internal/trace-export");
     expect(search).toBe("?include=messages");
-    expect(mocks.list).toHaveBeenCalledWith({ cursor: null, limit: MAX_INCLUDED_EXPORT_LIMIT });
+    expect(mocks.list).toHaveBeenCalledWith({
+      scope: "sessions",
+      cursor: null,
+      limit: MAX_INCLUDED_EXPORT_LIMIT,
+    });
   });
 
   it("inlines the prompt, tool activity, step tokens and outcome on one session line", async () => {
@@ -363,6 +369,51 @@ describe("GET /sessions/export", () => {
     mocks.runtimeFetch.mockResolvedValueOnce(traceResponse({ events: [] }));
     await readLines(await callExport({ include: "events", format: "compact" }));
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
+  });
+
+  it("forwards runs scope, its cursor and root window while retaining include and compact format", async () => {
+    const cursor = {
+      rootCreatedAt: 900,
+      rootSessionId: "root-1",
+      spawnDepth: 1,
+      createdAt: 1_000,
+      id: "session-1",
+      snapshotMaxRowId: 42,
+    };
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: true, nextCursor: cursor });
+    mocks.runtimeFetch.mockResolvedValueOnce(traceResponse({ events: [] }));
+
+    const response = await callExport({
+      scope: "runs",
+      cursor: encodeRunsExportCursor(cursor),
+      createdAfter: "800",
+      createdBefore: "950",
+      include: "events",
+      format: "compact",
+    });
+
+    expect(await readLines(response)).toMatchObject([
+      { type: "session", id: "session-1", events: [] },
+      { type: "cursor", nextCursor: encodeRunsExportCursor(cursor) },
+    ]);
+    expect(mocks.list).toHaveBeenCalledWith({
+      scope: "runs",
+      cursor,
+      createdAfter: 800,
+      createdBefore: 950,
+      limit: MAX_INCLUDED_EXPORT_LIMIT,
+    });
+    expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
+  });
+
+  it("keeps default sessions output byte-identical to explicit scope=sessions", async () => {
+    mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
+    const original = await (await callExport()).text();
+    const explicit = await (await callExport({ scope: "sessions" })).text();
+    expect(original).toBe(
+      `${JSON.stringify({ schemaVersion: 1, type: "session", ...sampleRow })}\n`
+    );
+    expect(explicit).toBe(original);
   });
 
   it("rejects invalid format before reading sessions", async () => {
@@ -413,6 +464,32 @@ describe("GET /sessions/export", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid cursor" });
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scope: "runs", cursor: "1000:session-1:42" },
+    {
+      scope: "sessions",
+      cursor: encodeRunsExportCursor({
+        rootCreatedAt: 900,
+        rootSessionId: "root-1",
+        spawnDepth: 1,
+        createdAt: 1_000,
+        id: "session-1",
+        snapshotMaxRowId: 42,
+      }),
+    },
+  ])("rejects a $scope request with the other scope's cursor", async (query) => {
+    const response = await callExport(query);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid cursor" });
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown scope", async () => {
+    const response = await callExport({ scope: "other" });
+    expect(response.status).toBe(400);
     expect(mocks.list).not.toHaveBeenCalled();
   });
 

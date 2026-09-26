@@ -8,11 +8,20 @@
  * turns a partial trace into a successful session record. Schema 1 session
  * lines gain additive fields; consumers must ignore fields they do not
  * recognize.
+ * With `scope=runs`, root creation time defines the window. Families stay
+ * consecutive across pages, but can cross page boundaries: limit still counts
+ * sessions (at most five with include). Rows whose root no longer exists are
+ * excluded by the root join.
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { encodeSessionExportCursor, parseSessionExportCursor } from "../db/session-export-cursor";
+import {
+  encodeRunsExportCursor,
+  encodeSessionExportCursor,
+  parseRunsExportCursor,
+  parseSessionExportCursor,
+} from "../db/session-export-cursor";
 import { SessionExportStore, type SessionExportRow } from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
 import { readBoundedBytes } from "../http/bounded-body";
@@ -50,17 +59,8 @@ function epochMsQuery(paramName: string) {
 }
 
 const exportQuerySchema = z.object({
-  cursor: z
-    .string()
-    .optional()
-    .transform((raw, context) => {
-      const parsed = parseSessionExportCursor(raw);
-      if (!parsed.ok) {
-        context.addIssue({ code: "custom", message: parsed.error });
-        return z.NEVER;
-      }
-      return parsed.cursor;
-    }),
+  scope: z.enum(["sessions", "runs"]).default("sessions"),
+  cursor: z.string().optional(),
   limit: z
     .string()
     .regex(/^[1-9]\d*$/, { error: "Invalid limit" })
@@ -209,6 +209,11 @@ async function handleExport(
 ): Promise<Response> {
   const query = parseQuery(request, exportQuerySchema);
   if (query instanceof Response) return query;
+  const parsedCursor =
+    query.scope === "runs"
+      ? parseRunsExportCursor(query.cursor)
+      : parseSessionExportCursor(query.cursor);
+  if (!parsedCursor.ok) return error(parsedCursor.error, 400);
 
   const include = query.include ?? [];
   const limit =
@@ -242,7 +247,8 @@ async function handleExport(
 
       try {
         page ??= await store.list({
-          cursor: query.cursor,
+          scope: query.scope,
+          cursor: parsedCursor.cursor,
           limit,
           ...(query.createdAfter === undefined ? {} : { createdAfter: query.createdAfter }),
           ...(query.createdBefore === undefined ? {} : { createdBefore: query.createdBefore }),
@@ -276,7 +282,10 @@ async function handleExport(
             encodeLine({
               schemaVersion: EXPORT_SCHEMA_VERSION,
               type: "cursor",
-              nextCursor: encodeSessionExportCursor(page.nextCursor),
+              nextCursor:
+                "rootCreatedAt" in page.nextCursor
+                  ? encodeRunsExportCursor(page.nextCursor)
+                  : encodeSessionExportCursor(page.nextCursor),
             })
           );
           close(controller);
