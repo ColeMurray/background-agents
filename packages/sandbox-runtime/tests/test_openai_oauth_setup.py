@@ -81,6 +81,34 @@ class TestOpenaiOauthSetup:
 
         assert not _auth_file(tmp_path).exists()
 
+    def test_drops_stale_sentinel_when_provider_is_no_longer_managed(self, tmp_path, monkeypatch):
+        """A snapshot-carried sentinel must not shadow OPENAI_API_KEY."""
+        sup = _make_opencode_server()
+        auth_file = _auth_file(tmp_path)
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text(
+            json.dumps(
+                {
+                    "openai": {
+                        "type": "oauth",
+                        "refresh": "managed-by-control-plane",
+                        "access": "stale",
+                        "expires": 0,
+                    },
+                    "anthropic": {"type": "api", "key": "user-owned"},
+                }
+            )
+        )
+        monkeypatch.delenv("OPENAI_OAUTH_MANAGED", raising=False)
+        monkeypatch.delenv("XAI_OAUTH_MANAGED", raising=False)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            sup._setup_managed_oauth()
+
+        assert json.loads(auth_file.read_text()) == {
+            "anthropic": {"type": "api", "key": "user-owned"}
+        }
+
     def test_sets_secure_permissions(self, tmp_path):
         sup = _make_opencode_server()
 
