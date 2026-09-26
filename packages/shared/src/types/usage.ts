@@ -1,4 +1,5 @@
-import type { HarnessId } from "../harnesses";
+import { z } from "zod";
+import { harnessIdSchema } from "../harnesses";
 import type { TokenUsage } from "./sandbox-events";
 
 export interface NormalizedTokenUsage {
@@ -10,19 +11,27 @@ export interface NormalizedTokenUsage {
   totalTokens: number | null;
 }
 
-export interface StepUsage extends NormalizedTokenUsage {
-  id: string;
-  messageId: string | null;
-  model: string | null;
-  harness: HarnessId | null;
-  stepCostUsd: number | null;
-  messageCostUsd: number | null;
-  isSubtask: boolean;
-  childSessionId: string | null;
-  taskCallId: string | null;
-  reason: string | null;
-  createdAt: number;
-}
+/** `id` and `createdAt` form the page key, so they must be valid cursor parts. */
+export const stepUsageSchema = z.object({
+  id: z.string().min(1),
+  messageId: z.string().nullable(),
+  model: z.string().nullable(),
+  harness: harnessIdSchema.nullable(),
+  inputTokens: z.number().nullable(),
+  outputTokens: z.number().nullable(),
+  reasoningTokens: z.number().nullable(),
+  cacheReadTokens: z.number().nullable(),
+  cacheWriteTokens: z.number().nullable(),
+  totalTokens: z.number().nullable(),
+  stepCostUsd: z.number().nullable(),
+  messageCostUsd: z.number().nullable(),
+  isSubtask: z.boolean(),
+  childSessionId: z.string().nullable(),
+  taskCallId: z.string().nullable(),
+  reason: z.string().nullable(),
+  createdAt: z.number().int().nonnegative(),
+});
+export type StepUsage = z.infer<typeof stepUsageSchema>;
 
 export function normalizeTokenUsage(tokens: TokenUsage | undefined): NormalizedTokenUsage {
   const count = (value: number | undefined): number | null =>

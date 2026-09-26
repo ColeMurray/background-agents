@@ -11,7 +11,8 @@ import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
 import { parseStoredSessionAttachments } from "../session-attachment-resolver";
 import type { MessageListCursor } from "../message-cursor";
-import type { SessionMessagePage } from "../contracts";
+import type { SessionMessagePage, StepUsagePage } from "../contracts";
+import type { StepUsageCursor, UsageRepository } from "../usage-repository";
 
 export type ListEventsRequest = SessionEventListRequest;
 
@@ -21,10 +22,16 @@ export interface ListMessagesRequest {
   status: string | null;
 }
 
+export interface ListUsageRequest {
+  cursor: StepUsageCursor | null;
+  limit: number;
+}
+
 interface MessageServiceDeps {
   repository: MessageRepository;
   eventRepository: EventRepository;
   artifactRepository: ArtifactRepository;
+  usageRepository: UsageRepository;
   messageQueue: SessionMessageQueue;
   stopExecution: () => Promise<void>;
   parseArtifactMetadata: (
@@ -114,5 +121,17 @@ export class MessageService {
       return { messages: responseMessages, cursor, hasMore: true };
     }
     return { messages: responseMessages, cursor, hasMore: false };
+  }
+
+  listUsage(request: ListUsageRequest): StepUsagePage {
+    const page = this.deps.usageRepository.listStepUsage(request.cursor, request.limit);
+    if (page.nextCursor) {
+      return {
+        usage: page.items,
+        hasMore: true,
+        cursor: encodeCreatedAtCursor(page.nextCursor),
+      };
+    }
+    return { usage: page.items, hasMore: false };
   }
 }

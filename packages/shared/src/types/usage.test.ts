@@ -1,6 +1,50 @@
 import { describe, expect, it } from "vitest";
 import { sandboxEventSchema, tokenUsageSchema } from "./sandbox-events";
-import { normalizeTokenUsage } from "./usage";
+import { normalizeTokenUsage, stepUsageSchema, type StepUsage } from "./usage";
+
+const stepUsage: StepUsage = {
+  id: "step-1",
+  messageId: "message-1",
+  model: "anthropic/claude-sonnet-5",
+  harness: "opencode",
+  inputTokens: 40,
+  outputTokens: null,
+  reasoningTokens: null,
+  cacheReadTokens: 8,
+  cacheWriteTokens: null,
+  totalTokens: 48,
+  stepCostUsd: 0.01,
+  messageCostUsd: null,
+  isSubtask: false,
+  childSessionId: null,
+  taskCallId: null,
+  reason: "tool-calls",
+  createdAt: 1000,
+};
+
+describe("stepUsageSchema", () => {
+  it("accepts a step usage row with unknown counts left null", () => {
+    expect(stepUsageSchema.parse(stepUsage)).toEqual(stepUsage);
+  });
+
+  it("rejects a harness outside the catalog", () => {
+    expect(stepUsageSchema.safeParse({ ...stepUsage, harness: "unknown" }).success).toBe(false);
+  });
+
+  it("rejects a row without an id", () => {
+    const { id: _id, ...withoutId } = stepUsage;
+    expect(stepUsageSchema.safeParse(withoutId).success).toBe(false);
+  });
+
+  it.each([
+    ["an empty id", { id: "" }],
+    ["a negative createdAt", { createdAt: -1 }],
+    ["a fractional createdAt", { createdAt: 1.5 }],
+    ["an unsafe createdAt", { createdAt: Number.MAX_SAFE_INTEGER + 1 }],
+  ])("rejects %s, which cannot continue a page", (_case, key) => {
+    expect(stepUsageSchema.safeParse({ ...stepUsage, ...key }).success).toBe(false);
+  });
+});
 
 describe("normalizeTokenUsage", () => {
   it("treats a bare number as a total without inventing parts", () => {

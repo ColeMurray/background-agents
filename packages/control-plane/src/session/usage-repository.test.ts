@@ -106,9 +106,9 @@ describe("UsageRepository", () => {
     expect(
       usage.listStepUsage(null, 10).items.map(({ id, stepCostUsd }) => [id, stepCostUsd])
     ).toEqual([
-      ["negative", null],
-      ["non-finite", null],
       ["zero", 0],
+      ["non-finite", null],
+      ["negative", null],
     ]);
   });
 
@@ -167,10 +167,10 @@ describe("UsageRepository", () => {
       cacheWriteTokens: null,
       totalTokens: 11,
     });
-    expect(usage.listStepUsage(null, 10).items.map((row) => row.id)).toEqual(["m:1", "m:2"]);
+    expect(usage.listStepUsage(null, 10).items.map((row) => row.id)).toEqual(["m:2", "m:1"]);
   });
 
-  it("pages rows with equal timestamps without skips or repeats", () => {
+  it("pages rows newest first, with equal timestamps, without skips or repeats", () => {
     for (const id of ["c", "a", "b"]) {
       usage.recordStepUsage(
         { type: "step_finish", sandboxId: "s", messageId: "m", stepId: id, timestamp: 1 },
@@ -179,10 +179,34 @@ describe("UsageRepository", () => {
       );
     }
     const first = usage.listStepUsage(null, 2);
-    expect(first.items.map((row) => row.id)).toEqual(["a", "b"]);
+    expect(first.items.map((row) => row.id)).toEqual(["c", "b"]);
     expect(first.nextCursor).toEqual({ createdAt: 100, id: "b" });
     expect(usage.listStepUsage(first.nextCursor, 2)).toMatchObject({
-      items: [expect.objectContaining({ id: "c" })],
+      items: [expect.objectContaining({ id: "a" })],
+      nextCursor: null,
+    });
+  });
+
+  it("keeps rows recorded after the first page out of later pages", () => {
+    for (const [stepId, createdAt] of [
+      ["old", 100],
+      ["new", 200],
+    ] as const) {
+      usage.recordStepUsage(
+        { type: "step_finish", sandboxId: "s", messageId: "m", stepId, timestamp: 1 },
+        "m",
+        createdAt
+      );
+    }
+    const first = usage.listStepUsage(null, 1);
+    usage.recordStepUsage(
+      { type: "step_finish", sandboxId: "s", messageId: "m", stepId: "later", timestamp: 1 },
+      "m",
+      300
+    );
+
+    expect(usage.listStepUsage(first.nextCursor, 10)).toMatchObject({
+      items: [expect.objectContaining({ id: "old" })],
       nextCursor: null,
     });
   });
@@ -214,4 +238,17 @@ describe("UsageRepository", () => {
     db.exec("UPDATE step_usage SET input_tokens = 'corrupt'");
     expect(() => usage.listStepUsage(null, 10)).toThrow("Malformed persisted step usage row");
   });
+
+  it.each(["id = ''", "created_at = -1", "created_at = 1.5"])(
+    "rejects a persisted row whose key cannot continue a page (%s)",
+    (assignment) => {
+      usage.recordStepUsage(
+        { type: "step_finish", sandboxId: "s", messageId: "m", timestamp: 1 },
+        "m",
+        100
+      );
+      db.exec(`UPDATE step_usage SET ${assignment}`);
+      expect(() => usage.listStepUsage(null, 10)).toThrow("Malformed persisted step usage row");
+    }
+  );
 });

@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { stepUsageSchema } from "@open-inspect/shared";
 import { sessionMessageSchema } from "@open-inspect/shared/types/sessions";
 
 /** SCM display fields forwarded from the authenticated route to the Session runtime. */
@@ -27,6 +28,20 @@ export const sessionMessagePageSchema = z.discriminatedUnion("hasMore", [
 ]);
 export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 
+export const stepUsagePageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    usage: z.array(stepUsageSchema),
+    hasMore: z.literal(true),
+    cursor: z.string().min(1),
+  }),
+  z.object({
+    usage: z.array(stepUsageSchema),
+    hasMore: z.literal(false),
+    cursor: z.string().min(1).optional(),
+  }),
+]);
+export type StepUsagePage = z.infer<typeof stepUsagePageSchema>;
+
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
@@ -43,6 +58,7 @@ export const SessionInternalPaths = {
   events: "/internal/events",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
+  usage: "/internal/usage",
   createPr: "/internal/create-pr",
   // Static path + artifactId query param: the router matches paths as exact
   // strings, so the artifact id cannot ride in the path.
