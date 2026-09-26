@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
 import type { MessageService } from "../../services/message.service";
-import { MAX_STEP_USAGE_PAGE_SIZE } from "../../usage-repository";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 
 function createHandler() {
@@ -13,7 +12,7 @@ function createHandler() {
     listArtifacts: vi.fn(),
     getArtifact: vi.fn(),
     listMessages: vi.fn(),
-    listUsage: vi.fn(),
+    exportTrace: vi.fn(),
   } as unknown as MessageService;
 
   const log = {
@@ -458,64 +457,33 @@ describe("MessagesHandler", () => {
     });
   });
 
-  it("parses the usage cursor and limit before delegating to the service", async () => {
+  it("exports the requested trace collections in canonical order", async () => {
     const { handler, messageService } = createHandler();
-    vi.mocked(messageService.listUsage).mockReturnValue({
-      usage: [],
-      hasMore: true,
-      cursor: "2000:s%3A2",
-    });
+    vi.mocked(messageService.exportTrace).mockReturnValue({ ok: true, trace: { usage: [] } });
 
-    const response = handler.listUsage(
-      new URL("http://internal/internal/usage?limit=2&cursor=1000%3As%253A1")
+    const response = handler.exportTrace(
+      new URL("http://internal/internal/trace-export?include=usage,messages,events")
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      usage: [],
-      hasMore: true,
-      cursor: "2000:s%3A2",
-    });
-    expect(messageService.listUsage).toHaveBeenCalledWith({
-      cursor: { createdAt: 1000, id: "s:1" },
-      limit: 2,
-    });
+    await expect(response.json()).resolves.toEqual({ ok: true, trace: { usage: [] } });
+    expect(messageService.exportTrace).toHaveBeenCalledWith(["messages", "events", "usage"]);
   });
 
-  it("defaults the usage page to the repository maximum", () => {
-    const { handler, messageService } = createHandler();
-    vi.mocked(messageService.listUsage).mockReturnValue({ usage: [], hasMore: false });
-
-    handler.listUsage(new URL("http://internal/internal/usage"));
-
-    expect(messageService.listUsage).toHaveBeenCalledWith({
-      cursor: null,
-      limit: MAX_STEP_USAGE_PAGE_SIZE,
-    });
-  });
-
-  it.each(["1000", "not-a-cursor", ":s1", "1000:"])("rejects usage cursor %s", async (cursor) => {
-    const { handler, messageService } = createHandler();
-
-    const response = handler.listUsage(
-      new URL(`http://internal/internal/usage?cursor=${encodeURIComponent(cursor)}`)
-    );
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid cursor" });
-    expect(messageService.listUsage).not.toHaveBeenCalled();
-  });
-
-  it.each(["0", "-1", "1.5", "10junk", "", String(MAX_STEP_USAGE_PAGE_SIZE + 1)])(
-    "rejects invalid usage limit %s",
-    async (limit) => {
+  it.each(["", "?include=", "?include=prompts", "?include=messages,"])(
+    "rejects trace include %s",
+    async (search) => {
       const { handler, messageService } = createHandler();
 
-      const response = handler.listUsage(new URL(`http://internal/internal/usage?limit=${limit}`));
+      const response = handler.exportTrace(
+        new URL(`http://internal/internal/trace-export${search}`)
+      );
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: "Invalid limit" });
-      expect(messageService.listUsage).not.toHaveBeenCalled();
+      await expect(response.json()).resolves.toEqual({
+        error: "include must be a comma-separated list of messages, events, usage",
+      });
+      expect(messageService.exportTrace).not.toHaveBeenCalled();
     }
   );
 

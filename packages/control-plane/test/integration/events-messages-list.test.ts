@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect } from "vitest";
-import { stepUsagePageSchema, type StepUsagePage } from "../../src/session/contracts";
+import { sessionTraceExportSchema } from "../../src/session/contracts";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, queryDO, seedEvents } from "./helpers";
+import { initSession, queryDO, seedEvents, seedMessage } from "./helpers";
 
 async function seedStepUsage(
   stub: DurableObjectStub,
@@ -19,17 +19,6 @@ async function seedStepUsage(
       row.createdAt
     );
   }
-}
-
-async function fetchUsagePage(stub: DurableObjectStub, search: string): Promise<StepUsagePage> {
-  const res = await stub.fetch(`http://internal/internal/usage?${search}`);
-  expect(res.status).toBe(200);
-  return stepUsagePageSchema.parse(await res.json());
-}
-
-function nextUsageCursor(page: StepUsagePage): string {
-  if (!page.hasMore) throw new Error("Expected another usage page");
-  return encodeURIComponent(page.cursor);
 }
 
 describe("GET /internal/events", () => {
@@ -366,105 +355,104 @@ describe("GET /internal/messages", () => {
   });
 });
 
-describe("GET /internal/usage", () => {
+describe("GET /internal/trace-export", () => {
   beforeEach(cleanD1Tables);
 
-  it("pages usage rows newest first on (created_at, id) with a stable cursor", async () => {
+  it("returns the requested collections in the export contract, each in its export order", async () => {
     const { stub } = await initSession();
+    const [owner] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
     const createdAt = Date.now();
+    for (const [id, offset] of [
+      ["msg-1", 0],
+      ["msg-2", 10],
+    ] as const) {
+      await seedMessage(stub, {
+        id,
+        authorId: owner.id,
+        content: `prompt ${id}`,
+        source: "web",
+        status: "completed",
+        createdAt: createdAt + offset,
+      });
+    }
+    await seedEvents(stub, [
+      {
+        id: "tool_call:call-1",
+        type: "tool_call",
+        data: JSON.stringify({
+          type: "tool_call",
+          messageId: "msg-1",
+          tool: "bash",
+          args: { command: "npm test" },
+          callId: "call-1",
+          status: "completed",
+          output: "1 passed",
+        }),
+        messageId: "msg-1",
+        createdAt: createdAt + 1,
+      },
+      {
+        id: "execution_complete:msg-1",
+        type: "execution_complete",
+        data: JSON.stringify({ type: "execution_complete", messageId: "msg-1", success: true }),
+        messageId: "msg-1",
+        createdAt: createdAt + 1,
+      },
+    ]);
     await seedStepUsage(stub, [
-      { id: "step:c", createdAt },
-      { id: "step:a", createdAt: createdAt + 1 },
-      { id: "step:b", createdAt },
-      { id: "step:d", createdAt: createdAt - 1 },
-      { id: "step:e", createdAt },
+      { id: "step:2", createdAt: createdAt + 2 },
+      { id: "step:1", createdAt: createdAt + 1 },
     ]);
 
-    const page1 = await fetchUsagePage(stub, "limit=2");
-    expect(page1.usage.map((row) => row.id)).toEqual(["step:a", "step:e"]);
-    expect(page1).toMatchObject({ hasMore: true, cursor: `${createdAt}:step%3Ae` });
-    await expect(fetchUsagePage(stub, "limit=2")).resolves.toEqual(page1);
-
-    // Usage recorded after the first page must neither shift nor join later pages.
-    await seedStepUsage(stub, [{ id: "step:later", createdAt: createdAt + 2 }]);
-
-    const page2 = await fetchUsagePage(stub, `limit=2&cursor=${nextUsageCursor(page1)}`);
-    expect(page2.usage.map((row) => row.id)).toEqual(["step:c", "step:b"]);
-
-    const page3 = await fetchUsagePage(stub, `limit=2&cursor=${nextUsageCursor(page2)}`);
-    expect(page3).toEqual({ usage: [expect.objectContaining({ id: "step:d" })], hasMore: false });
-  });
-
-  it("returns each persisted row as step usage with unknown counts left null", async () => {
-    const { stub } = await initSession();
-    await queryDO(
-      stub,
-      `INSERT INTO step_usage (
-         id, message_id, model, harness, input_tokens, output_tokens, reasoning_tokens,
-         cache_read_tokens, cache_write_tokens, total_tokens, step_cost_usd, message_cost_usd,
-         is_subtask, child_session_id, task_call_id, reason, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      "step-full",
-      "msg-usage",
-      "anthropic/claude-sonnet-5",
-      "claude",
-      40,
-      30,
-      null,
-      8,
-      null,
-      78,
-      0.02,
-      0.05,
-      1,
-      "child-1",
-      "task-call-1",
-      "tool-calls",
-      1000
+    const res = await stub.fetch(
+      "http://internal/internal/trace-export?include=usage,events,messages"
     );
 
-    await expect(fetchUsagePage(stub, "")).resolves.toEqual({
-      usage: [
-        {
-          id: "step-full",
-          messageId: "msg-usage",
-          model: "anthropic/claude-sonnet-5",
-          harness: "claude",
-          inputTokens: 40,
-          outputTokens: 30,
-          reasoningTokens: null,
-          cacheReadTokens: 8,
-          cacheWriteTokens: null,
-          totalTokens: 78,
-          stepCostUsd: 0.02,
-          messageCostUsd: 0.05,
-          isSubtask: true,
-          childSessionId: "child-1",
-          taskCallId: "task-call-1",
-          reason: "tool-calls",
-          createdAt: 1000,
-        },
-      ],
-      hasMore: false,
+    expect(res.status).toBe(200);
+    const body = sessionTraceExportSchema.parse(await res.json());
+    expect(body).toMatchObject({
+      ok: true,
+      trace: {
+        messages: [
+          { id: "msg-2", content: "prompt msg-2" },
+          { id: "msg-1", content: "prompt msg-1" },
+        ],
+        events: [
+          { id: "tool_call:call-1", type: "tool_call", data: { output: "1 passed" } },
+          { id: "execution_complete:msg-1", type: "execution_complete" },
+        ],
+        usage: [{ id: "step:1" }, { id: "step:2" }],
+      },
+    });
+    // The two events share a timestamp; their timeline sequence is the tie-breaker.
+    const [first, second] = (body.ok && body.trace.events) || [];
+    expect(first.timelineSequence).toBeLessThan(second.timelineSequence);
+  });
+
+  it("returns only the requested collections", async () => {
+    const { stub } = await initSession();
+    await seedStepUsage(stub, [{ id: "step:1", createdAt: Date.now() }]);
+
+    const res = await stub.fetch("http://internal/internal/trace-export?include=usage");
+
+    expect(res.status).toBe(200);
+    expect(sessionTraceExportSchema.parse(await res.json())).toEqual({
+      ok: true,
+      trace: { usage: [expect.objectContaining({ id: "step:1" })] },
     });
   });
 
-  it("returns an empty terminal page when no usage is recorded", async () => {
+  it.each(["", "?include=prompts"])("rejects include %s", async (search) => {
     const { stub } = await initSession();
 
-    await expect(fetchUsagePage(stub, "")).resolves.toEqual({ usage: [], hasMore: false });
-  });
-
-  it.each([
-    ["cursor=bad", "Invalid cursor"],
-    ["limit=0", "Invalid limit"],
-    ["limit=101", "Invalid limit"],
-  ])("rejects %s", async (search, error) => {
-    const { stub } = await initSession();
-
-    const res = await stub.fetch(`http://internal/internal/usage?${search}`);
+    const res = await stub.fetch(`http://internal/internal/trace-export${search}`);
 
     expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toEqual({ error });
+    await expect(res.json()).resolves.toEqual({
+      error: "include must be a comma-separated list of messages, events, usage",
+    });
   });
 });
