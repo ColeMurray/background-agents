@@ -452,6 +452,67 @@ describe("POST /internal/sandbox-event", () => {
     });
   });
 
+  it("projects a step that finishes after a stop settled the session", async () => {
+    const { stub, sessionName } = await initSession();
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    const msgId = "msg-late-step";
+    await seedMessage(stub, {
+      id: msgId,
+      authorId: participants[0].id,
+      content: "Test prompt",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+    const postEvent = (event: Record<string, unknown>) =>
+      stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sandboxId: "sb-1", messageId: msgId, ...event }),
+      });
+    const stepFinish = (stepId: string, input: number) =>
+      postEvent({
+        type: "step_finish",
+        stepId,
+        timestamp: Date.now() / 1000,
+        tokens: { input, output: 40, reasoning: 5, cache: { read: 800, write: 60 } },
+      });
+    const index = new SessionIndexStore(env.DB);
+
+    expect((await stepFinish("step-1", 100)).status).toBe(200);
+    // Stop settles the session before the sandbox has seen the stop command.
+    expect((await stub.fetch("http://internal/internal/stop", { method: "POST" })).status).toBe(
+      200
+    );
+    await vi.waitFor(async () => {
+      expect(await index.get(sessionName)).toMatchObject({ status: "failed", inputTokens: 100 });
+    });
+
+    // A step already in flight lands after the settle; its terminal is then a no-op.
+    expect((await stepFinish("step-2", 250)).status).toBe(200);
+    const res = await postEvent({
+      type: "execution_complete",
+      success: false,
+      error: "Task was cancelled",
+      timestamp: Date.now() / 1000,
+    });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(async () => {
+      expect(await index.get(sessionName)).toMatchObject({
+        inputTokens: 350,
+        outputTokens: 80,
+        reasoningTokens: 10,
+        cacheReadTokens: 1600,
+        cacheWriteTokens: 120,
+      });
+    });
+  });
+
   it("execution_complete with success=false marks message as failed", async () => {
     const { stub } = await initSession();
 

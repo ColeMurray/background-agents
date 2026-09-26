@@ -135,7 +135,8 @@ function createProcessor(
       messenger,
       updateLastActivity,
       budgetService as unknown as SessionBudgetService,
-      persistedUsage ?? (usageRepository as unknown as UsageRepository)
+      persistedUsage ?? (usageRepository as unknown as UsageRepository),
+      () => {}
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
