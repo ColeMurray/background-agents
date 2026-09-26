@@ -31,7 +31,7 @@ describe("session export cursors", () => {
       spawnDepth: 2,
       createdAt: 456,
       id: "child:three/four",
-      snapshotMaxSequence: 789,
+      snapshotMaxRowId: 789,
     };
 
     expect(parseRunsExportCursor(encodeRunsExportCursor(cursor))).toEqual({ ok: true, cursor });
@@ -50,7 +50,7 @@ describe("session export cursors", () => {
       spawnDepth: 0,
       createdAt: 123,
       id: "root",
-      snapshotMaxSequence: 5,
+      snapshotMaxRowId: 5,
     });
     expect(parseRunsExportCursor(sessions)).toEqual({ ok: false, error: "Invalid cursor" });
     expect(parseSessionExportCursor(runs)).toEqual({ ok: false, error: "Invalid cursor" });
@@ -59,6 +59,7 @@ describe("session export cursors", () => {
   it.each([
     "r:123:root:0:123:root",
     "r:123:root:-1:123:root:5",
+    "r:123:root:0:123:root:0",
     "r:123:root:0:123:root:9007199254740992",
     "r:123:root:0:123:%ZZ:5",
     "r:123::0:123:root:5",

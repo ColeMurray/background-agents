@@ -100,7 +100,7 @@ type SessionsPage = { scope: "sessions" } & ExportPage<SessionExportCursor>;
 export type RunsPage = { scope: "runs" } & ExportPage<RunsExportCursor>;
 export type ListSessionsForExportResult = SessionsPage | RunsPage;
 
-/** Pages sessions or root-first runs behind their respective insertion fences. */
+/** Pages sessions or root-first runs behind a best-effort rowid insertion fence. */
 export class SessionExportStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -171,8 +171,8 @@ export class SessionExportStore {
     const firstPage = options.cursor === null;
     if (options.cursor) {
       const cursor = options.cursor;
-      conditions.push("s.export_sequence <= ?", "root.export_sequence <= ?");
-      bindings.push(cursor.snapshotMaxSequence, cursor.snapshotMaxSequence);
+      conditions.push("s.rowid <= ?", "root.rowid <= ?");
+      bindings.push(cursor.snapshotMaxRowId, cursor.snapshotMaxRowId);
       conditions.push("root.created_at <= ?");
       bindings.push(cursor.rootCreatedAt);
       conditions.push(
@@ -194,8 +194,8 @@ export class SessionExportStore {
       );
     } else {
       conditions.push(
-        "s.export_sequence <= export_fence.last_sequence",
-        "root.export_sequence <= export_fence.last_sequence"
+        "s.rowid <= export_fence.max_row_id",
+        "root.rowid <= export_fence.max_row_id"
       );
     }
     if (options.createdAfter !== undefined) {
@@ -206,8 +206,10 @@ export class SessionExportStore {
       conditions.push("root.created_at <= ?");
       bindings.push(options.createdBefore);
     }
-    const snapshotColumn = firstPage ? ", export_fence.last_sequence AS snapshot_max" : "";
-    const snapshotJoin = firstPage ? "CROSS JOIN session_export_sequence export_fence" : "";
+    const snapshotColumn = firstPage ? ", export_fence.max_row_id AS snapshot_max" : "";
+    const snapshotJoin = firstPage
+      ? "CROSS JOIN (SELECT COALESCE(MAX(rowid), 0) AS max_row_id FROM sessions) export_fence"
+      : "";
     const pageFrom = `FROM sessions root CROSS JOIN sessions s
        ${snapshotJoin} WHERE s.root_session_id = root.id AND ${conditions.join(" AND ")}
        ORDER BY root.created_at DESC, root.id ASC,
@@ -220,16 +222,16 @@ export class SessionExportStore {
         pageId: "s.id",
         bindings,
         limit: options.limit,
-        snapshotMax: options.cursor?.snapshotMaxSequence,
+        snapshotMax: options.cursor?.snapshotMaxRowId,
         schema: runsExportPageRowSchema,
-        makeCursor: (last, snapshotMaxSequence) => ({
+        makeCursor: (last, snapshotMaxRowId) => ({
           scope: "runs",
           rootCreatedAt: last.root_created_at,
           rootSessionId: last.root_session_id,
           spawnDepth: last.spawn_depth,
           createdAt: last.created_at,
           id: last.id,
-          snapshotMaxSequence,
+          snapshotMaxRowId,
         }),
       })),
     };

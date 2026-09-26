@@ -11,7 +11,11 @@
  * With `scope=runs`, root creation time defines the window. Families stay
  * consecutive across pages, but can cross page boundaries: limit still counts
  * sessions (at most five with include). Rows whose root no longer exists are
- * excluded by the root join.
+ * excluded by the root join. This is a best-effort export, not a snapshot:
+ * the first page's MAX(rowid) fences inserts unless deletion of the newest
+ * session lets SQLite reuse its rowid. Deletions are not fenced; deleting a
+ * root mid-export re-roots its children and may leave that run incomplete.
+ * Re-exporting a window covering the new root reflects its current lineage.
  */
 
 import { Hono } from "hono";

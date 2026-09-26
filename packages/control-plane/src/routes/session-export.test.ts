@@ -384,7 +384,7 @@ describe("GET /sessions/export", () => {
       spawnDepth: 1,
       createdAt: 1_000,
       id: "session-1",
-      snapshotMaxSequence: 42,
+      snapshotMaxRowId: 42,
     };
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: true, nextCursor: cursor });
     mocks.runtimeFetch.mockResolvedValueOnce(traceResponse({ events: [] }));
@@ -484,7 +484,7 @@ describe("GET /sessions/export", () => {
         spawnDepth: 1,
         createdAt: 1_000,
         id: "session-1",
-        snapshotMaxSequence: 42,
+        snapshotMaxRowId: 42,
       }),
     },
   ])("rejects a $scope request with the other scope's cursor", async (query) => {
