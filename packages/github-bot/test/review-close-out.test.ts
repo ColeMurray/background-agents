@@ -192,6 +192,18 @@ describe("completeCloseOut", () => {
     }
   );
 
+  it("writes the terminal status when the commit carries none", async () => {
+    // F3: the handler's pending write is best-effort; a missing status is not a terminal one.
+    vi.mocked(getReviewStatusState).mockResolvedValue({ ok: true, state: null });
+    const { env, cpFetch } = createEnv();
+
+    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+
+    expect(outcome).toBe("closed_out");
+    expect(postCommitStatus).toHaveBeenCalledTimes(1);
+    expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
+  });
+
   it.each(["closed", "merged"])("leaves a %s pull request's status alone", async (state) => {
     vi.mocked(getPullRequestSnapshot).mockResolvedValue({
       ok: true,
@@ -228,35 +240,29 @@ describe("completeCloseOut", () => {
     expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
   });
 
-  it("keeps the close-out for a retry when the status write fails transiently", async () => {
-    vi.mocked(postCommitStatus).mockResolvedValue({
-      ok: false,
-      status: 502,
-      error: "GitHub API returned 502",
-    });
-    const { env, cpFetch } = createEnv();
+  it.each([403, 422, 429, 502])(
+    "keeps the close-out for a retry, and logs an error, when GitHub answers the write %i",
+    async (status) => {
+      // F4: nothing written means the status is still pending; only a later attempt can end it.
+      vi.mocked(postCommitStatus).mockResolvedValueOnce({
+        ok: false,
+        status,
+        error: `GitHub API returned ${status}`,
+      });
+      const { env, cpFetch } = createEnv();
+      const log = createMockLogger();
 
-    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+      const rejected = await completeCloseOut(env, log, grant(), "trace-1");
+      const retried = await completeCloseOut(env, log, grant(), "trace-2");
 
-    expect(outcome).toBe("status_write_failed");
-    expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
-  });
-
-  it("keeps the close-out for a retry when GitHub rate-limits the status write", async () => {
-    vi.mocked(postCommitStatus).mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-      error: "GitHub API returned 403",
-      rateLimited: true,
-    });
-    const { env, cpFetch } = createEnv();
-
-    const limited = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
-    const retried = await completeCloseOut(env, createMockLogger(), grant(), "trace-2");
-
-    expect([limited, retried]).toEqual(["status_write_failed", "closed_out"]);
-    expect(finalizeOutcomes(cpFetch)).toEqual(["retry", "done"]);
-  });
+      expect([rejected, retried]).toEqual(["status_write_failed", "closed_out"]);
+      expect(finalizeOutcomes(cpFetch)).toEqual(["retry", "done"]);
+      expect(log.error).toHaveBeenCalledWith(
+        "review_close_out.status_write_failed",
+        expect.objectContaining({ github_status: status })
+      );
+    }
+  );
 
   it("finalizes the exact grant it holds", async () => {
     const { env, cpFetch } = createEnv();
@@ -269,26 +275,6 @@ describe("completeCloseOut", () => {
       grantId: "close-out:session-1:grant-1",
       outcome: "done",
     });
-  });
-
-  it("abandons a status write GitHub rejects outright", async () => {
-    vi.mocked(postCommitStatus).mockResolvedValue({
-      ok: false,
-      status: 422,
-      error: "GitHub API returned 422",
-      rateLimited: false,
-    });
-    const { env, cpFetch } = createEnv();
-    const log = createMockLogger();
-
-    const outcome = await completeCloseOut(env, log, grant(), "trace-1");
-
-    expect(outcome).toBe("status_write_rejected");
-    expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
-    expect(log.error).toHaveBeenCalledWith(
-      "review_close_out.abandoned",
-      expect.objectContaining({ github_status: 422 })
-    );
   });
 
   it("keeps the close-out for a retry when the installation token cannot be minted", async () => {

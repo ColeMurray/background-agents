@@ -161,15 +161,16 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
    the bot's own PRs use `COMMENT`, because GitHub does not allow pull request authors to approve
    their own PRs.
 
-If the prompt cannot be delivered, the handler requests the session's close-out itself, with "Review
-failed to start" as its description. If that request cannot be recorded either, the control plane's
-reaper finds the review later: the session is created with the PR's repository on its fence row, and
-a latest review that has no close-out after 10 minutes gets a provisional "Review failed to start"
-marker, and then its session is asked to archive itself as an unprompted draft (so no prompt can
-start it). While the marker is provisional the agent's lease request gets 423 (wait), and no
-close-out is granted. The marker is withdrawn if the session turns out to hold a prompt or to be
-active; otherwise it becomes a close-out request and runs like any other. A lost archive answer
-leaves it provisional, and the next tick asks again.
+If the control plane rejects the prompt (a 4xx), the handler requests the session's close-out
+itself, with "Review failed to start" as its description. A transport failure or 5xx is ambiguous
+(the prompt may have arrived), so it records nothing and leaves the review to the control plane's
+reaper, as it does when the close-out request itself fails: the session is created with the PR's
+repository on its fence row, and a latest review that has no close-out after 10 minutes gets a
+provisional "Review failed to start" marker, and then its session is asked to archive itself as an
+unprompted draft (so no prompt can start it). While the marker is provisional the agent's lease
+request gets 423 (wait), and no close-out is granted. The marker is withdrawn if the session turns
+out to hold a prompt or to be active; otherwise it becomes a close-out request and runs like any
+other. A lost archive answer leaves it provisional, and the next tick asks again.
 
 **Review Requested (compatibility path):**
 
@@ -213,25 +214,27 @@ sends it to `POST /callbacks/complete`. The bot then:
    stored on the session's fence row; from then on the agent can no longer take the lease.
 2. On `200` it holds the lease, named by the grant's `grantId`. `202` means another holder's lease
    is live, or a superseded session is not yet confirmed cancelled; `409` means nothing is owed (a
-   newer review of the same head owns the status, or it was already closed out). Neither writes
-   anything now: the control plane's reaper re-drives an owed close-out every minute through
-   `POST /callbacks/review-close-out` until it is granted.
-3. After acknowledging, it reads the commit's combined status and leaves anything but a
-   still-pending `open-inspect` alone, and leaves a merged or closed PR alone.
+   newer admitted review of the same head owns the status, or it was already closed out). Neither
+   writes anything now: the control plane's reaper re-drives owed close-outs every minute through
+   `POST /callbacks/review-close-out`, least recently attempted first, until each is granted.
+3. After acknowledging, it reads the commit's `open-inspect` status (paging through the combined
+   status) and leaves a terminal one alone, and leaves a merged or closed PR alone. A commit with no
+   `open-inspect` status at all still gets the terminal write.
 4. Otherwise it posts `error`: "Superseded by a newer commit" for a review a push replaced;
    `Review did not finish: <the session's reason>`; or "Review did not publish" for a turn that
    ended successfully without replacing the status. It never starts that write with less than a
    request timeout plus 5 seconds of the lease left.
 5. It finalizes its grant (`POST /internal/github-reviews/close-out/finalize` with the `grantId`):
    `done` once GitHub shows a terminal status, which deletes the fence row, or `retry`, which
-   releases the lease and keeps the row for the reaper. A rejection GitHub can clear later — a
-   timeout, a 5xx, or a rate limit (429, or 403 with rate-limit headers or message) — is `retry`;
-   any other 4xx is abandoned as `done`. Either outcome acts only while that grant still holds the
-   lease, so a late finalize from an earlier attempt is a no-op.
+   releases the lease and keeps the row for the reaper. Any failed status write is `retry`, logged
+   as an error. Either outcome acts only while that grant still holds the lease, so a late finalize
+   from an earlier attempt is a no-op.
 
-Fence rows older than a day are dropped by the reaper (unless a close-out holds the lease for them
-at that moment), so a close-out that can never succeed stops being retried. A completion callback
-that fails both delivery attempts is never recorded; that status stays pending.
+The reaper also records a close-out for a superseded review whose head no newer admitted review has
+taken over before retiring it, so a head a push replaced is closed out even when the successor's
+sweep never ran. Fence rows that owe no close-out are dropped after a day; a recorded close-out is
+retried for a week, then given up with an error log (never while a close-out holds the lease). A
+completion callback that fails both delivery attempts is never recorded; that status stays pending.
 
 ### Session Target
 

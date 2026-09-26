@@ -80,8 +80,7 @@ export type ReviewCloseOutOutcome =
   | "pr_not_open"
   | "lease_budget_exhausted"
   | "status_unreadable"
-  | "status_write_failed"
-  | "status_write_rejected";
+  | "status_write_failed";
 
 /**
  * The description for a review that ended with its status still pending. A turn that reported
@@ -160,19 +159,6 @@ async function finalizeCloseOut(
   }
 }
 
-/** A GitHub rejection no retry can fix: a 4xx that is neither a timeout nor a rate limit. */
-function isPermanentRejection(result: { status?: number; rateLimited?: boolean }): boolean {
-  const { status } = result;
-  return (
-    status !== undefined &&
-    status >= 400 &&
-    status < 500 &&
-    status !== 408 &&
-    status !== 429 &&
-    !result.rateLimited
-  );
-}
-
 async function writeTerminalStatus(
   env: Env,
   log: Logger,
@@ -199,7 +185,11 @@ async function writeTerminalStatus(
     return { outcome: "status_unreadable", finalize: "retry" };
   }
   // The agent published its verdict or marked its PR stale, or an earlier attempt closed it out.
-  if (status.state !== "pending") return { outcome: "already_terminal", finalize: "done" };
+  // A commit with no review status at all (the handler's pending write is best-effort) still
+  // needs the terminal one.
+  if (status.state !== "pending" && status.state !== null) {
+    return { outcome: "already_terminal", finalize: "done" };
+  }
 
   // A review abandoned because its PR merged or closed first is the common ending, and an error
   // on a commit nobody is waiting for is noise. An unreadable PR is not evidence it closed, so the
@@ -231,16 +221,13 @@ async function writeTerminalStatus(
     log.info("review_close_out.closed_out", { ...meta, description });
     return { outcome: "closed_out", finalize: "done" };
   }
-  const failureMeta = {
+  // Nothing was written, so GitHub still shows what it showed before: keep the close-out for the
+  // reaper, whatever the rejection. The control plane gives up on it after a week.
+  log.error("review_close_out.status_write_failed", {
     ...meta,
     ...(result.status === undefined ? {} : { github_status: result.status }),
     error: result.error,
-  };
-  if (isPermanentRejection(result)) {
-    log.error("review_close_out.abandoned", failureMeta);
-    return { outcome: "status_write_rejected", finalize: "done" };
-  }
-  log.error("review_close_out.status_write_failed", failureMeta);
+  });
   return { outcome: "status_write_failed", finalize: "retry" };
 }
 

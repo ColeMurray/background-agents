@@ -247,30 +247,7 @@ describe("postCommitStatus", () => {
       ok: false,
       status: 403,
       error: "GitHub API returned 403",
-      rateLimited: false,
     });
-  });
-
-  it.each([
-    ["a 429", 429, {}, ""],
-    ["a 403 with no primary quota left", 403, { "x-ratelimit-remaining": "0" }, ""],
-    ["a 403 asking to retry later", 403, { "retry-after": "60" }, ""],
-    [
-      "a 403 naming a secondary rate limit",
-      403,
-      {},
-      JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
-    ],
-  ])("reports %s as rate limited", async (_name, status, headers, body) => {
-    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(body, { status, headers }));
-
-    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
-      state: "error",
-      context: "open-inspect",
-      description: "Review did not publish",
-    });
-
-    expect(result).toMatchObject({ ok: false, status, rateLimited: true });
   });
 
   it("returns the network error when the request fails", async () => {
@@ -532,6 +509,30 @@ describe("getReviewStatusState", () => {
       ok: true,
       state: null,
     });
+  });
+
+  it("reads the review context from a later page when the commit has many contexts", async () => {
+    // F5: the combined status serves at most 100 contexts per page.
+    const otherContexts = Array.from({ length: 100 }, (_, index) => ({
+      context: `ci/check-${index}`,
+      state: "success",
+    }));
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(Response.json({ total_count: 101, statuses: otherContexts }))
+      .mockResolvedValueOnce(
+        Response.json({
+          total_count: 101,
+          statuses: [{ context: "open-inspect", state: "success" }],
+        })
+      );
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: true,
+      state: "success",
+    });
+    expect(vi.mocked(globalThis.fetch).mock.calls[1][0]).toBe(
+      "https://api.github.com/repos/acme/widgets/commits/abc123/status?per_page=100&page=2"
+    );
   });
 
   it("reports a non-2xx response as unreadable", async () => {
