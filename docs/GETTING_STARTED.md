@@ -321,13 +321,12 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > **bot** identity.
 
 5. Set **Repository permissions**:
-   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
-   - Checks: **Read-only** _(required for GitHub check-suite automations)_
    - Contents: **Read & Write**
-   - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
      session-created pull requests)_
    - Metadata: **Read-only**
+   - If enabling the GitHub bot, also grant Actions: **Read-only** _(workflow-run automations)_,
+     Checks: **Read-only** _(check-suite automations)_, and Issues: **Read & Write**.
 6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
    - Members: **Read-only**
    - For existing GitHub Apps, republish the permission change and request/approve installation
@@ -988,11 +987,11 @@ npx vercel --prod
 
 ## Step 9: Verify Deployment
 
-After deployment completes, verify each component:
+After deployment completes, verify each component from the repository root:
 
 ```bash
 # Get the verification commands from Terraform
-terraform output verification_commands
+terraform -chdir=terraform/environments/production output verification_commands
 ```
 
 Or manually:
@@ -1009,7 +1008,7 @@ curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Web app (should return 200)
-curl -I "$(terraform output -raw web_app_url)"
+curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
 ### Test the Full Flow

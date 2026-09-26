@@ -140,10 +140,10 @@ user selected GitHub:
 5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
    users"): `{canonical-web-app-url}/api/auth/callback/github`
    - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
-6. **Repository permissions**: Actions (Read-only), Checks (Read-only), Contents (Read & Write),
-   Pull requests (Read & Write), Metadata (Read-only), and Issues (Read & Write) if the GitHub bot
-   is enabled. Pull requests permission also authorizes creating and applying labels to
-   session-created pull requests; labeling does not require Issues permission.
+6. **Repository permissions**: Contents (Read & Write), Pull requests (Read & Write), Metadata
+   (Read-only). If the GitHub bot is enabled, also grant Actions (Read-only), Checks (Read-only),
+   and Issues (Read & Write). Pull requests permission also authorizes creating and applying labels
+   to session-created pull requests; labeling does not require Issues permission.
 7. If GitHub organizations are allowlisted, set **Organization permissions**: Members (Read-only).
    Existing Apps need the permission change approved on their installations.
 8. If GitHub sign-in is enabled, set **Account permissions**: Email addresses (Read-only). Every
@@ -363,10 +363,12 @@ verify by rerunning the dry run. Follow Step 7a for commands and refusal/no-op h
 
 ## Phase 13: Verification
 
+From the repository root:
+
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
 curl https://{workspace}--open-inspect-api-health.modal.run
-curl -I "$(terraform output -raw web_app_url)"
+curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
 Present a deployment summary table. Instruct the user to test: visit the web app, sign in with each
