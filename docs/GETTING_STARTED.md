@@ -28,26 +28,34 @@ Open-Inspect uses Terraform to automate deployment across multiple cloud provide
 **Your job**: Create accounts, gather credentials, and configure one file (`terraform.tfvars`).
 **Terraform's job**: Create all infrastructure and configure services.
 
+**How this guide is organized**: Steps 1–9 are the minimal deploy path: one web platform, the
+default Modal sandbox provider, a GitHub App for repository access and sign-in, and the Slack,
+Linear, and GitHub bots turned off. The [Optional Sections](#optional-sections) after Step 9 cover
+alternative sandbox providers, Google login, Slack, Linear, the GitHub bot, a custom domain, CI/CD,
+branding, updating, and troubleshooting.
+
 ---
 
 ## Prerequisites
 
 ### Required Accounts
 
-Create accounts on these services before continuing:
+Create accounts on these services before continuing. Rows marked _(optional)_ are only needed for
+the matching optional section:
 
 | Service                                                   | Purpose                                                         |
 | --------------------------------------------------------- | --------------------------------------------------------------- |
 | [Cloudflare](https://dash.cloudflare.com)                 | Control plane hosting (+ web app if using Cloudflare platform)  |
 | [Vercel](https://vercel.com) _(optional)_                 | Web application hosting (only if `web_platform = "vercel"`)     |
-| [Modal](https://modal.com) _(optional)_                   | Sandbox infrastructure when `sandbox_provider = "modal"`        |
+| [Modal](https://modal.com)                                | Sandbox infrastructure (default `sandbox_provider = "modal"`)   |
+| [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
+| [Anthropic](https://console.anthropic.com) _(optional)_   | Claude API (the Slack/Linear bot classifier's default provider) |
 | [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
 | [E2B](https://e2b.dev) _(optional)_                       | Sandbox infrastructure when `sandbox_provider = "e2b"`          |
-| [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
-| [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
+| [Linear](https://linear.app) _(optional)_                 | Linear Agent integration                                        |
 | GitHub App Webhooks _(optional)_                          | GitHub bot (PR reviews)                                         |
 
 ### Required Tools
@@ -149,7 +157,9 @@ Create an R2 API Token:
 
 ### Modal
 
-> Only required when `sandbox_provider = "modal"`.
+> Only required when `sandbox_provider = "modal"` (the default, used by the core path). To use
+> Daytona, Vercel Sandboxes, OpenComputer, or E2B instead, skip this section and follow
+> [Alternative Sandbox Providers](#alternative-sandbox-providers-optional).
 
 1. Go to [Modal Settings](https://modal.com/settings)
 2. **Create a new API token**: Settings -> API Tokens -> New Token
@@ -159,6 +169,539 @@ Create an R2 API Token:
 5. Note the environment's **Web suffix** from Modal's environment settings. Use the normalized
    lowercase suffix made of letters, digits, and dashes. Leave it empty for the environment whose
    endpoints use `https://<workspace>--...modal.run`.
+
+### Anthropic (Optional)
+
+Optional for the core path, which sets `enable_slack_bot = false` and `enable_linear_bot = false` in
+Step 5. Terraform's own default enables the Slack bot, and its classifier runs on Claude, so
+`terraform apply` fails without this key unless both bots are disabled or `classification_model`
+points at an OpenAI model. If you enable Slack or Linear later, add this key then. Coding sessions
+themselves need no key here — those model credentials can be added as secrets in the web app after
+deploying. With Modal, a key set here is also injected into session sandboxes as a deployment-wide
+default.
+
+1. Go to [Anthropic Console](https://console.anthropic.com)
+2. Create an API key
+3. Note the **API Key** (starts with `sk-ant-`)
+
+> **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
+> setup instructions (can be configured after deployment).
+>
+> **Want to use your xAI SuperGrok subscription?** See
+> [Using Grok with a SuperGrok Subscription](GROK_MODELS.md). Grok is opt-in and can also be
+> configured after deployment.
+
+---
+
+## Step 3: Create GitHub App
+
+Every deployment needs **one GitHub App** for repository access. The same App can also provide
+GitHub OAuth sign-in, but its client pair is optional when Google is the only sign-in provider.
+
+1. Go to [GitHub Apps](https://github.com/settings/apps)
+2. Click **"New GitHub App"**
+3. Fill in the basics:
+   - **Name**: `Open-Inspect-YourName` (must be globally unique)
+   - **Homepage URL**: Your web app URL (see below)
+   - **Webhook**: Leave "Active" unchecked for now. [GitHub Bot (Optional)](#github-bot-optional)
+     enables it when `enable_github_bot = true` for GitHub automations or bot commands.
+4. If enabling GitHub sign-in, configure **Identifying and authorizing users** (OAuth):
+   - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
+
+   Your web app URL depends on `web_platform`:
+   - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app`
+   - **Cloudflare**: `https://open-inspect-web-{deployment_name}.{your-subdomain}.workers.dev`
+   - **Cloudflare with `cloudflare_custom_domain` set**: `https://{your-custom-domain}`
+
+   > **Important**: The callback URL must match your deployed web app URL exactly. The
+   > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
+   > username or company name).
+
+   > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
+   > the default for newly created Apps, but activate it if yours predates that default). Expiring
+   > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
+   > that per-user credential for attributed GitHub operations such as pull-request creation. Clone,
+   > fetch, and push authentication still use the shared GitHub App installation. With expiration
+   > deactivated — or on an **OAuth App**, which never issues a refresh token — no per-user
+   > credential is captured, so supported attributed operations fall back to the shared GitHub App
+   > **bot** identity.
+
+5. Set **Repository permissions**:
+   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
+   - Checks: **Read-only** _(required for GitHub check-suite automations)_
+   - Contents: **Read & Write**
+   - Issues: **Read & Write** _(required if enabling GitHub bot)_
+   - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
+     session-created pull requests)_
+   - Metadata: **Read-only**
+6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
+   - Members: **Read-only**
+   - For existing GitHub Apps, republish the permission change and request/approve installation
+     updates before testing org membership sign-in.
+7. If GitHub sign-in uses `allowed_emails` or `allowed_email_domains`, set **Account permissions**:
+   - Email addresses: **Read-only** _(without it the app cannot read verified emails and those
+     allowlists deny every GitHub sign-in)_
+   - For existing GitHub Apps, republish the permission change and request/approve installation
+     updates, otherwise the added permission does not apply to current installs.
+8. Click **"Create GitHub App"**
+9. Note the **App ID** (top of page). If enabling GitHub sign-in, also note the **Client ID**.
+10. If enabling GitHub sign-in, under **"Client secrets"**, click **"Generate a new client secret"**
+    and note the **Client Secret**.
+11. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
+12. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
+    ```bash
+    openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+      -in ~/Downloads/your-app-name.*.private-key.pem \
+      -out private-key-pkcs8.pem
+    ```
+13. **Install the app** on your account/organization:
+    - Click "Install App" in the sidebar
+    - Select the repositories you want Open-Inspect to access
+14. Note the **Installation ID** from the URL after installing:
+    ```
+    https://github.com/settings/installations/INSTALLATION_ID
+    ```
+
+You should now always have:
+
+- **App ID** (e.g., `123456`)
+- **Private Key** (PKCS#8 format, starts with `-----BEGIN PRIVATE KEY-----`)
+- **Installation ID** (e.g., `12345678`)
+
+For GitHub sign-in, you should also have:
+
+- **Client ID** (e.g., `Iv1.abc123...`)
+- **Client Secret** (e.g., `abc123...`)
+
+---
+
+## Step 4: Generate Security Secrets
+
+Generate these random secrets (you'll need them for `terraform.tfvars`):
+
+```bash
+# Token encryption key
+echo "token_encryption_key: $(openssl rand -base64 32)"
+
+# Repo secrets encryption key
+echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
+
+# Modal API secret (use hex for this one)
+echo "modal_api_secret: $(openssl rand -hex 32)"
+
+# Browser authentication secret (Terraform retains the legacy input name)
+echo "nextauth_secret: $(openssl rand -base64 32)"
+
+# GitHub webhook secret (only if enabling GitHub bot)
+echo "github_webhook_secret: $(openssl rand -hex 32)"
+```
+
+Save these values somewhere secure—you'll need them in the next step.
+
+---
+
+## Step 5: Configure Terraform
+
+```bash
+cd terraform/environments/production
+
+# Copy the example files
+cp terraform.tfvars.example terraform.tfvars
+cp backend.tfvars.example backend.tfvars
+```
+
+### Configure `backend.tfvars`
+
+Fill in your R2 credentials:
+
+```hcl
+access_key = "your-r2-access-key-id"
+secret_key = "your-r2-secret-access-key"
+endpoints = {
+  s3 = "https://YOUR_CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+}
+```
+
+### Configure `terraform.tfvars`
+
+Fill in all the values you gathered. Here's the structure:
+
+```hcl
+# Provider Authentication
+cloudflare_api_token        = "your-cloudflare-api-token"
+cloudflare_account_id       = "your-account-id"
+cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (without .workers.dev)
+
+# Web platform: "vercel" (default) or "cloudflare" (OpenNext)
+web_platform                = "vercel"
+
+# Optional custom domain for the web app (only when web_platform = "cloudflare")
+# cloudflare_zone_id       = "your-zone-id"
+# cloudflare_custom_domain = "app.example.com"
+
+# Vercel (only required when web_platform = "vercel")
+# If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
+vercel_api_token            = "your-vercel-token"
+vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
+modal_token_id              = "your-modal-token-id"
+modal_token_secret          = "your-modal-token-secret"
+modal_workspace             = "your-modal-workspace"
+modal_environment           = "your-modal-environment"
+modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
+
+# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+# sandbox_provider          = "modal"
+
+# Daytona (only required when sandbox_provider = "daytona")
+# daytona_api_url           = "https://app.daytona.io/api"
+# daytona_api_key           = "your-daytona-api-key"
+# daytona_base_snapshot     = "your-snapshot-name"
+# daytona_base_snapshot_memory_gib = 2
+
+# Vercel Sandboxes (only required when sandbox_provider = "vercel")
+# vercel_sandbox_token      = "your-vercel-token"
+# vercel_sandbox_project_id = "prj_xxxxx"
+# vercel_sandbox_team_id    = "team_xxxxx" # Optional
+# vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
+# vercel_sandbox_runtime    = "node24"
+# vercel_snapshot_expiration_ms = 0
+
+# OpenComputer (only required when sandbox_provider = "opencomputer")
+# opencomputer_api_url      = "https://app.opencomputer.dev/api"
+# opencomputer_api_key      = "your-opencomputer-api-key"
+# opencomputer_template     = ""  # Empty lets Terraform build the runtime template
+
+# E2B (only required when sandbox_provider = "e2b")
+# e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
+# e2b_template_id           = "open-inspect-sandbox"
+
+# GitHub App repository access (required in every deployment)
+github_app_id              = "123456"
+github_app_installation_id = "12345678"
+github_app_private_key     = <<-EOF
+-----BEGIN PRIVATE KEY-----
+... paste your PKCS#8 key here ...
+-----END PRIVATE KEY-----
+EOF
+
+# GitHub OAuth sign-in (optional pair; leave both empty for Google-only)
+github_client_id     = "Iv1.abc123..."      # From GitHub App settings
+github_client_secret = "your-client-secret" # Generated in GitHub App settings
+
+# Google OAuth sign-in (optional pair; may be used alone or with GitHub)
+google_client_id     = ""
+google_client_secret = ""
+
+# Slack. Terraform defaults enable_slack_bot to true; keep false for the core path
+# (see "Slack Bot (Optional)" to enable it later).
+enable_slack_bot     = false
+slack_bot_token      = ""
+slack_signing_secret = ""
+
+# GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
+enable_github_bot      = false
+github_webhook_secret  = ""          # From Step 4 (required if enabled)
+github_bot_username    = ""          # e.g., "my-app[bot]" (your GitHub App's bot login)
+
+# Linear Agent (set enable_linear_bot = true to deploy the webhook worker)
+enable_linear_bot      = false
+linear_client_id       = ""          # From the Linear app (required if enabled)
+linear_client_secret   = ""          # From the Linear app (required if enabled)
+linear_webhook_secret  = ""          # From the Linear app (required if enabled)
+
+# API Keys. Optional: leave blank to add model credentials as secrets in the web
+# app instead. Required only when the Slack/Linear classifier runs on Anthropic.
+anthropic_api_key = "sk-ant-..."
+# classification_anthropic_api_key = ""   # Classifier-only key; never reaches sandboxes
+
+# Slack/Linear classifier provider, chosen by classification_model.
+# An OpenAI model requires classification_openai_api_key. An Anthropic model is
+# served by classification_anthropic_api_key, falling back to anthropic_api_key.
+# classification_model = "claude-haiku-4-5"   # e.g. "gpt-5.4-mini" to classify on OpenAI
+classification_openai_api_key = ""   # Required when classification_model is an OpenAI id
+
+# Security Secrets (from Step 4)
+token_encryption_key          = "your-generated-value"
+repo_secrets_encryption_key   = "your-generated-value"
+# provider_accounts_encryption_key = "existing-key" # Optional override; Terraform generates one
+modal_api_secret               = "your-generated-value"
+nextauth_secret                = "your-generated-value"
+
+# Configuration
+# IMPORTANT: deployment_name must be globally unique for Vercel URLs
+# Use your GitHub username, company name, or a random string
+deployment_name = "your-unique-name"  # e.g., "acme", "johndoe", "mycompany"
+project_root    = "../../../"
+
+# Branding (optional — defaults shown)
+# Display name shown in the web UI tab title, sign-in page, landing hero, bot
+# messages (Slack/Linear), PR body footer, and outbound HTTP User-Agent.
+# app_name = "Open-Inspect"
+# Short brand label shown only in the sidebar header.
+# Optional URL (absolute or root-relative) to a custom logo/favicon override.
+# Leave empty to keep the built-in favicon and default in-app icon.
+# app_icon_url = ""
+
+# Initial deployment: set both to false (see Step 6)
+enable_durable_object_bindings = false
+enable_service_bindings        = false
+
+# Access Control (set at least one allowlist for production). A user is admitted
+# if they match ANY allowlist below.
+allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
+allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
+allowed_emails        = ""                      # Exact addresses (e.g., "pm@gmail.com") — for users on shared domains
+allowed_github_orgs   = ""                      # Comma-separated orgs whose active members can sign in
+
+# Explicitly opt into open access only if you want any authenticated user to be
+# able to sign in when all allowlists are empty.
+unsafe_allow_all_users = false
+```
+
+> **Core path bot settings**: The snippet above deploys with `enable_slack_bot = false`,
+> `enable_github_bot = false`, and `enable_linear_bot = false`. Keep `enable_slack_bot = false`
+> explicit: Terraform defaults it to `true`, which requires Slack credentials and an Anthropic (or
+> OpenAI classifier) key. With all three bots off, `anthropic_api_key` is optional. Turn bots on
+> later with the [Slack](#slack-bot-optional), [Linear](#linear-agent-optional), and
+> [GitHub bot](#github-bot-optional) sections.
+
+### Choose Sign-In Providers
+
+Complete credential pairs are the enablement policy. Terraform rejects partial pairs and rejects a
+deployment with no sign-in provider.
+
+| Configuration     | GitHub client pair | Google client pair | Compatible admission                                  |
+| ----------------- | ------------------ | ------------------ | ----------------------------------------------------- |
+| GitHub-only       | Set                | Empty              | GitHub username/org, verified email/domain, or unsafe |
+| Google-only       | Empty              | Set                | Verified email/domain, or explicit unsafe allow-all   |
+| GitHub and Google | Set                | Set                | Verified email/domain, or explicit unsafe allow-all   |
+
+The GitHub App ID, PKCS#8 private key, and installation ID remain required in all three
+configurations because they authorize repository operations; they do not enable GitHub sign-in. The
+`/login` page reads the enabled provider set from the control plane on every request.
+
+The core path uses GitHub sign-in. To add or switch to Google, see
+[Enable Google Login (Optional)](#enable-google-login-optional).
+
+> **Note**: Review `allowed_users`, `allowed_email_domains`, `allowed_emails`, and
+> `allowed_github_orgs` carefully — these control who can sign in. Terraform fails if all are empty
+> unless you explicitly set `unsafe_allow_all_users = true`. **Allowlists use OR semantics**:
+> matching any configured username, email domain, exact email, or active GitHub org membership
+> grants access. Use `allowed_emails` for individual users on shared domains (e.g. a specific
+> `person@gmail.com`) where `allowed_email_domains` would admit too many. `allowed_github_orgs`
+> checks membership at sign-in only with the signing-in user's OAuth token; existing sessions last
+> until session expiry. The `read:org` OAuth scope is requested only when org access is configured,
+> and GitHub Apps using org access need Organization permissions: Members read-only.
+
+---
+
+## Step 6: Deploy with Terraform
+
+Deployment requires **two phases** due to Cloudflare's Durable Object and service binding
+requirements.
+
+### Phase 1: Initial Deployment
+
+Ensure your `terraform.tfvars` has:
+
+```hcl
+enable_durable_object_bindings = false
+enable_service_bindings        = false
+```
+
+**Important**: Build the workers before running Terraform (Terraform references the built bundles):
+
+```bash
+# From the repository root
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
+```
+
+Then run:
+
+```bash
+cd terraform/environments/production
+
+# Initialize Terraform with backend config
+terraform init -backend-config=backend.tfvars
+
+# Deploy (phase 1 - creates workers without bindings)
+terraform apply
+```
+
+### Phase 2: Enable Bindings
+
+After Phase 1 succeeds, update your `terraform.tfvars`:
+
+```hcl
+enable_durable_object_bindings = true
+enable_service_bindings        = true
+```
+
+Then run:
+
+```bash
+terraform apply
+```
+
+Terraform will update the workers with the required bindings.
+
+---
+
+## Step 7: Deploy the Web App
+
+### If using Cloudflare (`web_platform = "cloudflare"`)
+
+Terraform handles the full build and deploy automatically — the web app is built with OpenNext and
+deployed as a Cloudflare Worker during `terraform apply`. No manual step needed.
+
+To serve the web app on your own hostname, see
+[Custom Domain for the Web App (Optional)](#custom-domain-for-the-web-app-optional).
+
+### If using Vercel (`web_platform = "vercel"`)
+
+Terraform creates the Vercel project and configures environment variables, but does **not** deploy
+the code. You have two options:
+
+#### Option A: Deploy via CLI (Recommended for First Deploy)
+
+```bash
+# From the repository root (replace {deployment_name} with your value from terraform.tfvars)
+npx vercel link --project open-inspect-{deployment_name}
+npx vercel --prod
+```
+
+> **Note**: The Vercel project is configured with custom build commands for the monorepo structure.
+> Terraform sets these automatically:
+>
+> - Install: `cd ../.. && npm install && npm run build -w @open-inspect/shared`
+> - Build: `next build`
+
+#### Option B: Link Git Repository (For Automatic Deployments)
+
+1. Go to [Vercel Dashboard](https://vercel.com/dashboard)
+2. Find the `open-inspect-{deployment_name}` project
+3. Go to **Settings → Git**
+4. Click **"Connect Git Repository"** and select your fork
+5. Vercel will automatically deploy on push to main
+
+> **Note**: If you link Git, ensure the build settings match those configured by Terraform (Settings
+> → General → Build & Development Settings).
+
+---
+
+## Step 8: Verify Deployment
+
+After deployment completes, verify each component:
+
+```bash
+# Get the verification commands from Terraform
+terraform output verification_commands
+```
+
+Or manually:
+
+```bash
+# 1. Control Plane health check (replace {deployment_name} and YOUR-SUBDOMAIN)
+curl https://open-inspect-control-plane-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/health
+
+# 2. Sandbox backend health check
+# Modal exposes a health endpoint. Prefer the exact URL from terraform output verification_commands.
+# Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
+MODAL_WORKSPACE_SLUG="YOUR-WORKSPACE" # or "YOUR-WORKSPACE-YOUR-MODAL-WEB-SUFFIX"
+curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
+# Daytona, Vercel, OpenComputer, and E2B use their provider APIs directly, so there is no
+# Open-Inspect shim health URL.
+
+# 3. Web app (should return 200)
+curl -I "$(terraform output -raw web_app_url)"
+```
+
+### Test the Full Flow
+
+1. Visit your web app URL
+2. Sign in with each configured provider
+3. Create a new session with a repository
+4. Send a prompt and verify the sandbox starts
+
+---
+
+## Step 9: Bootstrap the Workspace Owner
+
+Owner assignment is an explicit operator action. After the web app is deployed and verified:
+
+1. Have the intended Owner sign in to the deployed web application once. This creates their
+   canonical user and default role assignment.
+2. While signed in, open `/api/auth/get-session` on the web application origin and record the
+   32-character lowercase hexadecimal `user.id`. The bootstrap command accepts this canonical ID,
+   never an email address.
+3. Obtain the D1 database name with `terraform output -raw d1_database_name` from
+   `terraform/environments/production`.
+4. From the repository root, run the remote dry run (the default):
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>"
+```
+
+5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
+   unsuspended Owner), then execute the same command with `--execute`:
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>" \
+  --execute
+```
+
+The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
+`wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
+assignment, or another unsuspended Owner. There is no force option. Execution is one atomic Wrangler
+`--command` batch: it writes one redacted `workspace.owner_bootstrapped` service audit event,
+replaces the target's assignment, and returns the exact audit-bound postcondition from that same
+transaction. A no-op writes nothing. A lost batch response can leave the outcome uncertain; the
+command does not automatically retry writes or claim success without the postcondition.
+
+A successful execution prints the postcondition row as JSON with `"status":"executed"`.
+
+6. Verify by re-running the dry run (without `--execute`):
+
+```bash
+npm run rbac:bootstrap-owner -- \
+  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
+  --user "<canonical-user-id>"
+```
+
+The preflight row should now report `"status":"no-op"` with the detail
+`selected user is already the current unsuspended Owner`. If it reports `refused` instead, the
+command exits non-zero and the `detail` field gives the reason.
+
+---
+
+## Optional Sections
+
+Your core deployment is complete. Everything below is optional; follow only the sections you need.
+
+- [Alternative Sandbox Providers](#alternative-sandbox-providers-optional): Daytona, Vercel
+  Sandboxes, OpenComputer, or E2B instead of Modal
+- [Enable Google Login](#enable-google-login-optional)
+- [Slack Bot](#slack-bot-optional)
+- [Linear Agent](#linear-agent-optional)
+- [GitHub Bot](#github-bot-optional)
+- [Custom Domain for the Web App](#custom-domain-for-the-web-app-optional)
+- [Set Up CI/CD](#set-up-cicd-optional)
+- [Customizing the App Name and Icon](#customizing-the-app-name-and-icon-optional)
+- [Updating Your Deployment](#updating-your-deployment)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Alternative Sandbox Providers (Optional)
+
+The core path uses Modal, the default `sandbox_provider`. To run sessions on another provider, set
+`sandbox_provider` in `terraform.tfvars` and follow the matching section below instead of the
+[Modal](#modal) credentials in Step 2. Terraform accepts `modal`, `daytona`, `vercel`,
+`opencomputer`, or `e2b`.
 
 ### Daytona
 
@@ -266,411 +809,9 @@ For the full runtime, lifecycle, and configuration model, see
 > plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets after
 > deploying. See [Secrets Management](SECRETS.md) for details.
 
-### Anthropic
-
-Required by the default configuration: the Slack bot is enabled by default and its classifier runs
-on Claude, so `terraform apply` fails without this key. You can skip it only if you set both
-`enable_slack_bot = false` and `enable_linear_bot = false`, or point `classification_model` at an
-OpenAI model. Coding sessions themselves need no key here — those model credentials can be added as
-secrets in the web app after deploying.
-
-1. Go to [Anthropic Console](https://console.anthropic.com)
-2. Create an API key
-3. Note the **API Key** (starts with `sk-ant-`)
-
-> **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
-> setup instructions (can be configured after deployment).
->
-> **Want to use your xAI SuperGrok subscription?** See
-> [Using Grok with a SuperGrok Subscription](GROK_MODELS.md). Grok is opt-in and can also be
-> configured after deployment.
-
 ---
 
-## Step 3: Create GitHub App
-
-Every deployment needs **one GitHub App** for repository access. The same App can also provide
-GitHub OAuth sign-in, but its client pair is optional when Google is the only sign-in provider.
-
-1. Go to [GitHub Apps](https://github.com/settings/apps)
-2. Click **"New GitHub App"**
-3. Fill in the basics:
-   - **Name**: `Open-Inspect-YourName` (must be globally unique)
-   - **Homepage URL**: Your web app URL (see below)
-   - **Webhook**: Leave "Active" unchecked for now. Step 7c enables it when
-     `enable_github_bot = true` for GitHub automations or bot commands.
-4. If enabling GitHub sign-in, configure **Identifying and authorizing users** (OAuth):
-   - **Callback URL**: `{your-web-app-url}/api/auth/callback/github`
-
-   Your web app URL depends on `web_platform`:
-   - **Vercel**: `https://open-inspect-{deployment_name}.vercel.app`
-   - **Cloudflare**: `https://open-inspect-web-{deployment_name}.{your-subdomain}.workers.dev`
-   - **Cloudflare with `cloudflare_custom_domain` set**: `https://{your-custom-domain}`
-
-   > **Important**: The callback URL must match your deployed web app URL exactly. The
-   > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
-   > username or company name).
-
-   > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
-   > the default for newly created Apps, but activate it if yours predates that default). Expiring
-   > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
-   > that per-user credential for attributed GitHub operations such as pull-request creation. Clone,
-   > fetch, and push authentication still use the shared GitHub App installation. With expiration
-   > deactivated — or on an **OAuth App**, which never issues a refresh token — no per-user
-   > credential is captured, so supported attributed operations fall back to the shared GitHub App
-   > **bot** identity.
-
-5. Set **Repository permissions**:
-   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
-   - Checks: **Read-only** _(required for GitHub check-suite automations)_
-   - Contents: **Read & Write**
-   - Issues: **Read & Write** _(required if enabling GitHub bot)_
-   - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
-     session-created pull requests)_
-   - Metadata: **Read-only**
-6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
-   - Members: **Read-only**
-   - For existing GitHub Apps, republish the permission change and request/approve installation
-     updates before testing org membership sign-in.
-7. If GitHub sign-in uses `allowed_emails` or `allowed_email_domains`, set **Account permissions**:
-   - Email addresses: **Read-only** _(without it the app cannot read verified emails and those
-     allowlists deny every GitHub sign-in)_
-   - For existing GitHub Apps, republish the permission change and request/approve installation
-     updates, otherwise the added permission does not apply to current installs.
-8. Click **"Create GitHub App"**
-9. Note the **App ID** (top of page). If enabling GitHub sign-in, also note the **Client ID**.
-10. If enabling GitHub sign-in, under **"Client secrets"**, click **"Generate a new client secret"**
-    and note the **Client Secret**.
-11. Scroll down to **"Private keys"** and click **"Generate a private key"** (downloads a .pem file)
-12. **Convert the key to PKCS#8 format** (required for Cloudflare Workers):
-    ```bash
-    openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
-      -in ~/Downloads/your-app-name.*.private-key.pem \
-      -out private-key-pkcs8.pem
-    ```
-13. **Install the app** on your account/organization:
-    - Click "Install App" in the sidebar
-    - Select the repositories you want Open-Inspect to access
-14. Note the **Installation ID** from the URL after installing:
-    ```
-    https://github.com/settings/installations/INSTALLATION_ID
-    ```
-
-You should now always have:
-
-- **App ID** (e.g., `123456`)
-- **Private Key** (PKCS#8 format, starts with `-----BEGIN PRIVATE KEY-----`)
-- **Installation ID** (e.g., `12345678`)
-
-For GitHub sign-in, you should also have:
-
-- **Client ID** (e.g., `Iv1.abc123...`)
-- **Client Secret** (e.g., `abc123...`)
-
----
-
-## Step 4: Create Slack App (Optional)
-
-Skip this step if you don't need Slack integration.
-
-### Create the App
-
-1. Go to [Slack API Apps](https://api.slack.com/apps)
-2. Click **"Create New App"** → **"From scratch"**
-3. Name it (e.g., `Open-Inspect`) and select your workspace
-
-After deploying the Slack worker, you can configure the app from
-[`packages/slack-bot/slack-app-manifest.yaml`](../packages/slack-bot/slack-app-manifest.yaml)
-instead of entering the settings below individually. Replace `SLACK_EVENTS_URL` with the worker's
-`/events` URL and `SLACK_INTERACTIONS_URL` with its `/interactions` URL before applying the
-manifest. The template includes `message.channels` and `message.groups` for channel-message
-automations; remove those subscriptions if the deployment will not use that feature.
-
-Before `terraform apply`, configure the OAuth scopes below, install the app, and collect its bot
-token and signing secret. Apply the URL-dependent manifest after deployment, when Slack can verify
-the worker's `/events` and `/interactions` endpoints.
-
-### Configure OAuth & Permissions
-
-1. Go to **OAuth & Permissions** in the sidebar
-2. Add **Bot Token Scopes**:
-   - `assistant:write`
-   - `app_mentions:read`
-   - `chat:write`
-   - `channels:history`
-   - `channels:read`
-   - `groups:history`
-   - `groups:read`
-   - `im:history`
-   - `files:read` (lets the bot read images attached to messages and forward them to sessions)
-   - `files:write`
-   - `reactions:write`
-   - `users:read`
-   - `users:read.email`
-3. Click **"Install to Workspace"**
-4. Note the **Bot Token** (`xoxb-...`)
-
-> **Important**: If you update bot token scopes later, you must **reinstall the app** to your
-> workspace for the new permissions to take effect.
-
-### Upgrade an Existing Slack Deployment
-
-Queued delivery applies to every Slack completion, including text-only replies. Before the first
-`terraform apply` after upgrading:
-
-1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
-   this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
-2. Ensure the Slack app has `assistant:write`, `users:read`, `users:read.email`, `files:read`, and
-   `files:write`. Reinstall the app once for the workspace, and update `slack_bot_token` if Slack
-   issued a replacement. These scopes enable Agent view, user identity resolution, inbound images,
-   and generated-media delivery.
-3. Run `terraform apply`, then verify a text completion, an inbound image attached to a prompt, and
-   a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
-   the new resources; grant the permission and rerun the apply.
-
-No individual Slack user needs to reauthorize the app. Deployments with `enable_slack_bot = false`
-still create the image-build finalization Queue and dead-letter Queue.
-
-### Get Signing Secret
-
-1. Go to **Basic Information**
-2. Note the **Signing Secret**
-
-### Event Subscriptions (Configure After Deployment)
-
-Event Subscriptions require the Slack bot worker to be deployed first for URL verification. You'll
-configure this in **Step 7b** after running Terraform.
-
----
-
-## Step 4b: Create a Linear OAuth App (Optional)
-
-Skip this step if you don't need the Linear Agent integration.
-
-1. Create an application in **Linear Settings → API → Applications**.
-2. Enable webhooks and subscribe to **Agent session events**. **Permission changes** and **Inbox
-   notifications** are also useful operational signals.
-3. Enable **Client credentials tokens**. This Linear-side setting is not managed by Terraform.
-4. Configure these URLs, replacing the deployment name and Workers subdomain:
-   - Callback URL:
-     `https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oauth/callback`
-   - Webhook URL:
-     `https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/webhook`
-5. Record the client ID, client secret, and webhook signing secret for `terraform.tfvars`.
-
-The app is installed after deployment in **Step 7d**. Runtime access uses replaceable
-client-credentials tokens; authorization-code refresh tokens are not stored as runtime credentials.
-
----
-
-## Step 5: Generate Security Secrets
-
-Generate these random secrets (you'll need them for `terraform.tfvars`):
-
-```bash
-# Token encryption key
-echo "token_encryption_key: $(openssl rand -base64 32)"
-
-# Repo secrets encryption key
-echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
-
-# Modal API secret (use hex for this one)
-echo "modal_api_secret: $(openssl rand -hex 32)"
-
-# Browser authentication secret (Terraform retains the legacy input name)
-echo "nextauth_secret: $(openssl rand -base64 32)"
-
-# GitHub webhook secret (only if enabling GitHub bot)
-echo "github_webhook_secret: $(openssl rand -hex 32)"
-```
-
-Save these values somewhere secure—you'll need them in the next step.
-
----
-
-## Step 6: Configure Terraform
-
-```bash
-cd terraform/environments/production
-
-# Copy the example files
-cp terraform.tfvars.example terraform.tfvars
-cp backend.tfvars.example backend.tfvars
-```
-
-### Configure `backend.tfvars`
-
-Fill in your R2 credentials:
-
-```hcl
-access_key = "your-r2-access-key-id"
-secret_key = "your-r2-secret-access-key"
-endpoints = {
-  s3 = "https://YOUR_CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
-}
-```
-
-### Configure `terraform.tfvars`
-
-Fill in all the values you gathered. Here's the structure:
-
-```hcl
-# Provider Authentication
-cloudflare_api_token        = "your-cloudflare-api-token"
-cloudflare_account_id       = "your-account-id"
-cloudflare_worker_subdomain = "your-subdomain"  # e.g., "twilight-unit-b2cf" (without .workers.dev)
-
-# Web platform: "vercel" (default) or "cloudflare" (OpenNext)
-web_platform                = "vercel"
-
-# Optional custom domain for the web app (only when web_platform = "cloudflare")
-# cloudflare_zone_id       = "your-zone-id"
-# cloudflare_custom_domain = "app.example.com"
-
-# Vercel (only required when web_platform = "vercel")
-# If using Cloudflare, do NOT set these — leave them out so the dummy defaults are used.
-vercel_api_token            = "your-vercel-token"
-vercel_team_id              = "team_xxxxx"       # Your Vercel ID (even personal accounts have one)
-modal_token_id              = "your-modal-token-id"
-modal_token_secret          = "your-modal-token-secret"
-modal_workspace             = "your-modal-workspace"
-modal_environment           = "your-modal-environment"
-modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
-
-# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
-# sandbox_provider          = "modal"
-
-# Daytona (only required when sandbox_provider = "daytona")
-# daytona_api_url           = "https://app.daytona.io/api"
-# daytona_api_key           = "your-daytona-api-key"
-# daytona_base_snapshot     = "your-snapshot-name"
-# daytona_base_snapshot_memory_gib = 2
-
-# Vercel Sandboxes (only required when sandbox_provider = "vercel")
-# vercel_sandbox_token      = "your-vercel-token"
-# vercel_sandbox_project_id = "prj_xxxxx"
-# vercel_sandbox_team_id    = "team_xxxxx" # Optional
-# vercel_base_snapshot_id   = "snapshot_xxxxx" # Optional manual override; skips managed snapshot builds
-# vercel_sandbox_runtime    = "node24"
-# vercel_snapshot_expiration_ms = 0
-
-# OpenComputer (only required when sandbox_provider = "opencomputer")
-# opencomputer_api_url      = "https://app.opencomputer.dev/api"
-# opencomputer_api_key      = "your-opencomputer-api-key"
-# opencomputer_template     = ""  # Empty lets Terraform build the runtime template
-
-# E2B (only required when sandbox_provider = "e2b")
-# e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
-# e2b_template_id           = "open-inspect-sandbox"
-
-# GitHub App repository access (required in every deployment)
-github_app_id              = "123456"
-github_app_installation_id = "12345678"
-github_app_private_key     = <<-EOF
------BEGIN PRIVATE KEY-----
-... paste your PKCS#8 key here ...
------END PRIVATE KEY-----
-EOF
-
-# GitHub OAuth sign-in (optional pair; leave both empty for Google-only)
-github_client_id     = "Iv1.abc123..."      # From GitHub App settings
-github_client_secret = "your-client-secret" # Generated in GitHub App settings
-
-# Google OAuth sign-in (optional pair; may be used alone or with GitHub)
-google_client_id     = ""
-google_client_secret = ""
-
-# Slack (set enable_slack_bot = false to disable Slack integration)
-enable_slack_bot     = false
-slack_bot_token      = ""
-slack_signing_secret = ""
-
-# GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
-enable_github_bot      = false
-github_webhook_secret  = ""          # From Step 5 (required if enabled)
-github_bot_username    = ""          # e.g., "my-app[bot]" (your GitHub App's bot login)
-
-# Linear Agent (set enable_linear_bot = true to deploy the webhook worker)
-enable_linear_bot      = false
-linear_client_id       = ""          # From Step 4b (required if enabled)
-linear_client_secret   = ""          # From Step 4b (required if enabled)
-linear_webhook_secret  = ""          # From Step 4b (required if enabled)
-
-# API Keys. Optional: leave blank to add model credentials as secrets in the web
-# app instead. Required only when the Slack/Linear classifier runs on Anthropic.
-anthropic_api_key = "sk-ant-..."
-# classification_anthropic_api_key = ""   # Classifier-only key; never reaches sandboxes
-
-# Slack/Linear classifier provider, chosen by classification_model.
-# An OpenAI model requires classification_openai_api_key. An Anthropic model is
-# served by classification_anthropic_api_key, falling back to anthropic_api_key.
-# classification_model = "claude-haiku-4-5"   # e.g. "gpt-5.4-mini" to classify on OpenAI
-classification_openai_api_key = ""   # Required when classification_model is an OpenAI id
-
-# Security Secrets (from Step 5)
-token_encryption_key          = "your-generated-value"
-repo_secrets_encryption_key   = "your-generated-value"
-# provider_accounts_encryption_key = "existing-key" # Optional override; Terraform generates one
-modal_api_secret               = "your-generated-value"
-nextauth_secret                = "your-generated-value"
-
-# Configuration
-# IMPORTANT: deployment_name must be globally unique for Vercel URLs
-# Use your GitHub username, company name, or a random string
-deployment_name = "your-unique-name"  # e.g., "acme", "johndoe", "mycompany"
-project_root    = "../../../"
-
-# Branding (optional — defaults shown)
-# Display name shown in the web UI tab title, sign-in page, landing hero, bot
-# messages (Slack/Linear), PR body footer, and outbound HTTP User-Agent.
-# app_name = "Open-Inspect"
-# Short brand label shown only in the sidebar header.
-# Optional URL (absolute or root-relative) to a custom logo/favicon override.
-# Leave empty to keep the built-in favicon and default in-app icon.
-# app_icon_url = ""
-
-# Initial deployment: set both to false (see Step 7)
-enable_durable_object_bindings = false
-enable_service_bindings        = false
-
-# Access Control (set at least one allowlist for production). A user is admitted
-# if they match ANY allowlist below.
-allowed_users         = "your-github-username"  # Comma-separated GitHub usernames, or empty
-allowed_email_domains = ""                      # Comma-separated domains (e.g., "example.com,corp.io")
-allowed_emails        = ""                      # Exact addresses (e.g., "pm@gmail.com") — for users on shared domains
-allowed_github_orgs   = ""                      # Comma-separated orgs whose active members can sign in
-
-# Explicitly opt into open access only if you want any authenticated user to be
-# able to sign in when all allowlists are empty.
-unsafe_allow_all_users = false
-```
-
-### Choose Sign-In Providers
-
-Complete credential pairs are the enablement policy. Terraform rejects partial pairs and rejects a
-deployment with no sign-in provider.
-
-| Configuration     | GitHub client pair | Google client pair | Compatible admission                                  |
-| ----------------- | ------------------ | ------------------ | ----------------------------------------------------- |
-| GitHub-only       | Set                | Empty              | GitHub username/org, verified email/domain, or unsafe |
-| Google-only       | Empty              | Set                | Verified email/domain, or explicit unsafe allow-all   |
-| GitHub and Google | Set                | Set                | Verified email/domain, or explicit unsafe allow-all   |
-
-The GitHub App ID, PKCS#8 private key, and installation ID remain required in all three
-configurations because they authorize repository operations; they do not enable GitHub sign-in. The
-`/login` page reads the enabled provider set from the control plane on every request.
-
-> **Note**: Review `allowed_users`, `allowed_email_domains`, `allowed_emails`, and
-> `allowed_github_orgs` carefully — these control who can sign in. Terraform fails if all are empty
-> unless you explicitly set `unsafe_allow_all_users = true`. **Allowlists use OR semantics**:
-> matching any configured username, email domain, exact email, or active GitHub org membership
-> grants access. Use `allowed_emails` for individual users on shared domains (e.g. a specific
-> `person@gmail.com`) where `allowed_email_domains` would admit too many. `allowed_github_orgs`
-> checks membership at sign-in only with the signing-in user's OAuth token; existing sessions last
-> until session expiry. The `read:org` OAuth scope is requested only when org access is configured,
-> and GitHub Apps using org access need Organization permissions: Members read-only.
-
-### Enable Google Login (Optional)
+## Enable Google Login (Optional)
 
 Google login lets non-developer users (PMs, support agents) sign in without a GitHub account. Git
 operations still use the shared GitHub App, and their PRs fall back to the App bot (no personal
@@ -694,122 +835,104 @@ GitHub attribution unless the same verified email is also a linked GitHub identi
 
 ---
 
-## Step 7: Deploy with Terraform
+## Slack Bot (Optional)
 
-Deployment requires **two phases** due to Cloudflare's Durable Object and service binding
-requirements.
+Skip this section if you don't need Slack integration.
 
-### Phase 1: Initial Deployment
+### Create the Slack App
 
-Ensure your `terraform.tfvars` has:
+1. Go to [Slack API Apps](https://api.slack.com/apps)
+2. Click **"Create New App"** → **"From scratch"**
+3. Name it (e.g., `Open-Inspect`) and select your workspace
+
+After deploying the Slack worker, you can configure the app from
+[`packages/slack-bot/slack-app-manifest.yaml`](../packages/slack-bot/slack-app-manifest.yaml)
+instead of entering the settings below individually. Replace `SLACK_EVENTS_URL` with the worker's
+`/events` URL and `SLACK_INTERACTIONS_URL` with its `/interactions` URL before applying the
+manifest. The template includes `message.channels` and `message.groups` for channel-message
+automations; remove those subscriptions if the deployment will not use that feature.
+
+Before `terraform apply`, configure the OAuth scopes below, install the app, and collect its bot
+token and signing secret. Apply the URL-dependent manifest after deployment, when Slack can verify
+the worker's `/events` and `/interactions` endpoints.
+
+#### Configure OAuth & Permissions
+
+1. Go to **OAuth & Permissions** in the sidebar
+2. Add **Bot Token Scopes**:
+   - `assistant:write`
+   - `app_mentions:read`
+   - `chat:write`
+   - `channels:history`
+   - `channels:read`
+   - `groups:history`
+   - `groups:read`
+   - `im:history`
+   - `files:read` (lets the bot read images attached to messages and forward them to sessions)
+   - `files:write`
+   - `reactions:write`
+   - `users:read`
+   - `users:read.email`
+3. Click **"Install to Workspace"**
+4. Note the **Bot Token** (`xoxb-...`)
+
+> **Important**: If you update bot token scopes later, you must **reinstall the app** to your
+> workspace for the new permissions to take effect.
+
+#### Upgrade an Existing Slack Deployment
+
+Queued delivery applies to every Slack completion, including text-only replies. Before the first
+`terraform apply` after upgrading:
+
+1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
+   this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
+2. Ensure the Slack app has `assistant:write`, `users:read`, `users:read.email`, `files:read`, and
+   `files:write`. Reinstall the app once for the workspace, and update `slack_bot_token` if Slack
+   issued a replacement. These scopes enable Agent view, user identity resolution, inbound images,
+   and generated-media delivery.
+3. Run `terraform apply`, then verify a text completion, an inbound image attached to a prompt, and
+   a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
+   the new resources; grant the permission and rerun the apply.
+
+No individual Slack user needs to reauthorize the app. Deployments with `enable_slack_bot = false`
+still create the image-build finalization Queue and dead-letter Queue.
+
+#### Get Signing Secret
+
+1. Go to **Basic Information**
+2. Note the **Signing Secret**
+
+#### Enable the Slack Bot in Terraform
+
+Set these in `terraform.tfvars`, then run `terraform apply` from
+`terraform/environments/production`:
 
 ```hcl
-enable_durable_object_bindings = false
-enable_service_bindings        = false
+enable_slack_bot     = true
+slack_bot_token      = "xoxb-..."
+slack_signing_secret = "your-signing-secret"
+anthropic_api_key    = "sk-ant-..." # Or classification_anthropic_api_key
 ```
 
-**Important**: Build the workers before running Terraform (Terraform references the built bundles):
+The Slack classifier needs an Anthropic key unless `classification_model` points at an OpenAI model;
+see [Anthropic (Optional)](#anthropic-optional).
 
-```bash
-# From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
-```
+#### Event Subscriptions (Configure After Deployment)
 
-Then run:
+Event Subscriptions require the Slack bot worker to be deployed first for URL verification. You'll
+configure this in [Complete Slack Setup](#complete-slack-setup) after running Terraform.
 
-```bash
-cd terraform/environments/production
-
-# Initialize Terraform with backend config
-terraform init -backend-config=backend.tfvars
-
-# Deploy (phase 1 - creates workers without bindings)
-terraform apply
-```
-
-### Phase 2: Enable Bindings
-
-After Phase 1 succeeds, update your `terraform.tfvars`:
-
-```hcl
-enable_durable_object_bindings = true
-enable_service_bindings        = true
-```
-
-Then run:
-
-```bash
-terraform apply
-```
-
-Terraform will update the workers with the required bindings.
-
----
-
-## Step 7a: Bootstrap the Workspace Owner
-
-Owner assignment is an explicit operator action. After both deployment phases complete:
-
-1. Have the intended Owner sign in to the deployed web application once. This creates their
-   canonical user and default role assignment.
-2. While signed in, open `/api/auth/get-session` on the web application origin and record the
-   32-character lowercase hexadecimal `user.id`. The bootstrap command accepts this canonical ID,
-   never an email address.
-3. Obtain the D1 database name with `terraform output -raw d1_database_name` from
-   `terraform/environments/production`.
-4. From the repository root, run the remote dry run (the default):
-
-```bash
-npm run rbac:bootstrap-owner -- \
-  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
-  --user "<canonical-user-id>"
-```
-
-5. Confirm the preflight result is `ready` (or `no-op` when the target is already the current
-   unsuspended Owner), then execute the same command with `--execute`:
-
-```bash
-npm run rbac:bootstrap-owner -- \
-  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
-  --user "<canonical-user-id>" \
-  --execute
-```
-
-The command uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or
-`wrangler login`) and targets remote D1. It refuses a suspended/missing user, a missing or ambiguous
-assignment, or another unsuspended Owner. There is no force option. Execution is one atomic Wrangler
-`--command` batch: it writes one redacted `workspace.owner_bootstrapped` service audit event,
-replaces the target's assignment, and returns the exact audit-bound postcondition from that same
-transaction. A no-op writes nothing. A lost batch response can leave the outcome uncertain; the
-command does not automatically retry writes or claim success without the postcondition.
-
-A successful execution prints the postcondition row as JSON with `"status":"executed"`.
-
-6. Verify by re-running the dry run (without `--execute`):
-
-```bash
-npm run rbac:bootstrap-owner -- \
-  --database "$(terraform -chdir=terraform/environments/production output -raw d1_database_name)" \
-  --user "<canonical-user-id>"
-```
-
-The preflight row should now report `"status":"no-op"` with the detail
-`selected user is already the current unsuspended Owner`. If it reports `refused` instead, the
-command exits non-zero and the `detail` field gives the reason.
-
----
-
-## Step 7b: Complete Slack Setup (If Using Slack)
+### Complete Slack Setup
 
 Now that the Slack bot worker is deployed, configure the agent experience, App Home, and event
 subscriptions.
 
-### Enable Agents
+#### Enable Agents
 
 1. Go to [Slack Apps](https://api.slack.com/apps) -> Your Slack App → **Agents**
 2. Enable the agent feature and use `AI coding assistant for your codebase` as the agent description
 
-### Enable App Home
+#### Enable App Home
 
 The App Home provides settings for users' preferred model, reasoning effort, and branch. The
 writable Messages tab lets users start direct-message sessions.
@@ -818,7 +941,7 @@ writable Messages tab lets users start direct-message sessions.
 2. Under **Show Tabs**, toggle **"Home Tab"** to On
 3. Toggle **"Messages Tab"** to On and allow users to send messages
 
-### Configure Event Subscriptions
+#### Configure Event Subscriptions
 
 1. Go to [Slack Apps](https://api.slack.com/apps) -> Your Slack App → **Event Subscriptions**
 2. Toggle **"Enable Events"** to On
@@ -837,7 +960,7 @@ writable Messages tab lets users start direct-message sessions.
    - `message.im` (enables direct message support)
 6. Click **Save Changes**
 
-### Configure Interactivity
+#### Configure Interactivity
 
 1. Go to **Interactivity & Shortcuts**
 2. Toggle **"Interactivity"** to On
@@ -852,7 +975,7 @@ writable Messages tab lets users start direct-message sessions.
    This is required for searchable Slack repository pickers that use external data sources.
 5. Click **Save Changes**
 
-### Invite the Bot to Channels
+#### Invite the Bot to Channels
 
 In Slack, for each channel where you want the bot to respond:
 
@@ -863,9 +986,65 @@ The bot only responds to @mentions in channels it has been invited to.
 
 ---
 
-## Step 7c: Complete GitHub Bot Setup (If Using GitHub Bot)
+## Linear Agent (Optional)
 
-Now that the GitHub bot worker is deployed, configure the GitHub App for webhook delivery.
+Skip this section if you don't need the Linear Agent integration.
+
+### Create a Linear OAuth App
+
+1. Create an application in **Linear Settings → API → Applications**.
+2. Enable webhooks and subscribe to **Agent session events**. **Permission changes** and **Inbox
+   notifications** are also useful operational signals.
+3. Enable **Client credentials tokens**. This Linear-side setting is not managed by Terraform.
+4. Configure these URLs, replacing the deployment name and Workers subdomain:
+   - Callback URL:
+     `https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oauth/callback`
+   - Webhook URL:
+     `https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/webhook`
+5. Record the client ID, client secret, and webhook signing secret for `terraform.tfvars`.
+6. Set `enable_linear_bot = true`, `linear_client_id`, `linear_client_secret`, and
+   `linear_webhook_secret` in `terraform.tfvars`, then run `terraform apply`. Like Slack, the Linear
+   classifier needs an Anthropic key unless `classification_model` points at an OpenAI model; see
+   [Anthropic (Optional)](#anthropic-optional).
+
+The app is installed after deployment in [Install the Linear Agent](#install-the-linear-agent).
+Runtime access uses replaceable client-credentials tokens; authorization-code refresh tokens are not
+stored as runtime credentials.
+
+### Install the Linear Agent
+
+After the Linear bot Worker is deployed, visit:
+
+```text
+https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oauth/authorize
+```
+
+A Linear workspace admin must approve the installation. After installation, the agent appears in
+mention and assignment menus. Test it by mentioning the agent on an issue, then use **View Session**
+to follow the corresponding Open-Inspect session.
+
+For upgrades, enable **Client credentials tokens** before deploying. No reinstall is expected for an
+eligible existing installation, but allow already-running sessions to finish before upgrading
+because older callback contexts may not contain the installed app-user identity.
+
+For configuration and troubleshooting, see [Linear Integration](./integrations/LINEAR.md).
+
+---
+
+## GitHub Bot (Optional)
+
+The GitHub bot handles PR review assignments and @mention commands. To deploy it, set these in
+`terraform.tfvars`, then run `terraform apply`:
+
+```hcl
+enable_github_bot     = true
+github_webhook_secret = "your-generated-value" # From Step 4
+github_bot_username   = "my-app[bot]"          # See "Find Your Bot Username" below
+```
+
+The GitHub App also needs the Issues permission listed in Step 3.
+
+After the GitHub bot worker is deployed, configure the GitHub App for webhook delivery.
 
 ### Configure Webhook on GitHub App
 
@@ -911,36 +1090,9 @@ For day-to-day workflows, see [GitHub Integration](./integrations/GITHUB.md).
 
 ---
 
-## Step 7d: Install the Linear Agent (If Using Linear)
+## Custom Domain for the Web App (Optional)
 
-After the Linear bot Worker is deployed, visit:
-
-```text
-https://open-inspect-linear-bot-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/oauth/authorize
-```
-
-A Linear workspace admin must approve the installation. After installation, the agent appears in
-mention and assignment menus. Test it by mentioning the agent on an issue, then use **View Session**
-to follow the corresponding Open-Inspect session.
-
-For upgrades, enable **Client credentials tokens** before deploying. No reinstall is expected for an
-eligible existing installation, but allow already-running sessions to finish before upgrading
-because older callback contexts may not contain the installed app-user identity.
-
-For configuration and troubleshooting, see [Linear Integration](./integrations/LINEAR.md).
-
----
-
-## Step 8: Deploy the Web App
-
-### If using Cloudflare (`web_platform = "cloudflare"`)
-
-Terraform handles the full build and deploy automatically — the web app is built with OpenNext and
-deployed as a Cloudflare Worker during `terraform apply`. No manual step needed.
-
-#### Optional: serve the web app on a custom domain
-
-By default the web app is served from
+Custom domains require `web_platform = "cloudflare"`. By default the web app is served from
 `https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev`. To use your own hostname,
 set both of these in `terraform.tfvars`:
 
@@ -959,75 +1111,9 @@ Cloudflare provisions the DNS record and edge certificate automatically. Notes:
 - The Cloudflare API token needs zone-level **Workers Routes: Edit** permission to attach the
   domain.
 
-### If using Vercel (`web_platform = "vercel"`)
-
-Terraform creates the Vercel project and configures environment variables, but does **not** deploy
-the code. You have two options:
-
-#### Option A: Deploy via CLI (Recommended for First Deploy)
-
-```bash
-# From the repository root (replace {deployment_name} with your value from terraform.tfvars)
-npx vercel link --project open-inspect-{deployment_name}
-npx vercel --prod
-```
-
-> **Note**: The Vercel project is configured with custom build commands for the monorepo structure.
-> Terraform sets these automatically:
->
-> - Install: `cd ../.. && npm install && npm run build -w @open-inspect/shared`
-> - Build: `next build`
-
-#### Option B: Link Git Repository (For Automatic Deployments)
-
-1. Go to [Vercel Dashboard](https://vercel.com/dashboard)
-2. Find the `open-inspect-{deployment_name}` project
-3. Go to **Settings → Git**
-4. Click **"Connect Git Repository"** and select your fork
-5. Vercel will automatically deploy on push to main
-
-> **Note**: If you link Git, ensure the build settings match those configured by Terraform (Settings
-> → General → Build & Development Settings).
-
 ---
 
-## Step 9: Verify Deployment
-
-After deployment completes, verify each component:
-
-```bash
-# Get the verification commands from Terraform
-terraform output verification_commands
-```
-
-Or manually:
-
-```bash
-# 1. Control Plane health check (replace {deployment_name} and YOUR-SUBDOMAIN)
-curl https://open-inspect-control-plane-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/health
-
-# 2. Sandbox backend health check
-# Modal exposes a health endpoint. Prefer the exact URL from terraform output verification_commands.
-# Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
-MODAL_WORKSPACE_SLUG="YOUR-WORKSPACE" # or "YOUR-WORKSPACE-YOUR-MODAL-WEB-SUFFIX"
-curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona, Vercel, OpenComputer, and E2B use their provider APIs directly, so there is no
-# Open-Inspect shim health URL.
-
-# 3. Web app (should return 200)
-curl -I "$(terraform output -raw web_app_url)"
-```
-
-### Test the Full Flow
-
-1. Visit your web app URL
-2. Sign in with each configured provider
-3. Create a new session with a repository
-4. Send a prompt and verify the sandbox starts
-
----
-
-## Step 10: Set Up CI/CD (Optional)
+## Set Up CI/CD (Optional)
 
 Enable automatic deployments when you push to main by configuring GitHub Actions secrets and
 variables under your fork's **Settings → Secrets and variables → Actions**.
@@ -1263,6 +1349,38 @@ it is the recovery source for automatically generated keys.
 
 ---
 
+## Customizing the App Name and Icon (Optional)
+
+Open-Inspect can be whitelabeled by overriding the brand name and logo. Both values are optional and
+default to the built-in `Open-Inspect` brand.
+
+Add these to your `terraform.tfvars`:
+
+```hcl
+# Display name shown in:
+#   - Web tab title, sign-in page, landing hero
+#   - Slack App Home settings page
+#   - Linear OAuth success page and completion comments
+#   - PR body footer ("Created with [<app_name>](<session-url>)")
+#   - Outbound HTTP User-Agent headers (GitHub, GitLab API)
+app_name = "Acme Bot"
+
+# Optional URL to a custom logo image (SVG/PNG). When set, replaces the icon in
+# the command menu and favicon. Leave empty to keep the built-in favicon.
+# Use an absolute URL or a root-relative path served from packages/web/public/.
+app_icon_url = "/branding/acme-logo.svg"   # or "https://cdn.example.com/logo.svg"
+```
+
+After changing any of these values, run `terraform apply` and (for Vercel) redeploy the web app so
+the new build picks up the `NEXT_PUBLIC_APP_NAME` and `NEXT_PUBLIC_APP_ICON_URL` env vars
+(Cloudflare's web deploy is rebuilt automatically by Terraform).
+
+> **Note**: `NEXT_PUBLIC_*` vars are inlined into the client bundle at build time, so changes
+> require a fresh web build. The bot/control-plane workers read `APP_NAME` at request time, so they
+> pick up the new value immediately after `terraform apply`.
+
+---
+
 ## Updating Your Deployment
 
 To update after pulling changes from upstream:
@@ -1457,38 +1575,6 @@ This occurs on first deployment. Follow the two-phase deployment process:
 - Rotate secrets periodically using `terraform apply` after updating `terraform.tfvars`
 - Review the [Security Model](../README.md#security-model-single-tenant-only) - this system is
   designed for single-tenant deployment
-
----
-
-## Customizing the App Name and Icon (Optional)
-
-Open-Inspect can be whitelabeled by overriding the brand name and logo. Both values are optional and
-default to the built-in `Open-Inspect` brand.
-
-Add these to your `terraform.tfvars`:
-
-```hcl
-# Display name shown in:
-#   - Web tab title, sign-in page, landing hero
-#   - Slack App Home settings page
-#   - Linear OAuth success page and completion comments
-#   - PR body footer ("Created with [<app_name>](<session-url>)")
-#   - Outbound HTTP User-Agent headers (GitHub, GitLab API)
-app_name = "Acme Bot"
-
-# Optional URL to a custom logo image (SVG/PNG). When set, replaces the icon in
-# the command menu and favicon. Leave empty to keep the built-in favicon.
-# Use an absolute URL or a root-relative path served from packages/web/public/.
-app_icon_url = "/branding/acme-logo.svg"   # or "https://cdn.example.com/logo.svg"
-```
-
-After changing any of these values, run `terraform apply` and (for Vercel) redeploy the web app so
-the new build picks up the `NEXT_PUBLIC_APP_NAME` and `NEXT_PUBLIC_APP_ICON_URL` env vars
-(Cloudflare's web deploy is rebuilt automatically by Terraform).
-
-> **Note**: `NEXT_PUBLIC_*` vars are inlined into the client bundle at build time, so changes
-> require a fresh web build. The bot/control-plane workers read `APP_NAME` at request time, so they
-> pick up the new value immediately after `terraform apply`.
 
 ---
 
