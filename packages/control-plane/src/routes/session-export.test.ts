@@ -18,7 +18,7 @@ import {
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { SessionExportRow } from "../db/session-export-store";
+import type { ListSessionsForExportOptions, SessionExportRow } from "../db/session-export-store";
 import { encodeRunsExportCursor } from "../db/session-export-cursor";
 import { MAX_INCLUDED_BYTES_PER_SESSION } from "../session/contracts";
 import type { Env } from "../types";
@@ -43,7 +43,12 @@ vi.mock("../auth/authenticate", async (importOriginal) => ({
 
 vi.mock("../db/session-export-store", () => ({
   SessionExportStore: vi.fn().mockImplementation(function () {
-    return { list: mocks.list };
+    return {
+      list: async (options: ListSessionsForExportOptions) => ({
+        scope: options.scope ?? "sessions",
+        ...(await mocks.list(options)),
+      }),
+    };
   }),
 }));
 
@@ -373,12 +378,13 @@ describe("GET /sessions/export", () => {
 
   it("forwards runs scope, its cursor and root window while retaining include and compact format", async () => {
     const cursor = {
+      scope: "runs" as const,
       rootCreatedAt: 900,
       rootSessionId: "root-1",
       spawnDepth: 1,
       createdAt: 1_000,
       id: "session-1",
-      snapshotMaxRowId: 42,
+      snapshotMaxSequence: 42,
     };
     mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: true, nextCursor: cursor });
     mocks.runtimeFetch.mockResolvedValueOnce(traceResponse({ events: [] }));
@@ -472,12 +478,13 @@ describe("GET /sessions/export", () => {
     {
       scope: "sessions",
       cursor: encodeRunsExportCursor({
+        scope: "runs",
         rootCreatedAt: 900,
         rootSessionId: "root-1",
         spawnDepth: 1,
         createdAt: 1_000,
         id: "session-1",
-        snapshotMaxRowId: 42,
+        snapshotMaxSequence: 42,
       }),
     },
   ])("rejects a $scope request with the other scope's cursor", async (query) => {

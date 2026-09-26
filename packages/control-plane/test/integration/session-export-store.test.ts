@@ -1,14 +1,22 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SessionExportStore } from "../../src/db/session-export-store";
+import { SessionExportStore, type RunsPage } from "../../src/db/session-export-store";
+import type { RunsExportCursor } from "../../src/db/session-export-cursor";
+import { SessionIndexStore } from "../../src/db/session-index";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 import { sqlDatabase } from "./helpers";
 
 function insertSession(id: string, createdAt: number) {
-  return env.DB.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)")
-    .bind(id, createdAt, createdAt)
-    .run();
+  return env.DB.batch([
+    env.DB.prepare(
+      "UPDATE session_export_sequence SET last_sequence = last_sequence + 1 WHERE singleton = 1"
+    ),
+    env.DB.prepare(
+      `INSERT INTO sessions (id, created_at, updated_at, export_sequence)
+       VALUES (?, ?, ?, (SELECT last_sequence FROM session_export_sequence WHERE singleton = 1))`
+    ).bind(id, createdAt, createdAt),
+  ]);
 }
 
 async function insertDescendant(
@@ -29,6 +37,36 @@ async function insertDescendant(
 describe("SessionExportStore integration", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
+
+  it("allocates a non-reusable export sequence atomically with each session insert", async () => {
+    const store = new SessionIndexStore(sqlDatabase(env.DB));
+    const create = (id: string) =>
+      store.create({
+        id,
+        title: null,
+        repoOwner: null,
+        repoName: null,
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+    await create("first");
+    await create("second");
+    await store.delete("second");
+    await expect(create("first")).rejects.toThrow();
+    await create("third");
+
+    const result = await env.DB.prepare(
+      "SELECT id, export_sequence FROM sessions ORDER BY export_sequence"
+    ).all();
+    expect(result.results).toEqual([
+      { id: "first", export_sequence: 1 },
+      { id: "third", export_sequence: 3 },
+    ]);
+  });
 
   it("paginates timestamp ties without gaps or newly-created sessions", async () => {
     await insertSession("session-a", 200);
@@ -103,9 +141,9 @@ describe("SessionExportStore integration", () => {
     const store = new SessionExportStore(sqlDatabase(env.DB));
     const ids: string[] = [];
     const pages: string[][] = [];
-    let cursor = null;
+    let cursor: RunsExportCursor | null = null;
     do {
-      const page = await store.list({ scope: "runs", cursor, limit: 3 });
+      const page: RunsPage = await store.list({ scope: "runs", cursor, limit: 3 });
       const pageIds = page.sessions.map(({ id }) => id);
       pages.push(pageIds);
       ids.push(...pageIds);
@@ -149,9 +187,9 @@ describe("SessionExportStore integration", () => {
     await insertDescendant("grandchild", "a-child", "root", 205, 2);
     const store = new SessionExportStore(sqlDatabase(env.DB));
     const ids: string[] = [];
-    let cursor = null;
+    let cursor: RunsExportCursor | null = null;
     do {
-      const page = await store.list({ scope: "runs", cursor, limit: 1 });
+      const page: RunsPage = await store.list({ scope: "runs", cursor, limit: 1 });
       ids.push(...page.sessions.map(({ id }) => id));
       cursor = page.nextCursor;
     } while (cursor);
@@ -175,6 +213,30 @@ describe("SessionExportStore integration", () => {
       "child-2",
     ]);
     expect(third.nextCursor).toBeNull();
+  });
+
+  it("excludes a late descendant even when deletion reuses the fenced rowid", async () => {
+    await insertSession("root", 200);
+    await insertDescendant("child-1", "root", "root", 210, 1);
+    await insertDescendant("child-2", "root", "root", 230, 1);
+    const store = new SessionExportStore(sqlDatabase(env.DB));
+    const first = await store.list({ scope: "runs", cursor: null, limit: 1 });
+    const deleted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
+      .bind("child-2")
+      .first();
+    await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("child-2").run();
+    await insertDescendant("late-child", "root", "root", 220, 1);
+    const inserted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
+      .bind("late-child")
+      .first();
+    expect(inserted).toEqual(deleted);
+    const second = await store.list({ scope: "runs", cursor: first.nextCursor, limit: 1 });
+
+    expect([first, second].flatMap((page) => page.sessions.map(({ id }) => id))).toEqual([
+      "root",
+      "child-1",
+    ]);
+    expect(second.nextCursor).toBeNull();
   });
 
   it("excludes orphans whose root row no longer exists", async () => {

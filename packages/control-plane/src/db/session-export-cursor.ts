@@ -8,10 +8,12 @@ export interface SessionExportCursor extends CreatedAtCursor {
   snapshotMaxRowId: number;
 }
 
-export interface RunsExportCursor extends SessionExportCursor {
+export interface RunsExportCursor extends CreatedAtCursor {
+  scope: "runs";
   rootCreatedAt: number;
   rootSessionId: string;
   spawnDepth: number;
+  snapshotMaxSequence: number;
 }
 
 export type ParseSessionExportCursorResult =
@@ -45,7 +47,7 @@ export function parseSessionExportCursor(
 }
 
 export function encodeRunsExportCursor(cursor: RunsExportCursor): string {
-  return `r:${cursor.rootCreatedAt}:${encodeURIComponent(cursor.rootSessionId)}:${cursor.spawnDepth}:${encodeCreatedAtCursor(cursor)}:${cursor.snapshotMaxRowId}`;
+  return `r:${cursor.rootCreatedAt}:${encodeURIComponent(cursor.rootSessionId)}:${cursor.spawnDepth}:${encodeCreatedAtCursor(cursor)}:${cursor.snapshotMaxSequence}`;
 }
 
 export function parseRunsExportCursor(
@@ -63,10 +65,10 @@ export function parseRunsExportCursor(
     return { ok: false, error: "Invalid cursor" };
   }
   const values = numbers.map(Number);
-  if (values.some((value) => !Number.isSafeInteger(value)) || values[3] < 1) {
+  if (values.some((value) => !Number.isSafeInteger(value))) {
     return { ok: false, error: "Invalid cursor" };
   }
-  const [rootCreatedAt, spawnDepth, createdAt, snapshotMaxRowId] = values;
+  const [rootCreatedAt, spawnDepth, createdAt, snapshotMaxSequence] = values;
 
   try {
     const rootSessionId = decodeURIComponent(rootSessionIdRaw);
@@ -74,7 +76,15 @@ export function parseRunsExportCursor(
     if (!rootSessionId || !id) return { ok: false, error: "Invalid cursor" };
     return {
       ok: true,
-      cursor: { rootCreatedAt, rootSessionId, spawnDepth, createdAt, id, snapshotMaxRowId },
+      cursor: {
+        scope: "runs",
+        rootCreatedAt,
+        rootSessionId,
+        spawnDepth,
+        createdAt,
+        id,
+        snapshotMaxSequence,
+      },
     };
   } catch {
     return { ok: false, error: "Invalid cursor" };

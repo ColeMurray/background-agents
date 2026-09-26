@@ -22,7 +22,11 @@ import {
   parseRunsExportCursor,
   parseSessionExportCursor,
 } from "../db/session-export-cursor";
-import { SessionExportStore, type SessionExportRow } from "../db/session-export-store";
+import {
+  SessionExportStore,
+  type ExportSelection,
+  type SessionExportRow,
+} from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
@@ -209,11 +213,16 @@ async function handleExport(
 ): Promise<Response> {
   const query = parseQuery(request, exportQuerySchema);
   if (query instanceof Response) return query;
-  const parsedCursor =
-    query.scope === "runs"
-      ? parseRunsExportCursor(query.cursor)
-      : parseSessionExportCursor(query.cursor);
-  if (!parsedCursor.ok) return error(parsedCursor.error, 400);
+  let selection: ExportSelection;
+  if (query.scope === "runs") {
+    const parsed = parseRunsExportCursor(query.cursor);
+    if (!parsed.ok) return error(parsed.error, 400);
+    selection = { scope: "runs", cursor: parsed.cursor };
+  } else {
+    const parsed = parseSessionExportCursor(query.cursor);
+    if (!parsed.ok) return error(parsed.error, 400);
+    selection = { scope: "sessions", cursor: parsed.cursor };
+  }
 
   const include = query.include ?? [];
   const limit =
@@ -247,8 +256,7 @@ async function handleExport(
 
       try {
         page ??= await store.list({
-          scope: query.scope,
-          cursor: parsedCursor.cursor,
+          ...selection,
           limit,
           ...(query.createdAfter === undefined ? {} : { createdAfter: query.createdAfter }),
           ...(query.createdBefore === undefined ? {} : { createdBefore: query.createdBefore }),
@@ -283,7 +291,7 @@ async function handleExport(
               schemaVersion: EXPORT_SCHEMA_VERSION,
               type: "cursor",
               nextCursor:
-                "rootCreatedAt" in page.nextCursor
+                page.scope === "runs"
                   ? encodeRunsExportCursor(page.nextCursor)
                   : encodeSessionExportCursor(page.nextCursor),
             })
