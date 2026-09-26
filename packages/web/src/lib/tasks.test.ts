@@ -36,6 +36,14 @@ describe("extractLatestTasks", () => {
     expect(extractLatestTasks([toolCall({ todos: [{ content: 42 }] })])).toEqual([]);
   });
 
+  it("does not derive a task list from truncated TodoWrite arguments", () => {
+    const event = toolCall({ todos: [{ content: "Incomplete", status: "completed" }] });
+    if (event.type !== "tool_call") throw new Error("Expected tool call");
+    event.truncated = { fields: ["args.todos[0].content"], originalBytes: 2_000_000 };
+
+    expect(extractLatestTasks([event])).toEqual([]);
+  });
+
   it("uses defaults for omitted todo fields", () => {
     expect(extractLatestTasks([toolCall({ todos: [{}] })])).toEqual([
       { content: "", status: "pending", activeForm: undefined },
