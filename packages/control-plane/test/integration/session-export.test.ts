@@ -154,10 +154,15 @@ describe("GET /sessions/export with include", () => {
     });
     const exported = lines.find((line) => line.id === withinBudget.sessionName);
     expect(exported).toMatchObject({ type: "session", title: "within budget" });
-    expect((exported?.events as Array<{ id: string }>).map((event) => event.id)).toEqual([
-      "fits-0",
-      "fits-1",
-      "fits-2",
+    expect(
+      (exported?.events as Array<{ id: string; data: { content: string } }>).map((event) => [
+        event.id,
+        event.data.content.length,
+      ])
+    ).toEqual([
+      ["fits-0", rowBytes],
+      ["fits-1", rowBytes],
+      ["fits-2", rowBytes],
     ]);
   });
 });
