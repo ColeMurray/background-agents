@@ -54,6 +54,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { AddRepositoryOverride } from "../add-repository-override";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/slack";
 const REPO_SETTINGS_KEY = "/api/integration-settings/slack/repos";
@@ -501,23 +502,13 @@ function RepoOverridesSection({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1" aria-label="Select a repository">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <AddRepositoryOverride
+        value={addingRepo}
+        onValueChange={setAddingRepo}
+        repositories={availableForOverride}
+        onAdd={handleAdd}
+        selectAriaLabel="Select a repository"
+      />
     </div>
   );
 }
