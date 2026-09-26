@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from websockets import State
 
+from .event_size import MAX_EVENT_FRAME_BYTES, event_size_bytes, truncate_tool_call
+
 if TYPE_CHECKING:
     from websockets import ClientConnection
 
@@ -141,6 +143,22 @@ class BufferedEventForwarder:
         is_critical = event_type in CRITICAL_EVENT_TYPES
         if is_critical and "ackId" not in event:
             event["ackId"] = self._make_ack_id(event)
+
+        size_bytes = event_size_bytes(event)
+        if size_bytes > MAX_EVENT_FRAME_BYTES:
+            if event_type == "tool_call":
+                try:
+                    event = truncate_tool_call(event)
+                except ValueError:
+                    self._log.warn(
+                        "bridge.event_oversized", event_type=event_type, size_bytes=size_bytes
+                    )
+                    return False
+            else:
+                self._log.warn(
+                    "bridge.event_oversized", event_type=event_type, size_bytes=size_bytes
+                )
+                return False
 
         ws = self._ws
         if not ws or ws.state != State.OPEN:
