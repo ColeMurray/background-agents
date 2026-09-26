@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sandboxEventSchema } from "@open-inspect/shared/types/sandbox-events";
+import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { EventRepository } from "./event-repository";
+import { initSchema } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { SessionStorageIntegrityError } from "./types";
 
@@ -388,6 +391,114 @@ describe("EventRepository", () => {
       expect(result.hasMore).toBe(false);
       expect(result.events.map((event) => event.id)).toEqual(["e1", "e2"]);
       expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 3000, id: "e1" });
+    });
+  });
+});
+
+describe("EventRepository token persistence", () => {
+  let db: DatabaseSync;
+  let repository: EventRepository;
+  const token = {
+    type: "token" as const,
+    content: "first",
+    messageId: "msg-1",
+    sandboxId: "sb-1",
+    timestamp: 1,
+  };
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    const storage = createNodeSqlStorage(db);
+    initSchema(storage.sql);
+    repository = new EventRepository(storage.sql, storage.transactionSync);
+  });
+
+  afterEach(() => db.close());
+
+  it("keeps both text parts in turn order when an earlier part is updated later", () => {
+    repository.upsertTokenEvent("msg-1", { ...token, partId: "part-1" }, 100);
+    repository.upsertTokenEvent("msg-1", { ...token, content: "last", partId: "part-2" }, 200);
+    repository.upsertTokenEvent(
+      "msg-1",
+      { ...token, content: "first final", partId: "part-1" },
+      300
+    );
+
+    expect(repository.listEventPage({ limit: 10, type: "token" }).events).toEqual([
+      expect.objectContaining({
+        id: 'token-part:["msg-1","part-2"]',
+        created_at: 200,
+        data: JSON.stringify({ ...token, content: "last", partId: "part-2" }),
+      }),
+      expect.objectContaining({
+        id: 'token-part:["msg-1","part-1"]',
+        created_at: 100,
+        data: JSON.stringify({ ...token, content: "first final", partId: "part-1" }),
+      }),
+    ]);
+  });
+
+  it("distinguishes delimiter-containing identities and the legacy token key", () => {
+    repository.upsertTokenEvent("a", { ...token, messageId: "a", partId: "b:part:c" }, 100);
+    repository.upsertTokenEvent("a:part:b", { ...token, messageId: "a:part:b", partId: "c" }, 200);
+    repository.upsertTokenEvent('part:["a","b"]', { ...token, messageId: 'part:["a","b"]' }, 300);
+
+    expect(
+      repository.listEventPage({ limit: 10, type: "token" }).events.map((row) => row.id)
+    ).toEqual([
+      'token:part:["a","b"]',
+      'token-part:["a:part:b","c"]',
+      'token-part:["a","b:part:c"]',
+    ]);
+  });
+
+  it("keeps unkeyed tokens on the legacy message key", () => {
+    repository.upsertTokenEvent("msg-1", token, 100);
+    repository.upsertTokenEvent("msg-1", { ...token, content: "final" }, 200);
+    expect(repository.listEventPage({ limit: 10, type: "token" }).events).toEqual([
+      expect.objectContaining({
+        id: "token:msg-1",
+        data: JSON.stringify({ ...token, content: "final" }),
+      }),
+    ]);
+  });
+
+  it("seals the unkeyed token on compaction without changing part-keyed rows", () => {
+    repository.upsertTokenEvent("msg-1", token, 100);
+    repository.upsertTokenEvent("msg-1", { ...token, partId: "part-1" }, 110);
+    repository.createContextCompactionEvent({
+      id: "compaction-1",
+      type: "context_compacted",
+      data: '{"type":"context_compacted"}',
+      messageId: "msg-1",
+      createdAt: 120,
+    });
+    repository.upsertTokenEvent("msg-1", { ...token, content: "after" }, 130);
+    repository.upsertTokenEvent(
+      "msg-1",
+      { ...token, content: "before corrected", partId: "part-1" },
+      140
+    );
+    repository.upsertTokenEvent("msg-1", { ...token, content: "final", partId: "part-2" }, 150);
+
+    expect(
+      repository.listEventPage({ limit: 10, type: "token" }).events.map((row) => row.id)
+    ).toEqual([
+      'token-part:["msg-1","part-2"]',
+      "token:msg-1",
+      'token-part:["msg-1","part-1"]',
+      "token:msg-1:compaction-1",
+    ]);
+    expect(repository.getEventTimelinePage({ limit: 10 }).events.map((row) => row.id)).toEqual([
+      "token:msg-1:compaction-1",
+      'token-part:["msg-1","part-1"]',
+      "compaction-1",
+      "token:msg-1",
+      'token-part:["msg-1","part-2"]',
+    ]);
+    expect(repository.listEventPage({ limit: 10, type: "token" }).events[2]).toMatchObject({
+      created_at: 110,
+      data: JSON.stringify({ ...token, content: "before corrected", partId: "part-1" }),
     });
   });
 });

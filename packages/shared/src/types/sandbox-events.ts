@@ -126,6 +126,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),
     content: z.string(),
+    partId: z.string().min(1).optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_call"),
