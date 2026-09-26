@@ -984,17 +984,8 @@ class OpenCodePromptStream:
                                 prev_len=len(previously_sent),
                                 new_len=len(text),
                             )
-                            state.cumulative_text[part_id] = text
-                            yield {
-                                "type": "token",
-                                "content": text,
-                                "messageId": state.message_id,
-                                **(
-                                    {"partId": part_id}
-                                    if isinstance(part_id, str) and part_id
-                                    else {}
-                                ),
-                            }
+                            for event in self._handle_part(state, part, None):
+                                yield event
 
         except Exception as e:
             self._log.error("bridge.final_state_error", exc=e)
