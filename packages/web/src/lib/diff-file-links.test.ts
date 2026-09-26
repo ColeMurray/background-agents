@@ -78,6 +78,7 @@ describe("isRepositoryFileHref", () => {
     "mailto:someone@example.com",
     "//cdn.example.com/x.js",
     "#section",
+    "?tab=changes",
     "/settings",
   ])("leaves %s alone", (href) => {
     expect(isRepositoryFileHref(href)).toBe(false);

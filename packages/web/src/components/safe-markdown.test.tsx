@@ -106,6 +106,12 @@ describe("SafeMarkdown links", () => {
     expect(screen.getByRole("link", { name: "jump" })).toHaveAttribute("href", "#details");
   });
 
+  it("leaves query-only links unchanged inside a session", () => {
+    renderInSession("[changes](?tab=changes)");
+
+    expect(screen.getByRole("link", { name: "changes" })).toHaveAttribute("href", "?tab=changes");
+  });
+
   it("keeps sanitized mailto links as plain text inside a session", () => {
     renderInSession("Contact [support](mailto:support@example.com).");
 
