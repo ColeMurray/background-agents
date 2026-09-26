@@ -118,6 +118,21 @@ function liveCloseOutLeaseOf(row: string): string {
 }
 
 /**
+ * SQL condition: a newer review of the same head as fence row `row` has been
+ * admitted (its session initialized as the PR's latest review), so that
+ * head's status is no longer `row`'s. A newer row whose init has not
+ * completed — and may still fail — does not count.
+ */
+function headReclaimedSql(row: string): string {
+  return `EXISTS (
+    SELECT 1 FROM github_review_sessions newer
+    WHERE newer.repo_id = ${row}.repo_id AND newer.pr_number = ${row}.pr_number
+      AND newer.generation > ${row}.generation AND newer.head_sha = ${row}.head_sha
+      AND newer.admitted_at IS NOT NULL
+  )`;
+}
+
+/**
  * Retire a stale fence row once its session is cancelled — unless, since it
  * was read, a close-out has become owed for its head (a request was recorded
  * and no newer review took the head) or a close-out holds the lease for it.
@@ -130,13 +145,7 @@ async function retireFenceRow(db: SqlDatabase, sessionId: string): Promise<boole
        WHERE session_id = ?
          AND (
            close_out_request IS NULL
-           OR EXISTS (
-             SELECT 1 FROM github_review_sessions newer
-             WHERE newer.repo_id = github_review_sessions.repo_id
-               AND newer.pr_number = github_review_sessions.pr_number
-               AND newer.generation > github_review_sessions.generation
-               AND newer.head_sha = github_review_sessions.head_sha
-           )
+           OR ${headReclaimedSql("github_review_sessions")}
          )
          AND NOT EXISTS (
            SELECT 1 FROM github_review_state st
@@ -170,12 +179,18 @@ const REVIEW_FENCE_ORPHAN_GRACE_MS = 10 * 60 * 1000;
 export const REVIEW_SUBMISSION_LEASE_MS = 2 * 60 * 1000;
 
 /**
- * Age past which the reaper drops a fence row outright: far beyond a review
- * session's sandbox lifetime (two hours by default), so no live review owns a
- * row this old. It bounds a close-out that can never succeed, and the
- * head-of-line blocking it would cause.
+ * Age past which the reaper drops a fence row that owes no close-out: far
+ * beyond a review session's sandbox lifetime (two hours by default), so no
+ * live review owns a row this old.
  */
 const REVIEW_FENCE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Age past which the reaper gives up on a recorded close-out that has never
+ * finished, logging an error. Far longer than REVIEW_FENCE_MAX_AGE_MS, so a
+ * long GitHub or credential outage still ends with the status closed out.
+ */
+const REVIEW_CLOSE_OUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Rows the reaper handles per pass, so one tick stays bounded. */
 const REAPER_STALE_BATCH = 20;
@@ -497,11 +512,7 @@ export async function handleSweepStaleReviews(
     .prepare(
       `SELECT grs.session_id, grs.created_at, grs.close_out_request,
          st.lease_session_id, st.lease_expires_at,
-         NOT EXISTS (
-           SELECT 1 FROM github_review_sessions newer
-           WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
-             AND newer.generation > grs.generation AND newer.head_sha = grs.head_sha
-         ) AS head_unclaimed
+         NOT ${headReclaimedSql("grs")} AS head_unclaimed
        FROM github_review_sessions grs
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
@@ -620,11 +631,7 @@ async function loadCloseOutRow(db: SqlDatabase, sessionId: string): Promise<Clos
          grs.created_at, grs.close_out_request,
          ${isProvisionalSql("grs.close_out_request")} AS close_out_provisional,
          st.latest_generation, st.lease_session_id, st.lease_expires_at,
-         EXISTS (
-           SELECT 1 FROM github_review_sessions newer
-           WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
-             AND newer.generation > grs.generation AND newer.head_sha = grs.head_sha
-         ) AS head_reclaimed
+         ${headReclaimedSql("grs")} AS head_reclaimed
        FROM github_review_sessions grs
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
@@ -737,11 +744,7 @@ export async function handleCloseOutReview(
              AND grs.pr_number = github_review_state.pr_number
              AND grs.close_out_request IS NOT NULL
              AND NOT ${isProvisionalSql("grs.close_out_request")}
-             AND NOT EXISTS (
-               SELECT 1 FROM github_review_sessions newer
-               WHERE newer.repo_id = grs.repo_id AND newer.pr_number = grs.pr_number
-                 AND newer.generation > grs.generation AND newer.head_sha = grs.head_sha
-             )
+             AND NOT ${headReclaimedSql("grs")}
          )
        RETURNING latest_generation`
     )
@@ -949,19 +952,22 @@ export async function handleReviewLeaseRelease(
  * Cron-driven reaper: the durable retry owner for review fence rows, so no
  * retained row depends on another PR event ever arriving. Each pass:
  *
- * 1. Drops rows older than REVIEW_FENCE_MAX_AGE_MS, except one whose
- *    close-out currently holds the lease: it goes once that lease ends.
- * 2. Retries the cancellation of superseded sessions that owe no close-out
+ * 1. Drops rows older than REVIEW_FENCE_MAX_AGE_MS that owe no close-out,
+ *    and — with an error — rows whose close-out has not finished within
+ *    REVIEW_CLOSE_OUT_MAX_AGE_MS; never while a close-out holds the lease.
+ * 2. For superseded sessions that owe no close-out: records one when the
+ *    review still owns its head's status (no newer admitted review of that
+ *    head) and its repository is known; otherwise retries the cancellation
  *    (cancel unconfirmed, fresh-404 grace, or a creator's failed
  *    self-cancel), retiring each once cancelled — the sweep's rule, decided
  *    at deletion time, since a close-out may become owed meanwhile.
  * 3. Records a close-out for the latest review of a PR whose prompt never
  *    arrived (see closeOutUnpromptedReviews): no completion callback will
  *    ever come for it.
- * 4. Re-drives every owed close-out whose PR has no live lease, by asking
- *    the github-bot to run it (a signed POST, as a background task).
- *    Duplicate drives are harmless: a second request finds the first one's
- *    lease live and is deferred.
+ * 4. Re-drives owed close-outs whose PR has no live lease, least recently
+ *    attempted first, by asking the github-bot to run them (a signed POST, as
+ *    a background task). Duplicate drives are harmless: a second request
+ *    finds the first one's lease live and is deferred.
  */
 export async function reapSupersededReviewSessions(
   db: SqlDatabase,
@@ -970,16 +976,18 @@ export async function reapSupersededReviewSessions(
   backgroundTasks: BackgroundTasks
 ): Promise<void> {
   const now = Date.now();
+  const noLiveCloseOut = `NOT EXISTS (
+    SELECT 1 FROM github_review_state st
+    WHERE st.repo_id = github_review_sessions.repo_id
+      AND st.pr_number = github_review_sessions.pr_number
+      AND ${liveCloseOutLeaseOf("github_review_sessions")}
+  )`;
   const expired = await db
     .prepare(
       `DELETE FROM github_review_sessions
        WHERE created_at < ?
-         AND NOT EXISTS (
-           SELECT 1 FROM github_review_state st
-           WHERE st.repo_id = github_review_sessions.repo_id
-             AND st.pr_number = github_review_sessions.pr_number
-             AND ${liveCloseOutLeaseOf("github_review_sessions")}
-         )
+         AND (close_out_request IS NULL OR ${isProvisionalSql("close_out_request")})
+         AND ${noLiveCloseOut}
        RETURNING session_id`
     )
     .bind(now - REVIEW_FENCE_MAX_AGE_MS, now)
@@ -990,10 +998,26 @@ export async function reapSupersededReviewSessions(
       session_id: row.session_id,
     });
   }
+  const abandoned = await db
+    .prepare(
+      `DELETE FROM github_review_sessions
+       WHERE created_at < ? AND ${noLiveCloseOut}
+       RETURNING session_id`
+    )
+    .bind(now - REVIEW_CLOSE_OUT_MAX_AGE_MS, now)
+    .all<{ session_id: string }>();
+  for (const row of abandoned.results) {
+    logger.error("review_reaper.close_out_abandoned", {
+      event: "review_reaper.close_out_abandoned",
+      session_id: row.session_id,
+    });
+  }
 
   const stale = await db
     .prepare(
-      `SELECT grs.session_id, grs.created_at, st.lease_session_id, st.lease_expires_at
+      `SELECT grs.session_id, grs.created_at, grs.repo_owner, grs.repo_name,
+         st.lease_session_id, st.lease_expires_at,
+         NOT ${headReclaimedSql("grs")} AS head_unclaimed
        FROM github_review_sessions grs
        JOIN github_review_state st
          ON st.repo_id = grs.repo_id AND st.pr_number = grs.pr_number
@@ -1002,9 +1026,26 @@ export async function reapSupersededReviewSessions(
        LIMIT ?`
     )
     .bind(REAPER_STALE_BATCH)
-    .all<StaleReviewSessionRow>();
+    .all<
+      StaleReviewSessionRow & {
+        repo_owner: string | null;
+        repo_name: string | null;
+        head_unclaimed: number;
+      }
+    >();
   const sessionStore = new SessionIndexStore(db);
   for (const row of stale.results) {
+    // Its head still has no newer admitted review, so its status is still this
+    // review's to close out: record that first — the close-out cancels the
+    // session before it writes — rather than retiring the only handle on it.
+    if (row.head_unclaimed === 1 && row.repo_owner !== null && row.repo_name !== null) {
+      await recordCloseOutRequest(db, row.session_id, {
+        owner: row.repo_owner,
+        repo: row.repo_name,
+        description: null,
+      });
+      continue;
+    }
     let outcome: StaleReviewCancellationOutcome;
     try {
       outcome = await cancelStaleReviewSession({ sessionRuntime }, sessionStore, row);
@@ -1035,7 +1076,7 @@ export async function reapSupersededReviewSessions(
        WHERE grs.close_out_request IS NOT NULL
          AND NOT ${isProvisionalSql("grs.close_out_request")}
          AND (st.lease_expires_at IS NULL OR st.lease_expires_at < ?)
-       ORDER BY grs.created_at ASC, grs.session_id ASC
+       ORDER BY COALESCE(grs.close_out_attempted_at, 0) ASC, grs.created_at ASC, grs.session_id ASC
        LIMIT ?`
     )
     .bind(now, REAPER_CLOSE_OUT_BATCH)
@@ -1052,6 +1093,10 @@ export async function reapSupersededReviewSessions(
     return;
   }
   for (const { session_id: sessionId } of owed.results) {
+    await db
+      .prepare("UPDATE github_review_sessions SET close_out_attempted_at = ? WHERE session_id = ?")
+      .bind(now, sessionId)
+      .run();
     backgroundTasks.submit(
       async () => {
         const payload = { sessionId, timestamp: Date.now() };

@@ -455,15 +455,23 @@ describe("initializeSession", () => {
       expect(deletes).toEqual([]);
     });
 
-    it.each([
-      ["no session exists behind it (404)", () => Response.json({}, { status: 404 })],
-      [
-        "its never-prompted session was archived",
-        () => Response.json({ outcome: "archived", status: "archived" }),
-      ],
-    ])("deletes the review fence when DO init throws and %s", async (_name, probe) => {
+    it("retains the review fence when DO init throws and no session exists yet", async () => {
+      // F9: an init still in flight can land after a 404, so it proves nothing.
       const { db, deletes } = createReviewDb({ latestGeneration: 1 });
-      stubFetchMock = initRejectsThenProbe(async () => probe());
+      stubFetchMock = initRejectsThenProbe(async () => Response.json({}, { status: 404 }));
+
+      await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
+        "transport"
+      );
+
+      expect(deletes).toEqual([]);
+    });
+
+    it("deletes the review fence when DO init throws and its never-prompted session was archived", async () => {
+      const { db, deletes } = createReviewDb({ latestGeneration: 1 });
+      stubFetchMock = initRejectsThenProbe(async () =>
+        Response.json({ outcome: "archived", status: "archived" })
+      );
 
       await expect(initializeSession(createEnv(), reviewInput, reviewCtx(db))).rejects.toThrow(
         "transport"

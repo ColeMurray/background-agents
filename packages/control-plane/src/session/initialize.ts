@@ -370,9 +370,33 @@ export async function initializeSession(
       await markSessionFailed(sessionStore, input.sessionId, ctx.trace_id);
       throw new ReviewGenerationSupersededError();
     }
+    await markReviewAdmitted(ctx, input.sessionId);
   }
 
   return { sessionId: input.sessionId, status: "created" };
+}
+
+/**
+ * Record that this review's session exists and is the PR's latest review:
+ * from now on it, not an older review of the same head, owns that head's
+ * status. Best-effort — the session is already live — so a failure is only
+ * logged; until then an older review of the head may still close it out,
+ * which this review's own leased success replaces.
+ */
+async function markReviewAdmitted(ctx: RequestContext, sessionId: string): Promise<void> {
+  try {
+    await ctx.db
+      .prepare("UPDATE github_review_sessions SET admitted_at = ? WHERE session_id = ?")
+      .bind(Date.now(), sessionId)
+      .run();
+  } catch (markError) {
+    logger.error("Failed to mark review session admitted", {
+      event: "review_fence.admit_failed",
+      session_id: sessionId,
+      trace_id: ctx.trace_id,
+      error: markError instanceof Error ? markError.message : String(markError),
+    });
+  }
 }
 
 /**
@@ -398,9 +422,10 @@ async function markSessionFailed(
 
 /**
  * After a DO init whose response was lost: whether the session is confirmed
- * unable to run — no runtime exists, or its never-prompted runtime has just
- * been archived, which rejects any later prompt. Any other answer, including
- * another failure, is not a confirmation.
+ * unable to run — its never-prompted runtime has just been archived, which
+ * rejects any later prompt. Any other answer, including a 404 or another
+ * failure, is not a confirmation; the reaper decides such a row after its
+ * grace period.
  */
 async function isSessionRetiredAfterLostInit(
   env: Env,
@@ -411,7 +436,8 @@ async function isSessionRetiredAfterLostInit(
     const outcome = await new SessionDraftExpiryClient(
       createSessionRuntimeClient(env, ctx)
     ).expireDraft(sessionId);
-    return outcome === "archived" || outcome === "missing";
+    // A 404 is no proof: an init still in flight can create the runtime after it.
+    return outcome === "archived";
   } catch {
     return false;
   }

@@ -321,8 +321,8 @@ export const createSessionGithubReviewSchema = z.object({
   generation: z.number().int().positive(),
   headSha: z.string().min(1),
   /** Where the review's commit status lives; lets a review that never started be closed out. */
-  owner: z.string().min(1).optional(),
-  repo: z.string().min(1).optional(),
+  owner: nonEmptyStringSchema.optional(),
+  repo: nonEmptyStringSchema.optional(),
 });
 
 export const createSessionInputSchema = createSessionRequestBaseSchema

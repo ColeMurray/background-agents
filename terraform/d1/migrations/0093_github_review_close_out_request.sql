@@ -8,3 +8,12 @@ ALTER TABLE github_review_sessions ADD COLUMN close_out_request TEXT;
 -- Null for rows created by a bot that predates it.
 ALTER TABLE github_review_sessions ADD COLUMN repo_owner TEXT;
 ALTER TABLE github_review_sessions ADD COLUMN repo_name TEXT;
+-- When the reaper last asked the github-bot to run this row's close-out: it drives the least
+-- recently attempted first, so failing close-outs cannot starve the rest.
+ALTER TABLE github_review_sessions ADD COLUMN close_out_attempted_at INTEGER;
+-- When the review's session finished initializing and was confirmed the latest generation. Only
+-- an admitted review takes over its head's status from an older review of the same head.
+ALTER TABLE github_review_sessions ADD COLUMN admitted_at INTEGER;
+-- Rows written before this migration belong to sessions whose init completed: a failed init
+-- deleted its row.
+UPDATE github_review_sessions SET admitted_at = created_at;

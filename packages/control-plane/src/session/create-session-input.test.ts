@@ -177,4 +177,26 @@ describe("parseCreateSessionInput", () => {
 
     expect(result).toEqual({ ok: false, message: "Invalid session request body" });
   });
+
+  it.each([
+    ["owner", { owner: "   ", repo: "background-agents" }],
+    ["repo", { owner: "open-inspect", repo: " " }],
+  ])("rejects a githubReview whose %s is blank", async (_field, repository) => {
+    // F10: a blank repository would be stored on the fence row and close out nothing.
+    const result = await parseCreateSessionInput(
+      jsonRequest({
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        githubReview: {
+          repoId: 123,
+          prNumber: 45,
+          generation: 2,
+          headSha: "abc123",
+          ...repository,
+        },
+      })
+    );
+
+    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
+  });
 });

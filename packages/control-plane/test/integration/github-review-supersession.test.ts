@@ -567,23 +567,130 @@ describe("GitHub review close-out (who writes a review's terminal status)", () =
     expect((await new SessionIndexStore(env.DB).get(sessionA))?.status).toBe("cancelled");
   });
 
-  it("keeps an aged fence row while its close-out holds the lease, and collects it after", async () => {
+  async function ageRow(sessionId: string, ageMs: number) {
+    await env.DB.prepare("UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?")
+      .bind(Date.now() - ageMs, sessionId)
+      .run();
+  }
+
+  async function reapDrivingBot(sessions: SessionRuntimeClient["fetch"]) {
+    const botFetch = vi.fn(async () => Response.json({ ok: true }));
+    const drives: Promise<unknown>[] = [];
+    await reapSupersededReviewSessions(
+      sqlDatabase(env.DB),
+      { fetch: sessions },
+      {
+        GITHUB_BOT: { fetch: botFetch },
+        SERVICE_AUTH_SECRET_GITHUB_BOT: "reaper-test-secret",
+      } as unknown as Env,
+      { submit: (task) => void drives.push(task()) }
+    );
+    await Promise.all(drives);
+    return (botFetch.mock.calls as unknown as [string, RequestInit][]).map(
+      ([, init]) => (JSON.parse(String(init.body)) as { sessionId: string }).sessionId
+    );
+  }
+
+  it("keeps an owed close-out past a day, and gives it up only after a week", async () => {
     // R4: age is no proof the row's newly granted close-out is inactive.
+    // F6: a recorded close-out is kept until finalized, well past the one-day collection.
+    const DAY_MS = 24 * 60 * 60 * 1000;
     const repoId = 628282;
     const prNumber = 6;
     const sessionId = await createLatestReview(repoId, prNumber, "sha-a");
     const grant = await grantOf(closeOut(sessionId, REQUEST));
-    await env.DB.prepare("UPDATE github_review_sessions SET created_at = ? WHERE session_id = ?")
-      .bind(Date.now() - 25 * 60 * 60 * 1000, sessionId)
-      .run();
+    await ageRow(sessionId, DAY_MS + 60 * 60 * 1000);
+    const idle = await createLatestReview(628283, 6, "sha-x");
+    await ageRow(idle, DAY_MS + 60 * 60 * 1000);
     const noCancel = vi.fn(async () => new Response(null, { status: 404 }));
 
     await runReaper(noCancel);
     expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
+    // A day-old row that owes no close-out is collected.
+    expect(await fenceRows(628283, 6)).toEqual([]);
 
     expect((await finalize(sessionId, grant.grantId, "retry")).status).toBe(204);
     await runReaper(noCancel);
+    expect((await fenceRows(repoId, prNumber)).map((row) => row.session_id)).toEqual([sessionId]);
+
+    await ageRow(sessionId, 8 * DAY_MS);
+    await runReaper(noCancel);
     expect(await fenceRows(repoId, prNumber)).toEqual([]);
+  });
+
+  it("records a replaced head's close-out before the reaper retires its superseded review", async () => {
+    // F1: the successor's best-effort sweep never ran, so the reaper finds the stale review first.
+    const repoId = 628484;
+    const prNumber = 6;
+    const generationA = await claimGeneration(repoId, prNumber);
+    const createA = await createReviewSession({
+      repoId,
+      prNumber,
+      generation: generationA,
+      headSha: "sha-a",
+      owner: "acme",
+      repo: "widgets",
+    });
+    expect(createA.status).toBe(201);
+    const { sessionId: sessionA } = await createA.json<CreateSessionResponse>();
+    await createLatestReview(repoId, prNumber, "sha-b");
+
+    const driven = await reapDrivingBot(async () => Response.json({ status: "cancelled" }));
+
+    const rowA = (await fenceRows(repoId, prNumber)).find((row) => row.session_id === sessionA);
+    expect(JSON.parse(rowA?.close_out_request ?? "null")).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      description: null,
+    });
+    expect(driven).toContain(sessionA);
+    // A's own completion still finds its close-out owed.
+    await expect(grantOf(closeOut(sessionA, REQUEST))).resolves.toMatchObject({
+      headSha: "sha-a",
+      superseded: true,
+    });
+  });
+
+  it("does not hand a head to a newer review of it whose init has not completed", async () => {
+    // F2: a same-head successor that may still fail to initialize has not taken the status over.
+    const repoId = 628585;
+    const prNumber = 6;
+    const sessionA = await createLatestReview(repoId, prNumber, "sha-a");
+    const generationB = await claimGeneration(repoId, prNumber);
+    await env.DB.prepare(
+      `INSERT INTO github_review_sessions (repo_id, pr_number, generation, session_id, head_sha, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+      .bind(repoId, prNumber, generationB, "session-b-initializing", "sha-a", Date.now())
+      .run();
+
+    await expect(grantOf(closeOut(sessionA, REQUEST))).resolves.toMatchObject({
+      headSha: "sha-a",
+      superseded: true,
+    });
+  });
+
+  it("drives the least recently attempted close-outs first", async () => {
+    // F7: close-outs that keep failing cannot starve the ones behind them.
+    const sessions: string[] = [];
+    for (let index = 0; index < 11; index += 1) {
+      const sessionId = await createLatestReview(628600 + index, 6, "sha-a");
+      await env.DB.prepare(
+        "UPDATE github_review_sessions SET close_out_request = ? WHERE session_id = ?"
+      )
+        .bind(JSON.stringify(REQUEST), sessionId)
+        .run();
+      sessions.push(sessionId);
+    }
+    const noCancel = vi.fn(async () => new Response(null, { status: 404 }));
+
+    const firstTick = await reapDrivingBot(noCancel);
+    const secondTick = await reapDrivingBot(noCancel);
+
+    expect(firstTick).toHaveLength(10);
+    const neverDriven = sessions.filter((sessionId) => !firstTick.includes(sessionId));
+    expect(neverDriven).toHaveLength(1);
+    expect(secondTick).toContain(neverDriven[0]);
   });
 
   it("keeps a stale row whose close-out was recorded while the reaper was cancelling it", async () => {
