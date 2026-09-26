@@ -64,11 +64,12 @@ function filterCommandItem(value: string, search: string, keywords?: string[]): 
 /**
  * The exhaustive-search handoff. The menu only searches the fetched recent
  * set, so this item matches any typed text and carries it to the Sessions
- * page, which searches full history server-side.
+ * page, which searches full history server-side. The page defaults to
+ * non-archived sessions, so the handoff asks for every lifecycle.
  */
 function SearchAllSessionsItem({ onSelect }: { onSelect: (href: string) => void }) {
   const search = useCommandState((state) => state.search);
-  const href = buildSessionsHref({ q: search });
+  const href = buildSessionsHref({ q: search, lifecycle: "all" });
 
   return (
     <CommandItem
