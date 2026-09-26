@@ -1384,10 +1384,15 @@ export class SandboxLifecycleManager
         ? await this.storage.getSandboxAccessSecret("ttyd")
         : null;
       const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
-      const replaceForTerminalCredential = Boolean(result.ttydUrl && !validTtydToken);
-      if (replaceForTerminalCredential && restoringSavedState) {
-        this.shutdown.holdFailedRecovery("Terminal credential is missing or expired", generation);
-        return;
+      if (result.ttydUrl && !validTtydToken) {
+        // Terminal tokens are signed with the sandbox auth token, which is kept
+        // only as a hash, so an expired or missing one cannot be renewed. The
+        // resumed sandbox holds the workspace; keep it without terminal access.
+        this.log.warn("Terminal credential unavailable; resuming without terminal access", {
+          event: "sandbox.resume_terminal_credential_unavailable",
+          provider_object_id: finalProviderObjectId,
+          reason: ttydToken ? "invalid_or_expired" : "missing",
+        });
       }
       let completed: boolean;
       try {
@@ -1398,12 +1403,7 @@ export class SandboxLifecycleManager
               ? { url: result.codeServerUrl, password: result.codeServerPassword }
               : null,
           vnc: result.vncAccess ?? null,
-          ttyd: validTtydToken
-            ? {
-                url: replaceForTerminalCredential ? null : (result.ttydUrl ?? null),
-                token: validTtydToken,
-              }
-            : null,
+          ttyd: validTtydToken ? { url: result.ttydUrl ?? null, token: validTtydToken } : null,
           tunnelUrls: result.tunnelUrls ?? null,
         });
       } catch (error) {
@@ -1426,16 +1426,6 @@ export class SandboxLifecycleManager
       this.providerStartupPending = false;
       await this.shutdown.recordProviderStartup(generation, result.lifetime);
       startupClaimed = true;
-
-      if (replaceForTerminalCredential) {
-        this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
-          event: "sandbox.resume_terminal_credential_unavailable",
-          provider_object_id: finalProviderObjectId,
-          reason: ttydToken ? "invalid_or_expired" : "missing",
-        });
-        await this.doSpawn(previousGeneration);
-        return;
-      }
 
       if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });

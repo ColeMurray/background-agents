@@ -1910,7 +1910,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it.each(["missing", "expired"] as const)(
-      "replaces a resumable sandbox when its terminal token is %s",
+      "keeps a resumed sandbox without terminal access when its terminal token is %s",
       async (credentialState) => {
         const ttydToken =
           credentialState === "expired"
@@ -1932,7 +1932,6 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "replacement-provider-obj",
           createdAt: Date.now(),
           lifetime: noLifetime(),
-          ttydUrl: "https://terminal.test/replacement",
         }));
         const resumeSandbox = vi.fn(async () => ({
           success: true as const,
@@ -1961,22 +1960,19 @@ describe("SandboxLifecycleManager", () => {
 
         await manager.spawnSandbox();
 
-        expect(resumeSandbox).toHaveBeenCalled();
-        expect(stopSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({
-            providerObjectId: "old-provider-obj",
-            reason: "respawn",
-          })
-        );
-        expect(createSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({ sandboxSettings: { terminalEnabled: true } })
-        );
-        expect(sandbox.ttyd_token).not.toBeNull();
-        expect(sandbox.ttyd_token).not.toBe(ttydToken);
+        // The stopped sandbox is the only copy of the workspace; losing the
+        // terminal must not delete it.
+        expect(resumeSandbox).toHaveBeenCalledOnce();
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(createSandbox).not.toHaveBeenCalled();
+        expect(sandbox.modal_object_id).toBe("old-provider-obj");
+        expect(sandbox.status).toBe("connecting");
+        expect(sandbox.ttyd_url).toBeNull();
+        expect(sandbox.ttyd_token).toBeNull();
       }
     );
 
-    it("replaces a resumed sandbox after its initial terminal preview could not be issued", async () => {
+    it("keeps resuming a sandbox whose initial terminal preview could not be issued", async () => {
       const sandbox = createMockSandbox({
         status: "pending",
         created_at: Date.now() - 60_000,
@@ -1988,28 +1984,24 @@ describe("SandboxLifecycleManager", () => {
         createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
         sandbox
       );
-      let createCount = 0;
-      const createSandbox = vi.fn(async (config: CreateSandboxConfig) => {
-        createCount++;
-        return {
-          sandboxId: config.sandboxId,
-          providerObjectId: createCount === 1 ? "initial-provider-obj" : "replacement-provider-obj",
-          createdAt: Date.now(),
-          lifetime: noLifetime(),
-          ...(createCount === 2 ? { ttydUrl: "https://terminal.test/replacement" } : {}),
-        };
-      });
+      const createSandbox = vi.fn(async (config: CreateSandboxConfig) => ({
+        sandboxId: config.sandboxId,
+        providerObjectId: "initial-provider-obj",
+        createdAt: Date.now(),
+        lifetime: noLifetime(),
+      }));
       const resumeSandbox = vi.fn(async () => ({
         success: true as const,
         providerObjectId: "initial-provider-obj",
         lifetime: noLifetime(),
         ttydUrl: "https://terminal.test/resumed",
       }));
+      const stopSandbox = vi.fn(async () => ({ success: true }));
       const provider = createMockProvider({
         capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
         createSandbox,
         resumeSandbox,
-        stopSandbox: vi.fn(async () => ({ success: true })),
+        stopSandbox,
       });
       const manager = new SandboxLifecycleManager(
         provider,
@@ -2029,9 +2021,59 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(resumeSandbox).toHaveBeenCalledOnce();
-      expect(createSandbox).toHaveBeenCalledTimes(2);
-      expect(sandbox.ttyd_url).toBe("https://terminal.test/replacement");
-      expect(sandbox.ttyd_token).not.toBeNull();
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(sandbox.modal_object_id).toBe("initial-provider-obj");
+      expect(sandbox.ttyd_url).toBeNull();
+    });
+
+    it("resumes retained saved state without terminal access when its terminal token expired", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "retained-source",
+        ttyd_url: null,
+        ttyd_token: await mintJwt({ exp: Math.floor(Date.now() / 1000) - 1 }, "sandbox-auth-token"),
+      });
+      const storage = createMockStorage(
+        createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
+        sandbox
+      );
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({
+          success: true as const,
+          providerObjectId: "retained-source",
+          lifetime: noLifetime(),
+          ttydUrl: "https://terminal.test/resumed",
+        })),
+      });
+      const shutdown = createUnmanagedShutdown();
+      shutdown.startupDecision.mockReturnValue({
+        kind: "resume_retained",
+        providerObjectId: "retained-source",
+        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        shutdown,
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      // Retrying recovery cannot renew the credential, so holding here would
+      // leave the saved workspace unrecoverable.
+      expect(shutdown.holdFailedRecovery).not.toHaveBeenCalled();
+      expect(shutdown.recordProviderStartup).toHaveBeenCalledOnce();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(sandbox.modal_object_id).toBe("retained-source");
+      expect(sandbox.ttyd_url).toBeNull();
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {
