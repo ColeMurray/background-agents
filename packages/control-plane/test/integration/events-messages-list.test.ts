@@ -369,7 +369,7 @@ describe("GET /internal/messages", () => {
 describe("GET /internal/usage", () => {
   beforeEach(cleanD1Tables);
 
-  it("pages usage rows in (created_at, id) order with a stable cursor", async () => {
+  it("pages usage rows newest first on (created_at, id) with a stable cursor", async () => {
     const { stub } = await initSession();
     const createdAt = Date.now();
     await seedStepUsage(stub, [
@@ -381,18 +381,18 @@ describe("GET /internal/usage", () => {
     ]);
 
     const page1 = await fetchUsagePage(stub, "limit=2");
-    expect(page1.usage.map((row) => row.id)).toEqual(["step:d", "step:b"]);
-    expect(page1).toMatchObject({ hasMore: true, cursor: `${createdAt}:step%3Ab` });
+    expect(page1.usage.map((row) => row.id)).toEqual(["step:a", "step:e"]);
+    expect(page1).toMatchObject({ hasMore: true, cursor: `${createdAt}:step%3Ae` });
     await expect(fetchUsagePage(stub, "limit=2")).resolves.toEqual(page1);
 
-    // A row sorting before the cursor must not shift the pages after it.
-    await seedStepUsage(stub, [{ id: "step:0", createdAt: createdAt - 2 }]);
+    // Usage recorded after the first page must neither shift nor join later pages.
+    await seedStepUsage(stub, [{ id: "step:later", createdAt: createdAt + 2 }]);
 
     const page2 = await fetchUsagePage(stub, `limit=2&cursor=${nextUsageCursor(page1)}`);
-    expect(page2.usage.map((row) => row.id)).toEqual(["step:c", "step:e"]);
+    expect(page2.usage.map((row) => row.id)).toEqual(["step:c", "step:b"]);
 
     const page3 = await fetchUsagePage(stub, `limit=2&cursor=${nextUsageCursor(page2)}`);
-    expect(page3).toEqual({ usage: [expect.objectContaining({ id: "step:a" })], hasMore: false });
+    expect(page3).toEqual({ usage: [expect.objectContaining({ id: "step:d" })], hasMore: false });
   });
 
   it("returns each persisted row as step usage with unknown counts left null", async () => {

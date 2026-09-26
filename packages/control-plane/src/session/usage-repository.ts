@@ -1,5 +1,5 @@
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
-import { normalizeTokenUsage, type StepUsage } from "@open-inspect/shared";
+import { normalizeTokenUsage, stepUsageSchema, type StepUsage } from "@open-inspect/shared";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { z } from "zod";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
@@ -8,7 +8,7 @@ import { SessionStorageIntegrityError } from "./types";
 export const MAX_STEP_USAGE_PAGE_SIZE = 100;
 
 const stepUsageRowSchema = z.object({
-  id: z.string(),
+  id: stepUsageSchema.shape.id,
   message_id: z.string().nullable(),
   model: z.string().nullable(),
   harness: harnessIdSchema.nullable(),
@@ -24,7 +24,7 @@ const stepUsageRowSchema = z.object({
   child_session_id: z.string().nullable(),
   task_call_id: z.string().nullable(),
   reason: z.string().nullable(),
-  created_at: z.number(),
+  created_at: stepUsageSchema.shape.createdAt,
 });
 
 const totalsRowSchema = z.object({
@@ -171,17 +171,22 @@ export class UsageRepository {
     ) {
       throw new TypeError("Invalid step usage cursor");
     }
+    // Newest first, like messages and events: rows recorded after the first
+    // page sort ahead of every later cursor and cannot extend the scan.
     const rows = (
       cursor
         ? this.sql.exec(
-            `SELECT * FROM step_usage WHERE created_at > ? OR (created_at = ? AND id > ?)
-           ORDER BY created_at, id LIMIT ?`,
+            `SELECT * FROM step_usage WHERE created_at < ? OR (created_at = ? AND id < ?)
+           ORDER BY created_at DESC, id DESC LIMIT ?`,
             cursor.createdAt,
             cursor.createdAt,
             cursor.id,
             limit + 1
           )
-        : this.sql.exec(`SELECT * FROM step_usage ORDER BY created_at, id LIMIT ?`, limit + 1)
+        : this.sql.exec(
+            `SELECT * FROM step_usage ORDER BY created_at DESC, id DESC LIMIT ?`,
+            limit + 1
+          )
     ).toArray();
     const items = rows.slice(0, limit).map((raw): StepUsage => {
       const parsed = stepUsageRowSchema.safeParse(raw);

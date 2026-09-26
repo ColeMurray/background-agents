@@ -11,8 +11,9 @@ export interface NormalizedTokenUsage {
   totalTokens: number | null;
 }
 
+/** `id` and `createdAt` form the page key, so they must be valid cursor parts. */
 export const stepUsageSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
   messageId: z.string().nullable(),
   model: z.string().nullable(),
   harness: harnessIdSchema.nullable(),
@@ -28,7 +29,7 @@ export const stepUsageSchema = z.object({
   childSessionId: z.string().nullable(),
   taskCallId: z.string().nullable(),
   reason: z.string().nullable(),
-  createdAt: z.number(),
+  createdAt: z.number().int().nonnegative(),
 });
 export type StepUsage = z.infer<typeof stepUsageSchema>;
 

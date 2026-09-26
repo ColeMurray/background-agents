@@ -35,6 +35,15 @@ describe("stepUsageSchema", () => {
     const { id: _id, ...withoutId } = stepUsage;
     expect(stepUsageSchema.safeParse(withoutId).success).toBe(false);
   });
+
+  it.each([
+    ["an empty id", { id: "" }],
+    ["a negative createdAt", { createdAt: -1 }],
+    ["a fractional createdAt", { createdAt: 1.5 }],
+    ["an unsafe createdAt", { createdAt: Number.MAX_SAFE_INTEGER + 1 }],
+  ])("rejects %s, which cannot continue a page", (_case, key) => {
+    expect(stepUsageSchema.safeParse({ ...stepUsage, ...key }).success).toBe(false);
+  });
 });
 
 describe("normalizeTokenUsage", () => {
