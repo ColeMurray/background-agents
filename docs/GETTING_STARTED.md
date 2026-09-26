@@ -175,10 +175,12 @@ Create an R2 API Token:
 Optional for the core path, which sets `enable_slack_bot = false` and `enable_linear_bot = false` in
 Step 5. Terraform's own default enables the Slack bot, and its classifier runs on Claude, so
 `terraform apply` fails without this key unless both bots are disabled or `classification_model`
-points at an OpenAI model. If you enable Slack or Linear later, add this key then. Coding sessions
-themselves need no key here — those model credentials can be added as secrets in the web app after
-deploying. With Modal, a key set here is also injected into session sandboxes as a deployment-wide
-default.
+points at an OpenAI model. If you enable Slack or Linear later, set either
+`classification_anthropic_api_key` or `anthropic_api_key` then; prefer the classifier-only key
+unless you also want a deployment-wide sandbox key, because it is never injected into sandboxes.
+Coding sessions themselves need no key here — those model credentials can be added as secrets in the
+web app after deploying. With Modal, a key set in `anthropic_api_key` is also injected into session
+sandboxes as a deployment-wide default.
 
 1. Go to [Anthropic Console](https://console.anthropic.com)
 2. Create an API key
@@ -411,7 +413,7 @@ linear_webhook_secret  = ""          # From the Linear app (required if enabled)
 
 # API Keys. Optional: leave blank to add model credentials as secrets in the web
 # app instead. Required only when the Slack/Linear classifier runs on Anthropic.
-anthropic_api_key = "sk-ant-..."
+anthropic_api_key = ""
 # classification_anthropic_api_key = ""   # Classifier-only key; never reaches sandboxes
 
 # Slack/Linear classifier provider, chosen by classification_model.
@@ -908,10 +910,10 @@ Set these in `terraform.tfvars`, then run `terraform apply` from
 `terraform/environments/production`:
 
 ```hcl
-enable_slack_bot     = true
-slack_bot_token      = "xoxb-..."
-slack_signing_secret = "your-signing-secret"
-anthropic_api_key    = "sk-ant-..." # Or classification_anthropic_api_key
+enable_slack_bot                 = true
+slack_bot_token                  = "xoxb-..."
+slack_signing_secret             = "your-signing-secret"
+classification_anthropic_api_key = "sk-ant-..." # Classifier-only; or set anthropic_api_key
 ```
 
 The Slack classifier needs an Anthropic key unless `classification_model` points at an OpenAI model;
@@ -1243,6 +1245,8 @@ Secrets for credentials:
 | `VERCEL_SANDBOX_RUNTIME`           | Optional Vercel Sandbox runtime (defaults to `node24`)                                      |
 | `VERCEL_SNAPSHOT_EXPIRATION_MS`    | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
 | `VERCEL_SANDBOX_API_BASE_URL`      | Optional advanced Vercel Sandbox API base URL override                                      |
+| `OPENCOMPUTER_API_KEY`             | OpenComputer API key _(only if `sandbox_provider = "opencomputer"`)_                        |
+| `E2B_API_KEY`                      | E2B API key _(only if `sandbox_provider = "e2b"`)_                                          |
 | `GH_OAUTH_CLIENT_ID`               | Optional GitHub sign-in client ID; set with `GH_OAUTH_CLIENT_SECRET`                        |
 | `GH_OAUTH_CLIENT_SECRET`           | Optional GitHub sign-in client secret; set with `GH_OAUTH_CLIENT_ID`                        |
 | `GOOGLE_CLIENT_ID`                 | Optional Google sign-in client ID; set with `GOOGLE_CLIENT_SECRET`                          |
