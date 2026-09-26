@@ -28,10 +28,12 @@ import type { SessionUpgradeAdmission } from "../session/connection-authenticato
 import type { SessionRuntimeLookup } from "./runtime-client";
 
 /**
- * The largest frame a peer may send, the Workers runtime's WebSocket
- * message limit, so a bridge or browser sees the same bound on both hosts.
+ * Match Cloudflare's 32 MiB received WebSocket message limit (raised on
+ * 2025-10-31): https://developers.cloudflare.com/changelog/post/2025-10-31-increased-websocket-message-size-limit/
+ * The socket host pauses reading before delivery, so a busy handler does not
+ * cause another message of up to this size to be assembled per socket.
  */
-export const MAX_MESSAGE_BYTES = 1024 * 1024;
+export const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 
 const SESSION_WS_PATH = /^\/sessions\/([^/]+)\/ws$/;
 

@@ -7,7 +7,11 @@ import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import type { Logger } from "../logger";
 import type { SessionWebSocket } from "../platform-ports";
 import type { UpgradeDecision } from "../session/connection-authenticator";
-import { createSessionUpgradeHandler, type UpgradeServingRuntime } from "./websocket-upgrade";
+import {
+  createSessionUpgradeHandler,
+  MAX_MESSAGE_BYTES,
+  type UpgradeServingRuntime,
+} from "./websocket-upgrade";
 
 function fakeLogger(): Logger {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
@@ -210,6 +214,54 @@ describe("createSessionUpgradeHandler", () => {
       expect.objectContaining({ event: "ws.connect", session_id: "s1" })
     );
   });
+
+  it("delivers a message just under the Cloudflare limit", async () => {
+    let receive!: (data: Buffer) => void;
+    const delivered = new Promise<Buffer>((resolve) => {
+      receive = resolve;
+    });
+    runtimes.set(
+      "s1",
+      runtimeDeciding(() =>
+        accept((ws) => {
+          asNodeSocket(ws).once("message", (data) => receive(data as Buffer));
+        })
+      )
+    );
+    const ws = connect("/sessions/s1/ws");
+    await once(ws, "open");
+    ws.send(Buffer.alloc(MAX_MESSAGE_BYTES - 1, 0x61));
+    const data = await delivered;
+    expect(data.byteLength).toBe(MAX_MESSAGE_BYTES - 1);
+    expect(data[0]).toBe(0x61);
+    expect(data.at(-1)).toBe(0x61);
+  }, 15_000);
+
+  it("rejects a message just over the Cloudflare limit with a ws payload error", async () => {
+    const onMessage = vi.fn();
+    const onError = vi.fn();
+    runtimes.set(
+      "s1",
+      runtimeDeciding(() =>
+        accept((ws) => {
+          asNodeSocket(ws).on("message", onMessage);
+          asNodeSocket(ws).on("error", onError);
+        })
+      )
+    );
+    const ws = connect("/sessions/s1/ws");
+    await once(ws, "open");
+    ws.send(Buffer.alloc(MAX_MESSAGE_BYTES + 1));
+    const [code] = await once(ws, "close");
+    expect(code).toBe(1009);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH",
+        message: "Max payload size exceeded",
+      })
+    );
+  }, 15_000);
 
   it("holds a frame sent on the 101 until the runtime has attached", async () => {
     let attachNow!: () => void;
