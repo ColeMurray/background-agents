@@ -27,6 +27,7 @@ import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { BudgetSection } from "./sidebar/budget-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -68,6 +69,7 @@ export function SessionRightSidebarContent({
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
 }: SessionRightSidebarContentProps) {
+  const { hasPermission } = useCurrentUserAuthorization();
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
     () =>
@@ -140,6 +142,17 @@ export function SessionRightSidebarContent({
           canManageBudget={canManageBudget}
         />
       </div>
+
+      {hasPermission("sessions.export") && (
+        <div className="px-4 py-3 border-b border-border-muted">
+          <a
+            href={`/api/sessions/${encodeURIComponent(sessionId)}/export`}
+            className="text-sm text-accent hover:underline"
+          >
+            Download trace
+          </a>
+        </div>
+      )}
 
       {/* Code Server */}
       {capabilities.sandboxAccess && sessionState.codeServerUrl && (

@@ -7,12 +7,21 @@ import { SessionDetailsOverlay } from "./session-details-overlay";
 import { SessionRightSidebar } from "./session-right-sidebar";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
+const permissions = vi.hoisted(() => new Set<string>());
+
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: (id: string) => permissions.has(id) }),
+}));
+
 vi.mock("swr", () => ({
   default: () => ({ data: undefined }),
   useSWRConfig: () => ({ fetcher: undefined }),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  permissions.clear();
+});
 
 const FULL_CAPABILITIES: SessionCapabilities = {
   read: true,
@@ -37,6 +46,35 @@ describe("SessionRightSidebar", () => {
     totalCost: 3,
     maxSessionCostUsd: 10,
   };
+
+  it("hides Download trace from viewers and offers it to exporters in desktop and mobile details", () => {
+    const props = {
+      sessionId: "session-1",
+      sessionState,
+      participants: [],
+      presenceSynced: false,
+      events: [],
+      artifacts: [],
+      onOpenMedia: vi.fn(),
+      capabilities: FULL_CAPABILITIES,
+    };
+    permissions.add("sessions.read");
+    const { rerender } = render(<SessionRightSidebar {...props} />);
+    expect(screen.queryByRole("link", { name: "Download trace" })).not.toBeInTheDocument();
+
+    permissions.add("sessions.export");
+    rerender(<SessionRightSidebar {...props} />);
+    expect(screen.getByRole("link", { name: "Download trace" })).toHaveAttribute(
+      "href",
+      "/api/sessions/session-1/export"
+    );
+
+    rerender(<SessionDetailsOverlay {...props} open isPhone onOpenChange={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "Download trace" })).toHaveAttribute(
+      "href",
+      "/api/sessions/session-1/export"
+    );
+  });
 
   it("hides sandbox access controls when the capability is denied", () => {
     const sandboxSessionState: SessionState = {

@@ -1,5 +1,5 @@
 /**
- * GET /sessions/export - bulk session-trace export as newline-delimited JSON.
+ * GET /sessions/export and /sessions/:id/export - session-trace NDJSON.
  *
  * Each line is a complete session, a session-scoped include error, a page
  * cursor, or a terminal stream error. `include` inlines a session's messages,
@@ -27,6 +27,7 @@ import {
   parseSessionExportCursor,
 } from "../db/session-export-cursor";
 import {
+  DEFAULT_EXPORT_LIMIT,
   SessionExportStore,
   type ExportSelection,
   type SessionExportRow,
@@ -52,10 +53,10 @@ import { dispatchSession, type SessionRouteContext } from "./session-route";
 import { error, SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 
 export const EXPORT_SCHEMA_VERSION = 1;
-const DEFAULT_EXPORT_LIMIT = 100;
 const MAX_EXPORT_LIMIT = 500;
 export const MAX_INCLUDED_EXPORT_LIMIT = 5;
 const TRACE_READ_TIMEOUT_MS = 10_000;
+const FULL_TRACE_INCLUDE: readonly SessionTraceCollection[] = ["messages", "events", "usage"];
 const encoder = new TextEncoder();
 
 function epochMsQuery(paramName: string) {
@@ -81,6 +82,12 @@ const exportQuerySchema = z.object({
   format: sessionTraceFormatSchema.optional(),
   createdAfter: epochMsQuery("createdAfter").optional(),
   createdBefore: epochMsQuery("createdBefore").optional(),
+});
+
+const singleExportQuerySchema = exportQuerySchema.pick({
+  scope: true,
+  include: true,
+  format: true,
 });
 
 type TraceReadFailure =
@@ -330,6 +337,88 @@ async function handleExport(
   });
 }
 
+async function handleSingleExport(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const query = parseQuery(request, singleExportQuerySchema);
+  if (query instanceof Response) return query;
+
+  const store = new SessionExportStore(ctx.db);
+  const selected = await store.get(params.id);
+  if (!selected) return error("Session not found", 404);
+
+  const include = query.include ?? FULL_TRACE_INCLUDE;
+  const rootId = selected.rootSessionId ?? selected.id;
+  const log = createLogger("session-export");
+  const streamAbort = new AbortController();
+  const signal = AbortSignal.any([request.signal, streamAbort.signal]);
+  let page: Awaited<ReturnType<SessionExportStore["listRun"]>> | undefined;
+  let index = 0;
+  let cancelled = false;
+  let closed = false;
+
+  const close = (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (closed || cancelled) return;
+    closed = true;
+    controller.close();
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (closed || cancelled) return;
+      if (signal.aborted) return close(controller);
+
+      try {
+        let row: SessionExportRow | undefined;
+        if (query.scope === "runs") {
+          if (!page || index >= page.sessions.length) {
+            if (page && !page.nextCursor) return close(controller);
+            page = await store.listRun(rootId, page?.nextCursor ?? null);
+            index = 0;
+          }
+          row = page.sessions[index++];
+        } else {
+          row = index++ === 0 ? selected : undefined;
+        }
+        if (!row) return close(controller);
+
+        if (include.length === 0) {
+          controller.enqueue(encodeLine(sessionLine(row)));
+          return;
+        }
+        const result = await readTrace(
+          ctx.sessionRuntime,
+          row.id,
+          include,
+          query.format,
+          log,
+          signal
+        );
+        controller.enqueue(
+          encodeLine(result.ok ? sessionLine(row, result.trace) : sessionErrorLine(row.id, result))
+        );
+      } catch (caught) {
+        if (cancelled) return;
+        if (signal.aborted) return close(controller);
+        log.error("session_export.stream_failed", {
+          error: caught instanceof Error ? caught.message : String(caught),
+        });
+        controller.enqueue(encodeLine({ schemaVersion: EXPORT_SCHEMA_VERSION, type: "error" }));
+        close(controller);
+      }
+    },
+    cancel() {
+      cancelled = true;
+      streamAbort.abort();
+    },
+  });
+
+  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+}
+
 const EXPORT_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("sessions.export"),
@@ -339,3 +428,6 @@ const EXPORT_READ = admit({
 export const sessionExportRoutes = new Hono<ControlPlaneHonoEnv>();
 
 sessionExportRoutes.get("/sessions/export", EXPORT_READ, (c) => dispatchSession(c, handleExport));
+sessionExportRoutes.get("/sessions/:id/export", EXPORT_READ, (c) =>
+  dispatchSession(c, handleSingleExport)
+);
