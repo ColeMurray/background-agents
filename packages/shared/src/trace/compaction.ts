@@ -1,13 +1,18 @@
 import type { SessionEvent } from "../types/sessions";
 
 export const MAX_COMPACT_OUTPUT_CHARS = 4_096;
+export const MAX_COMPACT_INDEX_CHARS = 1024 * 1024;
+export const MAX_COMPACT_INDEX_ENTRIES = 256;
+
+const encoder = new TextEncoder();
 
 export interface CompactionState {
   seenOutputs: Map<string, string>;
+  indexedChars: number;
 }
 
 export function createCompactionState(): CompactionState {
-  return { seenOutputs: new Map() };
+  return { seenOutputs: new Map(), indexedChars: 0 };
 }
 
 /**
@@ -30,10 +35,23 @@ export function compactEvent(event: SessionEvent, state: CompactionState): Sessi
 
   const ref = state.seenOutputs.get(output);
   if (ref !== undefined) {
-    const { output: _output, ...data } = event.data;
-    return { ...event, data: { ...data, compacted: { output: "ref", ref } } };
+    const compacted = { output: "ref", ref };
+    if (
+      encoder.encode(JSON.stringify({ compacted })).byteLength <
+      encoder.encode(JSON.stringify({ output })).byteLength
+    ) {
+      const { output: _output, ...data } = event.data;
+      return { ...event, data: { ...data, compacted } };
+    }
+    return event;
   }
-  state.seenOutputs.set(output, event.id);
+  if (
+    state.seenOutputs.size < MAX_COMPACT_INDEX_ENTRIES &&
+    state.indexedChars + output.length <= MAX_COMPACT_INDEX_CHARS
+  ) {
+    state.seenOutputs.set(output, event.id);
+    state.indexedChars += output.length;
+  }
 
   if (output.length <= MAX_COMPACT_OUTPUT_CHARS) return event;
   const head = output.slice(0, MAX_COMPACT_OUTPUT_CHARS);

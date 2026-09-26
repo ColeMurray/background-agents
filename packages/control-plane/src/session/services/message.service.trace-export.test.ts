@@ -163,12 +163,13 @@ describe("MessageService.exportTrace", () => {
   });
 
   it("references the latest repeated output across event pages", () => {
+    const repeatedOutput = "same output ".repeat(10);
     seedEvent("earlier", 1_000, {
       type: "tool_call",
       tool: "bash",
       args: { command: "run" },
       callId: "earlier",
-      output: "same output",
+      output: repeatedOutput,
     });
     for (let index = 0; index < TRACE_EXPORT_PAGE_SIZE - 1; index++) {
       seedEvent(`token-${index}`, 1_001 + index, { type: "token", content: "part" });
@@ -178,14 +179,63 @@ describe("MessageService.exportTrace", () => {
       tool: "bash",
       args: { command: "run" },
       callId: "latest",
-      output: "same output",
+      output: repeatedOutput,
     });
 
     const result = service.exportTrace(["events"], "compact");
     expect(result.ok && result.trace.events?.[0].data).toMatchObject({
       compacted: { output: "ref", ref: "latest" },
     });
-    expect(result.ok && result.trace.events?.at(-1)?.data.output).toBe("same output");
+    expect(result.ok && result.trace.events?.at(-1)?.data.output).toBe(repeatedOutput);
+  });
+
+  it("does not let short duplicate references exhaust a budget that fits the full trace", () => {
+    seedMessage("m1", 1_000, "");
+    for (let index = 0; index < TRACE_EXPORT_PAGE_SIZE; index++) {
+      seedEvent(`call-${index}`, 1_001 + index, {
+        type: "tool_call",
+        tool: "bash",
+        args: {},
+        callId: `call-${index}`,
+        output: "ok",
+      });
+    }
+    const baseline = service.exportTrace(["messages", "events"], "full");
+    if (!baseline.ok) throw new Error("expected the baseline to export");
+    const remaining =
+      MAX_INCLUDED_BYTES_PER_SESSION - encoder.encode(JSON.stringify(baseline)).byteLength - 4;
+    db.prepare("UPDATE messages SET content = ? WHERE id = 'm1'").run("x".repeat(remaining));
+
+    expect(service.exportTrace(["messages", "events"], "full").ok).toBe(true);
+    const compact = service.exportTrace(["messages", "events"], "compact");
+    expect(compact.ok).toBe(true);
+    if (compact.ok) {
+      expect(compact.trace.events?.every((item) => item.data.output === "ok")).toBe(true);
+    }
+  });
+
+  it("exports multiple pages of unique large tool outputs within the compact budget", () => {
+    const count = 2 * TRACE_EXPORT_PAGE_SIZE + 1;
+    for (let index = 0; index < count; index++) {
+      seedEvent(`call-${index}`, 1_000 + index, {
+        type: "tool_call",
+        tool: "bash",
+        args: { command: `run-${index}` },
+        callId: `call-${index}`,
+        output: `${index}:` + "x".repeat(128 * 1024),
+      });
+    }
+
+    expect(service.exportTrace(["events"], "full")).toEqual({
+      ok: false,
+      reason: "message_budget_exceeded",
+    });
+    const compact = service.exportTrace(["events"], "compact");
+    expect(compact.ok && compact.trace.events).toHaveLength(count);
+    expect(compact.ok && compact.trace.events?.at(-1)?.data.compacted).toEqual({
+      output: "truncated",
+      originalChars: `${count - 1}:`.length + 128 * 1024,
+    });
   });
 
   it("orders events that share a timestamp by timeline sequence, across pages", () => {

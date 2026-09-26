@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "../types/sessions";
-import { compactEvent, createCompactionState, MAX_COMPACT_OUTPUT_CHARS } from "./compaction";
+import {
+  compactEvent,
+  createCompactionState,
+  MAX_COMPACT_OUTPUT_CHARS,
+  MAX_COMPACT_INDEX_CHARS,
+  MAX_COMPACT_INDEX_ENTRIES,
+} from "./compaction";
 
 function event(
   id: string,
@@ -76,6 +82,30 @@ describe("compactEvent", () => {
     expect(
       compactEvent(event("another", "bash", {}, output), createCompactionState()).data.compacted
     ).toEqual({ output: "truncated", originalChars: output.length });
+  });
+
+  it("bounds the raw-output index across pages of unique large tool calls", () => {
+    const state = createCompactionState();
+    for (let index = 0; index < 3 * 100; index++) {
+      const output = `${index}:` + "x".repeat(128 * 1024);
+      const compact = compactEvent(event(`call-${index}`, "bash", {}, output), state);
+      expect(compact.data.compacted).toEqual({ output: "truncated", originalChars: output.length });
+    }
+    for (let index = 0; index < 500; index++) {
+      compactEvent(event(`small-${index}`, "bash", {}, `unique-${index}`), state);
+    }
+    expect(
+      [...state.seenOutputs.keys()].reduce((length, output) => length + output.length, 0)
+    ).toBeLessThanOrEqual(MAX_COMPACT_INDEX_CHARS);
+    expect(state.seenOutputs.size).toBe(MAX_COMPACT_INDEX_ENTRIES);
+  });
+
+  it("keeps short duplicate output when a reference would be larger", () => {
+    const state = createCompactionState();
+    const first = event("latest", "bash", {}, "ok");
+    const second = event("earlier", "bash", {}, "ok");
+    expect(compactEvent(first, state)).toBe(first);
+    expect(compactEvent(second, state)).toBe(second);
   });
 
   it("keeps edit args and the final text in a sanitized two-harness trace", () => {
