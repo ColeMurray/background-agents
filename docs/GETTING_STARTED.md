@@ -674,8 +674,8 @@ command exits non-zero and the `detail` field gives the reason.
 
 ### Test the Full Flow
 
-1. As the Owner, add a model credential: go to **Settings > Secrets**, select **All Repositories
-   (Global)**, and add the key for your model (e.g. `ANTHROPIC_API_KEY` for Claude). Skip this if
+1. As the Owner, add a model credential: go to **Settings > Secrets**, select the repository used
+   for this test, and add the key for your model (e.g. `ANTHROPIC_API_KEY` for Claude). Skip this if
    you set `anthropic_api_key` in `terraform.tfvars` and will use a Claude model. See
    [Secrets Management](SECRETS.md).
 2. Create a new session with a repository, selecting a model whose credential you added
