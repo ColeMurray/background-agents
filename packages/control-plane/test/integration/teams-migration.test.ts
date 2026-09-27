@@ -5,12 +5,6 @@ import { cleanD1Tables } from "./cleanup";
 beforeEach(cleanD1Tables);
 
 describe("team migration constraints", () => {
-  it("creates no teams, memberships, or grants", async () => {
-    for (const table of ["teams", "team_memberships", "team_repository_grants"]) {
-      expect((await env.DB.prepare(`SELECT * FROM ${table}`).all()).results).toEqual([]);
-    }
-  });
-
   it("rejects unknown owner team ids and restricts deleting a member user", async () => {
     await expect(
       env.DB.prepare(

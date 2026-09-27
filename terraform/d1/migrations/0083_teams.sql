@@ -1,7 +1,6 @@
 -- Teams are opt-in overlays over existing workspace-level ownership.
--- A NULL owner_team_id remains workspace-owned across the deploy window; no
--- team or membership is created for existing users or resources. Visibility
--- defaults to workspace and only a team-owned session may be team-visible.
+-- A NULL `owner_team_id` means the workspace owns the row, as today; nothing is inserted or backfilled.
+-- Visibility defaults to workspace and only a team-owned session may be team-visible.
 
 CREATE TABLE teams (
   id TEXT PRIMARY KEY,
