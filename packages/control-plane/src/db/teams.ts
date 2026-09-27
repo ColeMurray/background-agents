@@ -37,19 +37,36 @@ export class TeamStore {
     return row ? toTeam(row) : null;
   }
 
-  async list(options: { forUserId?: string; includeArchived?: boolean } = {}): Promise<Team[]> {
+  async list(
+    options: { forUserId?: string; includeArchived?: boolean; search?: string } = {}
+  ): Promise<Team[]> {
     const conditions: string[] = [];
     if (!options.includeArchived) conditions.push("t.archived_at IS NULL");
     if (options.forUserId)
       conditions.push(
         "EXISTS (SELECT 1 FROM team_memberships m WHERE m.team_id = t.id AND m.user_id = ?)"
       );
+    if (options.search)
+      conditions.push("(lower(t.name) LIKE ? ESCAPE '\\' OR lower(t.slug) LIKE ? ESCAPE '\\')");
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const search = options.search?.toLowerCase().replace(/[\\%_]/g, "\\$&");
     const rows = await this.db
       .prepare(`SELECT t.* FROM teams t ${where} ORDER BY t.name, t.id`)
-      .bind(...(options.forUserId ? [options.forUserId] : []))
+      .bind(
+        ...(options.forUserId ? [options.forUserId] : []),
+        ...(search ? [`%${search}%`, `%${search}%`] : [])
+      )
       .all();
     return rows.results.map(toTeam);
+  }
+
+  async isActive(id: string): Promise<boolean> {
+    return (
+      (await this.db
+        .prepare("SELECT 1 AS ok FROM teams WHERE id = ? AND archived_at IS NULL")
+        .bind(id)
+        .first()) !== null
+    );
   }
 
   async create(input: {

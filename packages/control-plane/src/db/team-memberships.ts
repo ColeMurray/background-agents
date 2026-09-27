@@ -1,4 +1,6 @@
+import { z } from "zod";
 import {
+  teamMemberSchema,
   teamMembershipSchema,
   teamRoleSchema,
   type TeamMembership,
@@ -55,6 +57,37 @@ export class TeamMembershipStore {
     );
   }
 
+  async countLeads(teamId: string): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT COUNT(*) AS count FROM team_memberships WHERE team_id = ? AND role = 'lead'")
+      .bind(teamId)
+      .first();
+    return teamRoleCountSchema.parse(row).count;
+  }
+
+  async listMembersWithUsers(teamId: string) {
+    const rows = await this.db
+      .prepare(
+        `SELECT m.*, u.display_name, u.email, u.avatar_url
+      FROM team_memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.team_id = ? ORDER BY m.created_at, m.user_id`
+      )
+      .bind(teamId)
+      .all();
+    return rows.results.map((row) =>
+      teamMemberSchema.parse({
+        teamId: row.team_id,
+        userId: row.user_id,
+        role: row.role,
+        source: row.source,
+        createdAt: row.created_at,
+        displayName: row.display_name,
+        email: row.email,
+        avatarUrl: row.avatar_url,
+      })
+    );
+  }
+
   async add(
     teamId: string,
     userId: string,
@@ -101,3 +134,5 @@ export class TeamMembershipStore {
     throw new LastLeadError();
   }
 }
+
+const teamRoleCountSchema = z.object({ count: z.number().int().nonnegative() });

@@ -17,6 +17,7 @@ import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { TeamStore } from "../../src/db/teams";
 import { catalog } from "../../src/routes/catalog";
 import { Hono } from "hono";
 import { admit } from "../../src/routing/admit";
@@ -49,6 +50,7 @@ interface MatrixFixtures {
   readonlySessionId: string;
   sandboxSessionId: string;
   automationId: string;
+  teamId: string;
 }
 
 function automation(id: string, userId: string): AutomationRow {
@@ -98,6 +100,10 @@ function isAutomationRoute(route: RouteContract): boolean {
   return route.path.startsWith("/automations/:id");
 }
 
+function isTeamRoute(route: RouteContract): boolean {
+  return route.path.startsWith("/teams/:id");
+}
+
 let automationSequence = 0;
 async function createAutomation(): Promise<string> {
   const id = `matrix-automation-${automationSequence++}`;
@@ -128,6 +134,7 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     readonlySessionId: "",
     sandboxSessionId: "",
     automationId: "",
+    teamId: "",
   };
 
   beforeAll(async () => {
@@ -141,6 +148,13 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
     fixtures.sandboxSessionId = sessionName;
 
     fixtures.automationId = await createAutomation();
+    fixtures.teamId = (
+      await new TeamStore(env.DB).create({
+        slug: "matrix-team",
+        name: "Matrix",
+        joinPolicy: "open",
+      })
+    ).id;
   }, MATRIX_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -185,13 +199,15 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
       // Mutating routes get a fresh resource so an earlier DELETE or state
       // change cannot turn later routes into handler-owned 404s.
-      const id = isAutomationRoute(route)
-        ? isMutation(route)
-          ? await createAutomation()
-          : fixtures.automationId
-        : isSessionRoute(route) && isMutation(route)
-          ? await createReadySession()
-          : fixtures.readonlySessionId;
+      const id = isTeamRoute(route)
+        ? fixtures.teamId
+        : isAutomationRoute(route)
+          ? isMutation(route)
+            ? await createAutomation()
+            : fixtures.automationId
+          : isSessionRoute(route) && isMutation(route)
+            ? await createReadySession()
+            : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, { id })}`;
       const response = await serviceFetch(url, {
         method: route.method,
@@ -385,6 +401,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     readonlySessionId: "",
     sandboxSessionId: "",
     automationId: "",
+    teamId: "",
   };
   // Every production contract, admitted by its own policy, in front of a
   // sentinel handler.
@@ -404,6 +421,13 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: "sb-sentinel" });
     fixtures.sandboxSessionId = sessionName;
     fixtures.automationId = await createAutomation();
+    fixtures.teamId = (
+      await new TeamStore(env.DB).create({
+        slug: "sentinel-team",
+        name: "Sentinel",
+        joinPolicy: "open",
+      })
+    ).id;
   }, MATRIX_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -448,7 +472,11 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           ? fixtures.sandboxSessionId
           : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, {
-        id: isAutomationRoute(route) ? fixtures.automationId : sessionId,
+        id: isTeamRoute(route)
+          ? fixtures.teamId
+          : isAutomationRoute(route)
+            ? fixtures.automationId
+            : sessionId,
       })}`;
       const method = route.method;
       const expectReach = async (

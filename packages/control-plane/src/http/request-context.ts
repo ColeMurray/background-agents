@@ -1,4 +1,6 @@
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
+import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
+import type { Team } from "@open-inspect/shared/types/teams";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { AuthenticationRequestServices } from "../auth/request-services";
 import type { UserAuthRuntime } from "../auth/user/runtime";
@@ -24,4 +26,5 @@ export type RequestContext = AuthenticationRequestServices & {
   authentication?: AuthenticationContext;
   authorization?: EffectiveAuthorization;
   automationAdmission?: AutomationRouteAdmission;
+  teamAdmission?: { team: Team; access: TeamCapabilities };
 };

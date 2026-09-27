@@ -45,3 +45,56 @@ export const teamMembershipSchema = z.object({
   createdAt: z.number(),
 });
 export type TeamMembership = z.infer<typeof teamMembershipSchema>;
+
+export const createTeamRequestSchema = z.object({
+  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/),
+  name: z.string().min(1).max(80),
+  description: z.string().nullable().optional(),
+  joinPolicy: teamJoinPolicySchema.default("invite_only"),
+});
+
+export const updateTeamRequestSchema = z.object({
+  slug: createTeamRequestSchema.shape.slug.optional(),
+  name: createTeamRequestSchema.shape.name.optional(),
+  description: z.string().nullable().optional(),
+  joinPolicy: teamJoinPolicySchema.optional(),
+  defaultVisibility: sessionVisibilitySchema.optional(),
+  defaultEnvironmentId: z.string().nullable().optional(),
+});
+
+export const teamCapabilitiesSchema = z.object({
+  canJoin: z.boolean(),
+  canLeave: z.boolean(),
+  canEditMetadata: z.boolean(),
+  canManageMembers: z.boolean(),
+  canManageRepositories: z.boolean(),
+  canManageBindings: z.boolean(),
+  canManageAutomations: z.boolean(),
+  canManageSecrets: z.boolean(),
+  canArchive: z.boolean(),
+});
+
+export const teamResponseSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  joinPolicy: teamJoinPolicySchema,
+  defaultVisibility: sessionVisibilitySchema,
+  defaultEnvironmentId: z.string().nullable(),
+  grantsVersion: z.number().int(),
+  archivedAt: z.number().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  capabilities: teamCapabilitiesSchema,
+});
+
+export const teamMemberSchema = teamMembershipSchema.extend({
+  displayName: z.string().nullable(),
+  email: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+
+export const meTeamsResponseSchema = z.object({
+  teams: z.array(teamResponseSchema.extend({ role: teamRoleSchema })),
+});

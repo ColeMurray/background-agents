@@ -7,6 +7,7 @@ import {
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
+import type { Team } from "@open-inspect/shared/types/teams";
 
 const logger = createLogger("authorization-audit");
 
@@ -134,4 +135,37 @@ export async function auditRouteAuthorizationDecision(input: {
       trace_id: input.ctx.trace_id,
     });
   }
+}
+
+export async function auditTeamEvent(input: {
+  ctx: RequestContext;
+  action: string;
+  team: Team;
+  targetUserId?: string;
+  before: unknown;
+  after: unknown;
+}): Promise<void> {
+  const principal = input.ctx.principal;
+  if (!principal || principal.kind !== "user") throw new Error("Team audit requires a user");
+  await input.ctx.db
+    .prepare(
+      `INSERT INTO authorization_audit_events
+    (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
+     action, resource_type, resource_id, target_user_id_snapshot, team_id,
+     reason_code, operation_result, metadata_json)
+    VALUES (?, ?, ?, 'user', ?, ?, 'team', ?, ?, ?, ?, 'applied', ?)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      Date.now(),
+      input.ctx.request_id,
+      principal.userId,
+      input.action,
+      input.team.id,
+      input.targetUserId ?? null,
+      input.team.id,
+      input.action,
+      JSON.stringify({ before: input.before ?? {}, requested: {}, after: input.after ?? {} })
+    )
+    .run();
 }
