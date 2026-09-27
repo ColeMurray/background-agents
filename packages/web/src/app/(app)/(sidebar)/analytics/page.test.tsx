@@ -39,6 +39,20 @@ vi.mock("@/components/analytics/summary-cards", () => ({
   AnalyticsSummaryCards: () => <div data-testid="analytics-summary-cards" />,
 }));
 
+vi.mock("@/components/analytics/token-cards", () => ({
+  AnalyticsTokenCards: () => <div data-testid="analytics-token-cards" />,
+}));
+
+vi.mock("@/components/analytics/model-bar-chart", () => ({
+  AnalyticsModelBarChart: ({ entries }: { entries?: AnalyticsBreakdownResponse["entries"] }) => (
+    <div data-testid="analytics-model-chart" data-entries={JSON.stringify(entries)} />
+  ),
+}));
+
+vi.mock("@/components/analytics/dimension-table", () => ({
+  AnalyticsDimensionTable: () => <div data-testid="analytics-provider-table" />,
+}));
+
 vi.mock("@/components/analytics/timeseries-chart", () => ({
   AnalyticsTimeseriesChart: () => <div data-testid="analytics-timeseries-chart" />,
 }));
@@ -173,13 +187,61 @@ describe("AnalyticsPage", () => {
 
     renderPage();
 
-    expect(mockUseAnalyticsDashboard).toHaveBeenCalledWith(30);
+    expect(mockUseAnalyticsDashboard).toHaveBeenCalledWith(30, "human");
 
     await user.click(screen.getByRole("radio", { name: "7d" }));
 
     await waitFor(() => {
-      expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(7);
+      expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(7, "human");
     });
+  });
+
+  it("refetches analytics when the selected scope changes", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    mockUseAnalyticsDashboard.mockImplementation((_days, selectedScope) => ({
+      summary,
+      timeseries,
+      repoBreakdown,
+      userBreakdown,
+      modelBreakdown: {
+        entries: [
+          {
+            ...repoBreakdown.entries[0],
+            key: "anthropic/sonnet",
+            cost: selectedScope === "agent" ? 7 : 2,
+          },
+        ],
+      },
+      loading: false,
+    }));
+
+    expect(screen.getByRole("radio", { name: "Human" })).toHaveAttribute("data-state", "on");
+    await user.click(screen.getByRole("radio", { name: "Agents" }));
+
+    await waitFor(() => {
+      expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(30, "agent");
+    });
+    expect(screen.getByTestId("analytics-token-cards")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-model-chart")).toBeInTheDocument();
+    expect(
+      JSON.parse(screen.getByTestId("analytics-model-chart").dataset.entries ?? "[]")
+    ).toMatchObject([{ key: "anthropic/sonnet", cost: 7 }]);
+    expect(screen.getByTestId("analytics-provider-table")).toBeInTheDocument();
+  });
+
+  it("renders cached dimensions when a refresh fails without summary data", () => {
+    mockUseSidebarContext.mockReturnValue({ isOpen: true });
+    mockUseAnalyticsDashboard.mockReturnValue({
+      modelBreakdown: { entries: [{ key: "a" }] },
+      error: new Error("request failed"),
+      loading: false,
+    });
+
+    render(<AnalyticsPage />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-model-chart")).toBeInTheDocument();
   });
 
   it("re-sorts the per-user table when a header is clicked", async () => {

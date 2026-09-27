@@ -3,6 +3,7 @@ import type {
   AnalyticsDays,
   AnalyticsPullRequestFunnel,
   AnalyticsPullRequestsResponse,
+  AnalyticsScope,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
 
@@ -14,6 +15,13 @@ export const ANALYTICS_RANGE_LABELS: Record<AnalyticsDays, string> = {
   14: "14d",
   30: "30d",
   90: "90d",
+};
+
+export const ANALYTICS_SCOPE_LABELS: Record<AnalyticsScope, string> = {
+  human: "Human",
+  agent: "Agents",
+  automation: "Automations",
+  all: "All",
 };
 
 export type AnalyticsUserSortKey =
@@ -50,6 +58,10 @@ function parseAnalyticsDate(value: string): Date | null {
 
 export function formatAnalyticsCount(value: number): string {
   return INTEGER_FORMATTER.format(value);
+}
+
+export function formatAnalyticsRatio(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value * 100)}%`;
 }
 
 export function formatAnalyticsDate(value: string): string {

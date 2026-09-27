@@ -5,6 +5,7 @@ import {
   formatAnalyticsDuration,
   formatAnalyticsLongDate,
   formatAnalyticsLongDuration,
+  formatAnalyticsRatio,
   formatCompletionRate,
   formatPullRequestAcceptanceRate,
   getCostPerMergedPullRequest,
@@ -21,6 +22,11 @@ const zeroTokens = {
 };
 
 describe("analytics utilities", () => {
+  it("formats a nullable ratio as a rounded percentage", () => {
+    expect(formatAnalyticsRatio(null)).toBe("—");
+    expect(formatAnalyticsRatio(0)).toBe("0%");
+    expect(formatAnalyticsRatio(0.416)).toBe("42%");
+  });
   it("builds chart data with zero-filled group values", () => {
     const result = buildTimeseriesChartData([
       { date: "2026-04-10", groups: { alice: 2, bob: 1 } },

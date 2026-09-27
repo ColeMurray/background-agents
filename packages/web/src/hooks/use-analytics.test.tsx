@@ -70,14 +70,14 @@ describe("useAnalyticsDashboard", () => {
     vi.mocked(useAuthSession).mockReturnValue({ data: { user: {} } } as never);
   });
 
-  it("uses one SWR resource per range and retains a complete cached snapshot on failure", () => {
+  it("uses one SWR resource per range and scope and retains a complete cached snapshot on failure", () => {
     const error = new Error("refresh failed");
     vi.mocked(useSWR).mockReturnValue({ data: snapshot, error, isLoading: false } as never);
 
-    const { result } = renderHook(() => useAnalyticsDashboard(30));
+    const { result } = renderHook(() => useAnalyticsDashboard(30, "agent"));
 
     expect(useSWR).toHaveBeenCalledTimes(1);
-    expect(useSWR).toHaveBeenCalledWith("/api/analytics/dashboard?days=30", {
+    expect(useSWR).toHaveBeenCalledWith("/api/analytics/dashboard?days=30&scope=agent", {
       refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS,
     });
     expect(result.current).toMatchObject({
@@ -85,6 +85,11 @@ describe("useAnalyticsDashboard", () => {
       timeseries: snapshot.timeseries,
       repoBreakdown: snapshot.breakdowns.repository,
       userBreakdown: snapshot.breakdowns.user,
+      modelBreakdown: snapshot.breakdowns.model,
+      harnessBreakdown: snapshot.breakdowns.harness,
+      providerBreakdown: snapshot.breakdowns.provider,
+      automationBreakdown: snapshot.breakdowns.automation,
+      runs: snapshot.runs,
       pullRequests: snapshot.pullRequests,
       loading: false,
       error,
@@ -95,7 +100,7 @@ describe("useAnalyticsDashboard", () => {
     vi.mocked(useAuthSession).mockReturnValue({ data: null } as never);
     vi.mocked(useSWR).mockReturnValue({ data: undefined, isLoading: false } as never);
 
-    renderHook(() => useAnalyticsDashboard(7));
+    renderHook(() => useAnalyticsDashboard(7, "human"));
 
     expect(useSWR).toHaveBeenCalledWith(null, {
       refreshInterval: ANALYTICS_REFRESH_INTERVAL_MS,

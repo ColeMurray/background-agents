@@ -1,13 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AnalyticsDays } from "@open-inspect/shared/types/analytics";
+import {
+  ANALYTICS_SCOPES,
+  DEFAULT_ANALYTICS_SCOPE,
+  type AnalyticsDays,
+  type AnalyticsScope,
+} from "@open-inspect/shared/types/analytics";
+import { AnalyticsDimensionTable } from "@/components/analytics/dimension-table";
+import { AnalyticsModelBarChart } from "@/components/analytics/model-bar-chart";
 import { AnalyticsPullRequestCards } from "@/components/analytics/pull-request-cards";
 import { AnalyticsPullRequestChart } from "@/components/analytics/pull-request-chart";
 import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-request-repo-table";
 import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
 import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
 import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
+import { AnalyticsTokenCards } from "@/components/analytics/token-cards";
 import { AnalyticsUserTable } from "@/components/analytics/user-table";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +26,7 @@ import {
   ANALYTICS_DAYS,
   ANALYTICS_REFRESH_INTERVAL_MS,
   ANALYTICS_RANGE_LABELS,
+  ANALYTICS_SCOPE_LABELS,
   formatAnalyticsCount,
   sortAnalyticsUserEntries,
   type AnalyticsSortDirection,
@@ -27,10 +36,23 @@ import {
 export default function AnalyticsPage() {
   const { isOpen } = useSidebarContext();
   const [days, setDays] = useState<AnalyticsDays>(30);
+  const [scope, setScope] = useState<AnalyticsScope>(DEFAULT_ANALYTICS_SCOPE);
   const [sortKey, setSortKey] = useState<AnalyticsUserSortKey>("sessions");
   const [sortDirection, setSortDirection] = useState<AnalyticsSortDirection>("desc");
-  const { summary, timeseries, repoBreakdown, userBreakdown, pullRequests, loading, error } =
-    useAnalyticsDashboard(days);
+  const {
+    summary,
+    timeseries,
+    repoBreakdown,
+    userBreakdown,
+    modelBreakdown,
+    harnessBreakdown,
+    providerBreakdown,
+    automationBreakdown,
+    runs,
+    pullRequests,
+    loading,
+    error,
+  } = useAnalyticsDashboard(days, scope);
   const userEntries = userBreakdown?.entries;
 
   const sortedUserEntries = useMemo(
@@ -42,6 +64,11 @@ export default function AnalyticsPage() {
     timeseries?.series?.length ||
     repoBreakdown?.entries?.length ||
     sortedUserEntries?.length ||
+    modelBreakdown?.entries?.length ||
+    harnessBreakdown?.entries?.length ||
+    providerBreakdown?.entries?.length ||
+    automationBreakdown?.entries?.length ||
+    runs?.length ||
     pullRequests
   );
 
@@ -99,7 +126,7 @@ export default function AnalyticsPage() {
                 </div>
               </div>
 
-              <div className="min-w-0 xl:w-[18rem]">
+              <div className="min-w-0 xl:w-[22rem]">
                 <div className="rounded-lg border border-border-muted bg-background p-4">
                   <div className="text-xs uppercase tracking-wider text-secondary-foreground">
                     Time range
@@ -128,7 +155,39 @@ export default function AnalyticsPage() {
                     </ToggleGroup>
                   </div>
                   <div className="mt-3 text-xs leading-5 text-muted-foreground">
-                    All charts and tables re-filter instantly when the selected range changes.
+                    Session charts follow the selected range and scope.
+                  </div>
+                  <div className="mt-4 text-xs uppercase tracking-wider text-secondary-foreground">
+                    Scope
+                  </div>
+                  <div className="mt-3">
+                    <ToggleGroup
+                      type="single"
+                      value={scope}
+                      onValueChange={(value) => {
+                        const nextScope = ANALYTICS_SCOPES.find((option) => option === value);
+                        if (nextScope) setScope(nextScope);
+                      }}
+                      aria-label="Session scope"
+                      variant="outline"
+                      size="sm"
+                      className="grid grid-cols-4 gap-1 rounded-md bg-card p-1"
+                    >
+                      {ANALYTICS_SCOPES.map((option) => (
+                        <ToggleGroupItem
+                          key={option}
+                          value={option}
+                          aria-label={ANALYTICS_SCOPE_LABELS[option]}
+                          className="min-w-0 px-1 text-xs"
+                        >
+                          {ANALYTICS_SCOPE_LABELS[option]}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </div>
+                  <div className="mt-3 text-xs leading-5 text-muted-foreground">
+                    Human: sessions people started, including via Slack, Linear and GitHub. Agents:
+                    sessions spawned by other sessions.
                   </div>
                 </div>
               </div>
@@ -145,9 +204,24 @@ export default function AnalyticsPage() {
             <>
               <AnalyticsSummaryCards days={days} summary={summary} loading={loading} />
 
+              <AnalyticsTokenCards summary={summary} loading={loading} />
+
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
                 <AnalyticsTimeseriesChart series={timeseries?.series} loading={loading} />
                 <AnalyticsRepoBarChart entries={repoBreakdown?.entries} loading={loading} />
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <AnalyticsModelBarChart entries={modelBreakdown?.entries} loading={loading} />
+                <AnalyticsDimensionTable
+                  title="Providers"
+                  description="Session cost and billing by provider."
+                  keyLabel="Provider"
+                  entries={providerBreakdown?.entries}
+                  loading={loading}
+                  emptyMessage="No provider data found for this range."
+                  columns={["subscriptionSessions", "cost", "cacheHitRatio"]}
+                />
               </div>
 
               <AnalyticsUserTable

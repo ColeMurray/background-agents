@@ -13,6 +13,9 @@ the paginated bulk export.
 
 ### Added
 
+The analytics dashboard now lets operators select human, agent, automation or all sessions and
+compare token usage, cost by model and provider billing in the selected scope.
+
 Analytics responses now include session token totals and cache hit ratio, pull-request cost by model
 and harness, and the top 20 scoped runs in the dashboard snapshot. Run titles may be null.
 
