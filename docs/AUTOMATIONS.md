@@ -220,8 +220,8 @@ concurrency protection.
 A **GitHub Event** automation starts a session when a supported webhook event arrives for its
 repository. Pick one repository and one event type. The GitHub App must subscribe to that event and
 have its required repository permission. Set `enable_github_bot = true`, then complete the
-[GitHub bot setup](GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot) to
-deploy the webhook worker and configure event delivery.
+[GitHub bot setup](GETTING_STARTED.md#github-bot-optional) to deploy the webhook worker and
+configure event delivery.
 
 **Workflow Run Completed** handles completed GitHub Actions workflow runs. It requires the GitHub
 App's read-only Actions permission and the **Workflow runs** event subscription. Use these

@@ -43,6 +43,44 @@ describe("GET /sessions/export with include", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
+  it("downloads a full single-session trace or its root family without unrelated sessions", async () => {
+    const root = await initSession({ title: "root" });
+    const child = await initSession({ title: "child" });
+    const other = await initSession({ title: "other" });
+    await env.DB.prepare(
+      "UPDATE sessions SET parent_session_id = ?, root_session_id = ?, spawn_depth = 1 WHERE id = ?"
+    )
+      .bind(root.sessionName, root.sessionName, child.sessionName)
+      .run();
+
+    const single = await serviceFetch(`https://cp.test/sessions/${child.sessionName}/export`);
+    expect(single.status).toBe(200);
+    expect(single.headers.get("Content-Type")).toBe("application/x-ndjson");
+    const singleLines = new TextDecoder()
+      .decode(await single.arrayBuffer())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as ExportLine);
+    expect(singleLines).toMatchObject([
+      { type: "session", id: child.sessionName, messages: [], events: [], usage: [] },
+    ]);
+
+    const run = await serviceFetch(
+      `https://cp.test/sessions/${child.sessionName}/export?scope=runs`
+    );
+    expect(run.status).toBe(200);
+    const runLines = new TextDecoder()
+      .decode(await run.arrayBuffer())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as ExportLine);
+    expect(runLines.map(({ id }) => id)).toEqual([root.sessionName, child.sessionName]);
+    expect(runLines.some(({ id }) => id === other.sessionName)).toBe(false);
+
+    const missing = await serviceFetch("https://cp.test/sessions/missing/export");
+    expect(missing.status).toBe(404);
+  });
+
   it("emits a complete consecutive run across pages with and without include", async () => {
     const root = await initSession({ title: "root" });
     await env.DB.prepare("UPDATE sessions SET created_at = ? WHERE id = ?")

@@ -14,6 +14,8 @@ import { sessionRowSchema, toSessionFields, type SessionRow } from "./session-ro
 import type { RunsExportCursor, SessionExportCursor } from "./session-export-cursor";
 import type { SqlDatabase } from "./sql-database";
 
+export const DEFAULT_EXPORT_LIMIT = 100;
+
 /**
  * One exported session-trace record: the session-index projection deployers
  * need for analytics. Messages live in each session's Durable Object, not
@@ -104,6 +106,29 @@ export type ListSessionsForExportResult = SessionsPage | RunsPage;
 export class SessionExportStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  async get(id: string): Promise<SessionExportRow | null> {
+    const page = await this.loadPage({
+      select: "sessions.*",
+      pageFrom: "FROM sessions WHERE sessions.id = ?",
+      pageId: "sessions.id",
+      bindings: [id],
+      limit: 1,
+      snapshotMax: undefined,
+      schema: sessionRowSchema,
+      makeCursor: (last, snapshotMaxRowId) => ({
+        createdAt: last.created_at,
+        id: last.id,
+        snapshotMaxRowId,
+      }),
+    });
+    return page.sessions[0] ?? null;
+  }
+
+  /** Page a single root family without scanning or retaining unrelated runs. */
+  listRun(rootSessionId: string, cursor: RunsExportCursor | null): Promise<RunsPage> {
+    return this.listRuns({ scope: "runs", rootSessionId, cursor, limit: DEFAULT_EXPORT_LIMIT });
+  }
+
   list(
     options: ExportFilters & { scope: "runs"; cursor: RunsExportCursor | null }
   ): Promise<RunsPage>;
@@ -164,11 +189,19 @@ export class SessionExportStore {
   }
 
   private async listRuns(
-    options: ExportFilters & { scope: "runs"; cursor: RunsExportCursor | null }
+    options: ExportFilters & {
+      scope: "runs";
+      cursor: RunsExportCursor | null;
+      rootSessionId?: string;
+    }
   ): Promise<RunsPage> {
     const conditions: string[] = [];
     const bindings: (string | number)[] = [];
     const firstPage = options.cursor === null;
+    if (options.rootSessionId !== undefined) {
+      conditions.push("s.root_session_id = ?");
+      bindings.push(options.rootSessionId);
+    }
     if (options.cursor) {
       const cursor = options.cursor;
       conditions.push("s.rowid <= ?", "root.rowid <= ?");

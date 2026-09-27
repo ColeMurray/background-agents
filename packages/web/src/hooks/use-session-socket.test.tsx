@@ -19,6 +19,7 @@ const FULL_CAPABILITIES = {
   collaborate: true,
   lifecycle: true,
   sandboxAccess: true,
+  exportTrace: true,
 } satisfies SessionCapabilities;
 
 type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
@@ -160,6 +161,7 @@ describe("useSessionSocket", () => {
         collaborate: false,
         lifecycle: false,
         sandboxAccess: false,
+        exportTrace: false,
       })
     );
 

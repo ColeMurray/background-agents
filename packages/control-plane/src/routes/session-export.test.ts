@@ -19,6 +19,7 @@ import {
 } from "../router.test-support";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ListSessionsForExportOptions, SessionExportRow } from "../db/session-export-store";
+import type * as ExportStoreModule from "../db/session-export-store";
 import { encodeRunsExportCursor } from "../db/session-export-cursor";
 import { MAX_INCLUDED_BYTES_PER_SESSION } from "../session/contracts";
 import type { Env } from "../types";
@@ -27,6 +28,8 @@ import { MAX_INCLUDED_EXPORT_LIMIT, sessionExportRoutes } from "./session-export
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
   list: vi.fn(),
+  get: vi.fn(),
+  listRun: vi.fn(),
   runtimeFetch: vi.fn(),
   logger: {
     debug: vi.fn(),
@@ -41,9 +44,12 @@ vi.mock("../auth/authenticate", async (importOriginal) => ({
   authenticate: mocks.authenticate,
 }));
 
-vi.mock("../db/session-export-store", () => ({
+vi.mock("../db/session-export-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof ExportStoreModule>()),
   SessionExportStore: vi.fn().mockImplementation(function () {
     return {
+      get: mocks.get,
+      listRun: mocks.listRun,
       list: async (options: ListSessionsForExportOptions) => ({
         scope: options.scope ?? "sessions",
         ...(await mocks.list(options)),
@@ -76,9 +82,11 @@ function createHandler() {
 
 async function callExport(
   query: Record<string, string> = {},
-  options?: { permissions?: readonly PermissionId[]; principal?: Principal }
+  options?: { permissions?: readonly PermissionId[]; principal?: Principal; sessionId?: string }
 ): Promise<Response> {
-  const url = new URL("https://test.local/sessions/export");
+  const url = new URL(
+    `https://test.local/sessions/${options?.sessionId ? `${options.sessionId}/export` : "export"}`
+  );
   for (const [key, value] of Object.entries(query)) {
     url.searchParams.set(key, value);
   }
@@ -92,6 +100,111 @@ async function callExport(
     TEST_BACKGROUND_TASK_CONTEXT
   );
 }
+
+describe("GET /sessions/:id/export", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.runtimeFetch.mockReset();
+  });
+
+  it("refuses viewers before looking up the session", async () => {
+    const response = await callExport(
+      {},
+      { sessionId: "session-1", permissions: ["sessions.read"] }
+    );
+    expect(response.status).toBe(403);
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.runtimeFetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a missing session rather than an empty successful download", async () => {
+    mocks.get.mockResolvedValue(null);
+    const response = await callExport({}, { sessionId: "missing" });
+    expect(response.status).toBe(404);
+    expect(mocks.runtimeFetch).not.toHaveBeenCalled();
+  });
+
+  it("exports a full trace by default in one NDJSON line through the bounded runtime read", async () => {
+    mocks.get.mockResolvedValue(sampleRow);
+    const trace = {
+      messages: [sampleMessage("msg-1", "Run the tests")],
+      events: [sampleEvent("token:msg-1", 1_100, 1, { type: "token", content: "passed" })],
+      usage: [sampleUsage("step-1", 1_200, 200)],
+    };
+    mocks.runtimeFetch.mockResolvedValueOnce(traceResponse(trace));
+
+    const response = await callExport({}, { sessionId: "session-1" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await readLines(response)).toEqual([
+      { schemaVersion: 1, type: "session", ...sampleRow, ...trace },
+    ]);
+    expect(mocks.get).toHaveBeenCalledWith("session-1");
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.runtimeFetch.mock.calls[0][1]).toBe("/internal/trace-export");
+    expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=messages%2Cevents%2Cusage");
+  });
+
+  it("exports the requested session's root family in order with compact format", async () => {
+    mocks.get.mockResolvedValue(sampleRow);
+    mocks.listRun
+      .mockResolvedValueOnce({ sessions: [{ ...sampleRow, id: "root-1" }], nextCursor: "next" })
+      .mockResolvedValueOnce({ sessions: [sampleRow], nextCursor: null });
+    mocks.runtimeFetch.mockImplementation(async () => traceResponse({ events: [] }));
+
+    const response = await callExport(
+      { scope: "runs", include: "events", format: "compact" },
+      { sessionId: "session-1" }
+    );
+    expect(await readLines(response)).toMatchObject([
+      { type: "session", id: "root-1", events: [] },
+      { type: "session", id: "session-1", events: [] },
+    ]);
+    expect(mocks.listRun).toHaveBeenNthCalledWith(1, "root-1", null);
+    expect(mocks.listRun).toHaveBeenNthCalledWith(2, "root-1", "next");
+    expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
+  });
+
+  it("reports a trace read failure without emitting a partial session", async () => {
+    mocks.get.mockResolvedValue(sampleRow);
+    mocks.runtimeFetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+    expect(await readLines(await callExport({}, { sessionId: "session-1" }))).toEqual([
+      {
+        schemaVersion: 1,
+        type: "session_error",
+        sessionId: "session-1",
+        reason: "http_error",
+        status: 503,
+      },
+    ]);
+  });
+
+  it("aborts an in-flight single-session trace read when the download is cancelled", async () => {
+    mocks.get.mockResolvedValue(sampleRow);
+    let fetchSignal: AbortSignal | undefined;
+    let notifyStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    mocks.runtimeFetch.mockImplementation((_sessionId, _path, init: RequestInit) => {
+      fetchSignal = init.signal as AbortSignal;
+      notifyStarted?.();
+      return new Promise<Response>((_resolve, reject) => {
+        fetchSignal?.addEventListener("abort", () => reject(fetchSignal?.reason), { once: true });
+      });
+    });
+
+    const response = await callExport({}, { sessionId: "session-1" });
+    const reader = response.body!.getReader();
+    const pendingRead = reader.read();
+    await started;
+    await reader.cancel();
+
+    expect(fetchSignal?.aborted).toBe(true);
+    await expect(pendingRead).resolves.toEqual({ done: true, value: undefined });
+  });
+});
 
 const sampleRow = {
   id: "session-1",
@@ -211,6 +324,7 @@ async function readLines(response: Response): Promise<Record<string, unknown>[]>
 describe("GET /sessions/export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runtimeFetch.mockReset();
   });
 
   it("rejects a caller without sessions.export before touching the store", async () => {

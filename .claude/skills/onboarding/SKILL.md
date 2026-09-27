@@ -57,7 +57,7 @@ Use AskUserQuestion to gather:
 8. **Admission mode** - Restricted (collect the allowed GitHub usernames, exact verified emails,
    email domains, and/or GitHub orgs) or explicitly open to any authenticated user (no allowlists).
    Validate the chosen providers and admission mode against the compatibility table and allowlist
-   rules in Step 6 of `docs/GETTING_STARTED.md` before proceeding.
+   rules in Step 5 of `docs/GETTING_STARTED.md` before proceeding.
 9. **Prerequisites confirmation** - Confirm they have Cloudflare, Modal, Anthropic, and GitHub
    accounts, plus Vercel only if selected above.
 
@@ -239,10 +239,14 @@ If Phase 1 selected a Cloudflare custom domain, also set `cloudflare_custom_doma
 `cloudflare_zone_id` to the collected hostname and zone ID. Leave both unset otherwise. If Vercel
 was not selected, leave `vercel_api_token` and `vercel_team_id` unset (not empty strings).
 
+Set `enable_slack_bot = false` if Slack was declined in Phase 1; Terraform defaults it to `true`. If
+Slack was selected, set `enable_slack_bot = true`, `slack_bot_token`, and `slack_signing_secret` to
+the collected values.
+
 Write the restricted-mode comma-separated Phase 1 answers to `allowed_users`,
 `allowed_email_domains`, `allowed_emails`, and `allowed_github_orgs`; leave unused inputs empty and
 set `unsafe_allow_all_users = false`. For explicitly open mode, leave all four lists empty and set
-`unsafe_allow_all_users = true`. Use Step 6 of `docs/GETTING_STARTED.md` for the admission contract.
+`unsafe_allow_all_users = true`. Use Step 5 of `docs/GETTING_STARTED.md` for the admission contract.
 
 If GitHub bot is enabled, also set:
 
@@ -356,10 +360,10 @@ npx vercel --prod
 
 ## Phase 12: Bootstrap the Workspace Owner
 
-After the web app is deployed, guide the intended Owner through Step 7a of
-`docs/GETTING_STARTED.md`. Obtain their canonical user ID after sign-in; run
-`npm run rbac:bootstrap-owner` from the repository root as a dry run, execute only if ready, and
-verify by rerunning the dry run. Follow Step 7a for commands and refusal/no-op handling.
+After the web app is deployed, guide the intended Owner through Step 9 of `docs/GETTING_STARTED.md`.
+Obtain their canonical user ID after sign-in; run `npm run rbac:bootstrap-owner` from the repository
+root as a dry run, execute only if ready, and verify by rerunning the dry run. Follow Step 9 for
+commands and refusal/no-op handling.
 
 ## Phase 13: Verification
 
@@ -367,7 +371,7 @@ From the repository root:
 
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
-curl https://{workspace}--open-inspect-api-health.modal.run
+curl "$(terraform -chdir=terraform/environments/production output -raw modal_health_url)"
 curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
@@ -376,16 +380,16 @@ configured provider, create a session, and send a prompt.
 
 ## Phase 14: CI/CD Setup (Optional)
 
-Ask if user wants GitHub Actions CI/CD. If yes, follow Step 10 of `docs/GETTING_STARTED.md` for the
-required variables and secrets, including the Phase 1 admission mode and allowlists. CI uses the
-same `open-inspect-terraform-state` R2 bucket as local Terraform.
+Ask if user wants GitHub Actions CI/CD. If yes, follow the "Set Up CI/CD (Optional)" section of
+`docs/GETTING_STARTED.md` for the required variables and secrets, including the Phase 1 admission
+mode and allowlists. CI uses the same `open-inspect-terraform-state` R2 bucket as local Terraform.
 
 ## Error Handling
 
 - **"redirect_uri is not associated"**: Callback URL mismatch - update GitHub App settings
 - **Durable Object errors**: Must follow two-phase deployment
 - **"At least one access control allowlist must be configured"**: Set an appropriate `allowed_*`
-  Terraform value or the explicit Phase 1 open-access choice; check Step 6 of
+  Terraform value or the explicit Phase 1 open-access choice; check Step 5 of
   `docs/GETTING_STARTED.md` and the corresponding CI variables/secrets.
 - **Queue creation or binding permission errors**: Grant Account | Queues | Edit to the Cloudflare
   API token and rerun `terraform apply`.
