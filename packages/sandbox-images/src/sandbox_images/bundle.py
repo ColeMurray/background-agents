@@ -16,7 +16,7 @@ from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_en
 from .locks import update_locks
 
 DOCKER_PACKAGES = ("engine", "cli", "containerd", "buildx", "compose")
-PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer", "boat")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -44,6 +44,7 @@ INFRA_MODULES = {
     "e2b": "e2b-infra",
     "vercel": "vercel-sandbox-infra",
     "opencomputer": "opencomputer-infra",
+    "boat": "boat-infra",
 }
 
 
@@ -193,7 +194,10 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
     output_root.mkdir(parents=True, exist_ok=True)
     destination = Path(tempfile.mkdtemp(prefix=f"{provider}-", dir=output_root))
     try:
-        for source in source_files(root, PAYLOAD_ROOTS):
+        payload_roots = PAYLOAD_ROOTS + (
+            (Path("packages/boat-infra/runtime-launcher.sh"),) if provider == "boat" else ()
+        )
+        for source in source_files(root, payload_roots):
             target = destination / source.relative_to(root)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target, follow_symlinks=False)

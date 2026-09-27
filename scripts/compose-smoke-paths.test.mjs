@@ -34,6 +34,7 @@ const unrelated = [
   "packages/modal-infra/src/web_api.py",
   "packages/daytona-infra/src/toolchain.py",
   "packages/e2b-infra/pyproject.toml",
+  "packages/boat-infra/build_template.py",
   "packages/opencomputer-infra/src/build-template.ts",
   "packages/sandbox-runtime/src/sandbox_runtime/bridge.py",
   "packages/sandbox-runtime/src/sandbox_runtime/skills/example/SKILL.md",

@@ -12,6 +12,7 @@ coverage/
 
 # Python
 packages/modal-infra/
+packages/boat-infra/
 __pycache__/
 *.pyc
 .venv/

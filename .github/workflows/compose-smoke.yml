@@ -69,6 +69,7 @@ jobs:
             ':(exclude)packages/modal-infra'
             ':(exclude)packages/daytona-infra'
             ':(exclude)packages/e2b-infra'
+            ':(exclude)packages/boat-infra'
             ':(exclude)packages/opencomputer-infra'
             ':(exclude)packages/sandbox-runtime'
             ':(exclude)terraform'

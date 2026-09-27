@@ -54,6 +54,26 @@ describe("createSessionRuntime", () => {
     expect(error).toMatch(/MODAL_API_SECRET/);
   });
 
+  it("builds the graph for a fully configured Boat provider", async () => {
+    const error = await buildWithEnv({
+      SANDBOX_PROVIDER: "boat",
+      BOAT_API_KEY: "boat-key",
+      BOAT_BASE_SNAPSHOT: "openinspect-base",
+      BOAT_SANDBOX_ACCESS_SECRET: "stable-access-secret-at-least-32-chars",
+    });
+    expect(error).toBeNull();
+  });
+
+  it("fails at graph build when Boat's base snapshot is missing", async () => {
+    const error = await buildWithEnv({
+      SANDBOX_PROVIDER: "boat",
+      BOAT_API_KEY: "boat-key",
+      BOAT_BASE_SNAPSHOT: undefined,
+      BOAT_SANDBOX_ACCESS_SECRET: "stable-access-secret-at-least-32-chars",
+    });
+    expect(error).toMatch(/BOAT_BASE_SNAPSHOT/);
+  });
+
   it("fails at graph build on an invalid SCM_PROVIDER", async () => {
     const error = await buildWithEnv({ SCM_PROVIDER: "not-a-real-provider" });
     expect(error).toMatch(/SCM_PROVIDER/i);

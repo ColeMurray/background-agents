@@ -25,7 +25,7 @@ import {
 } from "./integrations";
 
 describe("sandbox provider settings capabilities", () => {
-  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+  it.each(["modal", "vercel", "boat"])("allows resource overrides for %s", (provider) => {
     expect(supportsConfigurableSandboxResources(provider)).toBe(true);
   });
 
@@ -39,6 +39,7 @@ describe("sandbox provider settings capabilities", () => {
   it("does not expose session timeout overrides for Daytona", () => {
     expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
     expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
+    expect(supportsConfigurableSandboxTimeout("boat")).toBe(true);
   });
 
   it("uses the explicit permissive fallback for unvalidated provider names", () => {

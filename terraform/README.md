@@ -242,6 +242,17 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
+# Boat (only if SANDBOX_PROVIDER=boat)
+BOAT_API_KEY
+BOAT_BUILD_API_KEY # Optional separate template-build key
+BOAT_SANDBOX_ACCESS_SECRET # Stable 32+ character access-password secret
+BOAT_API_URL # Optional; defaults to https://boat.dev/api/v1
+BOAT_ORG # Optional billing scope
+BOAT_BASE_SNAPSHOT # Optional verified manual pin; skips managed build
+BOAT_TEMPLATE_PREFIX # Optional; empty derives a deployment-specific prefix
+BOAT_SANDBOX_TYPE # Optional: small, default, or large
+BOAT_TEMPLATE_SANDBOX_TYPE # Optional build/verification size
+
 # Optional GitHub sign-in pair (set both or neither)
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET

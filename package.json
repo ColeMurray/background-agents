@@ -64,7 +64,7 @@
     "*.{js,jsx,json,md,yaml,yml,css}": [
       "prettier --write"
     ],
-    "packages/{daytona-infra,e2b-infra,modal-infra,sandbox-runtime,sandbox-images}/**/*.py": [
+    "packages/{boat-infra,daytona-infra,e2b-infra,modal-infra,sandbox-runtime,sandbox-images}/**/*.py": [
       "ruff check --fix",
       "ruff format"
     ]

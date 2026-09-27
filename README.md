@@ -132,6 +132,7 @@ ownership, bots, and member suspension.
 | [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
 | [e2b-infra](packages/e2b-infra)                   | E2B sandbox template infrastructure         |
 | [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
+| [boat-infra](packages/boat-infra)                 | Boat named-template infrastructure          |
 | [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
 | [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
 | [linear-bot](packages/linear-bot)                 | Linear integration (issue → coding session) |
@@ -328,6 +329,7 @@ built with:
 - [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) - Cloud sandbox infrastructure
 - [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
 - [E2B](https://e2b.dev) - Cloud sandbox infrastructure
+- [Boat](https://boat.dev) - Persistent cloud development sandboxes
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime (built-in harness)
 - [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk) - Coding agent runtime (Claude

@@ -54,6 +54,7 @@ the matching optional section:
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
 | [E2B](https://e2b.dev) _(optional)_                       | Sandbox infrastructure when `sandbox_provider = "e2b"`          |
+| [Boat](https://boat.dev) _(optional)_                     | Sandbox infrastructure when `sandbox_provider = "boat"`         |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
 | [Linear](https://linear.app) _(optional)_                 | Linear Agent integration                                        |
 | GitHub App Webhooks _(optional)_                          | GitHub bot (PR reviews)                                         |
@@ -349,7 +350,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+# Sandbox provider: "modal" (default), "modal-vm", "daytona", "vercel", "opencomputer", "e2b", or "boat"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -374,6 +375,12 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # E2B (only required when sandbox_provider = "e2b")
 # e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
 # e2b_template_id           = "open-inspect-sandbox"
+
+# Boat (only required when sandbox_provider = "boat")
+# boat_api_key               = "your-boat-runtime-api-key"
+# boat_build_api_key         = "your-boat-build-api-key" # Optional; defaults to boat_api_key
+# boat_sandbox_access_secret = "stable-32-character-minimum-secret"
+# boat_base_snapshot         = "" # Empty builds a managed verified template
 
 # GitHub App repository access (required in every deployment)
 github_app_id              = "123456"
@@ -691,7 +698,7 @@ reports service liveness, not Owner status.
 Your core deployment is complete. Everything below is optional; follow only the sections you need.
 
 - [Alternative Sandbox Providers](#alternative-sandbox-providers-optional): Daytona, Vercel
-  Sandboxes, OpenComputer, or E2B instead of Modal
+  Sandboxes, OpenComputer, E2B, or Boat instead of Modal
 - [Enable Google Login](#enable-google-login-optional)
 - [Slack Bot](#slack-bot-optional)
 - [Linear Agent](#linear-agent-optional)
@@ -709,7 +716,7 @@ Your core deployment is complete. Everything below is optional; follow only the 
 The core path uses Modal, the default `sandbox_provider`. To run sessions on another provider, set
 `sandbox_provider` in `terraform.tfvars` and follow the matching section below instead of the
 [Modal](#modal) credentials in Step 2. Terraform accepts `modal`, `daytona`, `vercel`,
-`opencomputer`, or `e2b`.
+`opencomputer`, `e2b`, or `boat`.
 
 ### Daytona
 
@@ -816,6 +823,22 @@ For the full runtime, lifecycle, and configuration model, see
 > **Important**: the E2B provider has no fleet-wide key of its own. Add the key for the models you
 > plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets after
 > deploying. See [Secrets Management](SECRETS.md) for details.
+
+### Boat
+
+> Only required when `sandbox_provider = "boat"`.
+
+1. Create a scoped runtime key for sandbox operations and, optionally, a separate build key with
+   snapshot write access.
+2. Set `boat_api_key`, optionally `boat_build_api_key`, and a stable 32+ character
+   `boat_sandbox_access_secret`.
+3. Leave `boat_base_snapshot = ""` for Terraform to build and fresh-restore-verify an immutable
+   named snapshot, or set it to a previously verified manual rollback pin.
+4. Choose `boat_sandbox_type` from `small`, `default`, or `large`.
+
+Boat repository and environment prebuilds are intentionally unavailable; sessions use same-ID
+stop/resume persistence. See [Boat Sandbox Provider](BOAT_SANDBOX_PROVIDER.md) for scopes, template
+retention, lifecycle, limits, and release canaries.
 
 ---
 

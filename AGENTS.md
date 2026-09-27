@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Open-Inspect is a background coding agent system that spawns sandboxed dev environments to work on
-GitHub repositories. Single-tenant design. Stack: Cloudflare Workers (TypeScript), Modal (Python),
-Next.js (React), Terraform.
+GitHub repositories. Single-tenant design. Stack: Cloudflare Workers (TypeScript), pluggable sandbox
+providers, Next.js (React), Terraform.
 
 ## Architecture
 
@@ -13,8 +13,8 @@ Three tiers connected by WebSockets:
 2. **Control Plane** (Cloudflare Workers + Durable Objects) — session lifecycle, WebSocket hub,
    GitHub/auth integration. Each session is a Durable Object with SQLite storage. Uses D1 for the
    session index, repo metadata, environments, and encrypted secrets.
-3. **Data Plane** (Modal, Python) — sandboxed environments running coding agents. Manages sandbox
-   creation, snapshots, and repository/environment image builds.
+3. **Data Plane** (Modal, Boat, Daytona, E2B, Vercel, or OpenComputer) — sandboxed environments
+   running coding agents. Manages sandbox creation, preservation, and provider-supported images.
 
 **Bot integrations** — all Cloudflare Workers using Hono:
 
@@ -22,8 +22,8 @@ Three tiers connected by WebSockets:
 - `github-bot` — PR review assignments and @mention commands
 - `linear-bot` — Linear agent webhooks → coding sessions
 
-**Data flow**: User prompt → web client → control plane DO (WebSocket) → Modal sandbox → streaming
-events back through the same WebSocket chain.
+**Data flow**: User prompt → web client → control plane DO (WebSocket) → provider sandbox →
+streaming events back through the same WebSocket chain.
 
 ### Package Dependency Graph
 
@@ -45,6 +45,7 @@ it at build time.
 | `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
 | `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
 | `modal-infra`   | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
+| `boat-infra`    | Python 3.12 / Boat SDK             | Verified Boat base-template construction                    |
 
 ## Common Commands
 
@@ -69,9 +70,11 @@ npm test -w @open-inspect/linear-bot
 
 # Tests — Python (pytest)
 cd packages/modal-infra && pytest tests/ -v
+cd packages/boat-infra && uv run --frozen pytest tests/ -v
 
 # Python linting
 cd packages/modal-infra && ruff check --fix && ruff format
+cd packages/boat-infra && uv run --frozen ruff check --fix && uv run --frozen ruff format
 ```
 
 ## Testing
@@ -86,6 +89,7 @@ All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
 - **web, slack-bot, linear-bot**: co-located `src/**/*.test.ts`
 - **github-bot**: separate `test/*.test.ts`
 - **modal-infra**: `tests/test_*.py`
+- **boat-infra**: `tests/test_*.py`
 
 ### Control-plane integration tests
 
@@ -156,6 +160,8 @@ Pushing to `main` auto-deploys changed services:
 - **Vercel** → web app when `web_platform = "vercel"` (triggers: `packages/web/`,
   `packages/shared/`)
 - **Modal** → data plane (triggers: `packages/modal-infra/`, deployed via Terraform apply)
+- **Boat** → verified named template + direct control-plane API integration (triggers:
+  `packages/boat-infra/`, deployed via Terraform apply)
 
 CI runs lint, typecheck, and tests for all TypeScript and Python packages on every push and PR.
 
@@ -169,3 +175,5 @@ CI runs lint, typecheck, and tests for all TypeScript and Python packages on eve
   protocol, D1 schema, security model
 - [packages/modal-infra/README.md](packages/modal-infra/README.md) — sandbox internals, Modal
   deployment, endpoint URLs
+- [docs/BOAT_SANDBOX_PROVIDER.md](docs/BOAT_SANDBOX_PROVIDER.md) — Boat lifecycle, template build,
+  deployment, and operations
