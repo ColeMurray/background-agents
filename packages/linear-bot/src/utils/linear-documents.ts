@@ -1,8 +1,7 @@
 /**
  * Every GraphQL document the bot sends to Linear. `linearGraphQL` accepts
  * only a {@link LinearDocument}, and this module is the only place one is
- * constructed, so `linear-documents.test.ts` validating this registry against
- * Linear's schema covers everything the bot can send.
+ * constructed.
  */
 
 declare const linearDocumentBrand: unique symbol;
@@ -14,7 +13,7 @@ function document(source: string): LinearDocument {
   return source as LinearDocument;
 }
 
-/** Keyed by operation name; the test checks each key matches its operation. */
+/** Keyed by operation name. */
 export const LINEAR_DOCUMENTS = {
   AgentActivityCreate: document(`
     mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
