@@ -1,4 +1,4 @@
-import type { SpawnSource } from "./sessions";
+import { spawnSourceSchema, type SpawnSource } from "./sessions";
 
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
@@ -17,13 +17,26 @@ export type AnalyticsBreakdownBy = (typeof ANALYTICS_BREAKDOWN_BY)[number];
 export const ANALYTICS_SCOPES = ["human", "agent", "automation", "all"] as const;
 export type AnalyticsScope = (typeof ANALYTICS_SCOPES)[number];
 export const DEFAULT_ANALYTICS_SCOPE: AnalyticsScope = "human";
+export const ANALYTICS_SPAWN_SOURCE_SCOPE: Record<SpawnSource, Exclude<AnalyticsScope, "all">> = {
+  user: "human",
+  "slack-bot": "human",
+  "linear-bot": "human",
+  "github-bot": "human",
+  agent: "agent",
+  automation: "automation",
+};
+const spawnSources = Object.keys(ANALYTICS_SPAWN_SOURCE_SCOPE).map((source) =>
+  spawnSourceSchema.parse(source)
+);
 export const ANALYTICS_SCOPE_SPAWN_SOURCES: Record<
   Exclude<AnalyticsScope, "all">,
   readonly SpawnSource[]
 > = {
-  human: ["user", "slack-bot", "linear-bot", "github-bot"],
-  agent: ["agent"],
-  automation: ["automation"],
+  human: spawnSources.filter((source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "human"),
+  agent: spawnSources.filter((source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "agent"),
+  automation: spawnSources.filter(
+    (source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "automation"
+  ),
 };
 
 export const ANALYTICS_RUN_ORDER_BY = ["cost", "created"] as const;
