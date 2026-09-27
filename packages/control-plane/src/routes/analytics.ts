@@ -55,6 +55,9 @@ const breakdownQuery = windowQuery.extend({
 });
 
 const runsQuery = daysQuery.extend({
+  scope: z
+    .enum(ANALYTICS_SCOPES, { error: `scope must be one of: ${ANALYTICS_SCOPES.join(", ")}` })
+    .default("all"),
   limit: z
     .string()
     .optional()
@@ -179,6 +182,7 @@ async function handleRuns(
       endAt,
       limit: query.limit,
       orderBy: query.orderBy,
+      scope: query.scope,
     }),
   });
 }

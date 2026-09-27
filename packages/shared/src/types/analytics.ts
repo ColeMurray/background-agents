@@ -51,12 +51,28 @@ export interface AnalyticsStatusBreakdown {
   cancelled: number;
 }
 
-export interface AnalyticsSummaryResponse {
+export interface AnalyticsTokenTotals {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export function getCacheHitRatio(
+  t: Pick<AnalyticsTokenTotals, "cacheReadTokens" | "inputTokens">
+): number | null {
+  const total = t.cacheReadTokens + t.inputTokens;
+  return total === 0 ? null : t.cacheReadTokens / total;
+}
+
+export interface AnalyticsSummaryResponse extends AnalyticsTokenTotals {
   totalSessions: number;
   activeUsers: number;
   totalCost: number;
   avgCost: number;
   totalPrs: number;
+  cacheHitRatio: number | null;
   statusBreakdown: AnalyticsStatusBreakdown;
 }
 
@@ -69,7 +85,7 @@ export interface AnalyticsTimeseriesResponse {
   series: AnalyticsTimeseriesPoint[];
 }
 
-export interface AnalyticsBreakdownEntry {
+export interface AnalyticsBreakdownEntry extends AnalyticsTokenTotals {
   key: string;
   displayName?: string;
   /** Session count billed through a matching provider account; present only for provider breakdowns. */
@@ -92,6 +108,7 @@ export interface AnalyticsBreakdownResponse {
 /** All sessions in one root_session_id family, attributed to the root. */
 export interface SessionRun {
   rootSessionId: string;
+  title: string | null;
   sessionCount: number;
   maxSpawnDepth: number;
   totalCost: number;
@@ -157,6 +174,14 @@ export interface AnalyticsPullRequestSourceEntry {
   merged: number;
 }
 
+export interface AnalyticsPullRequestDimensionEntry {
+  key: string;
+  displayName?: string;
+  created: number;
+  merged: number;
+  sessionCost: number;
+}
+
 export interface AnalyticsPullRequestsResponse {
   funnel: AnalyticsPullRequestFunnel;
   /**
@@ -177,6 +202,8 @@ export interface AnalyticsPullRequestsResponse {
   timeseries: AnalyticsPullRequestTimeseriesPoint[];
   repos: AnalyticsPullRequestRepoEntry[];
   sources: AnalyticsPullRequestSourceEntry[];
+  models: AnalyticsPullRequestDimensionEntry[];
+  harnesses: AnalyticsPullRequestDimensionEntry[];
 }
 
 /** One coherently-windowed analytics dashboard snapshot. */
@@ -201,4 +228,5 @@ export interface AnalyticsDashboardResponse {
     automation: AnalyticsBreakdownResponse;
   };
   pullRequests: AnalyticsPullRequestsResponse;
+  runs: SessionRun[];
 }

@@ -360,6 +360,7 @@ export {
   ANALYTICS_SPAWN_SOURCE_SCOPE,
   ANALYTICS_SCOPE_SPAWN_SOURCES,
   ANALYTICS_RUN_ORDER_BY,
+  getCacheHitRatio,
 } from "./analytics";
 export type {
   AnalyticsDays,
@@ -367,6 +368,7 @@ export type {
   AnalyticsBreakdownBy,
   AnalyticsRunOrderBy,
   AnalyticsStatusBreakdown,
+  AnalyticsTokenTotals,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesPoint,
   AnalyticsTimeseriesResponse,
@@ -378,6 +380,7 @@ export type {
   AnalyticsPullRequestTimeseriesPoint,
   AnalyticsPullRequestRepoEntry,
   AnalyticsPullRequestSourceEntry,
+  AnalyticsPullRequestDimensionEntry,
   AnalyticsPullRequestsResponse,
   AnalyticsDashboardResponse,
 } from "./analytics";

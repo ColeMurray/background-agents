@@ -4,6 +4,7 @@ import type {
   AnalyticsBreakdownResponse,
   AnalyticsDashboardResponse,
   AnalyticsSummaryResponse,
+  AnalyticsTokenTotals,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
@@ -11,6 +12,14 @@ import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
+
+const zeroTokens: AnalyticsTokenTotals = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
 
 function dateBucket(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
@@ -36,6 +45,7 @@ async function seedSession(
     activeDurationMs: number;
     messageCount: number;
     prCount: number;
+    tokens?: AnalyticsTokenTotals;
   }
 ): Promise<void> {
   await store.create({
@@ -62,11 +72,11 @@ async function seedSession(
     activeDurationMs: input.activeDurationMs,
     messageCount: input.messageCount,
     prCount: input.prCount,
-    inputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
+    inputTokens: input.tokens?.inputTokens ?? 0,
+    outputTokens: input.tokens?.outputTokens ?? 0,
+    reasoningTokens: input.tokens?.reasoningTokens ?? 0,
+    cacheReadTokens: input.tokens?.cacheReadTokens ?? 0,
+    cacheWriteTokens: input.tokens?.cacheWriteTokens ?? 0,
   });
 }
 
@@ -85,6 +95,114 @@ async function seedUser(
 
 describe("Analytics API", () => {
   beforeEach(cleanD1Tables);
+
+  it("sums token totals across sessions and provider merges without excluding zero-token history", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    for (const [id, model, tokens] of [
+      [
+        "gpt-5",
+        "openai/gpt-5",
+        {
+          inputTokens: 2,
+          outputTokens: 5,
+          reasoningTokens: 1,
+          cacheReadTokens: 6,
+          cacheWriteTokens: 3,
+        },
+      ],
+      [
+        "gpt-5.3",
+        "openai/gpt-5.3-codex",
+        {
+          inputTokens: 1,
+          outputTokens: 4,
+          reasoningTokens: 2,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 2,
+        },
+      ],
+      ["old", "openai/gpt-5", undefined],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        model,
+        tokens,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: "alice",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + 100,
+        totalCost: 1,
+        activeDurationMs: 100,
+        messageCount: 1,
+        prCount: 0,
+      });
+    }
+    const dashboard = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=all")
+    ).json<AnalyticsDashboardResponse>();
+    const totals = {
+      inputTokens: 3,
+      outputTokens: 9,
+      reasoningTokens: 3,
+      cacheReadTokens: 9,
+      cacheWriteTokens: 5,
+    };
+    expect(dashboard.summary).toMatchObject({ totalSessions: 3, ...totals, cacheHitRatio: 0.75 });
+    expect(dashboard.breakdowns.repository.entries[0]).toMatchObject(totals);
+    expect(dashboard.breakdowns.user.entries[0]).toMatchObject(totals);
+    expect(dashboard.breakdowns.model.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "openai/gpt-5", inputTokens: 2, cacheReadTokens: 6 }),
+        expect.objectContaining({
+          key: "openai/gpt-5.3-codex",
+          inputTokens: 1,
+          cacheReadTokens: 3,
+        }),
+      ])
+    );
+    expect(dashboard.breakdowns.provider.entries[0]).toMatchObject({ key: "openai", ...totals });
+    expect(dashboard.summary.cacheHitRatio).toBe(9 / (9 + 3));
+    expect(dashboard.runs).toHaveLength(3);
+  });
+
+  it("lists only scoped top-cost runs in the dashboard, capped at the dashboard limit", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - 60_000;
+    for (let i = 0; i < 21; i++) {
+      await seedSession(store, {
+        id: `root-${i}`,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: null,
+        spawnSource: i === 20 ? "automation" : "user",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + i,
+        totalCost: i + 1,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+      });
+    }
+    await env.DB.prepare("UPDATE sessions SET title = NULL WHERE id = 'root-19'").run();
+    const human = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=human")
+    ).json<AnalyticsDashboardResponse>();
+    expect(human.runs).toHaveLength(20);
+    expect(human.runs.map((run) => run.totalCost)).toEqual(
+      Array.from({ length: 20 }, (_, i) => 20 - i)
+    );
+    expect(human.runs[0]).toMatchObject({ rootSessionId: "root-19", title: null });
+    const all = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=all")
+    ).json<AnalyticsDashboardResponse>();
+    expect(all.runs).toHaveLength(20);
+    expect(all.runs[0].rootSessionId).toBe("root-20");
+    expect(all.runs.at(-1)?.rootSessionId).toBe("root-1");
+  });
 
   it("returns one coherently-windowed dashboard snapshot", async () => {
     const before = Date.now();
@@ -224,6 +342,8 @@ describe("Analytics API", () => {
 
     expect(body).toEqual({
       totalSessions: 6,
+      ...zeroTokens,
+      cacheHitRatio: null,
       activeUsers: 3,
       totalCost: 3,
       avgCost: 0.5,
@@ -395,6 +515,7 @@ describe("Analytics API", () => {
       {
         key: "alice",
         displayName: "alice",
+        ...zeroTokens,
         sessions: 2,
         completed: 1,
         failed: 0,
@@ -408,6 +529,7 @@ describe("Analytics API", () => {
       {
         key: "__unknown__",
         displayName: "Unknown user",
+        ...zeroTokens,
         sessions: 1,
         completed: 0,
         failed: 0,
@@ -421,6 +543,7 @@ describe("Analytics API", () => {
       {
         key: "bob",
         displayName: "bob",
+        ...zeroTokens,
         sessions: 1,
         completed: 0,
         failed: 1,
@@ -532,6 +655,7 @@ describe("Analytics API", () => {
     expect(body.entries).toEqual([
       {
         key: "acme/web-app",
+        ...zeroTokens,
         sessions: 3,
         completed: 1,
         failed: 0,
@@ -544,6 +668,7 @@ describe("Analytics API", () => {
       },
       {
         key: "acme/api",
+        ...zeroTokens,
         sessions: 2,
         completed: 0,
         failed: 1,
@@ -556,6 +681,7 @@ describe("Analytics API", () => {
       },
       {
         key: "No repository",
+        ...zeroTokens,
         sessions: 1,
         completed: 1,
         failed: 0,
@@ -754,6 +880,7 @@ describe("Analytics API", () => {
       {
         key: "user-abc",
         displayName: "Alice Smith",
+        ...zeroTokens,
         sessions: 2,
         completed: 2,
         failed: 0,
@@ -767,6 +894,7 @@ describe("Analytics API", () => {
       {
         key: "bob",
         displayName: "bob",
+        ...zeroTokens,
         sessions: 1,
         completed: 0,
         failed: 1,

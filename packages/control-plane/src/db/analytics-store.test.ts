@@ -25,6 +25,11 @@ describe("AnalyticsStore row decoding", () => {
             active_users: 1,
             total_cost: 4,
             total_prs: 3,
+            input_tokens: 2,
+            output_tokens: 4,
+            reasoning_tokens: 1,
+            cache_read_tokens: 6,
+            cache_write_tokens: 3,
             created_count: 1,
             active_count: 0,
             completed_count: 1,
@@ -40,6 +45,12 @@ describe("AnalyticsStore row decoding", () => {
       totalCost: 4,
       avgCost: 2,
       totalPrs: 3,
+      inputTokens: 2,
+      outputTokens: 4,
+      reasoningTokens: 1,
+      cacheReadTokens: 6,
+      cacheWriteTokens: 3,
+      cacheHitRatio: 0.75,
       statusBreakdown: {
         created: 1,
         active: 0,
@@ -48,6 +59,14 @@ describe("AnalyticsStore row decoding", () => {
         archived: 0,
         cancelled: 0,
       },
+    });
+  });
+
+  it("returns a null cache hit ratio for an empty summary", () => {
+    expect(store.decodeSummary(result([]))).toMatchObject({
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      cacheHitRatio: null,
     });
   });
 
@@ -111,6 +130,11 @@ describe("AnalyticsStore row decoding", () => {
             message_count: 8,
             avg_duration: 100,
             last_active: 200,
+            input_tokens: 2,
+            output_tokens: 4,
+            reasoning_tokens: 1,
+            cache_read_tokens: 6,
+            cache_write_tokens: 3,
           },
         ]),
         "repo"
@@ -128,6 +152,11 @@ describe("AnalyticsStore row decoding", () => {
           messageCount: 8,
           avgDuration: 100,
           lastActive: 200,
+          inputTokens: 2,
+          outputTokens: 4,
+          reasoningTokens: 1,
+          cacheReadTokens: 6,
+          cacheWriteTokens: 3,
         },
       ],
     });
@@ -162,6 +191,11 @@ describe("AnalyticsStore row decoding", () => {
     message_count: 3,
     avg_duration: 100,
     last_active: 200,
+    input_tokens: 1,
+    output_tokens: 2,
+    reasoning_tokens: 3,
+    cache_read_tokens: 4,
+    cache_write_tokens: 5,
     ...extras,
   });
 
@@ -280,6 +314,11 @@ describe("scope and breakdown merging", () => {
       messageCount: 3,
       avgDuration,
       lastActive: avgDuration,
+      inputTokens: 1,
+      outputTokens: 2,
+      reasoningTokens: 3,
+      cacheReadTokens: 4,
+      cacheWriteTokens: 5,
     });
     expect(
       mergeBreakdownEntries(
@@ -305,6 +344,11 @@ describe("scope and breakdown merging", () => {
         messageCount: 6,
         avgDuration: 0,
         lastActive: 900,
+        inputTokens: 2,
+        outputTokens: 4,
+        reasoningTokens: 6,
+        cacheReadTokens: 8,
+        cacheWriteTokens: 10,
       },
       {
         key: "z",
@@ -318,6 +362,11 @@ describe("scope and breakdown merging", () => {
         messageCount: 6,
         avgDuration: 250,
         lastActive: 300,
+        inputTokens: 2,
+        outputTokens: 4,
+        reasoningTokens: 6,
+        cacheReadTokens: 8,
+        cacheWriteTokens: 10,
       },
     ]);
   });

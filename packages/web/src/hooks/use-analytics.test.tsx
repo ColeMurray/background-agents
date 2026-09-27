@@ -20,6 +20,12 @@ const snapshot = {
     endAt: 1_700_000_000_000,
   },
   summary: {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cacheHitRatio: null,
     totalSessions: 1,
     activeUsers: 1,
     totalCost: 1,
@@ -52,7 +58,10 @@ const snapshot = {
     timeseries: [],
     repos: [],
     sources: [],
+    models: [],
+    harnesses: [],
   },
+  runs: [],
 } satisfies AnalyticsDashboardResponse;
 
 describe("useAnalyticsDashboard", () => {

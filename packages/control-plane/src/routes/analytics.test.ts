@@ -151,18 +151,23 @@ describe("analytics route handlers", () => {
         endAt: FIXED_NOW,
         limit: 50,
         orderBy: "cost",
+        scope: "all",
       });
     });
 
-    it("accepts explicit days, limit and created ordering", async () => {
+    it("accepts explicit days, limit, created ordering and human scope", async () => {
       mockRunStore.list.mockResolvedValue([]);
-      const response = await callRoute("GET", "/analytics/runs?days=14&limit=10&orderBy=created");
+      const response = await callRoute(
+        "GET",
+        "/analytics/runs?days=14&limit=10&orderBy=created&scope=human"
+      );
       expect(response.status).toBe(200);
       expect(mockRunStore.list).toHaveBeenCalledWith({
         startAt: FIXED_NOW - 14 * 24 * 60 * 60 * 1000,
         endAt: FIXED_NOW,
         limit: 10,
         orderBy: "created",
+        scope: "human",
       });
     });
 
@@ -172,6 +177,7 @@ describe("analytics route handlers", () => {
       ["limit=101", "limit must be an integer between 1 and 100"],
       ["limit=1.5", "limit must be an integer between 1 and 100"],
       ["orderBy=other", "orderBy must be one of: cost, created"],
+      ["scope=other", "scope must be one of: human, agent, automation, all"],
       ["orderBy=cost&orderBy=created", "Invalid orderBy"],
     ])("rejects invalid runs query %s", async (query, error) => {
       const response = await callRoute("GET", `/analytics/runs?${query}`);

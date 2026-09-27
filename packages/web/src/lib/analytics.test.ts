@@ -12,6 +12,14 @@ import {
   sortAnalyticsUserEntries,
 } from "./analytics";
 
+const zeroTokens = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
 describe("analytics utilities", () => {
   it("builds chart data with zero-filled group values", () => {
     const result = buildTimeseriesChartData([
@@ -51,6 +59,7 @@ describe("analytics utilities", () => {
   it("formats completion rate from terminal sessions only", () => {
     expect(
       formatCompletionRate({
+        ...zeroTokens,
         key: "alice",
         sessions: 7,
         completed: 3,
@@ -70,6 +79,7 @@ describe("analytics utilities", () => {
       [
         {
           key: "user-id-1",
+          ...zeroTokens,
           displayName: "Zoe",
           sessions: 1,
           completed: 1,
@@ -83,6 +93,7 @@ describe("analytics utilities", () => {
         },
         {
           key: "user-id-2",
+          ...zeroTokens,
           displayName: "Alice",
           sessions: 1,
           completed: 1,
@@ -107,6 +118,7 @@ describe("analytics utilities", () => {
       [
         {
           key: "user-id-1",
+          ...zeroTokens,
           displayName: "Zoe",
           sessions: 1,
           completed: 1,
@@ -120,6 +132,7 @@ describe("analytics utilities", () => {
         },
         {
           key: "bob-login",
+          ...zeroTokens,
           sessions: 1,
           completed: 1,
           failed: 0,
@@ -144,6 +157,7 @@ describe("analytics utilities", () => {
       [
         {
           key: "alice",
+          ...zeroTokens,
           sessions: 4,
           completed: 3,
           failed: 1,
@@ -156,6 +170,7 @@ describe("analytics utilities", () => {
         },
         {
           key: "bob",
+          ...zeroTokens,
           sessions: 3,
           completed: 1,
           failed: 1,
@@ -203,6 +218,8 @@ describe("analytics utilities", () => {
       timeseries: [],
       repos: [],
       sources: [],
+      models: [],
+      harnesses: [],
     };
 
     expect(getCostPerMergedPullRequest(base)).toBe(1.5);

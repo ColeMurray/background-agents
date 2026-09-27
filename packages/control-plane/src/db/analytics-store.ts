@@ -5,8 +5,12 @@ import type {
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
   AnalyticsScope,
+  AnalyticsTokenTotals,
 } from "@open-inspect/shared/types/analytics";
-import { ANALYTICS_SCOPE_SPAWN_SOURCES } from "@open-inspect/shared/types/analytics";
+import {
+  ANALYTICS_SCOPE_SPAWN_SOURCES,
+  getCacheHitRatio,
+} from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import {
   getModelDisplayName,
@@ -34,7 +38,25 @@ export function scopePredicate(
   return { sql: `AND ${column} IN (${binds.map(() => "?").join(", ")})`, binds };
 }
 
-const summaryRowSchema = z.object({
+const tokenRowSchema = z.object({
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  reasoning_tokens: z.number(),
+  cache_read_tokens: z.number(),
+  cache_write_tokens: z.number(),
+});
+
+function decodeTokens(row: z.infer<typeof tokenRowSchema> | undefined): AnalyticsTokenTotals {
+  return {
+    inputTokens: row?.input_tokens ?? 0,
+    outputTokens: row?.output_tokens ?? 0,
+    reasoningTokens: row?.reasoning_tokens ?? 0,
+    cacheReadTokens: row?.cache_read_tokens ?? 0,
+    cacheWriteTokens: row?.cache_write_tokens ?? 0,
+  };
+}
+
+const summaryRowSchema = tokenRowSchema.extend({
   total_sessions: z.number(),
   active_users: z.number(),
   total_cost: z.number(),
@@ -57,7 +79,7 @@ const timeseriesRowSchema = z.object({
 
 type TimeseriesRow = z.infer<typeof timeseriesRowSchema>;
 
-const breakdownRowSchema = z.object({
+const breakdownRowSchema = tokenRowSchema.extend({
   key: z.string().nullable(),
   display_name: z.string().nullable().optional(),
   sessions: z.number(),
@@ -112,6 +134,11 @@ export function mergeBreakdownEntries(
       cost: previous.cost + entry.cost,
       prs: previous.prs + entry.prs,
       messageCount: previous.messageCount + entry.messageCount,
+      inputTokens: previous.inputTokens + entry.inputTokens,
+      outputTokens: previous.outputTokens + entry.outputTokens,
+      reasoningTokens: previous.reasoningTokens + entry.reasoningTokens,
+      cacheReadTokens: previous.cacheReadTokens + entry.cacheReadTokens,
+      cacheWriteTokens: previous.cacheWriteTokens + entry.cacheWriteTokens,
       avgDuration: terminal
         ? (previous.avgDuration * oldTerminal + entry.avgDuration * newTerminal) / terminal
         : 0,
@@ -145,6 +172,11 @@ export class AnalyticsStore {
            COUNT(DISTINCT COALESCE(user_id, NULLIF(scm_login, ''))) AS active_users,
            COALESCE(SUM(total_cost), 0) AS total_cost,
            COALESCE(SUM(pr_count), 0) AS total_prs,
+           COALESCE(SUM(input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(output_tokens), 0) AS output_tokens,
+           COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+           COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+           COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
            COALESCE(SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END), 0) AS created_count,
            COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_count,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_count,
@@ -163,6 +195,7 @@ export class AnalyticsStore {
 
     const totalSessions = row?.total_sessions ?? 0;
     const totalCost = row?.total_cost ?? 0;
+    const tokens = decodeTokens(row);
 
     return {
       totalSessions,
@@ -170,6 +203,8 @@ export class AnalyticsStore {
       totalCost,
       avgCost: totalSessions > 0 ? totalCost / totalSessions : 0,
       totalPrs: row?.total_prs ?? 0,
+      ...tokens,
+      cacheHitRatio: getCacheHitRatio(tokens),
       statusBreakdown: {
         created: row?.created_count ?? 0,
         active: row?.active_count ?? 0,
@@ -295,6 +330,11 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
            COALESCE(SUM(total_cost), 0) AS cost,
            COALESCE(SUM(pr_count), 0) AS prs,
+           COALESCE(SUM(s.input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(s.output_tokens), 0) AS output_tokens,
+           COALESCE(SUM(s.reasoning_tokens), 0) AS reasoning_tokens,
+           COALESCE(SUM(s.cache_read_tokens), 0) AS cache_read_tokens,
+           COALESCE(SUM(s.cache_write_tokens), 0) AS cache_write_tokens,
            COALESCE(SUM(message_count), 0) AS message_count,
            COALESCE(
              AVG(CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN active_duration_ms END),
@@ -329,6 +369,7 @@ export class AnalyticsStore {
       messageCount: row.message_count,
       avgDuration: row.avg_duration,
       lastActive: row.last_active,
+      ...decodeTokens(row),
     }));
 
     if (by === "model")

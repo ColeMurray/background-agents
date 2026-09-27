@@ -126,6 +126,7 @@ describe("session runs", () => {
     expect(body.runs).toEqual([
       {
         rootSessionId: "root",
+        title: "root",
         sessionCount: 4,
         maxSpawnDepth: 2,
         totalCost: 10,
@@ -212,6 +213,7 @@ describe("session runs", () => {
       endAt: now - 7 * DAY_MS,
       limit: 10,
       orderBy: "created",
+      scope: "all",
     });
     expect(runs).toMatchObject([{ rootSessionId: "old-root", sessionCount: 2, totalCost: 3 }]);
   });
@@ -243,12 +245,57 @@ describe("session runs", () => {
     );
 
     const runs = new SessionRunStore(env.DB);
-    const window = { startAt: now - 7 * DAY_MS, endAt: now, limit: 1 };
+    const window = { startAt: now - 7 * DAY_MS, endAt: now, limit: 1, scope: "all" as const };
     expect(
       (await runs.list({ ...window, orderBy: "cost" })).map((run) => run.rootSessionId)
     ).toEqual(["older-expensive"]);
     expect(
       (await runs.list({ ...window, orderBy: "created" })).map((run) => run.rootSessionId)
     ).toEqual(["newer-cheap"]);
+  });
+
+  it("keeps runs unfiltered by default but scopes explicit human roots and preserves null titles", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - DAY_MS;
+    await seedSession(
+      store,
+      { id: "human-root", spawnSource: "user", createdAt: now, updatedAt: now },
+      1,
+      0,
+      0
+    );
+    await seedSession(
+      store,
+      { id: "agent-root", spawnSource: "agent", createdAt: now, updatedAt: now },
+      2,
+      0,
+      0
+    );
+    await seedSession(
+      store,
+      { id: "automation-root", spawnSource: "automation", createdAt: now, updatedAt: now },
+      3,
+      0,
+      0
+    );
+    await env.DB.prepare("UPDATE sessions SET title = NULL WHERE id = 'human-root'").run();
+    const ordinary = await (
+      await serviceFetch("https://test.local/analytics/runs")
+    ).json<AnalyticsRunsResponse>();
+    const all = await (
+      await serviceFetch("https://test.local/analytics/runs?scope=all")
+    ).json<AnalyticsRunsResponse>();
+    expect(ordinary).toEqual(all);
+    expect(ordinary.runs.map((run) => run.rootSessionId)).toEqual([
+      "automation-root",
+      "agent-root",
+      "human-root",
+    ]);
+    const human = await (
+      await serviceFetch("https://test.local/analytics/runs?scope=human")
+    ).json<AnalyticsRunsResponse>();
+    expect(human.runs).toEqual([
+      expect.objectContaining({ rootSessionId: "human-root", title: null }),
+    ]);
   });
 });

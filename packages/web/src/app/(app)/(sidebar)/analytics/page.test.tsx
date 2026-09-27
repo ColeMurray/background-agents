@@ -14,6 +14,14 @@ import AnalyticsPage from "./page";
 
 expect.extend(matchers);
 
+const zeroTokens = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
 const { mockUseAnalyticsDashboard, mockUseSidebarContext } = vi.hoisted(() => ({
   mockUseAnalyticsDashboard: vi.fn(),
   mockUseSidebarContext: vi.fn(),
@@ -45,6 +53,8 @@ afterEach(() => {
 });
 
 const summary: AnalyticsSummaryResponse = {
+  ...zeroTokens,
+  cacheHitRatio: null,
   totalSessions: 13,
   activeUsers: 3,
   totalCost: 12.5,
@@ -76,6 +86,7 @@ const repoBreakdown: AnalyticsBreakdownResponse = {
   entries: [
     {
       key: "open-inspect/background-agents",
+      ...zeroTokens,
       sessions: 8,
       completed: 7,
       failed: 1,
@@ -93,6 +104,7 @@ const userBreakdown: AnalyticsBreakdownResponse = {
   entries: [
     {
       key: "zoe",
+      ...zeroTokens,
       sessions: 8,
       completed: 7,
       failed: 1,
@@ -105,6 +117,7 @@ const userBreakdown: AnalyticsBreakdownResponse = {
     },
     {
       key: "anna",
+      ...zeroTokens,
       sessions: 3,
       completed: 2,
       failed: 0,
@@ -117,6 +130,7 @@ const userBreakdown: AnalyticsBreakdownResponse = {
     },
     {
       key: "mike",
+      ...zeroTokens,
       sessions: 1,
       completed: 1,
       failed: 0,

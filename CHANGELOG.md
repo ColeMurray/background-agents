@@ -13,6 +13,9 @@ the paginated bulk export.
 
 ### Added
 
+Analytics responses now include session token totals and cache hit ratio, pull-request cost by model
+and harness, and the top 20 scoped runs in the dashboard snapshot. Run titles may be null.
+
 Session analytics API now accepts `scope=human|agent|automation|all` (default `human`) on the
 dashboard, summary, timeseries, and breakdown routes, and supports `by=model`, `by=harness`,
 `by=spawnSource`, `by=automation`, and `by=provider` breakdowns. Provider rows include the number of

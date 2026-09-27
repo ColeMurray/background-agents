@@ -1,17 +1,24 @@
-import type { AnalyticsRunOrderBy, SessionRun } from "@open-inspect/shared/types/analytics";
+import type {
+  AnalyticsRunOrderBy,
+  AnalyticsScope,
+  SessionRun,
+} from "@open-inspect/shared/types/analytics";
 import { spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
+import { scopePredicate } from "./analytics-store";
 
 export interface ListSessionRunsOptions {
   startAt: number;
   endAt: number;
   limit: number;
   orderBy: AnalyticsRunOrderBy;
+  scope: AnalyticsScope;
 }
 
 const runRowSchema = z.object({
   root_session_id: z.string(),
+  title: z.string().nullable(),
   session_count: z.number(),
   max_spawn_depth: z.number(),
   total_cost: z.number(),
@@ -44,12 +51,12 @@ const RUN_SELECT = `SELECT
   COALESCE(SUM(s.cache_write_tokens), 0) AS cache_write_tokens,
   MIN(s.created_at) AS created_at,
   MAX(s.updated_at) AS updated_at,
-  root.user_id, root.scm_login, root.spawn_source, root.automation_id,
+  root.title, root.user_id, root.scm_login, root.spawn_source, root.automation_id,
   root.repo_owner, root.repo_name
 FROM sessions root
 JOIN sessions s ON s.root_session_id = root.id`;
 
-const RUN_GROUP = `GROUP BY root.id, root.user_id, root.scm_login, root.spawn_source,
+const RUN_GROUP = `GROUP BY root.id, root.title, root.user_id, root.scm_login, root.spawn_source,
   root.automation_id, root.repo_owner, root.repo_name`;
 
 function toRun(value: unknown): SessionRun {
@@ -58,6 +65,7 @@ function toRun(value: unknown): SessionRun {
   const row = parsed.data;
   return {
     rootSessionId: row.root_session_id,
+    title: row.title,
     sessionCount: row.session_count,
     maxSpawnDepth: row.max_spawn_depth,
     totalCost: row.total_cost,
@@ -81,19 +89,27 @@ function toRun(value: unknown): SessionRun {
 export class SessionRunStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list({ startAt, endAt, limit, orderBy }: ListSessionRunsOptions): Promise<SessionRun[]> {
+  prepareList({ startAt, endAt, limit, orderBy, scope }: ListSessionRunsOptions): SqlStatement {
     const order = orderBy === "cost" ? "total_cost" : "created_at";
-    const result = await this.db
+    const { sql, binds } = scopePredicate(scope, "root.spawn_source");
+    return this.db
       .prepare(
         `${RUN_SELECT}
          WHERE root.created_at >= ? AND root.created_at < ?
+         ${sql}
          ${RUN_GROUP}
          ORDER BY ${order} DESC, root_session_id ASC
          LIMIT ?`
       )
-      .bind(startAt, endAt, limit)
-      .all<unknown>();
+      .bind(startAt, endAt, ...binds, limit);
+  }
+
+  decodeList(result: SqlResult): SessionRun[] {
     return (result.results ?? []).map(toRun);
+  }
+
+  async list(options: ListSessionRunsOptions): Promise<SessionRun[]> {
+    return this.decodeList(await this.prepareList(options).all<unknown>());
   }
 
   async get(rootSessionId: string): Promise<SessionRun | null> {

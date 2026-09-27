@@ -5,6 +5,7 @@ import type {
 } from "@open-inspect/shared/types/analytics";
 import { AnalyticsStore } from "./analytics-store";
 import { PullRequestAnalyticsStore } from "./pull-request-analytics-store";
+import { SessionRunStore } from "./session-run-store";
 import type { SqlDatabase } from "./sql-database";
 
 export interface AnalyticsDashboardFilters {
@@ -14,12 +15,15 @@ export interface AnalyticsDashboardFilters {
   endAt: number;
 }
 
+export const DASHBOARD_RUNS_LIMIT = 20;
+
 export class AnalyticsDashboardStore {
   constructor(private readonly db: SqlDatabase) {}
 
   async get(filters: AnalyticsDashboardFilters): Promise<AnalyticsDashboardResponse> {
     const analytics = new AnalyticsStore(this.db);
     const pullRequests = new PullRequestAnalyticsStore(this.db);
+    const runs = new SessionRunStore(this.db);
     const sessionFilters = {
       startAt: filters.startAt,
       endAt: filters.endAt,
@@ -41,7 +45,7 @@ export class AnalyticsDashboardStore {
       harness,
       automation,
       billing,
-      ...pullRequestResults
+      ...pullRequestAndRunResults
     ] = await this.db.batch([
       analytics.prepareSummary(sessionFilters),
       analytics.prepareTimeseries(sessionFilters),
@@ -52,7 +56,10 @@ export class AnalyticsDashboardStore {
       analytics.prepareBreakdown(sessionFilters, "automation"),
       billingStatement,
       ...pullRequestStatements,
+      runs.prepareList({ ...sessionFilters, limit: DASHBOARD_RUNS_LIMIT, orderBy: "cost" }),
     ]);
+    const runResult = pullRequestAndRunResults.pop();
+    if (!runResult) throw new Error("Missing dashboard runs result");
     const modelBreakdown = analytics.decodeBreakdown(model, "model");
 
     return {
@@ -73,7 +80,8 @@ export class AnalyticsDashboardStore {
         automation: analytics.decodeBreakdown(automation, "automation"),
         provider: analytics.decodeProviderBreakdown(modelBreakdown, billing),
       },
-      pullRequests: pullRequests.decode(pullRequestResults),
+      pullRequests: pullRequests.decode(pullRequestAndRunResults),
+      runs: runs.decodeList(runResult),
     };
   }
 }
