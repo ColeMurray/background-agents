@@ -637,6 +637,7 @@ describe("managed skills persistence and resolution", () => {
       ids.map((id) =>
         environments.bindEnvironmentInsert({
           id,
+          owner_team_id: "team_default",
           name: id,
           description: null,
           prebuild_enabled: 0,
@@ -705,6 +706,7 @@ describe("managed skills persistence and resolution", () => {
     await environments.create(
       {
         id: "env_skill_generation",
+        owner_team_id: "team_default",
         name: "Before",
         description: null,
         prebuild_enabled: 0,

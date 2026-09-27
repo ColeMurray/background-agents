@@ -5,7 +5,7 @@ import {
   AutomationStore,
   toAutomation,
   toAutomationRun,
-  type AutomationRow,
+  type AutomationInsertRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
@@ -16,10 +16,11 @@ import { seedRun, fetchRuns } from "./run-helpers";
 /** Default deadline the sweep holds a run to when the row carries none of its own. */
 const DEFAULT_DEADLINE_MS = 3 * 60 * 60 * 1000;
 
-function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
+function makeAutomation(overrides?: Partial<AutomationInsertRow>): AutomationInsertRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: "team_default",
     name: "Test Automation",
     instructions: "Run tests",
     trigger_type: "schedule",

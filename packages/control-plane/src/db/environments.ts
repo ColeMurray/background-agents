@@ -25,6 +25,8 @@ export interface EnvironmentRow {
   owner_team_id?: string | null;
 }
 
+export type EnvironmentInsertRow = EnvironmentRow & { owner_team_id: string };
+
 const environmentOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
 
 function withOwnerTeam(row: EnvironmentRow): EnvironmentRow {
@@ -90,7 +92,7 @@ const MUTABLE_SCALAR_COLUMNS = [
 export class EnvironmentStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  bindEnvironmentInsert(row: EnvironmentRow): SqlStatement {
+  bindEnvironmentInsert(row: EnvironmentInsertRow): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO environments
@@ -105,12 +107,15 @@ export class EnvironmentStore {
         row.channel_associations,
         row.created_at,
         row.updated_at,
-        row.owner_team_id ?? DEFAULT_TEAM_ID
+        row.owner_team_id
       );
   }
 
   /** Insert an environment and its repositories atomically. */
-  async create(row: EnvironmentRow, repositories: EnvironmentRepositoryInsert[]): Promise<void> {
+  async create(
+    row: EnvironmentInsertRow,
+    repositories: EnvironmentRepositoryInsert[]
+  ): Promise<void> {
     await this.db.batch([
       this.bindEnvironmentInsert(row),
       ...this.bindRepositoryInserts(row.id, repositories),

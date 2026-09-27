@@ -90,6 +90,8 @@ export interface AutomationRow {
   trigger_auth_data: string | null;
 }
 
+export type AutomationInsertRow = AutomationRow & { owner_team_id: string };
+
 const automationOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
 
 export function withOwnerTeam(row: AutomationRow): AutomationRow {
@@ -395,7 +397,7 @@ export class AutomationStore {
    * Prepared INSERT for an automation row. Public so a route can compose it with
    * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
-  bindAutomationInsert(row: AutomationRow): SqlStatement {
+  bindAutomationInsert(row: AutomationInsertRow): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO automations
@@ -426,11 +428,11 @@ export class AutomationStore {
         row.event_type,
         row.trigger_config,
         row.trigger_auth_data,
-        row.owner_team_id ?? DEFAULT_TEAM_ID
+        row.owner_team_id
       );
   }
 
-  async create(row: AutomationRow): Promise<void> {
+  async create(row: AutomationInsertRow): Promise<void> {
     await this.bindAutomationInsert(row).run();
   }
 

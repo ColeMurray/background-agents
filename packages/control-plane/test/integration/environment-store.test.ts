@@ -10,15 +10,16 @@ import { env } from "cloudflare:test";
 import {
   EnvironmentStore,
   toEnvironment,
-  type EnvironmentRow,
+  type EnvironmentInsertRow,
   type EnvironmentRepositoryInsert,
 } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
 
-function makeEnv(overrides?: Partial<EnvironmentRow>): EnvironmentRow {
+function makeEnv(overrides?: Partial<EnvironmentInsertRow>): EnvironmentInsertRow {
   const now = Date.now();
   return {
     id: `env_${Math.random().toString(36).slice(2, 10)}`,
+    owner_team_id: "team_default",
     name: "Full Stack",
     description: null,
     prebuild_enabled: 0,

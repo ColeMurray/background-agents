@@ -1,15 +1,16 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
 
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 
-function automation(id: string, userId: string): AutomationRow {
+function automation(id: string, userId: string): AutomationInsertRow {
   return {
     id,
+    owner_team_id: "team_default",
     name: id,
     instructions: "Run tests",
     trigger_type: "schedule",

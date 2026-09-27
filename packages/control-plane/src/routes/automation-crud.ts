@@ -31,7 +31,7 @@ import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/model
 import {
   AutomationStore,
   parseAutomationTriggerFields,
-  type AutomationRow,
+  type AutomationInsertRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
@@ -275,7 +275,7 @@ async function handleCreateAutomation(
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
-  const row: AutomationRow = {
+  const row: AutomationInsertRow = {
     owner_team_id: DEFAULT_TEAM_ID,
     id,
     name: body.name.trim(),

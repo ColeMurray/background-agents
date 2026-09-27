@@ -1,17 +1,18 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { seedActiveUser, sqlDatabase } from "./helpers";
-import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
 import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
-function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
+function makeAutomation(overrides?: Partial<AutomationInsertRow>): AutomationInsertRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: "team_default",
     name: "Test Automation",
     instructions: "Investigate and fix",
     trigger_type: "schedule",

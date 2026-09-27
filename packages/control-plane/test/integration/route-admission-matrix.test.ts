@@ -16,7 +16,7 @@ import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudfl
 import { createControlPlaneApp } from "../../src/routing/hono-app";
 import { listRouteContracts, type RouteContract } from "../../src/routing/route-contracts";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
 import { catalog } from "../../src/routes/catalog";
 import { Hono } from "hono";
 import { admit } from "../../src/routing/admit";
@@ -51,9 +51,10 @@ interface MatrixFixtures {
   automationId: string;
 }
 
-function automation(id: string, userId: string): AutomationRow {
+function automation(id: string, userId: string): AutomationInsertRow {
   return {
     id,
+    owner_team_id: "team_default",
     name: id,
     instructions: "Run tests",
     trigger_type: "schedule",

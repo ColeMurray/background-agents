@@ -29,6 +29,7 @@ async function seedEnvironment(opts?: {
   await store.create(
     {
       id,
+      owner_team_id: "team_default",
       name: opts?.name ?? "Seeded",
       description: null,
       prebuild_enabled: 0,

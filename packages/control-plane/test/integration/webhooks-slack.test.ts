@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
-import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
@@ -26,10 +26,11 @@ function makeSlackEventBody(overrides?: Record<string, unknown>): Record<string,
   };
 }
 
-function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
+function makeSlackAutomation(overrides?: Partial<AutomationInsertRow>): AutomationInsertRow {
   const now = Date.now();
   return {
     id: `auto-slack-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: "team_default",
     name: "Slack triage",
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
