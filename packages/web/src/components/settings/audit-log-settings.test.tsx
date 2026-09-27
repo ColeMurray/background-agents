@@ -104,6 +104,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("AuditLogSettings", () => {
+  it("shows a team creation as an applied operation", () => {
+    const article = renderSingle(createEvent("applied", { action: "team.created" }));
+    expect(article.getByText("Team created")).toBeInTheDocument();
+    expect(article.getByText("Applied")).toBeInTheDocument();
+  });
+
   it("renders outcomes, stable summaries, timestamps, and expandable structured details", async () => {
     hook.events = [
       createEvent("applied"),

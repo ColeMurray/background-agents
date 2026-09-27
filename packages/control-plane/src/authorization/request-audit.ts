@@ -1,4 +1,5 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { AuditOperationAction } from "@open-inspect/shared/types/audit-events";
 import {
   AUTHORIZATION_DECISION_ACTIONS,
   AUTHORIZATION_DECISION_METADATA_SCHEMA,
@@ -8,6 +9,7 @@ import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
 import type { Team } from "@open-inspect/shared/types/teams";
+import type { SqlStatement } from "../db/sql-database";
 
 const logger = createLogger("authorization-audit");
 
@@ -137,17 +139,19 @@ export async function auditRouteAuthorizationDecision(input: {
   }
 }
 
-export async function auditTeamEvent(input: {
+type TeamAuditInput = {
   ctx: RequestContext;
-  action: string;
-  team: Team;
+  action: Extract<AuditOperationAction, `team.${string}`>;
+  teamId: string;
   targetUserId?: string;
   before: unknown;
   after: unknown;
-}): Promise<void> {
+};
+
+export function bindTeamEvent(input: TeamAuditInput): SqlStatement {
   const principal = input.ctx.principal;
   if (!principal || principal.kind !== "user") throw new Error("Team audit requires a user");
-  await input.ctx.db
+  return input.ctx.db
     .prepare(
       `INSERT INTO authorization_audit_events
     (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
@@ -161,11 +165,16 @@ export async function auditTeamEvent(input: {
       input.ctx.request_id,
       principal.userId,
       input.action,
-      input.team.id,
+      input.teamId,
       input.targetUserId ?? null,
-      input.team.id,
+      input.teamId,
       input.action,
       JSON.stringify({ before: input.before ?? {}, requested: {}, after: input.after ?? {} })
-    )
-    .run();
+    );
+}
+
+export async function auditTeamEvent(
+  input: Omit<TeamAuditInput, "teamId"> & { team: Team }
+): Promise<void> {
+  await bindTeamEvent({ ...input, teamId: input.team.id }).run();
 }

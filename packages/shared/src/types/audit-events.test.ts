@@ -123,6 +123,22 @@ describe("interpretAuditEvent", () => {
     ).toEqual({ kind: "operation", result });
   });
 
+  it.each([
+    "team.created",
+    "team.updated",
+    "team.archived",
+    "team.restored",
+    "team.member_added",
+    "team.member_role_changed",
+    "team.member_removed",
+    "team.member_joined",
+  ])("recognizes %s as a domain operation", (action) => {
+    expect(interpretAuditEvent({ action, operationResult: "applied", metadata: {} })).toEqual({
+      kind: "operation",
+      result: "applied",
+    });
+  });
+
   it.each(["authorization.policy_updated", "future.request_gate", "constructor"])(
     "leaves unrecognized action %s uninterpreted, even with decision metadata",
     (action) => {

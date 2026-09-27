@@ -45,6 +45,14 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "workspace.default_role_assigned": "Default role assigned",
   "workspace.owner_bootstrapped": "Owner bootstrapped",
   "workspace.user_merged": "Users merged",
+  "team.created": "Team created",
+  "team.updated": "Team updated",
+  "team.archived": "Team archived",
+  "team.restored": "Team restored",
+  "team.member_added": "Team member added",
+  "team.member_role_changed": "Team member role changed",
+  "team.member_removed": "Team member removed",
+  "team.member_joined": "Team member joined",
 };
 
 const ACTION_LABELS = new Map<string, string>([

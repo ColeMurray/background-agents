@@ -76,6 +76,14 @@ export const AUDIT_OPERATION_ACTIONS = [
   "workspace.default_role_assigned",
   "workspace.owner_bootstrapped",
   "workspace.user_merged",
+  "team.created",
+  "team.updated",
+  "team.archived",
+  "team.restored",
+  "team.member_added",
+  "team.member_role_changed",
+  "team.member_removed",
+  "team.member_joined",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";

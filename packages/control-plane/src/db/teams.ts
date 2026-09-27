@@ -5,7 +5,7 @@ import {
   type SessionVisibility,
 } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 function toTeam(value: unknown): Team {
   const row = teamRowSchema.parse(value);
@@ -69,6 +69,24 @@ export class TeamStore {
     );
   }
 
+  private insertStatement(
+    input: {
+      slug: string;
+      name: string;
+      description?: string | null;
+      joinPolicy: TeamJoinPolicy;
+    },
+    id: string,
+    now: number
+  ): SqlStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO teams (id, slug, name, description, join_policy, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(id, input.slug, input.name, input.description ?? null, input.joinPolicy, now, now);
+  }
+
   async create(input: {
     slug: string;
     name: string;
@@ -76,14 +94,26 @@ export class TeamStore {
     joinPolicy: TeamJoinPolicy;
   }): Promise<Team> {
     const id = `team_${generateId()}`;
+    await this.insertStatement(input, id, Date.now()).run();
+    return (await this.getById(id))!;
+  }
+
+  async createWithLead(
+    input: { slug: string; name: string; description?: string | null; joinPolicy: TeamJoinPolicy },
+    leadUserId: string,
+    auditStatement: (teamId: string) => SqlStatement
+  ): Promise<Team> {
+    const id = `team_${generateId()}`;
     const now = Date.now();
-    await this.db
-      .prepare(
-        `INSERT INTO teams (id, slug, name, description, join_policy, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(id, input.slug, input.name, input.description ?? null, input.joinPolicy, now, now)
-      .run();
+    await this.db.batch([
+      this.insertStatement(input, id, now),
+      this.db
+        .prepare(
+          "INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES (?, ?, 'lead', 'manual', ?)"
+        )
+        .bind(id, leadUserId, now),
+      auditStatement(id),
+    ]);
     return (await this.getById(id))!;
   }
 

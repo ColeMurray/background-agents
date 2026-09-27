@@ -8,7 +8,7 @@ import {
   type Team,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
-import { auditTeamEvent } from "../authorization/request-audit";
+import { auditTeamEvent, bindTeamEvent } from "../authorization/request-audit";
 import {
   LastLeadError,
   TeamMembershipNotFoundError,
@@ -50,7 +50,8 @@ function viewer(ctx: RequestContext) {
 async function responseTeam(
   ctx: RequestContext,
   team: Team,
-  memberships?: ReadonlyMap<string, TeamRole>
+  memberships?: ReadonlyMap<string, TeamRole>,
+  leadCount?: number
 ) {
   const subject = viewer(ctx);
   const store = new TeamMembershipStore(ctx.db);
@@ -59,7 +60,7 @@ async function responseTeam(
     ...team,
     capabilities: resolveTeamAccess(
       { ...subject, memberships: roles },
-      { ...team, leadCount: await store.countLeads(team.id) }
+      { ...team, leadCount: leadCount ?? (await store.countLeads(team.id)) }
     ),
   };
 }
@@ -86,28 +87,34 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
   if (query instanceof Response) return query;
   const subject = viewer(ctx);
   const isAdmin = subject.roleKey === "owner" || subject.roleKey === "administrator";
-  const memberships = await new TeamMembershipStore(ctx.db).listForUser(subject.userId);
+  const membershipStore = new TeamMembershipStore(ctx.db);
+  const memberships = await membershipStore.listForUser(subject.userId);
   const teams = await new TeamStore(ctx.db).list({
     forUserId: query.membership === "all" && isAdmin ? undefined : subject.userId,
     includeArchived: query.includeArchived === "true",
     search: query.search,
   });
+  const leadCounts = await membershipStore.listLeadCounts();
   return json({
-    teams: await Promise.all(teams.map((team) => responseTeam(ctx, team, memberships))),
+    teams: await Promise.all(
+      teams.map((team) => responseTeam(ctx, team, memberships, leadCounts.get(team.id) ?? 0))
+    ),
   });
 }
 
 async function meTeams(_request: Request, _env: Env, _params: object, ctx: RequestContext) {
   const subject = viewer(ctx);
-  const memberships = await new TeamMembershipStore(ctx.db).listForUser(subject.userId);
+  const membershipStore = new TeamMembershipStore(ctx.db);
+  const memberships = await membershipStore.listForUser(subject.userId);
   const teams = await new TeamStore(ctx.db).list({
     forUserId: subject.userId,
     includeArchived: true,
   });
+  const leadCounts = await membershipStore.listLeadCounts();
   return json({
     teams: await Promise.all(
       teams.map(async (team) => ({
-        ...(await responseTeam(ctx, team, memberships)),
+        ...(await responseTeam(ctx, team, memberships, leadCounts.get(team.id) ?? 0)),
         role: memberships.get(team.id),
       }))
     ),
@@ -118,15 +125,16 @@ async function createTeam(request: Request, _env: Env, _params: object, ctx: Req
   const body = await parseBody(request, createTeamRequestSchema);
   if (body instanceof Response) return body;
   try {
-    const team = await new TeamStore(ctx.db).create(body);
-    await new TeamMembershipStore(ctx.db).add(team.id, viewer(ctx).userId, "lead");
-    await auditTeamEvent({
-      ctx,
-      team,
-      action: "team.created",
-      before: {},
-      after: { ...team, leadUserId: viewer(ctx).userId },
-    });
+    const leadUserId = viewer(ctx).userId;
+    const team = await new TeamStore(ctx.db).createWithLead(body, leadUserId, (teamId) =>
+      bindTeamEvent({
+        ctx,
+        teamId,
+        action: "team.created",
+        before: {},
+        after: { ...body, teamId, leadUserId },
+      })
+    );
     return json(await responseTeam(ctx, team), 201);
   } catch (cause) {
     return mutationError(cause);
@@ -212,7 +220,9 @@ async function putMember(
   }
   try {
     if (before) await store.setRole(team.id, params.userId, body.role);
-    else await store.add(team.id, params.userId, body.role);
+    else if (!(await store.add(team.id, params.userId, body.role))) {
+      return json({ error: "Membership changed concurrently", code: "membership_conflict" }, 409);
+    }
     const after = (await store.listMembersWithUsers(team.id)).find(
       (member) => member.userId === params.userId
     )!;
@@ -277,7 +287,9 @@ async function joinTeam(
 ) {
   const team = admittedTeam(ctx);
   const userId = viewer(ctx).userId;
-  await new TeamMembershipStore(ctx.db).add(team.id, userId);
+  if (!(await new TeamMembershipStore(ctx.db).add(team.id, userId))) {
+    return json({ error: "Already a member", code: "already_member" }, 409);
+  }
   await auditTeamEvent({
     ctx,
     team,

@@ -65,6 +65,20 @@ export class TeamMembershipStore {
     return teamRoleCountSchema.parse(row).count;
   }
 
+  async listLeadCounts(): Promise<ReadonlyMap<string, number>> {
+    const rows = await this.db
+      .prepare(
+        "SELECT team_id, COUNT(*) AS count FROM team_memberships WHERE role = 'lead' GROUP BY team_id"
+      )
+      .all();
+    return new Map(
+      rows.results.map((row) => {
+        const value = teamRoleCountSchema.extend({ team_id: z.string() }).parse(row);
+        return [value.team_id, value.count];
+      })
+    );
+  }
+
   async listMembersWithUsers(teamId: string) {
     const rows = await this.db
       .prepare(

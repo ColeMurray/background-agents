@@ -76,6 +76,29 @@ describe("team routes", () => {
     ]);
   });
 
+  it("rolls back team creation if its audit write fails", async () => {
+    const store = new TeamStore(env.DB);
+    await expect(
+      store.createWithLead(
+        { slug: "rollback", name: "Rollback", joinPolicy: "invite_only" },
+        OWNER,
+        () =>
+          env.DB.prepare("INSERT INTO authorization_audit_events (id) VALUES (?)").bind("bad-audit")
+      )
+    ).rejects.toThrow();
+    expect(await store.getBySlug("rollback")).toBeNull();
+    expect(
+      (
+        await env.DB.prepare("SELECT COUNT(*) AS count FROM team_memberships").first<{
+          count: number;
+        }>()
+      )?.count
+    ).toBe(0);
+    expect((await request("/teams", "POST", { slug: "rollback", name: "Rollback" })).status).toBe(
+      201
+    );
+  });
+
   it("lets leads manage their team without exposing another team", async () => {
     await setRole(OWNER, "member");
     const teams = new TeamStore(env.DB);
@@ -166,6 +189,24 @@ describe("team routes", () => {
       expect(row.team_id).toBe(team.id);
       expect(JSON.parse(String(row.metadata_json))).toMatchObject({ before: {}, after: {} });
     }
+  });
+
+  it("records a single addition when membership requests race", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "concurrent",
+      name: "Concurrent",
+      joinPolicy: "open",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, MEMBER, "lead");
+    const responses = await Promise.all([
+      request(`/teams/${team.id}/join`, "POST"),
+      request(`/teams/${team.id}/join`, "POST"),
+    ]);
+    expect(
+      responses.map((response) => response.status).filter((status) => status === 200)
+    ).toHaveLength(1);
+    expect((await auditEvents(team.id)).map((row) => row.action)).toEqual(["team.member_joined"]);
   });
 
   it("denies a bot service even when it presents an actor", async () => {
