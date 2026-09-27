@@ -203,6 +203,7 @@ export function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.startup_rejected = 0;
+        sandbox.fenced = 0;
         sandbox.created_at = data.createdAt;
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;

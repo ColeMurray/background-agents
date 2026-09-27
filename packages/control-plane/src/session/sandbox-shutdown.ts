@@ -587,6 +587,7 @@ export class SandboxShutdownCoordinator {
       if (claim.providerObjectId && this.canStopSource()) {
         try {
           await this.stopSource(
+            claim,
             claim.providerObjectId,
             "discard",
             "destroy",
@@ -1100,6 +1101,7 @@ export class SandboxShutdownCoordinator {
       // A receipt carried from an earlier generation names that generation's
       // source; the one to stop is the source this generation is running.
       await this.stopSource(
+        state,
         this.receiptCoversSource(state)
           ? (state.receipt.sourceObjectId ?? state.providerObjectId)
           : state.providerObjectId,
@@ -1138,6 +1140,7 @@ export class SandboxShutdownCoordinator {
 
   /** Confirmed provider stop of one source, bounded by the caller's deadline. */
   private async stopSource(
+    state: ShutdownRecord,
     providerObjectId: string,
     reason: string,
     intent: "destroy" | "preserve",
@@ -1155,6 +1158,7 @@ export class SandboxShutdownCoordinator {
         intent,
         deadlineAtMs,
         signal,
+        generationCreatedAtMs: state.generation.createdAt,
       })
     );
     if (!result.success) throw new Error(result.error ?? "Source retirement failed");

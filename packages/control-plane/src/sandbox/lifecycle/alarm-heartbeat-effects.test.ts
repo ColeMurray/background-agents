@@ -44,6 +44,7 @@ describe("heartbeat alarm effects", () => {
           reason: "heartbeat_timeout",
           intent: resumable ? "preserve" : "destroy",
           signal: undefined,
+          generationCreatedAtMs: sandbox.created_at,
         });
       } else {
         expect(stopSandbox).not.toHaveBeenCalled();

@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
+import { PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS } from "../lifecycle/decisions";
 import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
 import { RequestDeadlineError } from "../request-deadline";
@@ -634,6 +635,49 @@ describe("ModalSandboxProvider", () => {
   });
 
   describe("HTTP status handling", () => {
+    it("confirms an invisible pending VM only after its materialization bound", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+        const createdAt = Date.now();
+        const stopSandbox = vi.fn(async () => {
+          throw new ModalApiError("pending_reference_not_visible", 409);
+        });
+        const provider = new ModalSandboxProvider(
+          createMockModalClient({ stopSandbox }),
+          "modal-vm"
+        );
+        const config = {
+          sessionId: "test-session",
+          providerObjectId: provider.pendingSandboxReference("test-session", "generation")!,
+          reason: "respawn",
+          intent: "destroy" as const,
+          generationCreatedAtMs: createdAt,
+        };
+        await expect(provider.stopSandbox(config)).rejects.toThrow();
+        vi.setSystemTime(createdAt + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS - 1);
+        await expect(provider.stopSandbox(config)).rejects.toThrow();
+        vi.setSystemTime(createdAt + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS);
+        await expect(provider.stopSandbox(config)).resolves.toEqual({ success: true });
+        await expect(
+          provider.stopSandbox({ ...config, generationCreatedAtMs: undefined })
+        ).rejects.toThrow();
+
+        for (const error of [
+          new ModalApiError("other conflict", 409),
+          new ModalApiError("provider unavailable", 500),
+          new Error("network failure"),
+        ]) {
+          stopSandbox.mockRejectedValueOnce(error);
+          await expect(provider.stopSandbox(config)).rejects.toThrow();
+        }
+        stopSandbox.mockRejectedValueOnce(new ModalApiError("not found", 404));
+        await expect(provider.stopSandbox(config)).resolves.toEqual({ success: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("classifies HTTP 502 from restoreFromSnapshot as transient", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => {

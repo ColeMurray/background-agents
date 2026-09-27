@@ -385,6 +385,8 @@ export interface StopConfig {
   signal?: AbortSignal;
   /** Absolute caller deadline shared by every nested provider operation. */
   deadlineAtMs?: number;
+  /** Reservation time of the generation being stopped, if known. */
+  generationCreatedAtMs?: number;
 }
 
 /**

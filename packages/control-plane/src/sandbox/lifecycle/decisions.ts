@@ -245,6 +245,9 @@ export interface SpawnConfig {
  */
 const CONNECT_WATCHDOG_MS = 240_000;
 
+/** Modal api_create_sandbox/api_restore_sandbox timeout=150s plus 60s margin. */
+export const PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS = 210_000;
+
 /**
  * Default spawn configuration.
  */

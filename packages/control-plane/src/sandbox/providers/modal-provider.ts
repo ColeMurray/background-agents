@@ -6,6 +6,7 @@
  */
 
 import { ModalApiError } from "../client";
+import { PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS } from "../lifecycle/decisions";
 import type { ModalClient, ModalBackend, CreateImageBuildSandboxResponse } from "../client";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../../logger";
@@ -317,6 +318,24 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       return { success: true };
     } catch (error) {
       if (error instanceof ModalApiError && error.status === 404) return { success: true };
+      const pendingNotVisible =
+        this.name === "modal-vm" &&
+        config.providerObjectId.startsWith("modal-vm-session:") &&
+        error instanceof ModalApiError &&
+        error.status === 409 &&
+        error.message.includes("pending_reference_not_visible");
+      if (
+        pendingNotVisible &&
+        config.generationCreatedAtMs !== undefined &&
+        Date.now() - config.generationCreatedAtMs >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
+      )
+        return { success: true };
+      if (pendingNotVisible)
+        throw new SandboxProviderError(
+          "Pending VM allocation is not yet visible; stop cannot be confirmed",
+          "transient",
+          error
+        );
       throw this.classifyError("Failed to stop Modal sandbox", error);
     }
   }

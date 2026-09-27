@@ -76,6 +76,10 @@ class RepositoryImageUnavailableError(RuntimeError):
     """The selected repository image no longer exists in Modal."""
 
 
+class PendingVMReferenceNotVisible(RuntimeError):
+    """The named allocation is absent or belongs to a different generation."""
+
+
 def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
     has_owner = bool(repo_owner)
     has_name = bool(repo_name)
@@ -627,7 +631,7 @@ class SandboxManager:
         except modal.exception.NotFoundError:
             return None
         if await sandbox.get_tags.aio() != tags:
-            raise RuntimeError("Docker sandbox allocation ownership mismatch")
+            raise PendingVMReferenceNotVisible("Docker sandbox allocation ownership mismatch")
         return sandbox
 
     async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:
@@ -796,7 +800,7 @@ class SandboxManager:
             if modal_sandbox is None:
                 # An in-flight create can still materialize. Never report confirmed
                 # absence/retirement for an unresolved launch intent.
-                raise RuntimeError("VM launch identity is not yet visible")
+                raise PendingVMReferenceNotVisible("VM launch identity is not yet visible")
         else:
             try:
                 modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)

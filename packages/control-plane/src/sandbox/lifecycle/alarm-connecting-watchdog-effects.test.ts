@@ -33,6 +33,7 @@ describe("connecting watchdog effects", () => {
         reason: "connecting_timeout",
         intent: "destroy",
         signal: undefined,
+        generationCreatedAtMs: sandbox.created_at,
       });
       expect(vi.mocked(h.storage.updateSandboxStatus).mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(h.storage.fenceSandboxGeneration).mock.invocationCallOrder[0]

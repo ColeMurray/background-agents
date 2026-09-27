@@ -380,6 +380,7 @@ def _session_config_from_create_request(
 @app.function(
     image=function_image,
     secrets=[internal_api_secret],
+    timeout=150,
 )
 @fastapi_endpoint(method="POST")
 async def api_create_sandbox(
@@ -679,9 +680,12 @@ async def api_stop_sandbox(
     ):
         if not isinstance(sandbox_id, str) or not sandbox_id:
             raise HTTPException(status_code=400, detail="sandbox_id is required")
-        from .sandbox.manager import SandboxManager
+        from .sandbox.manager import PendingVMReferenceNotVisible, SandboxManager
 
-        await SandboxManager().stop_sandbox(sandbox_id)
+        try:
+            await SandboxManager().stop_sandbox(sandbox_id)
+        except PendingVMReferenceNotVisible as e:
+            raise HTTPException(status_code=409, detail="pending_reference_not_visible") from e
         return {"success": True, "data": {"terminated": True}}
 
 
@@ -728,7 +732,7 @@ async def api_snapshot_build_sandbox(
         }
 
 
-@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret])
+@app.function(image=function_image, secrets=[github_app_secrets, internal_api_secret], timeout=150)
 @fastapi_endpoint(method="POST")
 async def api_restore_sandbox(
     request: dict,

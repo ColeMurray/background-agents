@@ -16,6 +16,75 @@ from src.sandbox.build_session import (
 )
 from src.sandbox.manager import SandboxHandle, SandboxManager
 
+PENDING_VM_REFERENCE = 'modal-vm-session:["session","generation"]'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", [None, "other"])
+async def test_stop_pending_vm_reference_reports_not_visible(monkeypatch, owner):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    from_name = MagicMock()
+    if owner is None:
+        from_name.aio = AsyncMock(side_effect=ModalNotFoundError("absent"))
+    else:
+        from_name.aio = AsyncMock(
+            return_value=SimpleNamespace(
+                get_tags=SimpleNamespace(aio=AsyncMock(return_value={"owner": owner}))
+            )
+        )
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", from_name)
+    from_id = MagicMock()
+    from_id.aio = AsyncMock()
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_stop({"sandbox_id": PENDING_VM_REFERENCE})
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "pending_reference_not_visible"
+    from_id.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stop_pending_vm_reference_terminates_owned_allocation(monkeypatch):
+    from src.sandbox.launch_policy import docker_allocation_tags
+
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    sandbox = SimpleNamespace(
+        object_id="sb-owned",
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(return_value=docker_allocation_tags("session", "generation"))
+        ),
+        terminate=SimpleNamespace(aio=AsyncMock()),
+    )
+    from_name = MagicMock()
+    from_name.aio = AsyncMock(return_value=sandbox)
+    from_id = MagicMock()
+    from_id.aio = AsyncMock(return_value=sandbox)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", from_name)
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+    assert (await _call_generic_stop({"sandbox_id": PENDING_VM_REFERENCE}))["success"] is True
+    sandbox.terminate.aio.assert_awaited_once_with(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_pending_vm_reference_keeps_provider_errors_distinct(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    lookup = MagicMock()
+    lookup.aio = AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", lookup)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call_generic_stop({"sandbox_id": PENDING_VM_REFERENCE})
+
+    assert exc.value.status_code == 500
+
+
+def test_session_launch_endpoints_declare_materialization_timeout():
+    for endpoint in (web_api.api_create_sandbox, web_api.api_restore_sandbox):
+        assert "timeout=150" in endpoint.get_build_def()
+
+
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 CALLBACK_CONTEXT = {
     "callback_url": "https://cp.test/image-builds/build-complete",
