@@ -2413,6 +2413,7 @@ export class SandboxLifecycleManager
     ) {
       throw new SpawnSupersededError();
     }
+    const previousProviderObjectId = row.modal_object_id;
     this.storage.updateSandboxModalObjectId(pending.reference);
     const registered = await this.shutdown.recordPendingProviderHandle(
       generation,
@@ -2420,7 +2421,18 @@ export class SandboxLifecycleManager
       pending.lifetime
     );
     if (registered === "superseded") throw new SpawnSupersededError();
-    if (registered === "expired") throw new SandboxLaunchExpiredError();
+    if (registered === "expired") {
+      const current = this.storage.getSandbox();
+      if (
+        current?.modal_sandbox_id === generation.sandboxId &&
+        current.created_at === generation.createdAt &&
+        current.modal_object_id === pending.reference &&
+        !current.fenced
+      ) {
+        this.storage.updateSandboxModalObjectId(previousProviderObjectId);
+      }
+      throw new SandboxLaunchExpiredError();
+    }
   }
 
   private async handleRejectedStartupAllocation(

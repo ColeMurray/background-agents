@@ -154,6 +154,7 @@ describe("pending VM reference recovery", () => {
         );
         expect(launch).not.toHaveBeenCalled();
         expect(sandbox.status).toBe("failed");
+        expect(sandbox.modal_object_id).toBeNull();
         expect(sandbox.last_spawn_error).toContain(
           "Increase the sandbox timeout or reduce the final snapshot buffer"
         );
@@ -202,6 +203,28 @@ describe("pending VM reference recovery", () => {
       expect(restarted.admissionDecision()).toBe("held"); // Still waits for generation-ready.
     }
   );
+
+  it("does not clear a newer generation's handle when pending registration expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const sandbox = createMockSandbox({ status: "pending", modal_object_id: null });
+    const client = { createSandbox: vi.fn(), stopSandbox: vi.fn(async () => {}) };
+    const fixture = createAlarmFixture(
+      sandbox,
+      new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm")
+    );
+    fixture.shutdown.recordPendingProviderHandle = vi.fn(async () => {
+      sandbox.modal_sandbox_id = "replacement-generation";
+      sandbox.created_at += 1;
+      sandbox.modal_object_id = "sb-replacement";
+      return "expired" as const;
+    });
+
+    await fixture.manager.spawnSandbox();
+
+    expect(client.createSandbox).not.toHaveBeenCalled();
+    expect(sandbox.modal_object_id).toBe("sb-replacement");
+  });
 
   it("respawns after a lost create response and boot-budget stop", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
