@@ -140,7 +140,12 @@ export function buildModalSandboxDashboardUrl(params: {
   modalEnvironment?: string | undefined;
   providerObjectId: string | null | undefined;
 }): string | null {
-  if (!params.workspace || !params.providerObjectId) return null;
+  if (
+    !params.workspace ||
+    !params.providerObjectId ||
+    params.providerObjectId.startsWith("modal-vm-session:")
+  )
+    return null;
   const workspace = encodeURIComponent(params.workspace);
   const modalEnvironment = encodeURIComponent(params.modalEnvironment || DEFAULT_MODAL_ENVIRONMENT);
   const providerObjectId = encodeURIComponent(params.providerObjectId);

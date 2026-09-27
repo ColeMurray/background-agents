@@ -3,14 +3,27 @@ import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { ModalSandboxProvider } from "../providers/modal-provider";
+import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../provider";
 import { parsePendingVmReference } from "../providers/pending-vm-reference";
-import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
+import { DEFAULT_LIFECYCLE_CONFIG, SandboxLifecycleManager } from "./manager";
+import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
+import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 import {
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
   PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
 } from "./decisions";
-import { createAlarmFixture, createMockSandbox } from "./test-helpers";
+import {
+  createAlarmFixture,
+  createMockSandbox,
+  createMockSession,
+  createMockStorage,
+  createMockBroadcaster,
+  createMockWebSocketManager,
+  createMockAlarmScheduler,
+  createMockIdGenerator,
+  createTestConfig,
+} from "./test-helpers";
 
 describe("pending VM reference recovery", () => {
   afterEach(() => vi.useRealTimers());
@@ -23,6 +36,99 @@ describe("pending VM reference recovery", () => {
       DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs
     );
   });
+
+  it.each([
+    ["create", undefined],
+    ["create", 5_400],
+    ["restore", 5_400],
+  ] as const)(
+    "persists a lost %s's pending handle and %s-second reservation bound across restart",
+    async (action, timeoutSeconds) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+      const sandbox = createMockSandbox({
+        status: action === "create" ? "pending" : "stopped",
+        modal_object_id: "sb-prior",
+        snapshot_image_id: action === "restore" ? "im-saved" : null,
+        snapshot_runtime_version: action === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
+      });
+      const storage = createMockStorage(
+        createMockSession({
+          sandbox_settings: timeoutSeconds
+            ? JSON.stringify({ sandboxTimeoutMs: timeoutSeconds * 1000 })
+            : null,
+        }),
+        sandbox
+      );
+      const loseResponse = vi.fn(async () => {
+        sandbox.status = "ready";
+        throw new Error("response lost after bridge attached");
+      });
+      const client = {
+        createSandbox: vi.fn(loseResponse),
+        restoreSandbox: vi.fn(loseResponse),
+        stopSandbox: vi.fn(async () => {}),
+      };
+      const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+      let state: ShutdownRecord | null = null;
+      const deps = {
+        store: {
+          read: () => (state ? structuredClone(state) : null),
+          write: (next: ShutdownRecord) => {
+            state = structuredClone(next);
+          },
+        },
+        provider,
+        sandbox: storage,
+        session: { getSession: () => storage.getSession(), transaction: <T>(fn: () => T) => fn() },
+        messages: { getProcessingMessage: () => null },
+        failures: { record: vi.fn(), deliver: vi.fn() },
+        messenger: createMockBroadcaster(),
+        sockets: { getSandboxSocket: () => null },
+        alarm: createMockAlarmScheduler(),
+        background: { submit: vi.fn() },
+        onLifecycleChange: vi.fn(async () => {}),
+        reconcileStatusFromMessages: vi.fn(async () => {}),
+        retireAccess: vi.fn(),
+      };
+      const shutdown = new SandboxShutdownCoordinator(deps as never);
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        shutdown,
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      const generation = { sandboxId: sandbox.modal_sandbox_id!, createdAt: sandbox.created_at };
+      const reference = provider.pendingSandboxReference("test-session", generation.sandboxId);
+      const launch = action === "create" ? client.createSandbox : client.restoreSandbox;
+      expect(launch).toHaveBeenCalledOnce();
+      expect(launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutSeconds: timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        }),
+        undefined
+      );
+      expect(sandbox.modal_object_id).toBe(reference);
+      const restarted = new SandboxShutdownCoordinator(deps as never);
+      expect(state).toMatchObject({
+        generation,
+        providerObjectId: reference,
+        lifetimeKind: "finite",
+        lifetimeSource: "conservative_start_bound",
+        expiresAtMs:
+          generation.createdAt + (timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000,
+      });
+      expect(restarted.admissionDecision()).toBe("held"); // Still waits for generation-ready.
+    }
+  );
 
   it("respawns after a lost create response and boot-budget stop", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

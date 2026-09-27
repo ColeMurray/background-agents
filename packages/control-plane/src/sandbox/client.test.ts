@@ -42,6 +42,14 @@ describe("buildModalWorkspaceSlug", () => {
 });
 
 describe("buildModalSandboxDashboardUrl", () => {
+  it("returns null for a pending VM reference", () => {
+    expect(
+      buildModalSandboxDashboardUrl({
+        workspace: "acme",
+        providerObjectId: 'modal-vm-session:["session","sandbox"]',
+      })
+    ).toBeNull();
+  });
   it("builds a Modal dashboard URL for a sandbox object", () => {
     expect(
       buildModalSandboxDashboardUrl({

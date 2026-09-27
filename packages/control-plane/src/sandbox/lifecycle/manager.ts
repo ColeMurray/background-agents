@@ -32,6 +32,7 @@ import {
   type SessionRow,
 } from "../../session/types";
 import {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   SandboxLaunchRejectedError,
@@ -110,6 +111,12 @@ export interface SandboxShutdownLifecycle {
   ): void;
   /** Durably marks the provider-I/O boundary so restart recovery cannot repeat it blindly. */
   markRecoveryInvoked(generation: SandboxGeneration, providerObjectId?: string): void;
+  /** Records a generation-scoped pending provider handle and its conservative expiry. */
+  recordPendingProviderHandle(
+    generation: SandboxGeneration,
+    reference: string,
+    lifetime: Extract<SandboxLifetime, { kind: "finite" }>
+  ): Promise<void>;
   /** Records the provider-confirmed handle and scheduling lifetime after startup. */
   recordProviderStartup(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
   /** Blocks generic destructive lifecycle work while shutdown or capture ownership is unresolved. */
@@ -836,7 +843,7 @@ export class SandboxLifecycleManager
 
       let result: CreateSandboxResult;
       try {
-        this.recordPendingProviderReference(generation, sessionId);
+        await this.recordPendingProviderReference(generation, sessionId, timeoutSeconds);
         result = await this.provider.createSandbox(createConfig);
       } catch (error) {
         if (!selectedImage) throw error;
@@ -872,7 +879,7 @@ export class SandboxLifecycleManager
           preserveProviderObjectId: false,
           shutdownPolicy: shutdownPolicyForLaunch("new", null),
         }));
-        this.recordPendingProviderReference(generation, sessionId);
+        await this.recordPendingProviderReference(generation, sessionId, timeoutSeconds);
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -1222,7 +1229,11 @@ export class SandboxLifecycleManager
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       this.shutdown.markRecoveryInvoked(generation);
-      this.recordPendingProviderReference(generation, session.session_name || session.id);
+      await this.recordPendingProviderReference(
+        generation,
+        session.session_name || session.id,
+        timeoutSeconds
+      );
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         generationCreatedAtMs: generation.createdAt,
@@ -2372,7 +2383,11 @@ export class SandboxLifecycleManager
     await this.storage.updateSandboxAccess("ttyd", url, token);
   }
 
-  private recordPendingProviderReference(generation: SandboxGeneration, sessionId: string): void {
+  private async recordPendingProviderReference(
+    generation: SandboxGeneration,
+    sessionId: string,
+    timeoutSeconds?: number
+  ): Promise<void> {
     if (!generation.sandboxId) throw new SpawnSupersededError();
     const reference = this.provider.pendingSandboxReference?.(sessionId, generation.sandboxId);
     if (!reference) return;
@@ -2385,6 +2400,13 @@ export class SandboxLifecycleManager
       throw new SpawnSupersededError();
     }
     this.storage.updateSandboxModalObjectId(reference);
+    await this.shutdown.recordPendingProviderHandle(generation, reference, {
+      kind: "finite",
+      expiresAtMs:
+        generation.createdAt + (timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000,
+      observedAtMs: generation.createdAt,
+      source: "conservative_start_bound",
+    });
   }
 
   private async handleRejectedStartupAllocation(

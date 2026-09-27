@@ -5,6 +5,7 @@ import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
+const PENDING_VM_REFERENCE = 'modal-vm-session:["session-1","sandbox-1"]';
 
 class MemoryStore implements ShutdownStore {
   value: ShutdownRecord | null = null;
@@ -171,6 +172,142 @@ function preparedEvent(
 
 describe("SandboxShutdownCoordinator", () => {
   beforeEach(() => vi.restoreAllMocks());
+
+  function pendingVmFixture(overrides: Partial<SandboxProvider> = {}) {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true as const,
+      imageId: "im-1",
+      sourceStopped: false,
+      sourceObjectId: "sb-real",
+    }));
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        name: "modal-vm",
+        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+        ...overrides,
+      })
+    );
+    reserveGeneration(f, GENERATION, "confirmed");
+    f.sandboxRow.modal_object_id = PENDING_VM_REFERENCE;
+    return { ...f, takeSnapshot, stopSandbox };
+  }
+
+  async function pendingVmReady(f: ReturnType<typeof pendingVmFixture>) {
+    await f.shutdown.recordPendingProviderHandle(GENERATION, PENDING_VM_REFERENCE, {
+      kind: "finite",
+      expiresAtMs: GENERATION.createdAt + 1_200_000,
+      observedAtMs: GENERATION.createdAt,
+      source: "conservative_start_bound",
+    });
+    f.shutdown.runtimeReady(1);
+    f.shutdown.generationReady({
+      type: "sandbox_generation_ready",
+      generation: GENERATION,
+      sandboxId: GENERATION.sandboxId,
+      timestamp: 1,
+    });
+  }
+
+  it("admits a ready VM after its create response is lost", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+
+    expect(f.store.value).toMatchObject({
+      providerObjectId: PENDING_VM_REFERENCE,
+      lifetimeKind: "finite",
+      lifetimeSource: "conservative_start_bound",
+      expiresAtMs: 1_201_000,
+      drainAtMs: 601_000,
+    });
+    expect(f.deps.alarm.schedule).toHaveBeenCalledWith(601_000);
+    expect(f.shutdown.admissionDecision()).toBe("ready");
+  });
+
+  it("saves a VM through its pending handle and retires the resolved source", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+
+    expect(f.takeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: PENDING_VM_REFERENCE })
+    );
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: { artifactId: "im-1", sourceObjectId: "sb-real" },
+    });
+    expect(f.stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "sb-real" })
+    );
+  });
+
+  it("stops the pending VM before discarding a failed capture", async () => {
+    const f = pendingVmFixture({
+      takeSnapshot: vi.fn(async () => ({ success: false as const, error: "capture failed" })),
+    });
+    await pendingVmReady(f);
+
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    expect(f.store.value?.phase).toBe("unknown");
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
+
+    await f.shutdown.recover("discard");
+    expect(f.stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: PENDING_VM_REFERENCE })
+    );
+    expect(f.deps.sandbox.discardSandboxState).toHaveBeenCalled();
+  });
+
+  it("retains the pending handle for a graceful archive during startup", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+    await f.shutdown.requestShutdown("archive");
+    expect(f.shutdown.isHolding()).toBe(true);
+
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    expect(f.takeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: PENDING_VM_REFERENCE })
+    );
+    expect(f.store.value?.phase).toBe("saved");
+  });
+
+  it("does not attach another generation's pending handle", async () => {
+    const f = pendingVmFixture();
+    await f.shutdown.recordPendingProviderHandle(
+      { ...GENERATION, createdAt: GENERATION.createdAt + 1 },
+      "other-handle",
+      {
+        kind: "finite",
+        expiresAtMs: 1_201_000,
+        observedAtMs: GENERATION.createdAt,
+        source: "conservative_start_bound",
+      }
+    );
+    expect(f.store.value).toMatchObject({ providerObjectId: null, lifetimeKind: "unknown" });
+  });
+
+  it("replaces a pending handle with a confirmed provider id", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+    f.sandboxRow.modal_object_id = "sb-confirmed";
+    await f.shutdown.recordProviderStartup(GENERATION, {
+      kind: "finite",
+      expiresAtMs: 1_301_000,
+      observedAtMs: GENERATION.createdAt,
+      source: "conservative_start_bound",
+    });
+    expect(f.store.value?.providerObjectId).toBe("sb-confirmed");
+    expect(f.store.value?.expiresAtMs).toBe(1_201_000);
+  });
 
   it("commits a VM image before retiring its retained source", async () => {
     const takeSnapshot = vi.fn(async () => ({
