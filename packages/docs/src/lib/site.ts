@@ -23,10 +23,14 @@ export function contentFilePath(pagePath: string): string {
   return `${site.repository.contentDirectory}/${pagePath.replace(/^\/+/, "")}`;
 }
 
-/** GitHub URL that opens the content file for editing on the published branch. */
+/**
+ * GitHub URL that opens the content file in the web editor on the published
+ * branch. `/edit/` is the editing route; `/blob/` only shows the file, and
+ * GitHub offers a fork to readers without write access from `/edit/` alone.
+ */
 export function editOnGitHubUrl(pagePath: string): string {
   const { owner, name, branch } = site.repository;
-  return `https://github.com/${owner}/${name}/blob/${branch}/${contentFilePath(pagePath)}`;
+  return `https://github.com/${owner}/${name}/edit/${branch}/${contentFilePath(pagePath)}`;
 }
 
 /** Pre-filled issue link for feedback about one page. */

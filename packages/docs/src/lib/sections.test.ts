@@ -1,8 +1,7 @@
 import type * as PageTree from "fumadocs-core/page-tree";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { primarySectionDirectories, sectionLinks } from "./sections";
-import { loadDocumentationSource } from "./source.test-support";
+import { sectionLinks } from "./sections";
 
 const page = (name: string, url: string): PageTree.Item => ({ type: "page", name, url });
 
@@ -42,23 +41,6 @@ describe("section links", () => {
   });
 });
 
-describe("primary sections in the published tree", () => {
-  let loaded: Awaited<ReturnType<typeof loadDocumentationSource>>;
-
-  beforeAll(async () => {
-    loaded = await loadDocumentationSource();
-  }, 60_000);
-
-  afterAll(async () => {
-    await loaded?.close();
-  });
-
-  it("resolves every primary section to a published page", () => {
-    const links = sectionLinks(loaded.source.getPageTree());
-
-    expect(links.map((link) => link.url.split("/")[1])).toEqual([...primarySectionDirectories]);
-    for (const link of links) {
-      expect(loaded.source.getPage(link.url.split("/").filter(Boolean))).toBeDefined();
-    }
-  });
-});
+// "resolves every primary section to a published page" lives in
+// content-inventory.test.ts: that suite already compiles the MDX corpus, and
+// loading it a second time here would parse every page twice per test run.

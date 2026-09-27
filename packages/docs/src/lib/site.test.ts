@@ -21,9 +21,9 @@ describe("repository links", () => {
     );
   });
 
-  it("builds an edit link with an explicit branch and the content directory", () => {
+  it("opens the GitHub editor, not the file view, on the published branch", () => {
     expect(editOnGitHubUrl("getting-started/quickstart.mdx")).toBe(
-      "https://github.com/ColeMurray/background-agents/blob/main/packages/docs/content/docs/getting-started/quickstart.mdx"
+      "https://github.com/ColeMurray/background-agents/edit/main/packages/docs/content/docs/getting-started/quickstart.mdx"
     );
   });
 
