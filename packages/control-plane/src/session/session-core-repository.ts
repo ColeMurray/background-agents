@@ -11,6 +11,8 @@ import {
 } from "./types";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 
+const sessionCostRowSchema = sessionRowSchema.pick({ total_cost: true });
+
 /** Data for upserting a session. */
 export interface UpsertSessionData {
   id: string;
@@ -194,8 +196,11 @@ export class SessionCoreRepository {
         cost,
         updatedAt
       )
-      .one() as { total_cost: number };
-    return row.total_cost;
+      .one();
+    const parsed = sessionCostRowSchema.safeParse(row);
+    if (!parsed.success)
+      throw new SessionStorageIntegrityError("Malformed persisted session cost row");
+    return parsed.data.total_cost;
   }
 
   setSessionBudget(maxCostUsd: number | null, exhausted: boolean, updatedAt: number): void {

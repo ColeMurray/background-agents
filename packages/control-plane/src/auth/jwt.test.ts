@@ -7,6 +7,10 @@ function decodeBase64url(value: string): string {
   return atob(padded);
 }
 
+function encodeBase64url(value: unknown): string {
+  return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 describe("mintJwt", () => {
   it("produces a valid 3-part base64url JWT", async () => {
     const token = await mintJwt({ sub: "test", iat: 1000 }, "secret");
@@ -73,4 +77,10 @@ describe("mintJwt", () => {
       expect(isJwtUnexpired(token, 1000)).toBe(false);
     }
   );
+
+  it("rejects a decoded JWT payload that is not an object", () => {
+    const token = `e30.${encodeBase64url(["not", "an", "object"])}.signature`;
+
+    expect(isJwtUnexpired(token, 1000)).toBe(false);
+  });
 });
