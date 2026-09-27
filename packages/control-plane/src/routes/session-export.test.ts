@@ -29,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
   list: vi.fn(),
   get: vi.fn(),
-  listRun: vi.fn(),
   runtimeFetch: vi.fn(),
   logger: {
     debug: vi.fn(),
@@ -49,7 +48,6 @@ vi.mock("../db/session-export-store", async (importOriginal) => ({
   SessionExportStore: vi.fn().mockImplementation(function () {
     return {
       get: mocks.get,
-      listRun: mocks.listRun,
       list: async (options: ListSessionsForExportOptions) => ({
         scope: options.scope ?? "sessions",
         ...(await mocks.list(options)),
@@ -146,23 +144,29 @@ describe("GET /sessions/:id/export", () => {
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=messages%2Cevents%2Cusage");
   });
 
-  it("exports the requested session's root family in order with compact format", async () => {
+  it.each(["runs", "sessions", ""])(
+    "rejects explicit scope=%s before looking up a session",
+    async (scope) => {
+      const response = await callExport({ scope }, { sessionId: "session-1" });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "scope is not supported" });
+      expect(mocks.get).not.toHaveBeenCalled();
+      expect(mocks.runtimeFetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("exports only the requested session with compact format", async () => {
     mocks.get.mockResolvedValue(sampleRow);
-    mocks.listRun
-      .mockResolvedValueOnce({ sessions: [{ ...sampleRow, id: "root-1" }], nextCursor: "next" })
-      .mockResolvedValueOnce({ sessions: [sampleRow], nextCursor: null });
     mocks.runtimeFetch.mockImplementation(async () => traceResponse({ events: [] }));
 
     const response = await callExport(
-      { scope: "runs", include: "events", format: "compact" },
+      { include: "events", format: "compact" },
       { sessionId: "session-1" }
     );
     expect(await readLines(response)).toMatchObject([
-      { type: "session", id: "root-1", events: [] },
       { type: "session", id: "session-1", events: [] },
     ]);
-    expect(mocks.listRun).toHaveBeenNthCalledWith(1, "root-1", null);
-    expect(mocks.listRun).toHaveBeenNthCalledWith(2, "root-1", "next");
+    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(1);
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
   });
 

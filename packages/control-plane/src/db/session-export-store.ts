@@ -124,11 +124,6 @@ export class SessionExportStore {
     return page.sessions[0] ?? null;
   }
 
-  /** Page a single root family without scanning or retaining unrelated runs. */
-  listRun(rootSessionId: string, cursor: RunsExportCursor | null): Promise<RunsPage> {
-    return this.listRuns({ scope: "runs", rootSessionId, cursor, limit: DEFAULT_EXPORT_LIMIT });
-  }
-
   list(
     options: ExportFilters & { scope: "runs"; cursor: RunsExportCursor | null }
   ): Promise<RunsPage>;
@@ -189,19 +184,11 @@ export class SessionExportStore {
   }
 
   private async listRuns(
-    options: ExportFilters & {
-      scope: "runs";
-      cursor: RunsExportCursor | null;
-      rootSessionId?: string;
-    }
+    options: ExportFilters & { scope: "runs"; cursor: RunsExportCursor | null }
   ): Promise<RunsPage> {
     const conditions: string[] = [];
     const bindings: (string | number)[] = [];
     const firstPage = options.cursor === null;
-    if (options.rootSessionId !== undefined) {
-      conditions.push("s.root_session_id = ?");
-      bindings.push(options.rootSessionId);
-    }
     if (options.cursor) {
       const cursor = options.cursor;
       conditions.push("s.rowid <= ?", "root.rowid <= ?");

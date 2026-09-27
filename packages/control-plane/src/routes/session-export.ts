@@ -1,5 +1,6 @@
 /**
  * GET /sessions/export and /sessions/:id/export - session-trace NDJSON.
+ * The single-session route never accepts scope; only the bulk route pages runs.
  *
  * Each line is a complete session, a session-scoped include error, a page
  * cursor, or a terminal stream error. `include` inlines a session's messages,
@@ -32,7 +33,6 @@ import {
   type ExportSelection,
   type SessionExportRow,
 } from "../db/session-export-store";
-import type { RunsExportCursor } from "../db/session-export-cursor";
 import { createLogger, type Logger } from "../logger";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
@@ -86,7 +86,6 @@ const exportQuerySchema = z.object({
 });
 
 const singleExportQuerySchema = exportQuerySchema.pick({
-  scope: true,
   include: true,
   format: true,
 });
@@ -345,6 +344,7 @@ async function handleSingleExport(
   params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
+  if (new URL(request.url).searchParams.has("scope")) return error("scope is not supported", 400);
   const query = parseQuery(request, singleExportQuerySchema);
   if (query instanceof Response) return query;
 
@@ -353,21 +353,9 @@ async function handleSingleExport(
   if (!selected) return error("Session not found", 404);
 
   const include = query.include ?? FULL_TRACE_INCLUDE;
-  const rootId = selected.rootSessionId ?? selected.id;
-  const scope = query.scope;
   const session = selected;
   async function* records(): AsyncGenerator<ExportRecord> {
-    if (scope !== "runs") {
-      yield session;
-      return;
-    }
-
-    let cursor: RunsExportCursor | null = null;
-    do {
-      const page = await store.listRun(rootId, cursor);
-      yield* page.sessions;
-      cursor = page.nextCursor;
-    } while (cursor);
+    yield session;
   }
 
   return streamExport(request, ctx, include, query.format, records());

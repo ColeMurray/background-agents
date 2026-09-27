@@ -43,10 +43,10 @@ describe("GET /sessions/export with include", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
-  it("downloads a full single-session trace or its root family without unrelated sessions", async () => {
+  it("downloads only the requested session and refuses run scope", async () => {
     const root = await initSession({ title: "root" });
     const child = await initSession({ title: "child" });
-    const other = await initSession({ title: "other" });
+    await initSession({ title: "other" });
     await env.DB.prepare(
       "UPDATE sessions SET parent_session_id = ?, root_session_id = ?, spawn_depth = 1 WHERE id = ?"
     )
@@ -68,14 +68,8 @@ describe("GET /sessions/export with include", () => {
     const run = await serviceFetch(
       `https://cp.test/sessions/${child.sessionName}/export?scope=runs`
     );
-    expect(run.status).toBe(200);
-    const runLines = new TextDecoder()
-      .decode(await run.arrayBuffer())
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as ExportLine);
-    expect(runLines.map(({ id }) => id)).toEqual([root.sessionName, child.sessionName]);
-    expect(runLines.some(({ id }) => id === other.sessionName)).toBe(false);
+    expect(run.status).toBe(400);
+    await expect(run.json()).resolves.toEqual({ error: "scope is not supported" });
 
     const missing = await serviceFetch("https://cp.test/sessions/missing/export");
     expect(missing.status).toBe(404);

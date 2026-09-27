@@ -31,18 +31,13 @@ describe("SessionExportStore integration", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
-  it("looks up exactly one export row and pages only the requested root family", async () => {
-    await insertSession("other", 100);
+  it("looks up exactly one export row", async () => {
     await insertSession("root", 200);
     await insertDescendant("child", "root", "root", 300, 1);
-    await insertDescendant("grandchild", "child", "root", 400, 2);
     const store = new SessionExportStore(sqlDatabase(env.DB));
 
     expect((await store.get("child"))?.rootSessionId).toBe("root");
     expect(await store.get("missing")).toBeNull();
-    const page = await store.listRun("root", null);
-    expect(page.sessions.map(({ id }) => id)).toEqual(["root", "child", "grandchild"]);
-    expect(page.nextCursor).toBeNull();
   });
 
   it("paginates timestamp ties without gaps or newly-created sessions", async () => {
