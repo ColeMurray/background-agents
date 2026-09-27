@@ -874,12 +874,26 @@ export class SandboxLifecycleManager
         // user-initiated respawn would.
         const retryNow = Math.max(Date.now(), now + 1);
         const retry = this.spawnGeneration(session, retryNow);
+        const firstAttemptReference = this.provider.pendingSandboxReference?.(
+          sessionId,
+          createConfig.sandboxId
+        );
+        const pendingCleanupHandle =
+          this.storage.getSandbox()?.modal_object_id === firstAttemptReference
+            ? firstAttemptReference
+            : undefined;
         generation = retry;
-        ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
-          preserveProviderObjectId: false,
-          shutdownPolicy: shutdownPolicyForLaunch("new", null),
-        }));
-        await this.recordPendingProviderReference(generation, sessionId, timeoutSeconds);
+        try {
+          ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
+            preserveProviderObjectId: false,
+            shutdownPolicy: shutdownPolicyForLaunch("new", null),
+          }));
+          await this.recordPendingProviderReference(generation, sessionId, timeoutSeconds);
+        } catch (error) {
+          if (pendingCleanupHandle)
+            await this.destroyLateProviderResult(pendingCleanupHandle, reserved.createdAt);
+          throw error;
+        }
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -2504,7 +2518,10 @@ export class SandboxLifecycleManager
     return true;
   }
 
-  private async destroyLateProviderResult(providerObjectId: string | undefined): Promise<boolean> {
+  private async destroyLateProviderResult(
+    providerObjectId: string | undefined,
+    generationCreatedAtMs?: number
+  ): Promise<boolean> {
     if (!providerObjectId || !this.canStopProviderSandbox()) return false;
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -2520,7 +2537,8 @@ export class SandboxLifecycleManager
           "startup_superseded",
           "destroy",
           controller.signal,
-          providerObjectId
+          providerObjectId,
+          generationCreatedAtMs
         ),
         timeout,
       ]);

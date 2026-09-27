@@ -53,6 +53,7 @@ import {
 } from "./test-helpers";
 import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
 import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
+import { formatPendingVmReference } from "../providers/pending-vm-reference";
 
 // Gate for the #1589 admission-race suite: hashToken passes through to the
 // real implementation, but a test can hold the next call open to keep the
@@ -3563,6 +3564,7 @@ describe("SandboxLifecycleManager", () => {
       imageBuildLookup?: ImageBuildLookup;
       session?: SessionRow;
       sessionRepositories?: SessionRepositoryInfo[];
+      shutdown?: SandboxShutdownLifecycle;
     }) {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(
@@ -3580,7 +3582,7 @@ describe("SandboxLifecycleManager", () => {
         createMockWebSocketManager(false),
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createUnmanagedShutdown(),
+        overrides?.shutdown ?? createUnmanagedShutdown(),
         createTestConfig(),
         overrides?.imageBuildLookup
       );
@@ -3762,6 +3764,41 @@ describe("SandboxLifecycleManager", () => {
         })
       );
       warnSpy.mockRestore();
+    });
+
+    it("cleans up the first VM if publishing the fallback's pending handle fails", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const shutdown = createUnmanagedShutdown();
+      shutdown.recordPendingProviderHandle
+        .mockResolvedValueOnce()
+        .mockRejectedValueOnce(new Error("failed to schedule pending lifetime"));
+      const createSandbox = vi.fn(async (_config: CreateSandboxConfig) => {
+        throw new PrebuiltImageUnavailableError("image expired");
+      });
+      const stopSandbox = vi.fn(async () => ({ success: true as const }));
+      const provider = createMockProvider({
+        createSandbox,
+        stopSandbox,
+        capabilities: { supportsExplicitStop: true },
+      });
+      provider.pendingSandboxReference = formatPendingVmReference;
+      const { manager } = createRepoSessionManager({ imageBuildLookup, provider, shutdown });
+
+      await manager.spawnSandbox();
+
+      const first = createSandbox.mock.calls[0][0];
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerObjectId: formatPendingVmReference(first.sessionId, first.sandboxId),
+          generationCreatedAtMs: first.generationCreatedAtMs,
+          reason: "startup_superseded",
+          intent: "destroy",
+        })
+      );
     });
 
     it("does not fail the image or retry from base on a transient provider error", async () => {
