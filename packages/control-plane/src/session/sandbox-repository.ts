@@ -385,11 +385,16 @@ export class SandboxRepository {
     access: ProviderResumeAccessData,
     expectedProviderObjectId?: string
   ): Promise<boolean> {
-    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
-      access.codeServer ? this.encrypt(access.codeServer.password) : null,
-      access.vnc ? this.encrypt(access.vnc.password) : null,
-      access.ttyd ? this.encrypt(access.ttyd.token) : null,
-    ]);
+    const [codeServerUrl, codeServerPassword, vncUrl, vncPassword, ttydUrl, ttydToken, tunnelUrls] =
+      await Promise.all([
+        access.codeServer ? this.encrypt(access.codeServer.url) : null,
+        access.codeServer ? this.encrypt(access.codeServer.password) : null,
+        access.vnc ? this.encrypt(access.vnc.url) : null,
+        access.vnc ? this.encrypt(access.vnc.password) : null,
+        access.ttyd?.url ? this.encrypt(access.ttyd.url) : null,
+        access.ttyd ? this.encrypt(access.ttyd.token) : null,
+        access.tunnelUrls ? this.encrypt(JSON.stringify(access.tunnelUrls)) : null,
+      ]);
     const result = this.sql.exec(
       `UPDATE sandbox SET
          modal_object_id = ?,
@@ -405,13 +410,13 @@ export class SandboxRepository {
           AND (status IN ('connecting', 'ready') OR (? IS NOT NULL AND status = 'spawning'))
           AND fenced = 0 AND (? IS NULL OR modal_object_id = ?)`,
       access.providerObjectId,
-      access.codeServer?.url ?? null,
+      codeServerUrl,
       codeServerPassword,
-      access.vnc?.url ?? null,
+      vncUrl,
       vncPassword,
-      access.ttyd?.url ?? null,
+      ttydUrl,
       ttydToken,
-      access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null,
+      tunnelUrls,
       generation.sandboxId,
       generation.createdAt,
       expectedProviderObjectId ?? null,
@@ -535,7 +540,7 @@ export class SandboxRepository {
     const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
       `UPDATE sandbox SET ${urlColumn} = ?, ${secretColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url,
+      await this.encrypt(url),
       await this.encrypt(secret)
     );
   }
@@ -567,10 +572,10 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxTunnelUrls(urls: Record<string, string>): void {
+  async updateSandboxTunnelUrls(urls: Record<string, string>): Promise<void> {
     this.sql.exec(
       `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      JSON.stringify(urls)
+      await this.encrypt(JSON.stringify(urls))
     );
   }
 

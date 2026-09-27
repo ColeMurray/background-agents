@@ -14,7 +14,6 @@ import type { SandboxDashboardSettings } from "./sandbox-access";
 import { resolveSandboxDashboardUrl } from "./sandbox-access";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import { resolvePublicSessionId } from "./public-session-id";
-import { safeParseTunnelUrls } from "./tunnel-urls";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SandboxStateReader } from "./sandbox-ports";
@@ -111,12 +110,12 @@ export class SessionSnapshotReader {
       totalCost: session.total_cost ?? 0,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,
-      codeServerUrl: sandbox?.code_server_url ?? null,
-      vncUrl: sandbox?.vnc_url ?? null,
-      tunnelUrls: sandbox?.tunnel_urls
-        ? safeParseTunnelUrls(sandbox.tunnel_urls, this.deps.log)
-        : null,
-      ttydUrl: sandbox?.ttyd_url ?? null,
+      // Access URLs may contain provider bearer tokens. They are served only
+      // through the encrypted, authorized sandbox-access endpoint.
+      codeServerUrl: null,
+      vncUrl: null,
+      tunnelUrls: null,
+      ttydUrl: null,
       sandboxDashboardUrl: resolveSandboxDashboardUrl(
         this.deps.sandboxDashboardSettings,
         sandbox?.modal_object_id

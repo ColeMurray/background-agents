@@ -33,5 +33,12 @@
     "node": "24",
     "user": "sandbox",
     "home": "/home/sandbox"
+  },
+  "boat": {
+    "os": "debian",
+    "base": "provider-default",
+    "node": "24",
+    "user": "user",
+    "home": "/home/user"
   }
 }

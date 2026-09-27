@@ -70,3 +70,21 @@ test("Every production Terraform variable reaches plan and apply", async () => {
   });
   assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
 });
+
+test("Boat deployment inputs reach Terraform plan and apply", () => {
+  const assignments = [
+    "TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}",
+    "TF_VAR_boat_build_api_key: ${{ secrets.BOAT_BUILD_API_KEY }}",
+    "TF_VAR_boat_sandbox_access_secret: ${{ secrets.BOAT_SANDBOX_ACCESS_SECRET }}",
+  ];
+  for (const assignment of assignments) assertInPlanAndApply(assignment, assignment);
+  const applyStart = workflow.indexOf("\n  apply:\n");
+  const jobs = {
+    plan: workflow.slice(workflow.indexOf("\n  plan:\n"), applyStart),
+    apply: workflow.slice(applyStart),
+  };
+  assert.match(workflow, /packages\/boat-infra\/\*\*/);
+  assert.match(jobs.apply, /Protect current Boat snapshot during rollout/);
+  assert.match(jobs.plan, /Protect current Boat snapshot during plan/);
+  assert.match(jobs.apply, /timeout-minutes: 90/);
+});

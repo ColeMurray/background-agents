@@ -186,6 +186,7 @@ describe("sandbox provider settings capabilities", () => {
     { provider: "vercel", resources: true, resourceLimits: false, timeout: true },
     { provider: "opencomputer", resources: false, resourceLimits: false, timeout: true },
     { provider: "e2b", resources: false, resourceLimits: false, timeout: true },
+    { provider: "boat", resources: true, resourceLimits: false, timeout: true },
   ])("resolves canonical capabilities for $provider", ({ provider, ...capabilities }) => {
     expect(sandboxSettingCapabilities(provider)).toEqual(capabilities);
     expect(sandboxSettingCapabilities(` ${provider.toUpperCase()} `)).toEqual(capabilities);
@@ -200,7 +201,7 @@ describe("sandbox provider settings capabilities", () => {
     expect(omitUnsupportedSandboxSettings(settings, provider)).toEqual(settings);
   });
 
-  it.each(["vercel", "daytona", "opencomputer", "e2b", "test-provider"])(
+  it.each(["vercel", "daytona", "opencomputer", "e2b", "boat", "test-provider"])(
     "ignores resource caps for %s",
     (provider) => {
       expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(false);
@@ -212,7 +213,7 @@ describe("sandbox provider settings capabilities", () => {
       ).toEqual({ terminalEnabled: true });
     }
   );
-  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+  it.each(["modal", "vercel", "boat"])("allows resource overrides for %s", (provider) => {
     expect(supportsConfigurableSandboxResources(provider)).toBe(true);
   });
 
@@ -226,6 +227,7 @@ describe("sandbox provider settings capabilities", () => {
   it("does not expose session timeout overrides for Daytona", () => {
     expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
     expect(supportsConfigurableSandboxTimeout("modal")).toBe(true);
+    expect(supportsConfigurableSandboxTimeout("boat")).toBe(true);
   });
 
   it("uses the explicit permissive fallback for unvalidated provider names", () => {

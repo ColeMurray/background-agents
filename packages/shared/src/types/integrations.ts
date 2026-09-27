@@ -316,6 +316,7 @@ export const SANDBOX_PROVIDER_NAMES = [
   "vercel",
   "opencomputer",
   "e2b",
+  "boat",
 ] as const;
 
 export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
@@ -332,6 +333,7 @@ const SANDBOX_SETTING_CAPABILITIES = {
   vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
   opencomputer: { resources: false, resourceLimits: false, timeout: true },
   e2b: { resources: false, resourceLimits: false, timeout: true },
+  boat: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
 } satisfies Record<
   SandboxProviderName,
   { resources: boolean; resourceLimits: boolean; timeout: boolean }

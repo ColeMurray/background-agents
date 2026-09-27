@@ -1,6 +1,6 @@
 import type { Logger } from "../logger";
 import { isSandboxAccessAvailable } from "../sandbox/lifecycle/decisions";
-import { decryptStoredAccessValue } from "./sandbox-access";
+import { decryptStoredAccessValue, decryptStoredAccessValueOrPlaintext } from "./sandbox-access";
 import type { SandboxStateReader } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
 import { resolveSandboxDashboardUrl, type SandboxDashboardSettings } from "./sandbox-access";
@@ -33,11 +33,16 @@ export class SessionAccessReader {
     }
 
     const encryptionKey = this.deps.repoSecretsEncryptionKey;
-    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
-      decryptStoredAccessValue(sandbox.code_server_password, encryptionKey, this.deps.log),
-      decryptStoredAccessValue(sandbox.vnc_password, encryptionKey, this.deps.log),
-      decryptStoredAccessValue(sandbox.ttyd_token, encryptionKey, this.deps.log),
-    ]);
+    const [codeServerUrl, codeServerPassword, vncUrl, vncPassword, ttydUrl, ttydToken, tunnelUrls] =
+      await Promise.all([
+        decryptStoredAccessValueOrPlaintext(sandbox.code_server_url, encryptionKey, this.deps.log),
+        decryptStoredAccessValue(sandbox.code_server_password, encryptionKey, this.deps.log),
+        decryptStoredAccessValueOrPlaintext(sandbox.vnc_url, encryptionKey, this.deps.log),
+        decryptStoredAccessValue(sandbox.vnc_password, encryptionKey, this.deps.log),
+        decryptStoredAccessValueOrPlaintext(sandbox.ttyd_url, encryptionKey, this.deps.log),
+        decryptStoredAccessValue(sandbox.ttyd_token, encryptionKey, this.deps.log),
+        decryptStoredAccessValueOrPlaintext(sandbox.tunnel_urls, encryptionKey, this.deps.log),
+      ]);
     const current = this.deps.sandboxRepository.getSandbox();
     if (
       !current ||
@@ -57,15 +62,12 @@ export class SessionAccessReader {
     return Response.json(
       {
         codeServer:
-          current.code_server_url && codeServerPassword
-            ? { url: current.code_server_url, password: codeServerPassword }
+          codeServerUrl && codeServerPassword
+            ? { url: codeServerUrl, password: codeServerPassword }
             : null,
-        vnc:
-          current.vnc_url && vncPassword ? { url: current.vnc_url, password: vncPassword } : null,
-        ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
-        tunnelUrls: current.tunnel_urls
-          ? safeParseTunnelUrls(current.tunnel_urls, this.deps.log)
-          : null,
+        vnc: vncUrl && vncPassword ? { url: vncUrl, password: vncPassword } : null,
+        ttyd: ttydUrl && ttydToken ? { url: ttydUrl, token: ttydToken } : null,
+        tunnelUrls: tunnelUrls ? safeParseTunnelUrls(tunnelUrls, this.deps.log) : null,
         sandboxDashboardUrl: resolveSandboxDashboardUrl(
           this.deps.sandboxDashboardSettings,
           current.modal_object_id

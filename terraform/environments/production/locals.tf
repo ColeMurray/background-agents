@@ -5,6 +5,7 @@ locals {
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
   use_e2b_backend          = var.sandbox_provider == "e2b"
+  use_boat_backend         = var.sandbox_provider == "boat"
 
   # A complete OAuth credential pair is the deployment's provider enablement
   # declaration. Runtime validation mirrors these plan-time invariants.

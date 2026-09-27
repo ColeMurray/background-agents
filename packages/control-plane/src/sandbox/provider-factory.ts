@@ -2,6 +2,7 @@ import { createModalClient } from "./client";
 import { createDaytonaRestClient, type DaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
+import { BOAT_SANDBOX_TYPES, createBoatRestClient, type BoatSandboxType } from "./boat-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
 import type { SandboxProvider } from "./provider";
 import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/daytona-provider";
@@ -12,6 +13,7 @@ import {
   type E2BSandboxProvider,
 } from "./providers/e2b-provider";
 import { createModalProvider, type ModalSandboxProvider } from "./providers/modal-provider";
+import { createBoatProvider, type BoatSandboxProvider } from "./providers/boat-provider";
 import {
   createOpenComputerProvider,
   type OpenComputerSandboxProvider,
@@ -21,7 +23,10 @@ import { createVercelProvider, type VercelSandboxProvider } from "./providers/ve
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
 
-function createModalProviderFromEnv(env: Env, backend: "modal" | "modal-vm"): ModalSandboxProvider {
+function createModalProviderFromEnv(
+  env: Env,
+  backend: "modal" | "modal-vm"
+): ModalSandboxProvider {
   if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
     throw new Error(
       `MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=${backend}`
@@ -168,12 +173,40 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
+function createBoatProviderFromEnv(env: Env): BoatSandboxProvider {
+  if (!env.BOAT_API_KEY || !env.BOAT_BASE_SNAPSHOT || !env.BOAT_SANDBOX_ACCESS_SECRET) {
+    throw new Error(
+      "BOAT_API_KEY, BOAT_BASE_SNAPSHOT, and BOAT_SANDBOX_ACCESS_SECRET are required when SANDBOX_PROVIDER=boat"
+    );
+  }
+  if (env.BOAT_SANDBOX_ACCESS_SECRET.length < 32) {
+    throw new Error("BOAT_SANDBOX_ACCESS_SECRET must contain at least 32 characters");
+  }
+  const rawType = env.BOAT_SANDBOX_TYPE?.trim().toLowerCase() || "default";
+  if (!(BOAT_SANDBOX_TYPES as readonly string[]).includes(rawType)) {
+    throw new Error("BOAT_SANDBOX_TYPE must be small, default, or large");
+  }
+  const client = createBoatRestClient({
+    apiKey: env.BOAT_API_KEY,
+    apiUrl: env.BOAT_API_URL,
+    org: env.BOAT_ORG,
+    baseSnapshot: env.BOAT_BASE_SNAPSHOT,
+  });
+  return createBoatProvider(client, {
+    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    sandboxAccessPasswordSecret: env.BOAT_SANDBOX_ACCESS_SECRET,
+    defaultType: rawType as BoatSandboxType,
+    deploymentName: env.DEPLOYMENT_NAME,
+  });
+}
+
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
   backend: "modal" | "modal-vm"
 ): ModalSandboxProvider;
+export function createSandboxProviderFromEnv(env: Env, backend: "boat"): BoatSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
@@ -204,6 +237,8 @@ export function createSandboxProviderFromEnv(
     case "modal":
     case "modal-vm":
       return createModalProviderFromEnv(env, backend);
+    case "boat":
+      return createBoatProviderFromEnv(env);
   }
 }
 

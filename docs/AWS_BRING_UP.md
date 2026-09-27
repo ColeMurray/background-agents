@@ -148,6 +148,12 @@ openssl rand -base64 32 | put SERVICE_AUTH_SECRET_LINEAR_BOT
 # replaces this entry through the `secret_names` variable.
 openssl rand -hex 32 | put MODAL_API_SECRET
 
+# For a Boat-backed Node deployment, retain both values across restarts and API
+# key rotations. Build/verify BOAT_BASE_SNAPSHOT separately, then put its name
+# and other non-secret Boat settings in the config map.
+printf 'boat_....' | put BOAT_API_KEY
+openssl rand -base64 32 | put BOAT_SANDBOX_ACCESS_SECRET
+
 # GitHub App, for repository access and git operations.
 printf '123456'   | put GITHUB_APP_ID
 printf '12345678' | put GITHUB_APP_INSTALLATION_ID

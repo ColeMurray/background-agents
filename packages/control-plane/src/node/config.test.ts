@@ -14,11 +14,17 @@ describe("readEnvConfig", () => {
     const config = readEnvConfig({
       ...REQUIRED,
       LOG_LEVEL: "debug",
-      SANDBOX_PROVIDER: "e2b",
+      SANDBOX_PROVIDER: "boat",
+      BOAT_API_URL: "https://boat.example/api/v1",
       PATH: "/usr/bin",
       DATA_DIR: "/var/lib/oi",
     });
-    expect(config).toEqual({ ...REQUIRED, LOG_LEVEL: "debug", SANDBOX_PROVIDER: "e2b" });
+    expect(config).toEqual({
+      ...REQUIRED,
+      LOG_LEVEL: "debug",
+      SANDBOX_PROVIDER: "boat",
+      BOAT_API_URL: "https://boat.example/api/v1",
+    });
   });
 
   it("treats an empty variable as unset", () => {
