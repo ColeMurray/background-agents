@@ -100,11 +100,23 @@ describe("applyMigrations", () => {
     );
     expect(
       db
+        .prepare("SELECT grant_kind FROM team_repository_grants WHERE team_id = 'team_default'")
+        .get()
+    ).toEqual({ grant_kind: "installation" });
+    expect(
+      db
         .prepare(
-          "SELECT grant_kind, webhook_home FROM team_repository_grants WHERE team_id = 'team_default'"
+          "SELECT name FROM pragma_table_info('team_repository_grants') WHERE name = 'webhook_home'"
         )
         .get()
-    ).toEqual({ grant_kind: "installation", webhook_home: 1 });
+    ).toBeUndefined();
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_team_grants_webhook_home', 'idx_team_grants_webhook_home_installation')"
+        )
+        .all()
+    ).toEqual([]);
     expect(() =>
       db
         .prepare(

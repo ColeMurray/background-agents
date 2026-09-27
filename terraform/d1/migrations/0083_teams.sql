@@ -40,7 +40,6 @@ CREATE TABLE team_repository_grants (
   repo_external_id INTEGER,
   repo_owner TEXT,
   repo_name TEXT,
-  webhook_home INTEGER NOT NULL DEFAULT 0 CHECK (webhook_home IN (0, 1)),
   created_at INTEGER NOT NULL,
   CHECK ((grant_kind = 'installation' AND repo_external_id IS NULL)
       OR (grant_kind = 'repository' AND repo_external_id IS NOT NULL
@@ -48,8 +47,6 @@ CREATE TABLE team_repository_grants (
 );
 CREATE UNIQUE INDEX idx_team_grants_installation ON team_repository_grants(team_id) WHERE grant_kind = 'installation';
 CREATE UNIQUE INDEX idx_team_grants_repository ON team_repository_grants(team_id, repo_external_id) WHERE grant_kind = 'repository';
-CREATE UNIQUE INDEX idx_team_grants_webhook_home ON team_repository_grants(repo_external_id) WHERE webhook_home = 1 AND grant_kind = 'repository';
-CREATE UNIQUE INDEX idx_team_grants_webhook_home_installation ON team_repository_grants(grant_kind) WHERE webhook_home = 1 AND grant_kind = 'installation';
 CREATE INDEX idx_team_grants_repo ON team_repository_grants(repo_external_id, team_id);
 
 CREATE TABLE team_channel_bindings (
@@ -90,8 +87,8 @@ SELECT 'team_default', u.id,
   'manual', 1790495974810
 FROM users u LEFT JOIN user_role_assignments ura ON ura.user_id = u.id;
 
-INSERT INTO team_repository_grants (id, team_id, grant_kind, webhook_home, created_at)
-VALUES ('tgrant_default_installation', 'team_default', 'installation', 1, 1790495974810);
+INSERT INTO team_repository_grants (id, team_id, grant_kind, created_at)
+VALUES ('tgrant_default_installation', 'team_default', 'installation', 1790495974810);
 
 ALTER TABLE sessions ADD COLUMN owner_team_id TEXT REFERENCES teams(id) ON DELETE RESTRICT;
 ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('team', 'workspace', 'private'));
