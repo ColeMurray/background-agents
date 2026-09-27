@@ -114,6 +114,8 @@ export interface SandboxShutdownLifecycle {
   recordProviderStartup(generation: SandboxGeneration, lifetime: SandboxLifetime): Promise<void>;
   /** Blocks generic destructive lifecycle work while shutdown or capture ownership is unresolved. */
   isHolding(): boolean;
+  /** Tells a runtime refused at reconnect to retry while a capture needs its sandbox. */
+  onRefusedReconnect(): "retry" | "exit";
   /** Owns termination; only unmanaged permits the legacy lifecycle fallback. */
   requestShutdown(
     reason: string,
@@ -1495,6 +1497,10 @@ export class SandboxLifecycleManager
     // checkpoint. The source may be retired by the provider or after the
     // control plane commits its capture receipt.
     if (this.provider.capabilities.snapshotRequiresShutdown) {
+      // Saving after every turn would stop the sandbox after every turn. It
+      // keeps running instead; inactivity, lifetime expiry and failures save
+      // it on the way down.
+      if (reason === "execution_complete") return;
       const ownership = await this.shutdown.requestShutdown(reason);
       if (ownership !== "unmanaged") return;
     }
@@ -1805,6 +1811,13 @@ export class SandboxLifecycleManager
       connected_clients: ctx.connectedClients,
       is_booting: isBooting,
     });
+    if (!isBooting && this.provider.capabilities.snapshotRequiresShutdown) {
+      // These providers save only on the way down, and a runtime that stopped
+      // heartbeating cannot take part in a graceful drain. The coordinator
+      // captures the source without it, then stops it.
+      const ownership = await this.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+      if (ownership !== "unmanaged") return "no_action";
+    }
     this.storage.updateSandboxStatus("stale");
     // A bridge that connected and then died mid-boot is a boot failure
     // like any other; the termination re-drives the queue, and the breaker
@@ -2177,13 +2190,39 @@ export class SandboxLifecycleManager
     return this.shutdown.snapshot();
   }
 
-  /** Session cancellation preserves its existing shutdown-before-status policy. */
-  cancelSandbox(): void {
-    if (!shouldStopSandboxOnSessionCancel(this.storage.getSandbox()?.status)) return;
+  /**
+   * Session cancellation preserves its existing shutdown-before-status policy,
+   * then destroys the sandbox at the provider: a runtime that is not connected
+   * never receives the shutdown, and a cancelled session never resumes a
+   * preserved one.
+   */
+  async cancelSandbox(): Promise<void> {
+    const sandbox = this.storage.getSandbox();
+    if (!shouldStopSandboxOnSessionCancel(sandbox?.status)) return;
     if (this.wsManager.getSandboxWebSocket()) {
       this.wsManager.sendToSandbox({ type: "shutdown" });
     }
     this.storage.updateSandboxStatus("stopped");
+    if (sandbox?.modal_object_id && this.canStopProviderSandbox()) {
+      await this.stopProviderSandboxSafely({
+        reason: "session_cancelled",
+        intent: "destroy",
+        providerObjectId: sandbox.modal_object_id,
+        failureMessage: "Provider stop failed after session cancel",
+      });
+    }
+  }
+
+  /**
+   * An archived session's sandbox is saved and stopped now: its runtime may
+   * hold work no save covers yet, and archive refuses its reconnects.
+   */
+  async preserveForArchive(): Promise<void> {
+    await this.shutdown.requestShutdown("session_archived");
+  }
+
+  onRefusedReconnect(): "retry" | "exit" {
+    return this.shutdown.onRefusedReconnect();
   }
 
   /** Update last activity timestamp. */

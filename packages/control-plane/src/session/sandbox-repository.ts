@@ -446,6 +446,24 @@ export class SandboxRepository {
   }
 
   /**
+   * Stop the generation and forget its snapshot and provider handle, so the
+   * next start is a fresh spawn: no restore from the snapshot and no resume of
+   * the provider object. Applies only while the row is still that generation.
+   */
+  discardSandboxState(generation: { sandboxId: string | null; createdAt: number }): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'stopped', snapshot_image_id = NULL,
+         snapshot_runtime_version = NULL, modal_object_id = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ?`,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /**
    * Set the runtime version describing the sandbox's current filesystem.
    *
    * Used when the control plane already knows it authoritatively — restoring a

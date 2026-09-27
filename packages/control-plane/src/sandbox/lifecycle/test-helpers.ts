@@ -454,6 +454,7 @@ export function createUnmanagedShutdown() {
     markRecoveryInvoked: vi.fn(),
     recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
     isHolding: vi.fn(() => false),
+    onRefusedReconnect: vi.fn(() => "exit" as const),
     requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "unmanaged"),
     captureCheckpoint: vi.fn<SandboxShutdownLifecycle["captureCheckpoint"]>(async () => ({
       outcome: "saved",
@@ -514,6 +515,7 @@ export function createCheckpointShutdown(
         : Promise.resolve("unmanaged"),
     isHolding: () => coordinator.isHolding(),
     admissionDecision: () => coordinator.admissionDecision(),
+    onRefusedReconnect: () => coordinator.onRefusedReconnect(),
   };
 }
 

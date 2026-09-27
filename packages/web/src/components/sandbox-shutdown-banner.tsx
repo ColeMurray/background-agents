@@ -14,9 +14,12 @@ const PHASE_MESSAGES: Record<
   string
 > = {
   saved: "Sandbox saved and stopped.",
-  failed: "Final sandbox save failed. Changes since the last verified save may be missing.",
-  unknown: "Final sandbox save could not be confirmed. Changes may be missing.",
+  failed: "The sandbox could not be saved.",
+  unknown: "The sandbox save could not be confirmed.",
 };
+
+const DISCARD_CONFIRMATION =
+  "Discard this sandbox and start a new one from the repository? Its unsaved changes will be lost. Queued messages will run in the new sandbox.";
 
 interface SandboxShutdownBannerProps {
   shutdown: SandboxShutdownState | null | undefined;
@@ -40,8 +43,12 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
   const recoveryActions = shutdown.availableRecoveryActions ?? [];
   const canRetry = recoveryActions.includes("retry");
   const canRestoreSaved = recoveryActions.includes("restore_saved");
+  const canDiscard = shutdown.discardAvailable === true;
   const canResumeQueuedWork = isContinuationPaused && canRestoreSaved;
   const detail = isError ? (shutdown.error ?? shutdown.reason) : undefined;
+  const lossWarning = shutdown.hasRecoveryPoint
+    ? "Changes since the last save may be lost."
+    : "Unsaved changes may be lost.";
 
   const recover = async (action: ShutdownRecoveryAction) => {
     if (!onRecover || pendingAction) return;
@@ -75,6 +82,7 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
       )}
     >
       <span className="font-medium">{PHASE_MESSAGES[phase]}</span>
+      {isError && <span className="ml-2">{lossWarning}</span>}
       {isContinuationPaused && (
         <span className="ml-2">
           The sandbox was interrupted. Partial state was saved. Queued work will wait until you
@@ -82,17 +90,17 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
         </span>
       )}
       {detail && <span className="ml-2">{detail}</span>}
-      {isError && recoveryActions.length === 0 && (
+      {isError && recoveryActions.length === 0 && !canDiscard && (
         <span className="ml-2">{sandboxPromptBlockReason(shutdown)}</span>
       )}
-      {phase === "failed" && canRetry && onRecover && (
+      {isError && canRetry && onRecover && (
         <button
           type="button"
           className="ml-3 underline disabled:cursor-not-allowed disabled:opacity-60"
           disabled={pendingAction !== null}
           onClick={() => void recover("retry")}
         >
-          {pendingAction === "retry" ? "Retrying shutdown…" : "Retry shutdown"}
+          {pendingAction === "retry" ? "Retrying save…" : "Retry save"}
         </button>
       )}
       {isError && canRestoreSaved && onRecover && (
@@ -111,6 +119,18 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
           }}
         >
           {pendingAction === "restore_saved" ? "Restoring saved state…" : "Restore saved state"}
+        </button>
+      )}
+      {isError && canDiscard && onRecover && (
+        <button
+          type="button"
+          className="ml-3 underline disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={pendingAction !== null}
+          onClick={() => {
+            if (window.confirm(DISCARD_CONFIRMATION)) void recover("discard");
+          }}
+        >
+          {pendingAction === "discard" ? "Discarding sandbox…" : "Discard and start fresh"}
         </button>
       )}
       {canResumeQueuedWork && onRecover && (

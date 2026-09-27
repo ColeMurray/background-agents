@@ -45,9 +45,13 @@ export interface SandboxReadiness {
   onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean;
 }
 
-/** Applies sandbox cancellation after session work has been cancelled. */
+/**
+ * Applies sandbox cancellation after session work has been cancelled, and
+ * saves the sandbox of a session that is archived.
+ */
 export interface SandboxCancellation {
-  cancelSandbox(): void;
+  cancelSandbox(): Promise<void>;
+  preserveForArchive(): Promise<void>;
 }
 
 /** Transport attachment reports facts without granting ordinary command readiness. */
@@ -56,6 +60,11 @@ export interface SandboxAttachment {
   isProviderStartupPending(): boolean;
   onSandboxConnected(): void;
   onSandboxSocketAttached(generation: SandboxGeneration): void;
+  /**
+   * A runtime refused at reconnect normally exits, which ends its sandbox.
+   * "retry" keeps it up because a capture still needs that sandbox.
+   */
+  onRefusedReconnect(): "retry" | "exit";
 }
 
 /** The lifecycle result consumed by the existing alarm coordinator. */

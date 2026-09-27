@@ -219,11 +219,9 @@ describe("SandboxShutdownBanner", () => {
         onRecover={onRecover}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
     expect(onRecover).toHaveBeenCalledWith("retry");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Retry shutdown" })).toBeEnabled()
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
     expect(confirm).toHaveBeenCalledWith(
       "Restore the last saved sandbox state? Changes since that save may be lost."
@@ -232,6 +230,62 @@ describe("SandboxShutdownBanner", () => {
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
     expect(onRecover).toHaveBeenCalledWith("restore_saved");
+  });
+
+  it("says unsaved changes may be lost when no save exists, and offers retry and discard", async () => {
+    const onRecover = acceptedRecovery();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <Banner
+        shutdown={{
+          phase: "unknown",
+          expiresAtMs: null,
+          drainAtMs: null,
+          error: "The provider did not confirm the save.",
+          availableRecoveryActions: ["retry"],
+          discardAvailable: true,
+        }}
+        onRecover={onRecover}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("The sandbox save could not be confirmed.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Unsaved changes may be lost.");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("since the last save");
+    expect(screen.queryByRole("button", { name: "Restore saved state" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard and start fresh" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("unsaved changes will be lost"));
+    expect(onRecover).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Discard and start fresh" }));
+    expect(onRecover).toHaveBeenCalledWith("discard");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+    expect(onRecover).toHaveBeenCalledWith("retry");
+  });
+
+  it("warns about changes since the last save when a recovery point exists", () => {
+    render(
+      <Banner
+        shutdown={{
+          phase: "failed",
+          expiresAtMs: null,
+          drainAtMs: null,
+          hasRecoveryPoint: true,
+          availableRecoveryActions: ["restore_saved"],
+          discardAvailable: true,
+        }}
+        onRecover={acceptedRecovery()}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("The sandbox could not be saved.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Changes since the last save may be lost.");
+    expect(screen.queryByRole("button", { name: "Retry save" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore saved state" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discard and start fresh" })).toBeInTheDocument();
   });
 
   it.each([undefined, [] as ShutdownRecoveryAction[]])(
@@ -250,8 +304,11 @@ describe("SandboxShutdownBanner", () => {
         />
       );
 
-      expect(screen.queryByRole("button", { name: "Retry shutdown" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry save" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Restore saved state" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Discard and start fresh" })
+      ).not.toBeInTheDocument();
       expect(screen.getByRole("alert")).toHaveTextContent("start a new session");
     }
   );
@@ -276,10 +333,10 @@ describe("SandboxShutdownBanner", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
-    expect(screen.getByRole("button", { name: "Retrying shutdown…" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+    expect(screen.getByRole("button", { name: "Retrying save…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Restore saved state" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Retrying shutdown…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retrying save…" }));
     expect(onRecover).toHaveBeenCalledOnce();
 
     settle({ ok: false, reason: "timeout" });
@@ -307,10 +364,8 @@ describe("SandboxShutdownBanner", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Retry shutdown" })).toBeEnabled()
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled());
     expect(screen.getByText(/Recovery was not confirmed/)).toBeInTheDocument();
   });
 
@@ -331,7 +386,7 @@ describe("SandboxShutdownBanner", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
     expect(await screen.findByText("Recovery is no longer eligible")).toBeInTheDocument();
     expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
   });

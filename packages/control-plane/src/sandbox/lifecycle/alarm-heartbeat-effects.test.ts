@@ -64,6 +64,78 @@ describe("heartbeat alarm effects", () => {
     }
   );
 
+  it("saves a stale sandbox whose snapshots stop it without its runtime, then stops it", async () => {
+    const sandbox = createMockSandbox({ status: "ready", last_heartbeat: Date.now() - 100_000 });
+    const takeSnapshot = vi.fn(async () => ({
+      success: true,
+      imageId: "heartbeat-image",
+      sourceStopped: false,
+    }));
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+      })
+    );
+
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+
+    expect(takeSnapshot).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "heartbeat_timeout" })
+    );
+    expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "heartbeat_timeout", intent: "destroy" })
+    );
+    expect(takeSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      stopSandbox.mock.invocationCallOrder[0]
+    );
+    // No graceful drain: the runtime is never asked to prepare or shut down.
+    expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+    expect(sandbox.snapshot_image_id).toBe("heartbeat-image");
+    expect(sandbox.status).toBe("stopped");
+    expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stale" });
+    expect(h.broadcaster.messages).toContainEqual(
+      expect.objectContaining({
+        type: "sandbox_preservation",
+        preservation: expect.objectContaining({ phase: "saved", continuationPaused: true }),
+      })
+    );
+  });
+
+  it("keeps a stale sandbox for another attempt when saving it without its runtime fails", async () => {
+    const sandbox = createMockSandbox({ status: "ready", last_heartbeat: Date.now() - 100_000 });
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true, snapshotRequiresShutdown: true },
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("guest unresponsive");
+        }),
+        stopSandbox,
+      })
+    );
+
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("stale");
+    expect(h.broadcaster.messages).toContainEqual(
+      expect.objectContaining({
+        type: "sandbox_preservation",
+        preservation: expect.objectContaining({
+          phase: "unknown",
+          availableRecoveryActions: ["retry"],
+          discardAvailable: true,
+        }),
+      })
+    );
+    expect(h.manager.onRefusedReconnect()).toBe("retry");
+  });
+
   it("does not await a heartbeat snapshot when the provider cannot explicitly stop", async () => {
     const sandbox = createMockSandbox({ last_heartbeat: Date.now() - 100_000 });
     let releaseSnapshot!: (result: SnapshotResult) => void;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   sandboxPromptBlockReason,
   sandboxShutdownSchema,
@@ -18,6 +19,25 @@ describe("sandboxShutdownSchema", () => {
     expect(
       sandboxShutdownSchema.safeParse({ ...base, availableRecoveryActions: ["resume"] }).success
     ).toBe(false);
+  });
+
+  it("carries discard beside the action list so clients that predate it still parse the state", () => {
+    const projected = {
+      phase: "unknown",
+      expiresAtMs: null,
+      drainAtMs: null,
+      availableRecoveryActions: ["retry"],
+      discardAvailable: true,
+    };
+    const predatingDiscard = sandboxShutdownSchema.omit({ discardAvailable: true }).extend({
+      availableRecoveryActions: z.array(z.enum(["retry", "restore_saved"])).optional(),
+    });
+
+    expect(predatingDiscard.safeParse(projected).success).toBe(true);
+    expect(sandboxShutdownSchema.parse(projected)).toMatchObject({
+      availableRecoveryActions: ["retry"],
+      discardAvailable: true,
+    });
   });
 });
 
@@ -39,6 +59,9 @@ describe("sandboxPromptBlockReason", () => {
     expect(
       sandboxPromptBlockReason({ ...state("failed"), availableRecoveryActions: ["retry"] })
     ).toContain("Use an available recovery action");
+    expect(sandboxPromptBlockReason({ ...state("unknown"), discardAvailable: true })).toContain(
+      "Use an available recovery action"
+    );
   });
 
   it.each(["running", "draining", "capturing", "saved", "restoring"] as const)(
