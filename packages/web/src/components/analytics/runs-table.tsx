@@ -33,7 +33,9 @@ export function AnalyticsRunsTable({ runs, loading }: RunsTableProps) {
     <div className="rounded-md border border-border-muted bg-card">
       <div className="border-b border-border-muted px-5 py-4">
         <h2 className="text-lg font-semibold text-foreground">Runs</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Root sessions and their descendants.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Top 20 runs by cost. Root sessions and their descendants.
+        </p>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full border-collapse text-sm">
@@ -42,7 +44,9 @@ export function AnalyticsRunsTable({ runs, loading }: RunsTableProps) {
               <th scope="col" className="px-5 py-3">
                 Title
               </th>
-              {(["Sessions", "Depth", "Cost", "PRs", "Tokens", "Started"] as const).map((label) => (
+              {(
+                ["Sessions", "Depth", "Cost", "PRs", "Input + output tokens", "Started"] as const
+              ).map((label) => (
                 <th key={label} scope="col" className="px-5 py-3 text-right">
                   {label}
                 </th>

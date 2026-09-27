@@ -22,9 +22,9 @@ const run: SessionRun = {
   totalPrs: 3,
   inputTokens: 1200,
   outputTokens: 345,
-  reasoningTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
+  reasoningTokens: 200,
+  cacheReadTokens: 400,
+  cacheWriteTokens: 50,
   createdAt: Date.UTC(2026, 8, 27, 10),
   updatedAt: Date.UTC(2026, 8, 27, 11),
   userId: null,
@@ -46,6 +46,7 @@ it("renders runs in server order with root links, token totals and start times",
   );
 
   const rows = screen.getAllByRole("row").slice(1);
+  expect(screen.getByRole("columnheader", { name: "Input + output tokens" })).toBeInTheDocument();
   expect(rows).toHaveLength(2);
   expect(within(rows[0]).getByRole("link", { name: "Fix a bug" })).toHaveAttribute(
     "href",
@@ -61,6 +62,14 @@ it("renders runs in server order with root links, token totals and start times",
     "href",
     "/session/root-2"
   );
+});
+
+it("describes the dashboard runs as the top 20 by cost", () => {
+  render(<AnalyticsRunsTable runs={[run]} loading={false} />);
+
+  expect(
+    screen.getByText("Top 20 runs by cost. Root sessions and their descendants.")
+  ).toBeInTheDocument();
 });
 
 it("renders an empty panel and a loading placeholder", () => {
