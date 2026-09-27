@@ -26,16 +26,20 @@ describe("analytics summary API route", () => {
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards only the allowed summary query params", async () => {
+  it("forwards days and scope but not unrelated query params", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ totalSessions: 5 }, { status: 200 })
     );
 
     const response = await GET(
-      new Request("http://localhost/api/analytics/summary?debug=true&days=14") as never
+      new Request(
+        "http://localhost/api/analytics/summary?debug=true&days=14&scope=automation"
+      ) as never
     );
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/summary?days=14");
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/analytics/summary?days=14&scope=automation"
+    );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ totalSessions: 5 });
   });
