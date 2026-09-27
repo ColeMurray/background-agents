@@ -215,26 +215,8 @@ describe("analytics utilities", () => {
   });
 
   it("computes cost per merged PR from the PR-session cost basis", () => {
-    const base = {
-      funnel: { created: 4, open: 1, draft: 0, merged: 2, closed: 1 },
-      prSessionCost: 3,
-      mergedInWindow: 2,
-      avgTimeToMergeMs: null,
-      openInventory: { total: 1, avgAgeMs: null },
-      timeseries: [],
-      repos: [],
-      sources: [],
-      models: [],
-      harnesses: [],
-    };
-
-    expect(getCostPerMergedPullRequest(base)).toBe(1.5);
-    expect(
-      getCostPerMergedPullRequest({
-        ...base,
-        funnel: { ...base.funnel, merged: 0 },
-      })
-    ).toBeNull();
+    expect(getCostPerMergedPullRequest(3, 2)).toBe(1.5);
+    expect(getCostPerMergedPullRequest(3, 0)).toBeNull();
   });
 
   it("formats day-scale durations with days and hours", () => {

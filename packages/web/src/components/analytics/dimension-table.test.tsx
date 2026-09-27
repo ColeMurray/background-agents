@@ -94,3 +94,22 @@ it("renders automation completion and PR columns without subscription billing", 
     screen.queryByText("Sessions billed to a subscription report $0.")
   ).not.toBeInTheDocument();
 });
+
+it("shows distinct keys for automations with the same display name", () => {
+  render(
+    <AnalyticsDimensionTable
+      {...props}
+      title="Automations"
+      keyLabel="Automation"
+      columns={["completionRate", "cost", "prs"]}
+      entries={[
+        { ...entry, key: "automation-1", displayName: "Daily" },
+        { ...entry, key: "automation-2", displayName: "Daily" },
+      ]}
+      loading={false}
+    />
+  );
+
+  expect(screen.getByRole("row", { name: /automation-1/ })).toBeInTheDocument();
+  expect(screen.getByRole("row", { name: /automation-2/ })).toBeInTheDocument();
+});

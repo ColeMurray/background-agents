@@ -40,3 +40,25 @@ it("renders an empty panel and a loading placeholder", () => {
   ).not.toBeInTheDocument();
   expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
 });
+
+it("shows distinct model keys when display names collide", () => {
+  render(
+    <AnalyticsPullRequestCostTable
+      title="Cost by Model"
+      entries={[
+        { key: "opencode/glm-5.1", displayName: "GLM 5.1", created: 1, merged: 1, sessionCost: 2 },
+        {
+          key: "opencode-go/glm-5.1",
+          displayName: "GLM 5.1",
+          created: 1,
+          merged: 1,
+          sessionCost: 3,
+        },
+      ]}
+      loading={false}
+    />
+  );
+
+  expect(screen.getByRole("row", { name: /opencode\/glm-5.1/ })).toBeInTheDocument();
+  expect(screen.getByRole("row", { name: /opencode-go\/glm-5.1/ })).toBeInTheDocument();
+});

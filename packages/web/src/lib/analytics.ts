@@ -2,7 +2,6 @@ import type {
   AnalyticsBreakdownEntry,
   AnalyticsDays,
   AnalyticsPullRequestFunnel,
-  AnalyticsPullRequestsResponse,
   AnalyticsScope,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
@@ -98,6 +97,23 @@ export function formatCompletionRate(entry: AnalyticsBreakdownEntry): string {
   return `${Math.round(getCompletionRate(entry) * 100)}%`;
 }
 
+export function getAnalyticsDimensionLabels(
+  entries: readonly Pick<AnalyticsBreakdownEntry, "key" | "displayName">[]
+): Map<string, string> {
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    const name = entry.displayName ?? entry.key;
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+
+  return new Map<string, string>(
+    entries.map((entry) => {
+      const name = entry.displayName ?? entry.key;
+      return [entry.key, (nameCounts.get(name) ?? 0) > 1 ? entry.key : name];
+    })
+  );
+}
+
 /**
  * Merged ÷ resolved (merged + closed-without-merge). PR-scoped by design:
  * still-open PRs are not in the denominator (they haven't failed, they just
@@ -122,12 +138,8 @@ export function formatPullRequestAcceptanceRate(
  * platform-wide cost, which would charge non-PR work (Q&A, debugging,
  * research) against PR output. Null until something has merged.
  */
-export function getCostPerMergedPullRequest(
-  pullRequests: AnalyticsPullRequestsResponse
-): number | null {
-  return pullRequests.funnel.merged > 0
-    ? pullRequests.prSessionCost / pullRequests.funnel.merged
-    : null;
+export function getCostPerMergedPullRequest(sessionCost: number, merged: number): number | null {
+  return merged > 0 ? sessionCost / merged : null;
 }
 
 /** Duration formatter for day-scale spans (merge cycle time, open-PR age). */

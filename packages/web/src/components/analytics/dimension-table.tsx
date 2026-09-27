@@ -2,7 +2,12 @@ import {
   getCacheHitRatio,
   type AnalyticsBreakdownResponse,
 } from "@open-inspect/shared/types/analytics";
-import { formatAnalyticsCount, formatAnalyticsRatio, formatCompletionRate } from "@/lib/analytics";
+import {
+  formatAnalyticsCount,
+  formatAnalyticsRatio,
+  formatCompletionRate,
+  getAnalyticsDimensionLabels,
+} from "@/lib/analytics";
 import { formatSessionCost } from "@/lib/session-cost";
 
 type DimensionColumn = "subscriptionSessions" | "cost" | "cacheHitRatio" | "completionRate" | "prs";
@@ -53,6 +58,8 @@ export function AnalyticsDimensionTable({
     );
   }
 
+  const labels = getAnalyticsDimensionLabels(entries);
+
   return (
     <div className="rounded-md border border-border-muted bg-card">
       <div className="border-b border-border-muted px-5 py-4">
@@ -95,7 +102,7 @@ export function AnalyticsDimensionTable({
                   className="border-b border-border-muted last:border-b-0 hover:bg-muted/50"
                 >
                   <td className="px-5 py-4 font-medium text-foreground">
-                    {entry.displayName ?? entry.key}
+                    {labels.get(entry.key) ?? entry.key}
                   </td>
                   <td className="px-5 py-4 text-right text-foreground">
                     {formatAnalyticsCount(entry.sessions)}

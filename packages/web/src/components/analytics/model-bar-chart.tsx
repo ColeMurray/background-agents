@@ -4,7 +4,11 @@ import {
   getCacheHitRatio,
   type AnalyticsBreakdownResponse,
 } from "@open-inspect/shared/types/analytics";
-import { formatAnalyticsCount, formatAnalyticsRatio } from "@/lib/analytics";
+import {
+  formatAnalyticsCount,
+  formatAnalyticsRatio,
+  getAnalyticsDimensionLabels,
+} from "@/lib/analytics";
 import { formatSessionCost } from "@/lib/session-cost";
 
 interface ModelBarChartProps {
@@ -67,17 +71,13 @@ export function AnalyticsModelBarChart({ entries, loading }: ModelBarChartProps)
     );
   }
 
-  const nameCounts = new Map<string, number>();
-  for (const entry of entries) {
-    const name = entry.displayName ?? entry.key;
-    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
-  }
+  const labels = getAnalyticsDimensionLabels(entries);
   const chartData: ModelChartRow[] = [...entries]
     .sort((left, right) => right.cost - left.cost)
     .map((entry) => {
       const name = entry.displayName ?? entry.key;
       return {
-        model: (nameCounts.get(name) ?? 0) > 1 ? entry.key : name,
+        model: labels.get(entry.key) ?? entry.key,
         name,
         key: entry.key,
         sessions: entry.sessions,
