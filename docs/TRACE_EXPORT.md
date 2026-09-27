@@ -2,17 +2,16 @@
 
 Trace export is pull-only NDJSON. Each line is an independent JSON object described by
 [`trace-export.v2.schema.json`](schemas/trace-export.v2.schema.json). The control plane does not
-send exports to a vendor. Use [the reference exporter](../examples/trace-export/README.md) to page
-into files and load a warehouse table of runs.
+send exports to a vendor. This release supports manual downloads, not scheduled warehouse loading.
 
 ## Access and routes
 
 Both routes require an active user with `sessions.export` (Owners and Administrators by default, or
 a custom role granting it). `sessions.read` alone is insufficient; the bot services cannot export.
-Operator scripts use the web app's `/api/sessions/export` proxy with an authenticated session
-cookie; the web app holds its service secret and signs the control-plane request server-side. The
+Manual bulk downloads use the web app's `/api/sessions/export` proxy with an authenticated browser
+session; the web app holds its service secret and signs the control-plane request server-side. The
 web app also proxies single-session downloads at `/api/sessions/:id/export`. There is no bearer API
-token path for export. Treat the exported files as sensitive session data.
+token path for export. Treat downloaded files as sensitive session data.
 
 | Route                      | Behavior                                                                                                                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -29,6 +28,22 @@ Bulk query parameters:
 | `format`                        | `full` (default) or `compact` (changes included event output only).                                                                                              |
 | `limit`                         | Sessions per page: 1–500 without `include` (default 100); 1–5 with any `include` (default 5). Counts session lines, not families.                                |
 | `cursor`                        | Opaque `nextCursor` from the prior page's cursor line. Keep the same scope, window, include and format on every page. Invalid or wrong-scope cursors return 400. |
+
+## Manual download
+
+For one session, open its page in the web app and select **Download trace**. For a bulk window, sign
+in as an operator with `sessions.export`, then open a URL on the **web app** origin such as:
+
+```text
+https://your-web-app.example/api/sessions/export?scope=runs&include=messages%2Cevents%2Cusage&format=compact&createdAfter=1767225600000&createdBefore=1767311999999&limit=5
+```
+
+Save the NDJSON response locally. If its last line has `type: "cursor"`, append its URL-encoded
+`nextCursor` as the `cursor` parameter and save the next page; repeat until a page has no cursor
+line. Keep the same scope, date window, include and format on each request. Inspect every page for
+`session_error` or `error` lines: these are not successful session exports. Re-export the window if
+the index changes during pagination. No browser cookie or web service secret needs to be copied into
+a CLI. Unattended export requires a separate machine credential, which is not available yet.
 
 The response has `Content-Type: application/x-ndjson` and `Cache-Control: private, no-store`. Lines
 are `schemaVersion: 2` and one of:
@@ -61,9 +76,9 @@ Pagination is best-effort, **not a database snapshot**. On the first page each s
 `MAX(rowid)` and fences later inserts; a late insert is normally excluded. If the highest-rowid
 session is deleted, SQLite can reuse its rowid and a rare late insert may slip through. Deletions
 are not fenced: deleting a root mid-export re-roots children, so a run can be incomplete in that
-export. Re-export the window to recover it. Treat exports as at-least-once per window, and
-de-duplicate on session `id` when loading overlapping or rerun windows. Orphaned children whose root
-row no longer exists are excluded by the run join.
+export. Re-export the window to recover it. Concurrent mutations can cause omissions or duplicates;
+de-duplicate on session `id` when combining overlapping or rerun windows. Orphaned children whose
+root row no longer exists are excluded by the run join.
 
 ## Compact events and known gaps
 

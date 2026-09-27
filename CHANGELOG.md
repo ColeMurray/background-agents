@@ -13,8 +13,8 @@ the paginated bulk export.
 
 ### Added
 
-The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema, a resumable Node exporter
-and PostgreSQL, BigQuery and Snowflake run-loading examples.
+The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema and instructions for
+manually downloading paginated runs through the web app.
 
 ## September 26, 2026
 
