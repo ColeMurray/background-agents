@@ -61,22 +61,39 @@ representation of every page.
    page names a screen the reader has to find.
 5. Add or update `relatedCode` and `lastReviewed`.
 6. Run the package checks above.
-7. Use the page's **Give feedback** or **Edit on GitHub** links for follow-up corrections.
+7. Use the page's **Give feedback** or **Edit on GitHub** links for follow-up corrections. The edit
+   link opens GitHub's editor on the published branch and offers a fork to anyone without write
+   access.
 
 ## Production deployment
 
 Docs deployment is manual. After `CI (TypeScript)` is green on `main`, run the `Deploy Docs`
 workflow from the Actions tab (or `gh workflow run deploy-docs.yml --ref main`). It only runs for
 `main` and deploys the commit at the tip of `main` to a dedicated Vercel project. Merging docs
-changes does not publish them on its own. The repository must define:
+changes does not publish them on its own, and a run that is missing credentials or targets another
+branch fails instead of reporting a deployment it did not make.
 
-- `VERCEL_API_TOKEN`
-- `VERCEL_TEAM_ID`
-- `VERCEL_DOCS_PROJECT_ID`
+### One-time setup
 
-Configure the Vercel project with `packages/docs` as its root directory and attach
-`docs.backgroundagents.dev` as its production domain. Do not merge the marketing-site links until
-the hostname resolves and serves the production docs deployment.
+The Vercel project is Terraform-managed, like the web app's. Set in
+`terraform/environments/production`:
+
+```hcl
+docs_site_enabled  = true
+docs_custom_domain = "docs.backgroundagents.dev"
+```
+
+Apply, then publish the project id so the workflow can find it:
+
+```bash
+gh variable set VERCEL_DOCS_PROJECT_ID --body "$(terraform output -raw docs_site_project_id)"
+```
+
+The workflow also needs `VERCEL_API_TOKEN` (a secret) and `VERCEL_TEAM_ID` (a variable or secret,
+shared with `Deploy Web`). The project deliberately has no git integration, so nothing deploys it
+except this workflow — do not connect the repository to it from the Vercel dashboard, which would
+enable deploy-on-push and bypass the gate above. Do not merge the marketing-site links until the
+hostname resolves and serves the production docs deployment.
 
 After deployment, verify:
 

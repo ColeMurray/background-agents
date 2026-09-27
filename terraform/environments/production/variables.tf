@@ -831,3 +831,15 @@ variable "unsafe_allow_all_users" {
   type        = bool
   default     = false
 }
+
+variable "docs_site_enabled" {
+  description = "Provision the public documentation site's Vercel project (packages/docs). Requires vercel_api_token and vercel_team_id. Deployment stays manual: the project has no git integration, so only the Deploy Docs workflow publishes it."
+  type        = bool
+  default     = false
+}
+
+variable "docs_custom_domain" {
+  description = "Production hostname for the documentation site, e.g. 'docs.example.com'. Leave unset to serve the project's vercel.app URL only. Requires docs_site_enabled = true."
+  type        = string
+  default     = null
+}
