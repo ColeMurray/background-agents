@@ -186,7 +186,9 @@ describe("sandbox shutdown safety", () => {
       expect(h.shutdown.admissionDecision()).toBe("held");
       await expect(h.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
       expect(h.stopSandbox).not.toHaveBeenCalled();
-      await expect(h.shutdown.recover("retry")).rejects.toThrow("cannot be retried safely");
+      // An ordinary checkpoint is not a shutdown: there is no source capture to repeat.
+      expect(h.shutdown.snapshot()?.availableRecoveryActions).not.toContain("retry");
+      await expect(h.shutdown.recover("retry")).rejects.toThrow("Shutdown recovery is unavailable");
       await expect(h.shutdown.captureCheckpoint(GENERATION, "execution_complete")).resolves.toEqual(
         { outcome: "held" }
       );

@@ -22,6 +22,7 @@ import {
   PrebuiltImageActivationPendingError,
   PrebuiltImageUnavailableError,
   SandboxProviderError,
+  SandboxLaunchRejectedError,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -356,7 +357,10 @@ describe("final graceful shutdown lifecycle integration", () => {
       receipt: { artifactId: "saved-image" },
     });
     expect(restoreFromSnapshot).toHaveBeenCalledOnce();
-    expect(saved.shutdown.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
+    expect(saved.shutdown.snapshot()).toMatchObject({
+      availableRecoveryActions: ["restore_saved"],
+      discardAvailable: true,
+    });
     await saved.shutdown.recover("restore_saved");
     await f.manager.spawnSandbox();
     expect(restoreFromSnapshot).toHaveBeenCalledTimes(2);
@@ -385,24 +389,46 @@ describe("final graceful shutdown lifecycle integration", () => {
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("routes destructive ordinary snapshots through confirmed graceful shutdown", async () => {
-    const f = fixture(createMockProvider({ capabilities: { snapshotStopsSandbox: true } }));
+  it("saves an archived session's sandbox through graceful shutdown", async () => {
+    const f = fixture(
+      createMockProvider({ capabilities: { snapshotRequiresShutdown: true } }),
+      createMockSandbox({ status: "ready" })
+    );
+    await f.manager.preserveForArchive();
+    expect(f.shutdown.requestShutdown).toHaveBeenCalledExactlyOnceWith("session_archived");
+  });
+
+  it("keeps a sandbox whose snapshots stop it running after a finished turn", async () => {
+    const sandbox = createMockSandbox({ status: "ready" });
+    const f = fixture(
+      createMockProvider({ capabilities: { snapshotRequiresShutdown: true } }),
+      sandbox
+    );
     await f.manager.triggerSnapshot("execution_complete");
-    expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("execution_complete");
+    expect(f.shutdown.requestShutdown).not.toHaveBeenCalled();
+    expect(f.shutdown.captureCheckpoint).not.toHaveBeenCalled();
+    expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("ready");
+  });
+
+  it("routes other destructive snapshots through confirmed graceful shutdown", async () => {
+    const f = fixture(createMockProvider({ capabilities: { snapshotRequiresShutdown: true } }));
+    await f.manager.triggerSnapshot("inactivity_timeout");
+    expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("inactivity_timeout");
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
   });
 
   it("does not fall through to a destructive checkpoint when shutdown declines it", async () => {
     const sandbox = createMockSandbox({ status: "ready" });
     const f = fixture(
-      createMockProvider({ capabilities: { snapshotStopsSandbox: true } }),
+      createMockProvider({ capabilities: { snapshotRequiresShutdown: true } }),
       sandbox
     );
     f.shutdown.requestShutdown.mockResolvedValue("held");
 
-    await f.manager.triggerSnapshot("execution_complete");
+    await f.manager.triggerSnapshot("inactivity_timeout");
 
-    expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("execution_complete");
+    expect(f.shutdown.requestShutdown).toHaveBeenCalledWith("inactivity_timeout");
     expect(f.shutdown.captureCheckpoint).not.toHaveBeenCalled();
     expect(f.provider.takeSnapshot).not.toHaveBeenCalled();
     expect(sandbox.status).toBe("ready");
@@ -661,12 +687,23 @@ describe("final graceful shutdown lifecycle integration", () => {
 });
 
 describe("lifecycle-owned runtime readiness and cancellation", () => {
-  function harness(status: SandboxStatus | null, attached = true) {
+  function harness(
+    status: SandboxStatus | null,
+    attached = true,
+    explicitStop = false,
+    persistentResume = false
+  ) {
     const row = status === null ? null : createMockSandbox({ status });
     const storage = createMockStorage(createMockSession(), row);
     const broadcaster = createMockBroadcaster();
     const ws = createMockWebSocketManager(attached);
-    const provider = createMockProvider({ stopSandbox: vi.fn(async () => ({ success: true })) });
+    const provider = createMockProvider({
+      stopSandbox: vi.fn(async () => ({ success: true })),
+      capabilities: {
+        supportsExplicitStop: explicitStop,
+        supportsPersistentResume: persistentResume,
+      },
+    });
     const alarms = createMockAlarmScheduler();
     const manager = new SandboxLifecycleManager(
       provider,
@@ -691,43 +728,77 @@ describe("lifecycle-owned runtime readiness and cancellation", () => {
     "snapshotting",
     "stale",
   ] as const)(
-    "preserves cancellation of %s without introducing provider retirement or fencing",
-    (status) => {
-      const h = harness(status);
-      h.manager.cancelSandbox();
+    "cancels %s by asking the runtime to exit, then stopping it at the provider",
+    async (status) => {
+      const h = harness(status, true, true);
+      await h.manager.cancelSandbox();
       expect(h.ws.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
       expect(h.storage.updateSandboxStatus).toHaveBeenCalledWith("stopped");
       expect(vi.mocked(h.ws.sendToSandbox).mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(h.storage.updateSandboxStatus).mock.invocationCallOrder[0]
       );
-      expect(h.provider.stopSandbox).not.toHaveBeenCalled();
+      expect(h.provider.stopSandbox).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          providerObjectId: "modal-obj-123",
+          reason: "session_cancelled",
+          intent: "destroy",
+        })
+      );
+      expect(vi.mocked(h.storage.updateSandboxStatus).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(h.provider.stopSandbox!).mock.invocationCallOrder[0]
+      );
       expect(h.storage.fenceSandboxGeneration).not.toHaveBeenCalled();
       expect(h.ws.detachSandboxWebSocket).not.toHaveBeenCalled();
       expect(h.broadcaster.messages).toEqual([]);
     }
   );
 
-  it.each(["stopped", "failed", null] as const)("leaves %s unchanged on cancel", (status) => {
-    const h = harness(status);
-    h.manager.cancelSandbox();
+  it("destroys a resumable provider's sandbox on cancel, since the session never resumes", async () => {
+    const h = harness("ready", true, true, true);
+    await h.manager.cancelSandbox();
+    expect(h.provider.stopSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "session_cancelled", intent: "destroy" })
+    );
+  });
+
+  it("cancels without a provider stop when the provider cannot stop explicitly", async () => {
+    const h = harness("ready");
+    await h.manager.cancelSandbox();
+    expect(h.storage.updateSandboxStatus).toHaveBeenCalledWith("stopped");
+    expect(h.provider.stopSandbox).not.toHaveBeenCalled();
+  });
+
+  it("still records a cancellation when the provider stop fails", async () => {
+    const h = harness("ready", true, true);
+    vi.mocked(h.provider.stopSandbox!).mockRejectedValue(new Error("provider unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await h.manager.cancelSandbox();
+    expect(h.row?.status).toBe("stopped");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider unavailable"));
+  });
+
+  it.each(["stopped", "failed", null] as const)("leaves %s unchanged on cancel", async (status) => {
+    const h = harness(status, true, true);
+    await h.manager.cancelSandbox();
     expect(h.ws.getSandboxWebSocket).not.toHaveBeenCalled();
     expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
+    expect(h.provider.stopSandbox).not.toHaveBeenCalled();
   });
 
   it.each(["ready", "stale"] as const)(
     "cancels a %s row without an attached dispatch socket",
-    (status) => {
+    async (status) => {
       const h = harness(status, false);
-      h.manager.cancelSandbox();
+      await h.manager.cancelSandbox();
       expect(h.ws.sendToSandbox).not.toHaveBeenCalled();
       expect(h.storage.updateSandboxStatus).toHaveBeenCalledWith("stopped");
     }
   );
 
-  it("still records stopped when the existing local shutdown send fails", () => {
+  it("still records stopped when the existing local shutdown send fails", async () => {
     const h = harness("ready");
     vi.mocked(h.ws.sendToSandbox).mockReturnValue(false);
-    h.manager.cancelSandbox();
+    await h.manager.cancelSandbox();
     expect(h.row?.status).toBe("stopped");
   });
 
@@ -2879,7 +2950,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider({
-        capabilities: { snapshotStopsSandbox: true },
+        capabilities: { snapshotRequiresShutdown: true },
         takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
       });
       const shutdown = createCheckpointShutdown(provider, storage, broadcaster);
@@ -4998,27 +5069,33 @@ describe("status writes after a provider await (COL-99)", () => {
     }
   });
 
-  it("counts an attempt once when the watchdog fails it before the provider rejects it", async () => {
-    // The connect alarm is armed at reservation, before the provider call,
-    // so it can fail the attempt while createSandbox() is still pending. The
-    // provider's later rejection is the same attempt, not a second failure.
-    vi.useFakeTimers();
-    try {
-      const sandbox = createMockSandbox({ status: "failed" });
-      const h = harness(sandbox, async () => {
-        vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
-        await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
-        throw new SandboxProviderError("quota exceeded", "permanent");
-      });
+  it.each([
+    new SandboxProviderError("quota exceeded", "permanent"),
+    new SandboxLaunchRejectedError("incompatible", "sb-rejected"),
+  ])(
+    "counts an attempt once when the watchdog fails it before the provider rejects it (%s)",
+    async (error) => {
+      // The connect alarm is armed at reservation, before the provider call,
+      // so it can fail the attempt while createSandbox() is still pending. The
+      // provider's later rejection is the same attempt, not a second failure.
+      vi.useFakeTimers();
+      try {
+        const sandbox = createMockSandbox({ status: "failed" });
+        const h = harness(sandbox, async () => {
+          vi.advanceTimersByTime(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1000);
+          await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_failed");
+          throw error;
+        });
 
-      await h.manager.spawnSandbox();
+        await h.manager.spawnSandbox();
 
-      expect(sandbox.status).toBe("failed");
-      expect(sandbox.spawn_failure_count).toBe(1);
-    } finally {
-      vi.useRealTimers();
+        expect(sandbox.status).toBe("failed");
+        expect(sandbox.spawn_failure_count).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
 
   it("leaves a sandbox whose bridge attached during the provider call booting when the call then fails", async () => {
     // The bridge now connects ahead of its boot, so a provider error that

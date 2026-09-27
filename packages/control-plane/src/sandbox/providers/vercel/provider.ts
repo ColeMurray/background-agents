@@ -92,7 +92,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     supportsRestore: true,
     supportsPersistentResume: false,
     supportsExplicitStop: true,
-    snapshotStopsSandbox: true,
+    snapshotRequiresShutdown: true,
   };
 
   constructor(

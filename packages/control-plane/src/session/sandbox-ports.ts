@@ -34,6 +34,11 @@ export interface SandboxShutdownStorage extends SandboxStateReader {
     from: SandboxStatus,
     to: SandboxStatus
   ): boolean;
+  /**
+   * Stop the named generation and forget its snapshot and provider handle, so
+   * the next start neither restores nor resumes it. Reports whether it applied.
+   */
+  discardSandboxState(generation: { sandboxId: string | null; createdAt: number }): boolean;
 }
 
 /** Aggregate initialization is separate from transitions of an existing sandbox. */

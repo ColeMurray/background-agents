@@ -66,6 +66,7 @@ import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
+import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -128,6 +129,7 @@ export default function SessionPage() {
   });
   // Fixed at create; per-message model overrides must stay within it.
   const sessionHarness = sessionState?.harness ?? initialSnapshot.session.harness;
+  const sandboxBlockReason = sandboxPromptBlockReason(sessionState?.sandboxPreservation);
   const {
     selectedModel,
     reasoningEffort,
@@ -156,7 +158,7 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? DEFAULT_SESSION_STATUS,
-    ready && capabilities.collaborate && !sessionState?.budgetExhausted,
+    ready && capabilities.collaborate && !sessionState?.budgetExhausted && !sandboxBlockReason,
     shortcuts["send-prompt"]
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
@@ -378,15 +380,18 @@ export default function SessionPage() {
             draftLocked: isSubmitting || sessionAttachments.isUploading,
             sendBlocked:
               !ready ||
+              Boolean(sandboxBlockReason) ||
               Boolean(sessionState?.budgetExhausted) ||
               modelAvailability.status === "unavailable",
-            blockedReason: sessionState?.budgetExhausted
-              ? canManageBudget
-                ? `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. Raise or remove the limit to continue.`
-                : `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. The session owner must raise or remove the limit to continue.`
-              : modelAvailability.status === "unavailable"
-                ? modelAvailability.message
-                : undefined,
+            blockedReason:
+              sandboxBlockReason ??
+              (sessionState?.budgetExhausted
+                ? canManageBudget
+                  ? `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. Raise or remove the limit to continue.`
+                  : `Session cost limit reached at ${formatSessionCost(sessionState.totalCost ?? 0)} of ${formatSessionCost(sessionState.maxSessionCostUsd ?? 0)}. The session owner must raise or remove the limit to continue.`
+                : modelAvailability.status === "unavailable"
+                  ? modelAvailability.message
+                  : undefined),
             submitError,
             inputRef,
             onSubmit: handleSubmit,

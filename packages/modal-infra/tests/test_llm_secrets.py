@@ -8,7 +8,6 @@ key is present.
 
 import pytest
 
-from src.app import llm_secrets
 from src.sandbox.manager import SandboxConfig, SandboxManager
 
 
@@ -31,13 +30,17 @@ def captured_launch(monkeypatch):
     return captured
 
 
-async def test_create_attaches_the_deployment_wide_secret(captured_launch):
+async def test_create_attaches_the_deployment_wide_secret(captured_launch, fake_llm_secret):
     await SandboxManager().create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
 
-    assert captured_launch["secrets"] == [llm_secrets]
+    assert len(fake_llm_secret) == 1
+    assert captured_launch["secrets"] == fake_llm_secret
+    fake_llm_secret[0].hydrate.aio.assert_awaited_once_with()
 
 
-async def test_restore_attaches_the_deployment_wide_secret(captured_launch, monkeypatch):
+async def test_restore_attaches_the_deployment_wide_secret(
+    captured_launch, monkeypatch, fake_llm_secret
+):
     class FakeImage:
         object_id = "img-llm-secrets"
 
@@ -48,4 +51,19 @@ async def test_restore_attaches_the_deployment_wide_secret(captured_launch, monk
         session_config={"repo_owner": "acme", "repo_name": "repo", "session_id": "sess-1"},
     )
 
-    assert captured_launch["secrets"] == [llm_secrets]
+    assert len(fake_llm_secret) == 1
+    assert captured_launch["secrets"] == fake_llm_secret
+    fake_llm_secret[0].hydrate.aio.assert_awaited_once_with()
+
+
+async def test_each_launch_resolves_a_fresh_secret(captured_launch, fake_llm_secret):
+    config = SandboxConfig(repo_owner="acme", repo_name="repo")
+    await SandboxManager().create_sandbox(config)
+    first_secret = captured_launch["secrets"][0]
+    await SandboxManager().create_sandbox(config)
+
+    assert len(fake_llm_secret) == 2
+    assert captured_launch["secrets"] == [fake_llm_secret[1]]
+    assert fake_llm_secret[1] is not first_secret
+    for secret in fake_llm_secret:
+        secret.hydrate.aio.assert_awaited_once_with()

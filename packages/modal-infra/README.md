@@ -35,7 +35,7 @@ This package provides the data plane for Open-Inspect:
 
 Base image definition with:
 - Debian slim + git, curl, build-essential
-- Node.js 22, pnpm, Bun
+- Node.js 24, pnpm, Bun
 - Python 3.12 with uv
 - OpenCode CLI
 - agent-browser CLI + headless Chrome
@@ -110,6 +110,8 @@ pip install -e ".[dev]"
 ```bash
 # Build the dynamic Sandbox image, then deploy the app (recommended)
 uv run python deploy.py --build-sandbox-image
+# Also build and verify the Docker-capable image variant (docs/MODAL_DOCKER.md):
+# BUILD_MODAL_VM_IMAGE=true uv run python deploy.py --build-sandbox-image
 uv run modal deploy deploy.py
 
 # Alternative app deployment after the same eager image-build step

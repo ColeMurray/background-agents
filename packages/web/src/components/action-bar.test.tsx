@@ -13,6 +13,7 @@ const FULL_CAPABILITIES = {
   collaborate: true,
   lifecycle: true,
   sandboxAccess: true,
+  exportTrace: true,
 } satisfies SessionCapabilities;
 const NO_LIFECYCLE = { ...FULL_CAPABILITIES, lifecycle: false };
 

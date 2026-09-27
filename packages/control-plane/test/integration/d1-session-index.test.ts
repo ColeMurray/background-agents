@@ -475,6 +475,13 @@ describe("D1 SessionIndexStore", () => {
     expect(before!.activeDurationMs).toBe(0);
     expect(before!.messageCount).toBe(0);
     expect(before!.prCount).toBe(0);
+    expect(before).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
 
     // Update metrics
     const updated = await store.updateMetrics("session-metrics", {
@@ -482,6 +489,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 120000,
       messageCount: 5,
       prCount: 1,
+      inputTokens: 1200,
+      outputTokens: 340,
+      reasoningTokens: 56,
+      cacheReadTokens: 7800,
+      cacheWriteTokens: 910,
     });
     expect(updated).toBe(true);
 
@@ -491,6 +503,13 @@ describe("D1 SessionIndexStore", () => {
     expect(after!.activeDurationMs).toBe(120000);
     expect(after!.messageCount).toBe(5);
     expect(after!.prCount).toBe(1);
+    expect(after).toMatchObject({
+      inputTokens: 1200,
+      outputTokens: 340,
+      reasoningTokens: 56,
+      cacheReadTokens: 7800,
+      cacheWriteTokens: 910,
+    });
   });
 
   it("updateMetrics overwrites on repeated calls (last write wins)", async () => {
@@ -515,6 +534,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 60000,
       messageCount: 3,
       prCount: 0,
+      inputTokens: 100,
+      outputTokens: 20,
+      reasoningTokens: 0,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 50,
     });
 
     await store.updateMetrics("session-metrics-overwrite", {
@@ -522,6 +546,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 180000,
       messageCount: 8,
       prCount: 2,
+      inputTokens: 300,
+      outputTokens: 60,
+      reasoningTokens: 10,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 75,
     });
 
     const session = await store.get("session-metrics-overwrite");
@@ -529,6 +558,13 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.activeDurationMs).toBe(180000);
     expect(session!.messageCount).toBe(8);
     expect(session!.prCount).toBe(2);
+    expect(session).toMatchObject({
+      inputTokens: 300,
+      outputTokens: 60,
+      reasoningTokens: 10,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 75,
+    });
   });
 
   it("updateMetrics returns false for non-existent session", async () => {
@@ -538,6 +574,11 @@ describe("D1 SessionIndexStore", () => {
       activeDurationMs: 1000,
       messageCount: 1,
       prCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     });
     expect(result).toBe(false);
   });
@@ -703,9 +744,68 @@ describe("D1 SessionIndexStore", () => {
       expect(children).toEqual([]);
     });
 
+    it("listActiveDescendantIds returns active descendants deepest-first through terminal ancestors", async () => {
+      const now = Date.now();
+      for (const [id, status, parentSessionId] of [
+        ["grandchild-active", "active", childId2],
+        ["grandchild-failed", "failed", childId1],
+      ] as const) {
+        await store.create({
+          id,
+          title: null,
+          repoOwner: "owner",
+          repoName: "repo",
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: null,
+          baseBranch: null,
+          status,
+          parentSessionId,
+          spawnSource: "agent",
+          spawnDepth: 2,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      await expect(store.listActiveDescendantIds(parentId)).resolves.toEqual([
+        "grandchild-active",
+        childId1,
+      ]);
+      await expect(store.listActiveDescendantIds("nonexistent-parent")).resolves.toEqual([]);
+    });
+
+    it("listActiveDescendantIds stops walking a parent cycle at the depth limit", async () => {
+      // Child 1 becomes its own grandparent: parent -> child 1 -> cycle -> child 1.
+      const now = Date.now();
+      await store.create({
+        id: "cycle-child",
+        title: null,
+        repoOwner: "owner",
+        repoName: "repo",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        parentSessionId: childId1,
+        spawnSource: "agent",
+        spawnDepth: 2,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await env.DB.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?")
+        .bind("cycle-child", childId1)
+        .run();
+
+      const ids = await store.listActiveDescendantIds(childId1);
+
+      expect(ids).toHaveLength(10);
+      expect(new Set(ids)).toEqual(new Set([childId1, "cycle-child"]));
+    });
+
     it("countTotalChildren counts all children regardless of status", async () => {
       const count = await store.countTotalChildren(parentId);
       expect(count).toBe(2);
+      expect(await store.countTotalChildren("nonexistent-parent")).toBe(0);
     });
 
     it("isChildOf returns true for valid parent-child pair", async () => {
@@ -716,6 +816,7 @@ describe("D1 SessionIndexStore", () => {
     it("isChildOf returns false for unrelated sessions", async () => {
       const result = await store.isChildOf(childId1, "unrelated-session");
       expect(result).toBe(false);
+      expect(await store.isChildOf("nonexistent", parentId)).toBe(false);
     });
 
     it("isChildOf returns false for reversed parent-child", async () => {

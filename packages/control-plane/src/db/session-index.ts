@@ -1,12 +1,5 @@
+import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
-  DEFAULT_HARNESS,
-  getValidHarnessOrDefault,
-  harnessIdSchema,
-  type HarnessId,
-} from "@open-inspect/shared/harnesses";
-import {
-  sessionStatusSchema,
-  spawnSourceSchema,
   type PullRequestSummary,
   type SessionReadAction,
   type SessionReadResult,
@@ -14,7 +7,6 @@ import {
   type SessionStatus,
   type SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import { z } from "zod";
 import {
   DEFAULT_SESSION_LIST_LIMIT,
   DEFAULT_SESSION_LIST_OFFSET,
@@ -42,6 +34,7 @@ import {
 } from "./session-inbox-store";
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
+import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
@@ -90,6 +83,11 @@ export interface SessionEntry {
   activeDurationMs?: number;
   messageCount?: number;
   prCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   createdAt: number;
   updatedAt: number;
   /**
@@ -116,35 +114,6 @@ export interface SessionEntry {
   providerAuth?: SessionModelProviderAuthInput[];
 }
 
-const sessionRowSchema = z.object({
-  id: z.string(),
-  title: z.string().nullable(),
-  repo_owner: z.string().nullable(),
-  repo_name: z.string().nullable(),
-  harness: harnessIdSchema.catch(DEFAULT_HARNESS),
-  model: z.string(),
-  reasoning_effort: z.string().nullable(),
-  base_branch: z.string().nullable(),
-  status: sessionStatusSchema,
-  parent_session_id: z.string().nullable(),
-  root_session_id: z.string().nullable(),
-  spawn_source: spawnSourceSchema,
-  spawn_depth: z.number(),
-  automation_id: z.string().nullable(),
-  automation_run_id: z.string().nullable(),
-  scm_login: z.string().nullable(),
-  user_id: z.string().nullable(),
-  total_cost: z.number(),
-  active_duration_ms: z.number(),
-  message_count: z.number(),
-  pr_count: z.number(),
-  environment_id: z.string().nullable(),
-  created_at: z.number(),
-  updated_at: z.number(),
-});
-
-type SessionRow = z.infer<typeof sessionRowSchema>;
-
 interface SessionModelProviderAuthRow {
   provider: string;
   auth_mode: string;
@@ -167,41 +136,6 @@ export interface ListSessionsResult {
 }
 
 type ViewerSessionRow = SessionRow & ViewerReadStateRow;
-
-function toEntry(row: SessionRow): SessionEntry {
-  return {
-    id: row.id,
-    title: row.title,
-    repoOwner: row.repo_owner,
-    repoName: row.repo_name,
-    harness: getValidHarnessOrDefault(row.harness),
-    model: row.model,
-    reasoningEffort: row.reasoning_effort,
-    baseBranch: row.base_branch,
-    status: row.status,
-    parentSessionId: row.parent_session_id,
-    spawnSource: row.spawn_source,
-    spawnDepth: row.spawn_depth,
-    automationId: row.automation_id,
-    automationRunId: row.automation_run_id,
-    scmLogin: row.scm_login,
-    userId: row.user_id,
-    totalCost: row.total_cost,
-    activeDurationMs: row.active_duration_ms,
-    messageCount: row.message_count,
-    prCount: row.pr_count,
-    environmentId: row.environment_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function parseSessionRow(row: unknown): SessionRow | null {
-  if (row === null || row === undefined) return null;
-  const parsed = sessionRowSchema.safeParse(row);
-  if (!parsed.success) throw new Error("Malformed persisted session index row");
-  return parsed.data;
-}
 
 function toProviderAuth(row: SessionModelProviderAuthRow): SessionModelProviderAuthInput {
   const auth = sessionModelProviderAuthSchema.parse({
@@ -735,14 +669,32 @@ export class SessionIndexStore {
       activeDurationMs: number;
       messageCount: number;
       prCount: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
     }
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?
+        `UPDATE sessions SET total_cost = ?, active_duration_ms = ?, message_count = ?, pr_count = ?,
+           input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, cache_read_tokens = ?,
+           cache_write_tokens = ?
          WHERE id = ?`
       )
-      .bind(metrics.totalCost, metrics.activeDurationMs, metrics.messageCount, metrics.prCount, id)
+      .bind(
+        metrics.totalCost,
+        metrics.activeDurationMs,
+        metrics.messageCount,
+        metrics.prCount,
+        metrics.inputTokens,
+        metrics.outputTokens,
+        metrics.reasoningTokens,
+        metrics.cacheReadTokens,
+        metrics.cacheWriteTokens,
+        id
+      )
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }

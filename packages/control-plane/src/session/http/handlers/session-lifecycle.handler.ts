@@ -163,6 +163,7 @@ export class SessionLifecycleHandler {
     }
 
     await this.statusService.transition("archived");
+    await this.sandboxLifecycle.preserveForArchive();
     try {
       await this.statusService.confirmIndexStatus("archived");
     } catch {
@@ -259,7 +260,7 @@ export class SessionLifecycleHandler {
 
     await this.cancelSession();
 
-    this.sandboxLifecycle.cancelSandbox();
+    await this.sandboxLifecycle.cancelSandbox();
 
     return Response.json({ status: "cancelled" });
   }

@@ -10,10 +10,10 @@ describe("inactivity alarm effects", () => {
 
   it.each([
     {
-      name: "remaining inactivity",
+      name: "heartbeat before remaining inactivity",
       ageMs: 120_000,
       clients: 0,
-      delayMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 120_000,
+      delayMs: DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs + 1,
     },
     {
       name: "minimum interval",
@@ -140,7 +140,7 @@ describe("inactivity alarm effects", () => {
       sandbox,
       createMockProvider({
         capabilities: {
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
           supportsExplicitStop: true,
           supportsPersistentResume: false,
         },

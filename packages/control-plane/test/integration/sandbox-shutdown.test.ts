@@ -77,6 +77,170 @@ async function readShutdown(stub: DurableObjectStub): Promise<Record<string, unk
 }
 
 describe("sandbox graceful shutdown wiring", () => {
+  it("holds an interrupted legacy VM capture without recapture or retirement", async () => {
+    const { stub } = await initNamedSession(`vm-capture-receipt-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET modal_object_id = 'sb-captured'");
+    });
+    const now = Date.now();
+    await seedShutdown(stub, {
+      phase: "capturing",
+      provider: "modal-vm",
+      providerObjectId: "sb-captured",
+      operationId: "lost-terminal-capture",
+      captureReceiptPending: true,
+      stopByMs: now - 120_000,
+      captureByMs: now - 60_000,
+      retireByMs: now - 30_000,
+      generationReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+    });
+    const evidence = await runInSessionDO(stub, async (instance, durableState) => {
+      let captureCount = 0;
+      let stopCount = 0;
+      const provider: SandboxProvider = {
+        name: "modal-vm",
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: true,
+          snapshotRequiresShutdown: true,
+          supportsRestore: true,
+          supportsExplicitStop: true,
+        },
+        createSandbox: async () => {
+          throw new Error("must not create");
+        },
+        takeSnapshot: async () => {
+          captureCount++;
+          throw new Error("must not recapture");
+        },
+        stopSandbox: async () => {
+          stopCount++;
+          return { success: true };
+        },
+      };
+      const restarted = realLifecycleHarness(instance, durableState, provider);
+      await restarted.manager.handleShutdownAlarm();
+      return { captureCount, stopCount, snapshot: restarted.manager.shutdownSnapshot() };
+    });
+    expect(evidence).toMatchObject({
+      captureCount: 0,
+      stopCount: 0,
+      snapshot: { phase: "unknown", hasRecoveryPoint: false },
+    });
+    expect(await queryDO(stub, "SELECT snapshot_image_id FROM sandbox")).toEqual([
+      { snapshot_image_id: null },
+    ]);
+  });
+
+  it("discards a held VM through the lifecycle boundary so the next start is fresh", async () => {
+    const { stub } = await initNamedSession(`vm-discard-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "stale" });
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE sandbox SET modal_object_id = 'sb-held', snapshot_image_id = 'im-older',
+           snapshot_runtime_version = 'v1'`
+      );
+    });
+    const now = Date.now();
+    await seedShutdown(stub, {
+      phase: "unknown",
+      provider: "modal-vm",
+      providerObjectId: "sb-held",
+      error: "The provider did not confirm the save.",
+      reason: "heartbeat_timeout",
+      operationId: "failed-capture",
+      stopByMs: now - 60_000,
+      captureByMs: now + 240_000,
+      retireByMs: now + 270_000,
+      continuationPaused: true,
+      generationReady: true,
+      runtimeReady: true,
+      lifecyclePolicy: "confirmed",
+      protocolVersion: 1,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "im-older",
+        provider: "modal-vm",
+        savedAtMs: 1,
+        runtimeVersion: "v1",
+      },
+    });
+    const evidence = await runInSessionDO(stub, async (instance, durableState) => {
+      const stopped: string[] = [];
+      const provider: SandboxProvider = {
+        name: "modal-vm",
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: true,
+          snapshotRequiresShutdown: true,
+          supportsRestore: true,
+          supportsExplicitStop: true,
+        },
+        createSandbox: async () => {
+          throw new Error("must not create during discard");
+        },
+        stopSandbox: async ({ providerObjectId }) => {
+          stopped.push(providerObjectId);
+          return { success: true };
+        },
+      };
+      const restarted = realLifecycleHarness(instance, durableState, provider);
+      const before = restarted.manager.shutdownSnapshot();
+      await restarted.manager.recoverShutdown("discard");
+      return {
+        before,
+        stopped,
+        after: restarted.manager.shutdownSnapshot(),
+        admission: restarted.manager.pushAdmissionDecision(),
+      };
+    });
+    expect(evidence.before).toMatchObject({ phase: "unknown", discardAvailable: true });
+    expect(evidence).toMatchObject({
+      stopped: ["sb-held"],
+      after: { phase: "running", hasRecoveryPoint: false, discardAvailable: false },
+      admission: "start_required",
+    });
+    expect(
+      await queryDO(stub, "SELECT status, snapshot_image_id, modal_object_id FROM sandbox")
+    ).toEqual([{ status: "stopped", snapshot_image_id: null, modal_object_id: null }]);
+  });
+
+  it("saves an archived session's sandbox and keeps it through a reconnect during the save", async () => {
+    const name = `archive-preserves-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sandbox SET modal_object_id = 'sb-live'");
+    });
+    await seedShutdown(stub, {
+      providerObjectId: "sb-live",
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+    await queryDO(stub, "UPDATE session SET status = 'completed'");
+
+    const archived = await stub.fetch("http://internal/internal/archive", { method: "POST" });
+    expect(archived.status).toBe(200);
+    expect(await readShutdown(stub)).toMatchObject({
+      phase: "draining",
+      reason: "session_archived",
+    });
+
+    // Archive refuses the runtime's reconnect; the save still needs its sandbox.
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).toBeNull();
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("Sandbox is being saved");
+  });
+
   it("preserves a completed session status when shutdown begins between prompts", async () => {
     const name = `shutdown-completed-status-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -476,7 +640,7 @@ describe("sandbox graceful shutdown wiring", () => {
           supportsRestore: true,
           supportsExplicitStop: true,
           supportsPersistentResume: false,
-          snapshotStopsSandbox: true,
+          snapshotRequiresShutdown: true,
         },
         createSandbox: async () => {
           throw new Error("not used by inactivity regression");

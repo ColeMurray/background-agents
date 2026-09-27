@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from .constants import DOCKER_ENABLED_ENV_VAR
 from .harness.base import HarnessId, parse_harness_id
 
 
@@ -110,6 +111,9 @@ class RuntimeConfig:
     session_config: Mapping[str, Any]
     workspace_path: Path
     repo_path: Path
+    # Set by the provider, never by user configuration: this sandbox runs on a
+    # Docker-capable runtime and must own a daemon before repository hooks.
+    docker_enabled: bool = False
 
     @classmethod
     def from_env(
@@ -137,6 +141,7 @@ class RuntimeConfig:
             session_config=session_config,
             workspace_path=workspace_path,
             repo_path=repo_path,
+            docker_enabled=environment.get(DOCKER_ENABLED_ENV_VAR) == "true",
         )
 
     @property

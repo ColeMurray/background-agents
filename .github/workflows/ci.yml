@@ -6,6 +6,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
       - "eslint.config.js"
@@ -41,6 +42,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
       - "eslint.config.js"
@@ -95,9 +97,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          # Minimum supported release: node:sqlite is available without an
-          # additional flag and --experimental-transform-types is present.
-          node-version: "22.13.0"
+          # Minimum supported release, matching `engines` in package.json.
+          # Every other job runs the version in .nvmrc.
+          node-version: "24.0.0"
           cache: "npm"
 
       - name: Install dependencies
@@ -130,6 +132,9 @@ jobs:
       - name: Test Terraform workflow contract
         run: npm run test:terraform-workflow-contract
 
+      - name: Test Node version workflow contract
+        run: npm run test:node-version-workflow-contract
+
       - name: Check Prettier formatting
         run: npm run format:check
 
@@ -147,7 +152,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -170,7 +175,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -217,7 +222,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -250,7 +255,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -275,7 +280,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -320,7 +325,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies

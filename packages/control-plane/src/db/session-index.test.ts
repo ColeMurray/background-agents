@@ -26,6 +26,11 @@ type SessionRow = {
   active_duration_ms: number;
   message_count: number;
   pr_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   environment_id: string | null;
   created_at: number;
   updated_at: number;
@@ -51,16 +56,9 @@ const QUERY_PATTERNS = {
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC, id DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
-  UPDATE_UPDATED_AT: /^UPDATE sessions SET updated_at = \?/,
   UPDATE_TITLE:
     /^UPDATE sessions SET title = \?, updated_at = MAX\(updated_at, \?\) WHERE id = \?$/,
-  UPDATE_METRICS: /^UPDATE sessions SET total_cost = \?/,
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
-  SELECT_BY_PARENT:
-    /^SELECT \* FROM sessions WHERE parent_session_id = \? ORDER BY created_at DESC$/,
-  SELECT_ACTIVE_DESCENDANTS: /^WITH RECURSIVE descendants/,
-  SELECT_1_CHILD: /^SELECT 1 FROM sessions WHERE id = \? AND parent_session_id = \?$/,
-  SELECT_SPAWN_DEPTH: /^SELECT spawn_depth FROM sessions WHERE id = \?$/,
 } as const;
 
 function normalizeQuery(query: string): string {
@@ -104,26 +102,6 @@ class FakeD1Database {
       return this.rows.has(id) ? { ok: 1 } : null;
     }
 
-    if (QUERY_PATTERNS.SELECT_COUNT.test(normalized)) {
-      const filtered = this.applyWhereConditions(normalized, args);
-      return { count: filtered.length };
-    }
-
-    if (QUERY_PATTERNS.SELECT_1_CHILD.test(normalized)) {
-      const [childId, parentId] = args as [string, string];
-      const row = this.rows.get(childId);
-      if (row && row.parent_session_id === parentId) {
-        return { "1": 1 };
-      }
-      return null;
-    }
-
-    if (QUERY_PATTERNS.SELECT_SPAWN_DEPTH.test(normalized)) {
-      const id = args[0] as string;
-      const row = this.rows.get(id);
-      return row ? { spawn_depth: row.spawn_depth } : null;
-    }
-
     throw new Error(`Unexpected first() query: ${query}`);
   }
 
@@ -146,34 +124,6 @@ class FakeD1Database {
       const sorted = filtered.sort((a, b) => b.updated_at - a.updated_at);
       const paged = sorted.slice(offset, offset + limit);
       return paged;
-    }
-
-    if (QUERY_PATTERNS.SELECT_BY_PARENT.test(normalized)) {
-      const parentId = args[0] as string;
-      const children = Array.from(this.rows.values())
-        .filter((r) => r.parent_session_id === parentId)
-        .sort((a, b) => b.created_at - a.created_at);
-      return children;
-    }
-
-    if (QUERY_PATTERNS.SELECT_ACTIVE_DESCENDANTS.test(normalized)) {
-      const terminalStatuses = new Set(["completed", "failed", "archived", "cancelled"]);
-      const descendants: Array<{ row: SessionRow; depth: number }> = [];
-      let parents = [args[0] as string];
-      let depth = 1;
-      // Mirrors the CTE's MAX_DESCENDANT_DEPTH cycle guard.
-      while (parents.length > 0 && depth <= 10) {
-        const children = Array.from(this.rows.values()).filter((row) =>
-          parents.includes(row.parent_session_id ?? "")
-        );
-        descendants.push(...children.map((row) => ({ row, depth })));
-        parents = children.map((row) => row.id);
-        depth += 1;
-      }
-      return descendants
-        .filter(({ row }) => !terminalStatuses.has(row.status))
-        .sort((a, b) => b.depth - a.depth)
-        .map(({ row }) => ({ id: row.id }));
     }
 
     if (QUERY_PATTERNS.SELECT_SESSION_REPOS.test(normalized)) {
@@ -272,6 +222,11 @@ class FakeD1Database {
           active_duration_ms: 0,
           message_count: 0,
           pr_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          reasoning_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
           environment_id: environmentId,
           created_at: createdAt,
           updated_at: updatedAt,
@@ -281,9 +236,9 @@ class FakeD1Database {
     }
 
     if (QUERY_PATTERNS.UPDATE_STATUS.test(normalized)) {
-      const [status, updatedAt, id, maxUpdatedAt] = args as [string, number, string, number];
+      const [status, updatedAt, id] = args as [string, number, string];
       const row = this.rows.get(id);
-      if (row && row.updated_at <= maxUpdatedAt) {
+      if (row) {
         row.status = status;
         row.updated_at = updatedAt;
         return { meta: { changes: 1 } };
@@ -337,35 +292,6 @@ class FakeD1Database {
       return { meta: { changes: existed ? 1 : 0 } };
     }
 
-    if (QUERY_PATTERNS.UPDATE_METRICS.test(normalized)) {
-      const [totalCost, activeDurationMs, messageCount, prCount, id] = args as [
-        number,
-        number,
-        number,
-        number,
-        string,
-      ];
-      const row = this.rows.get(id);
-      if (row) {
-        row.total_cost = totalCost;
-        row.active_duration_ms = activeDurationMs;
-        row.message_count = messageCount;
-        row.pr_count = prCount;
-        return { meta: { changes: 1 } };
-      }
-      return { meta: { changes: 0 } };
-    }
-
-    if (QUERY_PATTERNS.UPDATE_UPDATED_AT.test(normalized)) {
-      const [updatedAt, id] = args as [number, string];
-      const row = this.rows.get(id);
-      if (row) {
-        row.updated_at = updatedAt;
-        return { meta: { changes: 1 } };
-      }
-      return { meta: { changes: 0 } };
-    }
-
     throw new Error(`Unexpected mutation query: ${query}`);
   }
 
@@ -377,17 +303,6 @@ class FakeD1Database {
     const whereMatch = query.match(/WHERE (.+?)(?:ORDER|LIMIT|$)/);
     if (whereMatch) {
       const conditions = whereMatch[1].trim();
-
-      if (conditions.includes("parent_session_id = ?")) {
-        const parentId = args[argIdx++] as string;
-        rows = rows.filter((r) => r.parent_session_id === parentId);
-      }
-
-      if (conditions.includes("status NOT IN")) {
-        rows = rows.filter(
-          (r) => !["completed", "failed", "archived", "cancelled"].includes(r.status)
-        );
-      }
 
       if (conditions.includes("status = ?")) {
         const statusVal = args[argIdx++] as string;
@@ -401,33 +316,8 @@ class FakeD1Database {
 
       if (conditions.includes("automation_id IS NULL")) {
         rows = rows.filter(
-          (row) =>
-            row.automation_id === null &&
-            row.spawn_source !== "automation" &&
-            row.spawn_source !== "github-bot"
+          (row) => row.automation_id === null && row.spawn_source !== "automation"
         );
-      }
-
-      if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
-        // Combined member/scalar repo filter: params are the member arm's
-        // owner/name followed by the scalar arm's identical owner/name.
-        const hasOwner = conditions.includes("sr.repo_owner = ?");
-        const hasName = conditions.includes("sr.repo_name = ?");
-        const ownerVal = hasOwner ? (args[argIdx++] as string) : null;
-        const nameVal = hasName ? (args[argIdx++] as string) : null;
-        argIdx += (hasOwner ? 1 : 0) + (hasName ? 1 : 0); // scalar-arm copies
-        rows = rows.filter((r) => {
-          const memberMatch = this.repositoryRows.some(
-            (repo) =>
-              repo.session_id === r.id &&
-              (ownerVal === null || repo.repo_owner === ownerVal) &&
-              (nameVal === null || repo.repo_name === nameVal)
-          );
-          const scalarMatch =
-            (ownerVal === null || r.repo_owner === ownerVal) &&
-            (nameVal === null || r.repo_name === nameVal);
-          return memberMatch || scalarMatch;
-        });
       }
 
       const userIdMatch = conditions.match(/user_id IN \(([^)]+)\)/);
@@ -515,6 +405,11 @@ describe("SessionIndexStore", () => {
         activeDurationMs: 0,
         messageCount: 0,
         prCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         environmentId: null,
       });
     });
@@ -590,38 +485,6 @@ describe("SessionIndexStore", () => {
 
       const result = await store.get("test-id");
       expect(result?.title).toBe("Test Session");
-    });
-
-    it("stores parent fields when provided", async () => {
-      await store.create(makeSession({ id: "parent-1" }));
-      const session = makeSession({
-        id: "child-1",
-        parentSessionId: "parent-1",
-        spawnSource: "agent",
-        spawnDepth: 1,
-      });
-      await store.create(session);
-
-      const result = await store.get("child-1");
-      expect(result?.parentSessionId).toBe("parent-1");
-      expect(result?.spawnSource).toBe("agent");
-      expect(result?.spawnDepth).toBe(1);
-    });
-
-    it("stores userId when provided", async () => {
-      const session = makeSession({ userId: "user-123" });
-      await store.create(session);
-
-      const result = await store.get("test-id");
-      expect(result?.userId).toBe("user-123");
-    });
-
-    it("defaults userId to null when omitted", async () => {
-      const session = makeSession();
-      await store.create(session);
-
-      const result = await store.get("test-id");
-      expect(result?.userId).toBeNull();
     });
   });
 
@@ -737,36 +600,6 @@ describe("SessionIndexStore", () => {
       expect(result.hasMore).toBe(false);
     });
 
-    it("excludes github-bot sessions from lineage-filtered lists even when created by the user", async () => {
-      await store.create(
-        makeSession({ id: "web", spawnSource: "user", userId: "alice", updatedAt: 4000 })
-      );
-      await store.create(
-        makeSession({
-          id: "auto-review",
-          spawnSource: "github-bot",
-          userId: "alice",
-          updatedAt: 3000,
-        })
-      );
-      await store.create(
-        makeSession({ id: "slack", spawnSource: "slack-bot", userId: "alice", updatedAt: 2000 })
-      );
-
-      const filtered = await store.list({
-        excludeAutomationLineage: true,
-        createdByUserIds: ["alice"],
-      });
-      expect(filtered.sessions.map((session) => session.id)).toEqual(["web", "slack"]);
-
-      const unfiltered = await store.list({ createdByUserIds: ["alice"] });
-      expect(unfiltered.sessions.map((session) => session.id)).toEqual([
-        "web",
-        "auto-review",
-        "slack",
-      ]);
-    });
-
     it("supports multiple creator user ids", async () => {
       await store.create(makeSession({ id: "alice", userId: "alice", updatedAt: 1000 }));
       await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
@@ -825,20 +658,6 @@ describe("SessionIndexStore", () => {
       const updated = await store.updateStatus("nonexistent", "archived");
       expect(updated).toBe(false);
     });
-
-    it("ignores stale status updates when a newer update already exists", async () => {
-      await store.create(makeSession({ id: "test-id", status: "active", updatedAt: 1000 }));
-
-      const latest = await store.updateStatus("test-id", "completed", 2000);
-      expect(latest).toBe(true);
-
-      const stale = await store.updateStatus("test-id", "failed", 1500);
-      expect(stale).toBe(false);
-
-      const session = await store.get("test-id");
-      expect(session?.status).toBe("completed");
-      expect(session?.updatedAt).toBe(2000);
-    });
   });
 
   describe("updateTitle", () => {
@@ -862,151 +681,6 @@ describe("SessionIndexStore", () => {
       const session = await store.get("test-id");
       expect(session?.title).toBe("Generated Title");
       expect(session?.updatedAt).toBe(2000);
-    });
-  });
-
-  describe("delete", () => {
-    it("deletes an existing session", async () => {
-      await store.create(makeSession());
-      const deleted = await store.delete("test-id");
-      expect(deleted).toBe(true);
-
-      const session = await store.get("test-id");
-      expect(session).toBeNull();
-    });
-
-    it("returns false when session not found", async () => {
-      const deleted = await store.delete("nonexistent");
-      expect(deleted).toBe(false);
-    });
-  });
-
-  describe("parent/child queries", () => {
-    const parentId = "parent-1";
-
-    beforeEach(async () => {
-      // Seed parent
-      await store.create(
-        makeSession({
-          id: parentId,
-          title: "Parent",
-          parentSessionId: null,
-          spawnSource: "user",
-          spawnDepth: 0,
-        })
-      );
-      // Seed active child
-      await store.create(
-        makeSession({
-          id: "child-1",
-          title: "Child 1",
-          status: "created",
-          parentSessionId: parentId,
-          spawnSource: "agent",
-          spawnDepth: 1,
-          createdAt: 1000,
-        })
-      );
-      // Seed completed child
-      await store.create(
-        makeSession({
-          id: "child-2",
-          title: "Child 2",
-          status: "completed",
-          parentSessionId: parentId,
-          spawnSource: "agent",
-          spawnDepth: 1,
-          createdAt: 2000,
-        })
-      );
-    });
-
-    describe("listByParent", () => {
-      it("returns children newest-first", async () => {
-        const children = await store.listByParent(parentId);
-        expect(children).toHaveLength(2);
-        expect(children[0].id).toBe("child-2");
-        expect(children[1].id).toBe("child-1");
-      });
-
-      it("returns empty array when no children exist", async () => {
-        const children = await store.listByParent("no-children");
-        expect(children).toEqual([]);
-      });
-    });
-
-    describe("listActiveDescendantIds", () => {
-      it("returns active descendants deepest-first through terminal ancestors", async () => {
-        await store.create(
-          makeSession({
-            id: "grandchild-1",
-            status: "active",
-            parentSessionId: "child-2",
-            spawnSource: "agent",
-            spawnDepth: 2,
-          })
-        );
-
-        await expect(store.listActiveDescendantIds(parentId)).resolves.toEqual([
-          "grandchild-1",
-          "child-1",
-        ]);
-      });
-
-      it("returns an empty array when no descendants exist", async () => {
-        await expect(store.listActiveDescendantIds("no-children")).resolves.toEqual([]);
-      });
-    });
-
-    describe("countTotalChildren", () => {
-      it("counts all children regardless of status", async () => {
-        const count = await store.countTotalChildren(parentId);
-        expect(count).toBe(2);
-      });
-
-      it("returns 0 when no children exist", async () => {
-        const count = await store.countTotalChildren("no-children");
-        expect(count).toBe(0);
-      });
-    });
-
-    describe("isChildOf", () => {
-      it("returns true for valid parent-child pair", async () => {
-        const result = await store.isChildOf("child-1", parentId);
-        expect(result).toBe(true);
-      });
-
-      it("returns false for unrelated sessions", async () => {
-        const result = await store.isChildOf("child-1", "wrong-parent");
-        expect(result).toBe(false);
-      });
-
-      it("returns false for reversed parent-child", async () => {
-        const result = await store.isChildOf(parentId, "child-1");
-        expect(result).toBe(false);
-      });
-
-      it("returns false for nonexistent child", async () => {
-        const result = await store.isChildOf("nonexistent", parentId);
-        expect(result).toBe(false);
-      });
-    });
-
-    describe("getSpawnDepth", () => {
-      it("returns stored depth for child", async () => {
-        const depth = await store.getSpawnDepth("child-1");
-        expect(depth).toBe(1);
-      });
-
-      it("returns 0 for top-level session", async () => {
-        const depth = await store.getSpawnDepth(parentId);
-        expect(depth).toBe(0);
-      });
-
-      it("returns 0 for unknown session", async () => {
-        const depth = await store.getSpawnDepth("nonexistent");
-        expect(depth).toBe(0);
-      });
     });
   });
 });

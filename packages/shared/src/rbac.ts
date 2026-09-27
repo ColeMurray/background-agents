@@ -63,6 +63,7 @@ export const PERMISSION_IDS = [
   "sessions.collaborate",
   "sessions.create",
   "sessions.delete",
+  "sessions.export",
   "sessions.lifecycle",
   "sessions.read",
   "sessions.sandbox_access",

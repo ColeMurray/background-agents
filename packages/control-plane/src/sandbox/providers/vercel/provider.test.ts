@@ -173,7 +173,7 @@ describe("VercelSandboxProvider", () => {
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
-      snapshotStopsSandbox: true,
+      snapshotRequiresShutdown: true,
     });
   });
 

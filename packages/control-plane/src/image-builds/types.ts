@@ -1,4 +1,5 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
 import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
@@ -32,6 +33,7 @@ export type ImageBuildCloneAuth =
  * Every supported provider uses the same create-bind-launch session contract.
  */
 export interface ImageBuildPlan {
+  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
   buildId: string;
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];

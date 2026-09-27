@@ -34,7 +34,8 @@ const tokenUsageDetailsSchema = z
     { message: "Expected at least one token usage count" }
   );
 
-const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
+export const tokenUsageSchema = z.union([z.number(), tokenUsageDetailsSchema]);
+export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 
 /** The steps of a sandbox boot, in the order the supervisor runs them. */
 export const bootPhaseNameSchema = z.enum([
@@ -86,6 +87,7 @@ const sandboxEventBaseSchema = z.object({
 const messageSandboxEventBaseSchema = sandboxEventBaseSchema.extend({
   messageId: z.string(),
 });
+const stepIdSchema = z.string().min(1).optional();
 
 export const sandboxGenerationSchema = z.object({
   sandboxId: z.string().min(1),
@@ -124,6 +126,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("token"),
     content: z.string(),
+    partId: z.string().min(1).optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_call"),
@@ -132,18 +135,23 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     callId: z.string(),
     status: z.string().optional(),
     output: z.string().optional(),
+    truncated: z
+      .object({ fields: z.array(z.string()), originalBytes: z.number().int().nonnegative() })
+      .optional(),
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_start"),
+    stepId: stepIdSchema,
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
+    stepId: stepIdSchema,
     /** Cost of this step alone; absent when the runtime could not price it. */
     cost: z.number().nullable().optional(),
     /** Cumulative reported cost of the whole turn so far; idempotent on resend. */

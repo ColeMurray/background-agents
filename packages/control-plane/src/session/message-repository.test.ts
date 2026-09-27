@@ -286,6 +286,29 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  it("rejects new Autofix feedback during a sandbox safety hold", () => {
+    expect(
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "p-1",
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:held",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+        sandboxRecoveryRequired: true,
+      })
+    ).toEqual({ kind: "rejected", reason: "sandbox_recovery_required" });
+    expect(mock.calls).toHaveLength(2);
+  });
+
   it("rejects new Autofix feedback when the session budget is exhausted", () => {
     mock.setData(`SELECT budget_exhausted FROM session LIMIT 1`, [{ budget_exhausted: 1 }]);
 

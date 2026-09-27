@@ -136,7 +136,10 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   ).resolves.toBe(fingerprint);
 });
 
-function buildQueue(mayDispatch: () => boolean = () => true) {
+function buildQueue(
+  mayDispatch: () => boolean = () => true,
+  getSandboxPromptBlockReason: () => string | null = () => null
+) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
   // the queue is constructed.
@@ -299,7 +302,8 @@ function buildQueue(mayDispatch: () => boolean = () => true) {
     alarmScheduler,
     executionStop,
     () => executionTimeoutMs,
-    mayDispatch
+    mayDispatch,
+    getSandboxPromptBlockReason
   );
 
   return {
@@ -328,6 +332,56 @@ function buildQueue(mayDispatch: () => boolean = () => true) {
 }
 
 describe("SessionMessageQueue", () => {
+  it("rejects new websocket and API prompts during a failed safety hold", async () => {
+    const h = buildQueue(
+      () => false,
+      () => "Start a new session to continue."
+    );
+    const ws = {} as WebSocket;
+    h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+    await h.queue.handlePromptMessage(ws, createClientInfo(), {
+      content: "Continue",
+      clientRequestId: "request-1",
+    });
+    await expect(
+      h.queue.enqueuePromptFromApi({ content: "Continue", authorId: "user-1", source: "agent" })
+    ).rejects.toMatchObject({ name: "SandboxPromptBlockedError" });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      ws,
+      expect.objectContaining({
+        type: "error",
+        code: "SANDBOX_RECOVERY_REQUIRED",
+        clientRequestId: "request-1",
+        message: "Start a new session to continue.",
+      })
+    );
+    expect(h.participantService.create).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the safety hold after asynchronous prompt fingerprinting", async () => {
+    let held = false;
+    const h = buildQueue(
+      () => true,
+      () => (held ? "Sandbox recovery required" : null)
+    );
+    const ws = {} as WebSocket;
+    const handling = h.queue.handlePromptMessage(ws, createClientInfo(), {
+      content: "Continue",
+      clientRequestId: "request-1",
+    });
+    held = true;
+    await handling;
+
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      ws,
+      expect.objectContaining({ code: "SANDBOX_RECOVERY_REQUIRED" })
+    );
+  });
   it("cannot dispatch while final-cost settlement waits for terminal projection", async () => {
     const h = buildQueue();
     const session = createSession({ total_cost: 9, max_cost_usd: 10 });
@@ -445,6 +499,7 @@ describe("SessionMessageQueue", () => {
       attemptLimit: 10,
       windowStart: expect.any(Number),
       sessionClosed: false,
+      sandboxRecoveryRequired: false,
     });
     expect(h.repository.createEvent).not.toHaveBeenCalled();
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
@@ -508,6 +563,38 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.transition).not.toHaveBeenCalled();
     expect(h.participantService.getByUserId).not.toHaveBeenCalled();
     expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+  });
+
+  it("rejects new Autofix feedback during a failed safety hold", async () => {
+    const h = buildQueue(
+      () => false,
+      () => "Sandbox recovery required"
+    );
+    h.repository.admitAutofixMessage.mockReturnValue({
+      kind: "rejected",
+      reason: "sandbox_recovery_required",
+    });
+
+    const result = await h.queue.enqueueAutofix({
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:held",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the feedback",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-held",
+      },
+      attemptLimit: 10,
+    });
+
+    expect(result).toEqual({ kind: "rejected", reason: "sandbox_recovery_required" });
+    expect(h.repository.admitAutofixMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxRecoveryRequired: true })
+    );
+    expect(h.participantService.create).not.toHaveBeenCalled();
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
   });
 
   it("returns a duplicate without re-driving it in a closed session", async () => {
