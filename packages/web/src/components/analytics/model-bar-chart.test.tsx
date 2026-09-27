@@ -11,19 +11,18 @@ import { AnalyticsModelBarChart } from "./model-bar-chart";
 expect.extend(matchers);
 afterEach(cleanup);
 
+const chartRows = vi.hoisted(() => ({ current: [] as Record<string, unknown>[] }));
+
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  BarChart: ({
-    data,
-    children,
-  }: {
-    data: { model: string; cost: number }[];
-    children: ReactNode;
-  }) => (
-    <div data-testid="chart" data-rows={JSON.stringify(data)}>
-      {children}
-    </div>
-  ),
+  BarChart: ({ data, children }: { data: Record<string, unknown>[]; children: ReactNode }) => {
+    chartRows.current = data;
+    return (
+      <div data-testid="chart" data-rows={JSON.stringify(data)}>
+        {children}
+      </div>
+    );
+  },
   Bar: ({ dataKey }: { dataKey: string }) => <div data-testid="bar" data-key={dataKey} />,
   XAxis: () => null,
   YAxis: () => null,
@@ -34,12 +33,7 @@ vi.mock("recharts", () => ({
     content: (props: { active: boolean; payload: { payload: unknown }[] }) => ReactNode;
   }) => (
     <div data-testid="tooltip">
-      {content({
-        active: true,
-        payload: [
-          { payload: { model: "Sonnet", sessions: 1200, cost: 3.5, prs: 2, cacheHitRatio: 0.42 } },
-        ],
-      })}
+      {content({ active: true, payload: [{ payload: chartRows.current[0] }] })}
     </div>
   ),
 }));
@@ -80,6 +74,39 @@ it("charts cost by display name and shows sessions, cost, PRs and cache ratio in
   expect(screen.getByTestId("tooltip")).toHaveTextContent("$3.50");
   expect(screen.getByTestId("tooltip")).toHaveTextContent("2");
   expect(screen.getByTestId("tooltip")).toHaveTextContent("42%");
+});
+
+it("uses unique model keys on the axis when display names collide and identifies the key in the tooltip", () => {
+  render(
+    <AnalyticsModelBarChart
+      entries={[
+        { ...entry, key: "opencode/kimi-k3", displayName: "Kimi K3" },
+        { ...entry, key: "opencode-go/kimi-k3", displayName: "Kimi K3", cost: 2 },
+      ]}
+      loading={false}
+    />
+  );
+
+  expect(JSON.parse(screen.getByTestId("chart").dataset.rows ?? "[]")).toMatchObject([
+    { model: "opencode/kimi-k3" },
+    { model: "opencode-go/kimi-k3" },
+  ]);
+  expect(screen.getByTestId("tooltip")).toHaveTextContent("Kimi K3");
+  expect(screen.getByTestId("tooltip")).toHaveTextContent("opencode/kimi-k3");
+});
+
+it("shows the highest-cost model first without changing the server's entry order", () => {
+  const entries = [
+    { ...entry, key: "low", cost: 1 },
+    { ...entry, key: "high", displayName: "High", cost: 20 },
+  ];
+  render(<AnalyticsModelBarChart entries={entries} loading={false} />);
+
+  expect(JSON.parse(screen.getByTestId("chart").dataset.rows ?? "[]")).toMatchObject([
+    { model: "High", cost: 20 },
+    { model: "Sonnet", cost: 1 },
+  ]);
+  expect(entries.map(({ key }) => key)).toEqual(["low", "high"]);
 });
 
 it("shows an empty state and a loading placeholder", () => {

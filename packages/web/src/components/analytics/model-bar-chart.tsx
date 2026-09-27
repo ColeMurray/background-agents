@@ -14,6 +14,8 @@ interface ModelBarChartProps {
 
 interface ModelChartRow {
   model: string;
+  name: string;
+  key: string;
   sessions: number;
   cost: number;
   prs: number;
@@ -26,7 +28,8 @@ function ModelChartTooltip({ active, payload }: TooltipContentProps) {
 
   return (
     <div className="min-w-[13rem] rounded-md border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md">
-      <div className="font-medium text-foreground">{row.model}</div>
+      <div className="font-medium text-foreground">{row.name}</div>
+      {row.key !== row.name ? <div className="mt-1 text-muted-foreground">{row.key}</div> : null}
       <div className="mt-2 grid gap-1.5">
         {[
           ["Sessions", formatAnalyticsCount(row.sessions)],
@@ -64,13 +67,25 @@ export function AnalyticsModelBarChart({ entries, loading }: ModelBarChartProps)
     );
   }
 
-  const chartData: ModelChartRow[] = entries.map((entry) => ({
-    model: entry.displayName ?? entry.key,
-    sessions: entry.sessions,
-    cost: entry.cost,
-    prs: entry.prs,
-    cacheHitRatio: getCacheHitRatio(entry),
-  }));
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    const name = entry.displayName ?? entry.key;
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+  const chartData: ModelChartRow[] = [...entries]
+    .sort((left, right) => right.cost - left.cost)
+    .map((entry) => {
+      const name = entry.displayName ?? entry.key;
+      return {
+        model: (nameCounts.get(name) ?? 0) > 1 ? entry.key : name,
+        name,
+        key: entry.key,
+        sessions: entry.sessions,
+        cost: entry.cost,
+        prs: entry.prs,
+        cacheHitRatio: getCacheHitRatio(entry),
+      };
+    });
 
   return (
     <div className="rounded-md border border-border-muted bg-card p-5">
