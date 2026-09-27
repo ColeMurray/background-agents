@@ -89,7 +89,9 @@ export function AnalyticsDimensionTable({
                 {columns.map((column) => (
                   <td key={column} className="px-5 py-4 text-right text-foreground">
                     {column === "subscriptionSessions"
-                      ? formatAnalyticsCount(entry.subscriptionSessions ?? 0)
+                      ? entry.subscriptionSessions === undefined
+                        ? "—"
+                        : formatAnalyticsCount(entry.subscriptionSessions)
                       : column === "cost"
                         ? formatSessionCost(entry.cost)
                         : formatAnalyticsRatio(getCacheHitRatio(entry))}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, expect, it } from "vitest";
 import type { AnalyticsBreakdownEntry } from "@open-inspect/shared/types/analytics";
@@ -50,16 +50,19 @@ it("renders provider counts, subscription sessions, cost, and cache ratio", () =
   expect(screen.getByText("Sessions billed to a subscription report $0.")).toBeInTheDocument();
 });
 
-it("shows unknown ratios and zero subscription counts without a denominator", () => {
+it("distinguishes missing subscription counts from zero and shows unknown ratios", () => {
   render(
     <AnalyticsDimensionTable
       {...props}
-      entries={[{ ...entry, subscriptionSessions: undefined, inputTokens: 0, cacheReadTokens: 0 }]}
+      entries={[
+        { ...entry, subscriptionSessions: undefined, inputTokens: 0, cacheReadTokens: 0 },
+        { ...entry, key: "other", displayName: "Other", subscriptionSessions: 0 },
+      ]}
       loading={false}
     />
   );
-  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("—");
-  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("0");
+  expect(within(screen.getByRole("row", { name: /Anthropic/ })).getAllByText("—")).toHaveLength(2);
+  expect(screen.getByRole("row", { name: /Other/ })).toHaveTextContent("0");
 });
 
 it("renders the supplied empty message or a loading placeholder", () => {
