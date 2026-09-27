@@ -128,3 +128,35 @@ test("rejects remote HTTP before sending the session cookie", async () => {
     await rm(out, { recursive: true, force: true });
   }
 });
+
+test("does not save a page with an invalid cursor so the same window can be retried", async () => {
+  const out = await mkdtemp(join(tmpdir(), "trace-export-"));
+  const invalidCursors = [undefined, 42, ""];
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    const nextCursor = invalidCursors[requests++];
+    const session = { schemaVersion: 2, type: "session", id: "root" };
+    const cursorLine =
+      requests <= invalidCursors.length
+        ? `${JSON.stringify({ schemaVersion: 2, type: "cursor", nextCursor })}\n`
+        : "";
+    response.end(`${JSON.stringify(session)}\n${cursorLine}`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const args = ["--url", `http://127.0.0.1:${server.address().port}`, "--out", out];
+    for (let index = 0; index < invalidCursors.length; index++) {
+      const result = await run(args);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /Invalid cursor in export page/);
+      assert.deepEqual(await readdir(out), [".resume.json"]);
+    }
+    assert.equal((await run(args)).code, 0);
+    assert.equal(requests, 4);
+    const date = (await readdir(out)).find((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
+    assert.deepEqual(await readdir(join(out, date)), ["page-000001.ndjson"]);
+  } finally {
+    server.close();
+    await rm(out, { recursive: true, force: true });
+  }
+});

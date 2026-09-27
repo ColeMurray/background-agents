@@ -111,7 +111,7 @@ async function main() {
     const last = JSON.parse(lines.at(-1));
     if (last.type !== "cursor") return; // The previous export reached the end of its window.
     cursor = last.nextCursor;
-    if (typeof cursor !== "string") throw new Error("Invalid saved cursor");
+    if (typeof cursor !== "string" || !cursor) throw new Error("Invalid saved cursor");
   }
 
   let pageNumber = pages.length;
@@ -152,6 +152,8 @@ async function main() {
       throw new Error("Incomplete export page");
     if (lines.slice(0, -1).some((line) => line.type !== "session"))
       throw new Error("Malformed export page");
+    if (last?.type === "cursor" && (typeof last.nextCursor !== "string" || !last.nextCursor))
+      throw new Error("Invalid cursor in export page");
     const date = new Date().toISOString().slice(0, 10);
     const directory = join(options.out, date);
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -164,7 +166,6 @@ async function main() {
     await rename(temporary, destination);
     if (last?.type !== "cursor") return;
     cursor = last.nextCursor;
-    if (typeof cursor !== "string" || !cursor) throw new Error("Invalid cursor in export page");
   }
 }
 
