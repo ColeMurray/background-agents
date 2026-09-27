@@ -35,7 +35,7 @@ const run: SessionRun = {
   repoName: null,
 };
 
-it("renders runs in server order with links, token totals and relative start time", () => {
+it("renders runs in server order with links, input/output tokens and relative start time", () => {
   vi.setSystemTime(Date.UTC(2026, 8, 27, 12));
   render(
     <AnalyticsRunsTable
@@ -59,6 +59,23 @@ it("renders runs in server order with links, token totals and relative start tim
     "href",
     "/session/root-2"
   );
+});
+
+it("labels input and output tokens as a partial metric when other usage exists", () => {
+  render(
+    <AnalyticsRunsTable
+      runs={[
+        { ...run, reasoningTokens: 50, cacheReadTokens: 200, cacheWriteTokens: 30 },
+        { ...run, rootSessionId: "total-only", inputTokens: 0, outputTokens: 0 },
+      ]}
+      loading={false}
+    />
+  );
+
+  expect(screen.getByRole("columnheader", { name: "Input + output tokens" })).toBeInTheDocument();
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByRole("cell", { name: "1,234" })).toBeInTheDocument();
+  expect(within(rows[1]).getByRole("cell", { name: "0" })).toBeInTheDocument();
 });
 
 it("shows an empty panel or a loading placeholder", () => {

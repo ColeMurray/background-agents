@@ -233,7 +233,7 @@ export default function AnalyticsPage() {
               {scope === "automation" || scope === "all" ? (
                 <AnalyticsDimensionTable
                   title="Automations"
-                  description="Usage for sessions started by an automation."
+                  description="Sessions associated with each automation; All includes agent descendants."
                   keyLabel="Automation"
                   entries={automationBreakdown?.entries}
                   loading={loading}

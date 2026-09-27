@@ -55,7 +55,7 @@ export function AnalyticsRunsTable({ runs, loading }: RunsTableProps) {
                 PRs
               </th>
               <th scope="col" className="px-5 py-3 text-right">
-                Tokens
+                Input + output tokens
               </th>
               <th scope="col" className="px-5 py-3 text-right">
                 Started

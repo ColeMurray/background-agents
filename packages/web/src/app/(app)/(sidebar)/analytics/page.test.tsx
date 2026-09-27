@@ -50,8 +50,8 @@ vi.mock("@/components/analytics/model-bar-chart", () => ({
 }));
 
 vi.mock("@/components/analytics/dimension-table", () => ({
-  AnalyticsDimensionTable: ({ title }: { title: string }) => (
-    <div data-testid={`analytics-${title.toLowerCase()}-table`} />
+  AnalyticsDimensionTable: ({ title, description }: { title: string; description: string }) => (
+    <div data-testid={`analytics-${title.toLowerCase()}-table`}>{description}</div>
   ),
 }));
 
@@ -267,6 +267,9 @@ describe("AnalyticsPage", () => {
 
     await user.click(screen.getByRole("radio", { name: "All" }));
     expect(screen.getByTestId("analytics-automations-table")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-automations-table")).toHaveTextContent(
+      "Sessions associated with each automation; All includes agent descendants."
+    );
 
     await user.click(screen.getByRole("radio", { name: "Human" }));
     expect(screen.queryByTestId("analytics-automations-table")).not.toBeInTheDocument();
