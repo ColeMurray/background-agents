@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { ModalSandboxProvider } from "./modal-provider";
+import { formatPendingVmReference } from "./pending-vm-reference";
 import { PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS } from "../lifecycle/decisions";
 import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import { ModalApiError } from "../client";
@@ -93,6 +94,49 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  it("derives a pending VM reference and lifetime from the launch reservation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+      const createdAt = Date.now();
+      const provider = new ModalSandboxProvider(
+        createMockModalClient({
+          createSandbox: async () => ({
+            sandboxId: "sandbox-123",
+            modalObjectId: "sb-123",
+            createdAt: Date.now(),
+            sandboxBackend: "modal-vm",
+          }),
+          restoreSandbox: async () => ({
+            sandboxId: "sandbox-123",
+            modalObjectId: "sb-123",
+            sandboxBackend: "modal-vm",
+          }),
+        }),
+        "modal-vm"
+      );
+      const config = { ...testConfig, generationCreatedAtMs: createdAt, timeoutSeconds: 5_400 };
+      const pending = provider.pendingSandboxAllocation(config);
+      vi.setSystemTime(createdAt + 5_000);
+
+      expect(pending).toEqual({
+        reference: 'modal-vm-session:["test-session","sandbox-123"]',
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: createdAt + 5_400_000,
+          observedAtMs: createdAt,
+          source: "conservative_start_bound",
+        },
+      });
+      expect((await provider.createSandbox(config)).lifetime).toEqual(pending?.lifetime);
+      expect(
+        (await provider.restoreFromSnapshot({ ...config, snapshotImageId: "im-1" })).lifetime
+      ).toEqual(pending?.lifetime);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns a conservative pre-request lifetime and propagates final deadlines", async () => {
     vi.useFakeTimers();
     try {
@@ -649,7 +693,7 @@ describe("ModalSandboxProvider", () => {
         );
         const config = {
           sessionId: "test-session",
-          providerObjectId: provider.pendingSandboxReference("test-session", "generation")!,
+          providerObjectId: formatPendingVmReference("test-session", "generation"),
           reason: "respawn",
           intent: "destroy" as const,
           generationCreatedAtMs: createdAt,

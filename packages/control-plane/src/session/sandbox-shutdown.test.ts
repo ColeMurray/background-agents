@@ -282,7 +282,7 @@ describe("SandboxShutdownCoordinator", () => {
 
   it("does not attach another generation's pending handle", async () => {
     const f = pendingVmFixture();
-    await f.shutdown.recordPendingProviderHandle(
+    const result = await f.shutdown.recordPendingProviderHandle(
       { ...GENERATION, createdAt: GENERATION.createdAt + 1 },
       "other-handle",
       {
@@ -292,6 +292,7 @@ describe("SandboxShutdownCoordinator", () => {
         source: "conservative_start_bound",
       }
     );
+    expect(result).toBe("superseded");
     expect(f.store.value).toMatchObject({ providerObjectId: null, lifetimeKind: "unknown" });
   });
 

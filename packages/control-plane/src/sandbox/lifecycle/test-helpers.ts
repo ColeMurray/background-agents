@@ -454,7 +454,7 @@ export function createUnmanagedShutdown() {
     reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
     markRecoveryInvoked: vi.fn(),
     recordPendingProviderHandle: vi.fn<SandboxShutdownLifecycle["recordPendingProviderHandle"]>(
-      async () => {}
+      async () => "registered"
     ),
     recordProviderStartup: vi.fn<SandboxShutdownLifecycle["recordProviderStartup"]>(async () => {}),
     isHolding: vi.fn(() => false),

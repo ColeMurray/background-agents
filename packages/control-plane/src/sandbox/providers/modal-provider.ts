@@ -24,6 +24,8 @@ import {
   signalUntilDeadline,
   type ImageBuildProviderTriggerConfig,
   type SandboxProvider,
+  type PendingSandboxAllocation,
+  type SandboxLifetime,
   type SandboxProviderCapabilities,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -100,8 +102,32 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
 
   readonly capabilities: SandboxProviderCapabilities;
 
-  pendingSandboxReference(sessionId: string, sandboxId: string): string | undefined {
-    return this.name === "modal-vm" ? formatPendingVmReference(sessionId, sandboxId) : undefined;
+  pendingSandboxAllocation(
+    config: Pick<
+      CreateSandboxConfig,
+      "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
+    >
+  ): PendingSandboxAllocation | undefined {
+    if (this.name !== "modal-vm") return undefined;
+    return {
+      reference: formatPendingVmReference(config.sessionId, config.sandboxId),
+      lifetime: this.launchLifetime(config),
+    };
+  }
+
+  private launchLifetime(
+    config: Pick<CreateSandboxConfig, "generationCreatedAtMs" | "timeoutSeconds">,
+    observedAtMs?: number
+  ): Extract<SandboxLifetime, { kind: "finite" }> {
+    const startAtMs = this.name === "modal-vm" ? config.generationCreatedAtMs : observedAtMs;
+    if (startAtMs === undefined)
+      throw new SandboxProviderError("Missing Modal sandbox lifetime origin", "permanent");
+    return {
+      kind: "finite",
+      expiresAtMs: startAtMs + (config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000,
+      observedAtMs: startAtMs,
+      source: "conservative_start_bound",
+    };
   }
 
   private launchDeadlineAtMs(generationCreatedAtMs: number | undefined): number | undefined {
@@ -172,12 +198,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
         createdAt: result.createdAt,
-        lifetime: {
-          kind: "finite",
-          expiresAtMs: observedAtMs + timeoutSeconds * 1000,
-          observedAtMs,
-          source: "conservative_start_bound",
-        },
+        lifetime: this.launchLifetime(config, observedAtMs),
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
         vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
@@ -233,12 +254,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         success: true,
         sandboxId: result.sandboxId,
         providerObjectId: result.modalObjectId,
-        lifetime: {
-          kind: "finite",
-          expiresAtMs: observedAtMs + timeoutSeconds * 1000,
-          observedAtMs,
-          source: "conservative_start_bound",
-        },
+        lifetime: this.launchLifetime(config, observedAtMs),
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
         vncAccess: createVncAccess(result.vncUrl, result.vncPassword),

@@ -206,9 +206,9 @@ export class SandboxShutdownCoordinator {
     generation: SandboxGeneration,
     reference: string,
     lifetime: Extract<SandboxLifetime, { kind: "finite" }>
-  ): Promise<void> {
+  ): Promise<"registered" | "expired" | "superseded"> {
     const state = this.deps.store.read();
-    if (!state || !this.current(state) || !this.matches(state, generation)) return;
+    if (!state || !this.current(state) || !this.matches(state, generation)) return "superseded";
     const settings = parsePersistedSandboxSettings(
       this.deps.session.getSession()?.sandbox_settings ?? null
     );
@@ -226,9 +226,10 @@ export class SandboxShutdownCoordinator {
           : expiresAtMs - (settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS),
     };
     this.publish(next);
-    if (next.phase !== "running" || next.drainAtMs === null) return;
-    if (this.now() >= next.drainAtMs) await this.requestShutdown("sandbox_lifetime_expiring");
-    else await this.deps.alarm.schedule(next.drainAtMs);
+    if (next.drainAtMs !== null && this.now() >= next.drainAtMs) return "expired";
+    if (next.phase === "running" && next.drainAtMs !== null)
+      await this.deps.alarm.schedule(next.drainAtMs);
+    return "registered";
   }
 
   async recordProviderStartup(

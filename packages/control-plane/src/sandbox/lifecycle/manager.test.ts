@@ -3773,7 +3773,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const shutdown = createUnmanagedShutdown();
       shutdown.recordPendingProviderHandle
-        .mockResolvedValueOnce()
+        .mockResolvedValueOnce("registered")
         .mockRejectedValueOnce(new Error("failed to schedule pending lifetime"));
       const createSandbox = vi.fn(async (_config: CreateSandboxConfig) => {
         throw new PrebuiltImageUnavailableError("image expired");
@@ -3784,7 +3784,15 @@ describe("SandboxLifecycleManager", () => {
         stopSandbox,
         capabilities: { supportsExplicitStop: true },
       });
-      provider.pendingSandboxReference = formatPendingVmReference;
+      provider.pendingSandboxAllocation = (config) => ({
+        reference: formatPendingVmReference(config.sessionId, config.sandboxId),
+        lifetime: {
+          kind: "finite",
+          expiresAtMs: config.generationCreatedAtMs! + 600_000,
+          observedAtMs: config.generationCreatedAtMs!,
+          source: "conservative_start_bound",
+        },
+      });
       const { manager } = createRepoSessionManager({ imageBuildLookup, provider, shutdown });
 
       await manager.spawnSandbox();

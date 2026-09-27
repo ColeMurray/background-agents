@@ -76,6 +76,11 @@ export type SandboxLifetime =
   | { kind: "none"; observedAtMs: number }
   | { kind: "unknown"; observedAtMs: number; reason: string };
 
+export interface PendingSandboxAllocation {
+  reference: string;
+  lifetime: Extract<SandboxLifetime, { kind: "finite" }>;
+}
+
 /**
  * One member repository of a session, in position order (first = primary).
  * Mirrors the runtime's SessionRepositoryConfig, whose snake_case wire form
@@ -574,10 +579,13 @@ export interface SandboxProvider {
   /** Provider capabilities */
   readonly capabilities: SandboxProviderCapabilities;
 
-  /** Optional opaque reference usable for snapshot/stop even if the launch response is lost.
-   * Persisted before launch; this is not evidence that startup succeeded.
-   */
-  pendingSandboxReference?(sessionId: string, sandboxId: string): string | undefined;
+  /** Reference and lifetime to persist before launch; neither confirms startup succeeded. */
+  pendingSandboxAllocation?(
+    config: Pick<
+      CreateSandboxConfig,
+      "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
+    >
+  ): PendingSandboxAllocation | undefined;
 
   /**
    * Create a new sandbox.
