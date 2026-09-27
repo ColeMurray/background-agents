@@ -8,11 +8,14 @@ import {
   type AnalyticsScope,
 } from "@open-inspect/shared/types/analytics";
 import { AnalyticsDimensionTable } from "@/components/analytics/dimension-table";
+import { AnalyticsHarnessCards } from "@/components/analytics/harness-cards";
 import { AnalyticsModelBarChart } from "@/components/analytics/model-bar-chart";
 import { AnalyticsPullRequestCards } from "@/components/analytics/pull-request-cards";
 import { AnalyticsPullRequestChart } from "@/components/analytics/pull-request-chart";
+import { AnalyticsPullRequestCostTable } from "@/components/analytics/pull-request-cost-table";
 import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-request-repo-table";
 import { AnalyticsRepoBarChart } from "@/components/analytics/repo-bar-chart";
+import { AnalyticsRunsTable } from "@/components/analytics/runs-table";
 import { AnalyticsSummaryCards } from "@/components/analytics/summary-cards";
 import { AnalyticsTimeseriesChart } from "@/components/analytics/timeseries-chart";
 import { AnalyticsTokenCards } from "@/components/analytics/token-cards";
@@ -225,6 +228,20 @@ export default function AnalyticsPage() {
                 />
               </div>
 
+              <AnalyticsHarnessCards entries={harnessBreakdown?.entries} loading={loading} />
+
+              {(scope === "automation" || scope === "all") && (
+                <AnalyticsDimensionTable
+                  title="Automations"
+                  description="Sessions, completion and cost by automation."
+                  keyLabel="Automation"
+                  entries={automationBreakdown?.entries}
+                  loading={loading}
+                  emptyMessage="No automation data found for this range."
+                  columns={["completionRate", "cost", "prs"]}
+                />
+              )}
+
               <AnalyticsUserTable
                 entries={sortedUserEntries}
                 loading={loading}
@@ -232,6 +249,8 @@ export default function AnalyticsPage() {
                 sortDirection={sortDirection}
                 onSort={handleSort}
               />
+
+              <AnalyticsRunsTable runs={runs} loading={loading} />
 
               <div className="pt-2">
                 <h2 className="text-xl font-semibold text-foreground">Pull Requests</h2>
@@ -255,6 +274,19 @@ export default function AnalyticsPage() {
                   loading={loading}
                 />
                 <AnalyticsPullRequestRepoTable entries={pullRequests?.repos} loading={loading} />
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <AnalyticsPullRequestCostTable
+                  title="Cost by Model"
+                  entries={pullRequests?.models}
+                  loading={loading}
+                />
+                <AnalyticsPullRequestCostTable
+                  title="Cost by Harness"
+                  entries={pullRequests?.harnesses}
+                  loading={loading}
+                />
               </div>
             </>
           ) : null}

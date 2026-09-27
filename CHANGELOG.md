@@ -13,6 +13,9 @@ the paginated bulk export.
 
 ### Added
 
+The analytics dashboard now shows harness metrics, automation performance in automation and all
+scopes, complete runs, and pull-request cost per merged PR by model and harness.
+
 The analytics dashboard now lets operators select human, agent, automation or all sessions and
 compare token usage, cost by model and provider billing in the selected scope.
 

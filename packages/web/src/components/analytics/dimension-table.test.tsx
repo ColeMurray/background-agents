@@ -72,3 +72,25 @@ it("renders the supplied empty message or a loading placeholder", () => {
   rerender(<AnalyticsDimensionTable {...props} loading />);
   expect(screen.queryByText(props.emptyMessage)).not.toBeInTheDocument();
 });
+
+it("renders automation completion and PR columns without subscription billing", () => {
+  render(
+    <AnalyticsDimensionTable
+      {...props}
+      title="Automations"
+      keyLabel="Automation"
+      columns={["completionRate", "cost", "prs"]}
+      entries={[entry]}
+      loading={false}
+    />
+  );
+
+  expect(screen.getByRole("columnheader", { name: "Completion rate" })).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: "PRs" })).toBeInTheDocument();
+  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("100%");
+  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("$3.50");
+  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("2");
+  expect(
+    screen.queryByText("Sessions billed to a subscription report $0.")
+  ).not.toBeInTheDocument();
+});

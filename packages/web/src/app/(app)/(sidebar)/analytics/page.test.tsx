@@ -50,7 +50,47 @@ vi.mock("@/components/analytics/model-bar-chart", () => ({
 }));
 
 vi.mock("@/components/analytics/dimension-table", () => ({
-  AnalyticsDimensionTable: () => <div data-testid="analytics-provider-table" />,
+  AnalyticsDimensionTable: ({
+    title,
+    entries,
+  }: {
+    title: string;
+    entries?: AnalyticsBreakdownResponse["entries"];
+  }) => (
+    <div
+      data-testid={
+        title === "Providers" ? "analytics-provider-table" : "analytics-automation-table"
+      }
+      data-entries={JSON.stringify(entries)}
+    />
+  ),
+}));
+
+vi.mock("@/components/analytics/harness-cards", () => ({
+  AnalyticsHarnessCards: ({ entries }: { entries?: AnalyticsBreakdownResponse["entries"] }) => (
+    <div data-testid="analytics-harness-cards" data-entries={JSON.stringify(entries)} />
+  ),
+}));
+
+vi.mock("@/components/analytics/runs-table", () => ({
+  AnalyticsRunsTable: ({ runs }: { runs?: unknown[] }) => (
+    <div data-testid="analytics-runs-table" data-runs={JSON.stringify(runs)} />
+  ),
+}));
+
+vi.mock("@/components/analytics/pull-request-cost-table", () => ({
+  AnalyticsPullRequestCostTable: ({ title, entries }: { title: string; entries?: unknown[] }) => (
+    <div
+      data-testid={
+        title === "Cost by Model" ? "analytics-pr-model-cost" : "analytics-pr-harness-cost"
+      }
+      data-entries={JSON.stringify(entries)}
+    />
+  ),
+}));
+
+vi.mock("@/components/analytics/pull-request-cards", () => ({
+  AnalyticsPullRequestCards: () => <div data-testid="analytics-pr-cards" />,
 }));
 
 vi.mock("@/components/analytics/timeseries-chart", () => ({
@@ -182,6 +222,67 @@ function getUserRows() {
 }
 
 describe("AnalyticsPage", () => {
+  it("shows automation only for automation and all scopes and orders the new views", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    mockUseAnalyticsDashboard.mockImplementation(() => ({
+      summary,
+      timeseries,
+      repoBreakdown,
+      userBreakdown,
+      harnessBreakdown: { entries: [repoBreakdown.entries[0]] },
+      automationBreakdown: { entries: [repoBreakdown.entries[0]] },
+      runs: [{ rootSessionId: "root-1" }],
+      pullRequests: { models: [{ key: "model-1" }], harnesses: [{ key: "harness-1" }] },
+      loading: false,
+    }));
+
+    expect(screen.queryByTestId("analytics-automation-table")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Agents" }));
+    expect(screen.queryByTestId("analytics-automation-table")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Automations" }));
+    expect(screen.getByTestId("analytics-automation-table")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([repoBreakdown.entries[0]])
+    );
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    expect(screen.getByTestId("analytics-automation-table")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Human" }));
+    expect(screen.queryByTestId("analytics-automation-table")).not.toBeInTheDocument();
+
+    expect(screen.getByTestId("analytics-harness-cards")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([repoBreakdown.entries[0]])
+    );
+    expect(screen.getByTestId("analytics-runs-table")).toHaveAttribute(
+      "data-runs",
+      JSON.stringify([{ rootSessionId: "root-1" }])
+    );
+    expect(screen.getByTestId("analytics-pr-model-cost")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([{ key: "model-1" }])
+    );
+    expect(screen.getByTestId("analytics-pr-harness-cost")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([{ key: "harness-1" }])
+    );
+    const widgets = Array.from(document.querySelectorAll("[data-testid]")).map((node) =>
+      node.getAttribute("data-testid")
+    );
+    expect(widgets.indexOf("analytics-harness-cards")).toBeGreaterThan(
+      widgets.indexOf("analytics-provider-table")
+    );
+    expect(widgets.indexOf("analytics-runs-table")).toBeGreaterThan(
+      widgets.indexOf("analytics-harness-cards")
+    );
+    expect(widgets.indexOf("analytics-pr-model-cost")).toBeGreaterThan(
+      widgets.indexOf("analytics-pr-cards")
+    );
+    expect(widgets.indexOf("analytics-pr-harness-cost")).toBeGreaterThan(
+      widgets.indexOf("analytics-pr-model-cost")
+    );
+  });
+
   it("refetches analytics when the selected range changes", async () => {
     const user = userEvent.setup();
 

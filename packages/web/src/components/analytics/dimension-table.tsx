@@ -2,10 +2,10 @@ import {
   getCacheHitRatio,
   type AnalyticsBreakdownResponse,
 } from "@open-inspect/shared/types/analytics";
-import { formatAnalyticsCount, formatAnalyticsRatio } from "@/lib/analytics";
+import { formatAnalyticsCount, formatAnalyticsRatio, formatCompletionRate } from "@/lib/analytics";
 import { formatSessionCost } from "@/lib/session-cost";
 
-type DimensionColumn = "subscriptionSessions" | "cost" | "cacheHitRatio";
+type DimensionColumn = "subscriptionSessions" | "cost" | "cacheHitRatio" | "completionRate" | "prs";
 
 interface DimensionTableProps {
   title: string;
@@ -21,6 +21,8 @@ const columnLabels: Record<DimensionColumn, string> = {
   subscriptionSessions: "Subscription sessions",
   cost: "Cost",
   cacheHitRatio: "Cache hit ratio",
+  completionRate: "Completion rate",
+  prs: "PRs",
 };
 
 export function AnalyticsDimensionTable({
@@ -75,30 +77,37 @@ export function AnalyticsDimensionTable({
             </tr>
           </thead>
           <tbody>
-            {entries.map((entry) => (
-              <tr
-                key={entry.key}
-                className="border-b border-border-muted last:border-b-0 hover:bg-muted/50"
-              >
-                <td className="px-5 py-4 font-medium text-foreground">
-                  {entry.displayName ?? entry.key}
-                </td>
-                <td className="px-5 py-4 text-right text-foreground">
-                  {formatAnalyticsCount(entry.sessions)}
-                </td>
-                {columns.map((column) => (
-                  <td key={column} className="px-5 py-4 text-right text-foreground">
-                    {column === "subscriptionSessions"
-                      ? entry.subscriptionSessions === undefined
-                        ? "—"
-                        : formatAnalyticsCount(entry.subscriptionSessions)
-                      : column === "cost"
-                        ? formatSessionCost(entry.cost)
-                        : formatAnalyticsRatio(getCacheHitRatio(entry))}
+            {entries.map((entry) => {
+              const values: Record<DimensionColumn, string> = {
+                subscriptionSessions:
+                  entry.subscriptionSessions === undefined
+                    ? "—"
+                    : formatAnalyticsCount(entry.subscriptionSessions),
+                cost: formatSessionCost(entry.cost),
+                cacheHitRatio: formatAnalyticsRatio(getCacheHitRatio(entry)),
+                completionRate: formatCompletionRate(entry),
+                prs: formatAnalyticsCount(entry.prs),
+              };
+
+              return (
+                <tr
+                  key={entry.key}
+                  className="border-b border-border-muted last:border-b-0 hover:bg-muted/50"
+                >
+                  <td className="px-5 py-4 font-medium text-foreground">
+                    {entry.displayName ?? entry.key}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  <td className="px-5 py-4 text-right text-foreground">
+                    {formatAnalyticsCount(entry.sessions)}
+                  </td>
+                  {columns.map((column) => (
+                    <td key={column} className="px-5 py-4 text-right text-foreground">
+                      {values[column]}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
