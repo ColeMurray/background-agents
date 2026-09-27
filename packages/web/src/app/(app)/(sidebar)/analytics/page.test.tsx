@@ -50,7 +50,23 @@ vi.mock("@/components/analytics/model-bar-chart", () => ({
 }));
 
 vi.mock("@/components/analytics/dimension-table", () => ({
-  AnalyticsDimensionTable: () => <div data-testid="analytics-provider-table" />,
+  AnalyticsDimensionTable: ({ title }: { title: string }) => (
+    <div data-testid={`analytics-${title.toLowerCase()}-table`} />
+  ),
+}));
+
+vi.mock("@/components/analytics/harness-cards", () => ({
+  AnalyticsHarnessCards: () => <div data-testid="analytics-harness-cards" />,
+}));
+
+vi.mock("@/components/analytics/runs-table", () => ({
+  AnalyticsRunsTable: () => <div data-testid="analytics-runs-table" />,
+}));
+
+vi.mock("@/components/analytics/pull-request-cost-table", () => ({
+  AnalyticsPullRequestCostTable: ({ title }: { title: string }) => (
+    <div data-testid={`analytics-${title.toLowerCase().replaceAll(" ", "-")}`} />
+  ),
 }));
 
 vi.mock("@/components/analytics/timeseries-chart", () => ({
@@ -230,7 +246,30 @@ describe("AnalyticsPage", () => {
     expect(
       JSON.parse(screen.getByTestId("analytics-model-chart").dataset.entries ?? "[]")
     ).toMatchObject([{ key: "anthropic/sonnet", cost: 7 }]);
-    expect(screen.getByTestId("analytics-provider-table")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-providers-table")).toBeInTheDocument();
+  });
+
+  it("shows automation breakdown only for automation and all scopes", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(screen.queryByTestId("analytics-automations-table")).not.toBeInTheDocument();
+    expect(screen.getByTestId("analytics-harness-cards")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-runs-table")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-cost-by-model")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-cost-by-harness")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Agents" }));
+    expect(screen.queryByTestId("analytics-automations-table")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Automations" }));
+    expect(screen.getByTestId("analytics-automations-table")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    expect(screen.getByTestId("analytics-automations-table")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Human" }));
+    expect(screen.queryByTestId("analytics-automations-table")).not.toBeInTheDocument();
   });
 
   it("renders cached dimensions when a refresh fails without summary data", () => {

@@ -72,3 +72,23 @@ it("renders the supplied empty message or a loading placeholder", () => {
   rerender(<AnalyticsDimensionTable {...props} loading />);
   expect(screen.queryByText(props.emptyMessage)).not.toBeInTheDocument();
 });
+
+it("renders automation completion rate and PR totals in the existing dimension table", () => {
+  render(
+    <AnalyticsDimensionTable
+      title="Automations"
+      description="Automated session usage."
+      keyLabel="Automation"
+      emptyMessage="No automation data found for this range."
+      columns={["completionRate", "cost", "prs"]}
+      entries={[entry]}
+      loading={false}
+    />
+  );
+
+  expect(screen.getByRole("columnheader", { name: "Completion rate" })).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: "PRs" })).toBeInTheDocument();
+  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("100%");
+  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("$3.50");
+  expect(screen.getByRole("row", { name: /Anthropic/ })).toHaveTextContent("2");
+});
