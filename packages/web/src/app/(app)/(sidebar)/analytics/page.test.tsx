@@ -7,8 +7,11 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type {
   AnalyticsBreakdownResponse,
+  AnalyticsPullRequestDimensionEntry,
+  AnalyticsPullRequestsResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
+  SessionRun,
 } from "@open-inspect/shared/types/analytics";
 import AnalyticsPage from "./page";
 
@@ -50,22 +53,84 @@ vi.mock("@/components/analytics/model-bar-chart", () => ({
 }));
 
 vi.mock("@/components/analytics/dimension-table", () => ({
-  AnalyticsDimensionTable: ({ title, description }: { title: string; description: string }) => (
-    <div data-testid={`analytics-${title.toLowerCase()}-table`}>{description}</div>
+  AnalyticsDimensionTable: ({
+    title,
+    description,
+    entries,
+    loading,
+  }: {
+    title: string;
+    description: string;
+    entries?: AnalyticsBreakdownResponse["entries"];
+    loading: boolean;
+  }) => (
+    <div
+      data-testid={`analytics-${title.toLowerCase()}-table`}
+      data-entries={JSON.stringify(entries)}
+      data-loading={String(loading)}
+    >
+      {description}
+    </div>
   ),
 }));
 
 vi.mock("@/components/analytics/harness-cards", () => ({
-  AnalyticsHarnessCards: () => <div data-testid="analytics-harness-cards" />,
+  AnalyticsHarnessCards: ({
+    entries,
+    loading,
+  }: {
+    entries?: AnalyticsBreakdownResponse["entries"];
+    loading: boolean;
+  }) => (
+    <div
+      data-testid="analytics-harness-cards"
+      data-entries={JSON.stringify(entries)}
+      data-loading={String(loading)}
+    />
+  ),
 }));
 
 vi.mock("@/components/analytics/runs-table", () => ({
-  AnalyticsRunsTable: () => <div data-testid="analytics-runs-table" />,
+  AnalyticsRunsTable: ({ runs, loading }: { runs?: SessionRun[]; loading: boolean }) => (
+    <div
+      data-testid="analytics-runs-table"
+      data-runs={JSON.stringify(runs)}
+      data-loading={String(loading)}
+    />
+  ),
+}));
+
+vi.mock("@/components/analytics/pull-request-cards", () => ({
+  AnalyticsPullRequestCards: ({
+    pullRequests,
+    loading,
+  }: {
+    pullRequests?: AnalyticsPullRequestsResponse;
+    loading: boolean;
+  }) => (
+    <div
+      data-testid="analytics-pr-cards"
+      data-pull-requests={JSON.stringify(pullRequests)}
+      data-loading={String(loading)}
+    />
+  ),
 }));
 
 vi.mock("@/components/analytics/pull-request-cost-table", () => ({
-  AnalyticsPullRequestCostTable: ({ title }: { title: string }) => (
-    <div data-testid={`analytics-${title.toLowerCase().replaceAll(" ", "-")}`} />
+  AnalyticsPullRequestCostTable: ({
+    title,
+    entries,
+    loading,
+  }: {
+    title: string;
+    entries?: AnalyticsPullRequestDimensionEntry[];
+    loading: boolean;
+  }) => (
+    <div
+      data-testid={`analytics-${title.toLowerCase().replaceAll(" ", "-")}`}
+      data-entries={JSON.stringify(entries)}
+      data-loading={String(loading)}
+    />
   ),
 }));
 
@@ -174,7 +239,48 @@ const userBreakdown: AnalyticsBreakdownResponse = {
   ],
 };
 
-function renderPage() {
+const harnessBreakdown: AnalyticsBreakdownResponse = {
+  entries: [{ ...repoBreakdown.entries[0], key: "opencode" }],
+};
+const providerBreakdown: AnalyticsBreakdownResponse = {
+  entries: [{ ...repoBreakdown.entries[0], key: "anthropic", subscriptionSessions: 2 }],
+};
+const automationBreakdown: AnalyticsBreakdownResponse = {
+  entries: [{ ...repoBreakdown.entries[0], key: "automation-1", displayName: "Nightly" }],
+};
+const runs: SessionRun[] = [
+  {
+    rootSessionId: "root-1",
+    title: "Deploy app",
+    sessionCount: 2,
+    maxSpawnDepth: 1,
+    totalCost: 8.25,
+    totalPrs: 1,
+    ...zeroTokens,
+    createdAt: Date.UTC(2026, 3, 12),
+    updatedAt: Date.UTC(2026, 3, 12),
+    userId: null,
+    scmLogin: null,
+    spawnSource: "user",
+    automationId: null,
+    repoOwner: null,
+    repoName: null,
+  },
+];
+const pullRequests: AnalyticsPullRequestsResponse = {
+  funnel: { created: 2, open: 0, draft: 0, merged: 1, closed: 1 },
+  prSessionCost: 8.25,
+  mergedInWindow: 1,
+  avgTimeToMergeMs: null,
+  openInventory: { total: 0, avgAgeMs: null },
+  timeseries: [],
+  repos: [],
+  sources: [],
+  models: [{ key: "anthropic/sonnet", created: 2, merged: 1, sessionCost: 8.25 }],
+  harnesses: [{ key: "opencode", created: 2, merged: 1, sessionCost: 8.25 }],
+};
+
+function renderPage(loading = false) {
   mockUseSidebarContext.mockReturnValue({
     isOpen: true,
     toggle: vi.fn(),
@@ -185,7 +291,12 @@ function renderPage() {
     timeseries,
     repoBreakdown,
     userBreakdown,
-    loading: false,
+    harnessBreakdown,
+    providerBreakdown,
+    automationBreakdown,
+    runs,
+    pullRequests,
+    loading,
     error: undefined,
   }));
 
@@ -198,6 +309,49 @@ function getUserRows() {
 }
 
 describe("AnalyticsPage", () => {
+  it("forwards dashboard dimensions, runs and PR cohorts to the new widgets", async () => {
+    const user = userEvent.setup();
+    renderPage(true);
+
+    expect(screen.getByTestId("analytics-harness-cards")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify(harnessBreakdown.entries)
+    );
+    expect(screen.getByTestId("analytics-providers-table")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify(providerBreakdown.entries)
+    );
+    expect(screen.getByTestId("analytics-runs-table")).toHaveAttribute(
+      "data-runs",
+      JSON.stringify(runs)
+    );
+    expect(screen.getByTestId("analytics-cost-by-model")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify(pullRequests.models)
+    );
+    expect(screen.getByTestId("analytics-cost-by-harness")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify(pullRequests.harnesses)
+    );
+    expect(screen.getByTestId("analytics-pr-cards")).toHaveAttribute(
+      "data-pull-requests",
+      JSON.stringify(pullRequests)
+    );
+    expect(screen.getByTestId("analytics-harness-cards")).toHaveAttribute("data-loading", "true");
+    expect(screen.getByTestId("analytics-runs-table")).toHaveAttribute("data-loading", "true");
+    expect(screen.getByTestId("analytics-cost-by-model")).toHaveAttribute("data-loading", "true");
+
+    await user.click(screen.getByRole("radio", { name: "Automations" }));
+    expect(screen.getByTestId("analytics-automations-table")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify(automationBreakdown.entries)
+    );
+    expect(screen.getByTestId("analytics-automations-table")).toHaveAttribute(
+      "data-loading",
+      "true"
+    );
+  });
+
   it("refetches analytics when the selected range changes", async () => {
     const user = userEvent.setup();
 
