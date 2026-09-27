@@ -68,8 +68,13 @@ function toExportRow(
   repositories: SessionListRepository[],
   pullRequests: ExportPullRequest[]
 ): SessionExportRow {
+  const {
+    ownerTeamId: _ownerTeamId,
+    visibility: _visibility,
+    ...sessionFields
+  } = toSessionFields(row);
   return {
-    ...toSessionFields(row),
+    ...sessionFields,
     source: row.spawn_source,
     rootSessionId: row.root_session_id,
     provider: extractProviderAndModel(row.model).provider,

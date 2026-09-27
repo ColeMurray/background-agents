@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { TeamStore, DefaultTeamImmutableError } from "../../src/db/teams";
-import { TeamMembershipStore, LastLeadError } from "../../src/db/team-memberships";
+import {
+  TeamMembershipStore,
+  LastLeadError,
+  TeamMembershipNotFoundError,
+} from "../../src/db/team-memberships";
 import { cleanD1Tables } from "./cleanup";
 import { sqlDatabase } from "./helpers";
 
@@ -52,6 +56,26 @@ describe("team and membership stores", () => {
     expect(leads).toHaveLength(1);
     await expect(members.remove("team_default", leads[0].userId)).rejects.toBeInstanceOf(
       LastLeadError
+    );
+  });
+
+  it("distinguishes missing memberships from the final lead and permits an unchanged lead", async () => {
+    const members = new TeamMembershipStore(env.DB);
+    await env.DB.prepare(
+      "INSERT INTO users (id, created_at, updated_at) VALUES ('only-lead', 1, 1)"
+    ).run();
+    await members.add("team_default", "only-lead", "lead");
+
+    await expect(members.setRole("team_default", "only-lead", "lead")).resolves.toBeUndefined();
+    await expect(members.setRole("team_default", "only-lead", "member")).rejects.toBeInstanceOf(
+      LastLeadError
+    );
+    await expect(members.remove("team_default", "only-lead")).rejects.toBeInstanceOf(LastLeadError);
+    await expect(members.setRole("team_default", "missing", "member")).rejects.toBeInstanceOf(
+      TeamMembershipNotFoundError
+    );
+    await expect(members.remove("team_default", "missing")).rejects.toBeInstanceOf(
+      TeamMembershipNotFoundError
     );
   });
 

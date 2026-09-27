@@ -13,6 +13,13 @@ export class LastLeadError extends Error {
   }
 }
 
+export class TeamMembershipNotFoundError extends Error {
+  constructor() {
+    super("Team membership not found");
+    this.name = "TeamMembershipNotFoundError";
+  }
+}
+
 export class TeamMembershipStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -67,11 +74,11 @@ export class TeamMembershipStore {
     const result = await this.db
       .prepare(
         `UPDATE team_memberships SET role = ? WHERE team_id = ? AND user_id = ?
-                AND (role != 'lead' OR (SELECT COUNT(*) FROM team_memberships WHERE team_id = ? AND role = 'lead') > 1)`
+                AND (? = 'lead' OR role != 'lead' OR (SELECT COUNT(*) FROM team_memberships WHERE team_id = ? AND role = 'lead') > 1)`
       )
-      .bind(teamRoleSchema.parse(role), teamId, userId, teamId)
+      .bind(teamRoleSchema.parse(role), teamId, userId, role, teamId)
       .run();
-    if (result.meta.changes === 0) throw new LastLeadError();
+    if (result.meta.changes === 0) await this.throwMembershipUpdateError(teamId, userId);
   }
 
   async remove(teamId: string, userId: string): Promise<void> {
@@ -82,7 +89,16 @@ export class TeamMembershipStore {
       )
       .bind(teamId, userId, teamId)
       .run();
-    if (result.meta.changes === 0) throw new LastLeadError();
+    if (result.meta.changes === 0) await this.throwMembershipUpdateError(teamId, userId);
+  }
+
+  private async throwMembershipUpdateError(teamId: string, userId: string): Promise<never> {
+    const member = await this.db
+      .prepare("SELECT 1 AS ok FROM team_memberships WHERE team_id = ? AND user_id = ?")
+      .bind(teamId, userId)
+      .first();
+    if (!member) throw new TeamMembershipNotFoundError();
+    throw new LastLeadError();
   }
 
   autoJoinStatements(userId: string, nowMs: number): SqlStatement[] {
@@ -101,18 +117,16 @@ export class TeamMembershipStore {
                   (id, occurred_at, request_id, principal_kind, actor_service_snapshot,
                    action, resource_type, resource_id, target_user_id_snapshot,
                    reason_code, operation_result, metadata_json, team_id)
-                  SELECT lower(hex(randomblob(16))), ?, 'team-auto-join:' || ? || ':' || t.id,
+                  SELECT 'team-auto-join:' || ? || ':' || t.id || ':' || m.created_at,
+                         ?, 'team-auto-join:' || ? || ':' || t.id,
                          'service', 'team-auto-join', 'team.member_auto_joined', 'team', t.id,
                          ?, 'auto_join', 'applied', ?, t.id
                   FROM teams t JOIN team_memberships m ON m.team_id = t.id AND m.user_id = ?
                   WHERE m.source = 'auto_join' AND m.created_at = ?
-                    AND NOT EXISTS (
-                      SELECT 1 FROM authorization_audit_events a
-                      WHERE a.request_id = 'team-auto-join:' || ? || ':' || t.id
-                        AND a.action = 'team.member_auto_joined'
-                    )`
+                  ON CONFLICT(id) DO NOTHING`
         )
         .bind(
+          userId,
           nowMs,
           userId,
           userId,
@@ -122,8 +136,7 @@ export class TeamMembershipStore {
             after: { member: true },
           }),
           userId,
-          nowMs,
-          userId
+          nowMs
         ),
     ];
   }

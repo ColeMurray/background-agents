@@ -455,7 +455,21 @@ export async function mergeUsers(
 
   // Dedup before re-pointing: drop loser rows whose target slot the survivor
   // already occupies (identities under idx_user_identities_provider; read
-  // states routinely, where both split rows read the same session).
+  // states routinely, where both split rows read the same session). Keep the
+  // stronger lead role before deleting a colliding loser membership.
+  statements.push(
+    db
+      .prepare(
+        `UPDATE team_memberships SET role = 'lead'
+         WHERE user_id = ? AND role = 'member'
+           AND EXISTS (
+             SELECT 1 FROM team_memberships AS loser_membership
+             WHERE loser_membership.team_id = team_memberships.team_id
+               AND loser_membership.user_id = ? AND loser_membership.role = 'lead'
+           )`
+      )
+      .bind(survivorId, loserId)
+  );
   addOperations(BEFORE_SKILL_PROFILE_OPERATIONS);
 
   // Profile resolution uses this generation as a consistency fence. Advance

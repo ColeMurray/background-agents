@@ -266,7 +266,7 @@ describe("mergeUsers", () => {
       await env.DB.prepare("SELECT role FROM team_memberships WHERE user_id = ?")
         .bind(SURVIVOR)
         .first()
-    ).toEqual({ role: "member" });
+    ).toEqual({ role: "lead" });
     expect(
       await env.DB.prepare(
         "SELECT user_id FROM session_collaborators WHERE session_id = 'session-1'"

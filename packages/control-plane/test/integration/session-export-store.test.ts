@@ -39,6 +39,8 @@ describe("SessionExportStore integration", () => {
     const store = new SessionExportStore(sqlDatabase(env.DB));
 
     expect((await store.get("child"))?.rootSessionId).toBe("root");
+    expect(await store.get("child")).not.toHaveProperty("ownerTeamId");
+    expect(await store.get("child")).not.toHaveProperty("visibility");
     expect(await store.get("missing")).toBeNull();
   });
 

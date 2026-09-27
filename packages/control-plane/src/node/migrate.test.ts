@@ -112,6 +112,13 @@ describe("applyMigrations", () => {
         )
         .run()
     ).toThrow();
+    expect(() =>
+      db.prepare("INSERT INTO environments (id, name) VALUES ('old-null', 'OLD')").run()
+    ).toThrow();
+    db.prepare("INSERT INTO environments (id, name) VALUES ('null-first', 'New')").run();
+    expect(() =>
+      db.prepare("INSERT INTO environments (id, name) VALUES ('null-second', 'new')").run()
+    ).toThrow();
   });
 
   it("applies files in version order and skips the ones already recorded", () => {

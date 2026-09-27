@@ -108,4 +108,4 @@ CREATE INDEX idx_sessions_owner_team ON sessions(owner_team_id, status, updated_
 CREATE INDEX idx_sessions_owner_team_visibility ON sessions(owner_team_id, visibility, updated_at DESC);
 CREATE INDEX idx_audit_events_team ON authorization_audit_events(team_id, occurred_at DESC, id DESC);
 DROP INDEX idx_environments_name;
-CREATE UNIQUE INDEX idx_environments_name ON environments (owner_team_id, lower(name));
+CREATE UNIQUE INDEX idx_environments_name ON environments (COALESCE(owner_team_id, 'team_default'), lower(name));
