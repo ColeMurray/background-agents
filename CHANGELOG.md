@@ -13,6 +13,11 @@ the paginated bulk export.
 
 ### Added
 
+Session analytics API now accepts `scope=human|agent|automation|all` (default `human`) on the
+dashboard, summary, timeseries, and breakdown routes, and supports `by=model`, `by=harness`,
+`by=spawnSource`, `by=automation`, and `by=provider` breakdowns. Provider rows include the number of
+sessions billed through a matching provider account.
+
 The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema and instructions for
 manually downloading paginated runs through the web app.
 
