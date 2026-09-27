@@ -20,10 +20,14 @@ export function AnalyticsRunsTable({ runs, loading }: RunsTableProps) {
     );
   }
 
+  const description =
+    "Scope and time range select roots; totals include all descendants, even outside the selected scope or range.";
+
   if (!runs?.length) {
     return (
       <div className="rounded-md border border-border-muted bg-card p-5">
         <div className="text-lg font-semibold text-foreground">Top Runs by Cost</div>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         <p className="mt-1 text-sm text-muted-foreground">No runs found for this range.</p>
       </div>
     );
@@ -33,7 +37,7 @@ export function AnalyticsRunsTable({ runs, loading }: RunsTableProps) {
     <div className="rounded-md border border-border-muted bg-card">
       <div className="border-b border-border-muted px-5 py-4">
         <h2 className="text-lg font-semibold text-foreground">Top Runs by Cost</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Root sessions and their descendants.</p>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full border-collapse text-sm">

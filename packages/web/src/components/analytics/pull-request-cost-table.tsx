@@ -67,7 +67,12 @@ export function AnalyticsPullRequestCostTable({
                 className="border-b border-border-muted last:border-b-0 hover:bg-muted/50"
               >
                 <td className="px-5 py-4 font-medium text-foreground">
-                  {entry.displayName ?? entry.key}
+                  <div>{entry.displayName ?? entry.key}</div>
+                  {entry.displayName && entry.displayName !== entry.key ? (
+                    <div className="mt-1 text-xs font-normal text-muted-foreground">
+                      {entry.key}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="px-5 py-4 text-right text-foreground">
                   {formatAnalyticsCount(entry.created)}

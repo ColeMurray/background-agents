@@ -37,6 +37,23 @@ it("renders per-merged-PR session cost and excludes unmerged rows from division"
   ).toBeInTheDocument();
 });
 
+it("distinguishes raw model aliases with the same display name", () => {
+  render(
+    <AnalyticsPullRequestCostTable
+      title="Cost by Model"
+      entries={[
+        { ...entry, key: "claude-haiku-4-5", displayName: "Claude Haiku 4.5" },
+        { ...entry, key: "anthropic/claude-haiku-4-5", displayName: "Claude Haiku 4.5" },
+      ]}
+      loading={false}
+    />
+  );
+
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("claude-haiku-4-5")).toBeInTheDocument();
+  expect(within(rows[1]).getByText("anthropic/claude-haiku-4-5")).toBeInTheDocument();
+});
+
 it("shows the titled empty panel or a loading placeholder", () => {
   const { rerender } = render(
     <AnalyticsPullRequestCostTable title="Cost by Harness" entries={[]} loading={false} />

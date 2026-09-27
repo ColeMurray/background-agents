@@ -78,6 +78,22 @@ it("labels input and output tokens as a partial metric when other usage exists",
   expect(within(rows[1]).getByRole("cell", { name: "0" })).toBeInTheDocument();
 });
 
+it("distinguishes root scope and window from a run including agent descendants", () => {
+  const { rerender } = render(
+    <AnalyticsRunsTable runs={[{ ...run, spawnSource: "user", sessionCount: 2 }]} loading={false} />
+  );
+
+  expect(
+    screen.getByText(/Scope and time range select roots; totals include all descendants/)
+  ).toBeInTheDocument();
+  expect(screen.getByRole("row", { name: /Fix the build/ })).toHaveTextContent("2");
+
+  rerender(<AnalyticsRunsTable runs={[]} loading={false} />);
+  expect(
+    screen.getByText(/Scope and time range select roots; totals include all descendants/)
+  ).toBeInTheDocument();
+});
+
 it("shows an empty panel or a loading placeholder", () => {
   const { rerender } = render(<AnalyticsRunsTable runs={[]} loading={false} />);
   expect(screen.getByText("No runs found for this range.")).toBeInTheDocument();

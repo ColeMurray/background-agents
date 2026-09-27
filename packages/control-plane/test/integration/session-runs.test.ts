@@ -254,7 +254,7 @@ describe("session runs", () => {
     ).toEqual(["newer-cheap"]);
   });
 
-  it("keeps runs unfiltered by default but scopes explicit human roots and preserves null titles", async () => {
+  it("scopes runs by root while including agent descendants and preserves null titles", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now() - DAY_MS;
     await seedSession(
@@ -263,6 +263,20 @@ describe("session runs", () => {
       1,
       0,
       0
+    );
+    await seedSession(
+      store,
+      {
+        id: "agent-child",
+        parentSessionId: "human-root",
+        spawnSource: "agent",
+        spawnDepth: 1,
+        createdAt: now + 1,
+        updatedAt: now + 1,
+      },
+      0.5,
+      0,
+      2
     );
     await seedSession(
       store,
@@ -295,7 +309,17 @@ describe("session runs", () => {
       await serviceFetch("https://test.local/analytics/runs?scope=human")
     ).json<AnalyticsRunsResponse>();
     expect(human.runs).toEqual([
-      expect.objectContaining({ rootSessionId: "human-root", title: null }),
+      expect.objectContaining({
+        rootSessionId: "human-root",
+        title: null,
+        sessionCount: 2,
+        totalCost: 1.5,
+        inputTokens: 2,
+      }),
     ]);
+    const agents = await (
+      await serviceFetch("https://test.local/analytics/runs?scope=agent")
+    ).json<AnalyticsRunsResponse>();
+    expect(agents.runs.map((run) => run.rootSessionId)).toEqual(["agent-root"]);
   });
 });
