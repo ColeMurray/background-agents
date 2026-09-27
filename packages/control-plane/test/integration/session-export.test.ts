@@ -43,6 +43,18 @@ describe("GET /sessions/export with include", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
+  it("denies a signed-in member without sessions.export", async () => {
+    const response = await serviceFetch("https://cp.test/sessions/export", {
+      initialUserRole: "member",
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.export",
+    });
+  });
+
   it("downloads only the requested session and rejects scope on the single route", async () => {
     const root = await initSession({ title: "root" });
     const child = await initSession({ title: "child" });
