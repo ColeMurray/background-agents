@@ -44,15 +44,21 @@ VM session snapshots are **destructive**: quiesce Docker, capture the filesystem
 termination. Later work restores into a new VM. Standard Modal snapshots remain non-destructive. A
 failed or ambiguous capture/retirement must not be reported as a successful checkpoint.
 
+VMs therefore keep running between turns. They are saved and stopped on inactivity, lifetime expiry,
+a lost heartbeat, a runtime failure or archive; a VM that stops heartbeating is captured without its
+runtime. Cancelling a session stops its VM without saving. While a save has failed or its result is
+unknown, new prompts are held and the session offers to retry the save, restore the last saved
+state, or discard the VM and start fresh.
+
 Filesystem capture is not process/RAM continuity or an application-consistent database backup.
 Containers must use appropriate persistence and restart policies. Live Docker pause/resume is not
 provided. Raw daemon logs are truncated after clean preparation before reusable image capture.
 
 Retried VM launches adopt only an exactly owned allocation and recover its original interactive
 credentials. A predecessor must be confirmed terminated before launching a replacement. Build
-allocations have deterministic backend/build names and can be recovered after a lost create
-response. Returned build handles are persisted for cleanup before backend validation; incompatible
-builds never start and cannot publish prepared images.
+allocations have deterministic backend/build names, so a retried create adopts the allocation an
+earlier lost response created. Returned build handles are persisted for cleanup before backend
+validation; incompatible builds never start and cannot publish prepared images.
 
 ## Switching backends
 
