@@ -63,11 +63,8 @@
     },
     "packages/docs": {
       "next": true,
-      "entry": ["src/**/*.test.ts"],
-      "project": ["src/**/*.{ts,tsx,css}"],
-      "ignoreIssues": {
-        "src/components/mdx.tsx": ["exports", "duplicates"]
-      }
+      "entry": ["src/**/*.test.ts", "source.config.ts"],
+      "project": ["src/**/*.{ts,tsx,css}", "source.config.ts"]
     }
   }
 }

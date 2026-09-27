@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { ImageResponse } from "next/og";
 
+import { LogoMark } from "@/components/logo";
+import { borderAlpha, brand, withAlpha } from "@/lib/brand";
 import { socialCard, socialCardSize } from "@/lib/social-card";
 import { source } from "@/lib/source";
 
@@ -8,9 +10,12 @@ type SocialCardRouteContext = {
   params: Promise<{ slug: string[] }>;
 };
 
-const ink = "#1a1a1a";
-const muted = "#666666";
-const accent = "#6f5a41";
+const {
+  background,
+  foreground: ink,
+  mutedForeground: muted,
+  accentForeground: accent,
+} = brand.light;
 
 export const revalidate = false;
 
@@ -26,7 +31,7 @@ export async function GET(_request: Request, { params }: SocialCardRouteContext)
   return new ImageResponse(
     <div
       style={{
-        background: "#f8f8f6",
+        background,
         color: ink,
         display: "flex",
         height: "100%",
@@ -36,7 +41,7 @@ export async function GET(_request: Request, { params }: SocialCardRouteContext)
     >
       <div
         style={{
-          border: "2px solid rgba(26, 26, 26, 0.12)",
+          border: `2px solid ${withAlpha(ink, borderAlpha)}`,
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
@@ -53,10 +58,7 @@ export async function GET(_request: Request, { params }: SocialCardRouteContext)
             gap: "20px",
           }}
         >
-          <svg fill="none" height="52" viewBox="0 0 36 36" width="52">
-            <rect height="34" stroke={ink} strokeWidth="2" width="34" x="1" y="1" />
-            <rect fill={ink} height="20" width="20" x="8" y="8" />
-          </svg>
+          <LogoMark color={ink} size={52} />
           OpenInspect
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
