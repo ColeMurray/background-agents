@@ -641,7 +641,7 @@ describe("ModalSandboxProvider", () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const createdAt = Date.now();
         const stopSandbox = vi.fn(async () => {
-          throw new ModalApiError("pending_reference_not_visible", 409);
+          throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         });
         const provider = new ModalSandboxProvider(
           createMockModalClient({ stopSandbox }),
@@ -664,18 +664,13 @@ describe("ModalSandboxProvider", () => {
             ...config,
             providerObjectId: 'modal-vm-session:["test-session","generation"]',
           })
-        ).rejects.toThrow();
-        await expect(
-          provider.stopSandbox({
-            ...config,
-            providerObjectId: 'modal-vm-session:["test-session","bounded"]',
-          })
-        ).rejects.toThrow();
+        ).resolves.toEqual({ success: true });
         await expect(
           provider.stopSandbox({ ...config, generationCreatedAtMs: undefined })
         ).rejects.toThrow();
 
         for (const error of [
+          new ModalApiError("pending_reference_not_visible", 409, "other_conflict"),
           new ModalApiError("other conflict", 409),
           new ModalApiError("provider unavailable", 500),
           new Error("network failure"),

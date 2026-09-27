@@ -42,6 +42,7 @@ from ..app import app
 from ..app_config import APP_NAME
 from ..images.base import base_image
 from .launch_policy import (
+    PENDING_VM_REFERENCE_PREFIX,
     ModalBackend,
     docker_allocation_name,
     docker_allocation_tags,
@@ -49,6 +50,7 @@ from .launch_policy import (
     docker_runtime_env,
     launch_kwargs,
     parse_launch,
+    parse_pending_vm_reference,
 )
 from .vcs_env import inject_vcs_env_vars
 
@@ -636,7 +638,7 @@ class SandboxManager:
         except modal.exception.NotFoundError:
             return None
         if await sandbox.get_tags.aio() != tags:
-            raise PendingVMReferenceNotVisible("Docker sandbox allocation ownership mismatch")
+            raise RuntimeError("Docker sandbox allocation ownership mismatch")
         return sandbox
 
     async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:
@@ -767,7 +769,7 @@ class SandboxManager:
 
     async def stop_sandbox(self, sandbox_id: str) -> None:
         """Resolve a pending reference if needed, then confirm immutable-ID retirement."""
-        if sandbox_id.startswith("modal-vm-session:"):
+        if sandbox_id.startswith(PENDING_VM_REFERENCE_PREFIX):
             handle = await self.get_sandbox_by_id(sandbox_id)
             assert handle is not None and handle.modal_object_id is not None
             sandbox_id = handle.modal_object_id
@@ -789,23 +791,15 @@ class SandboxManager:
             SandboxHandle if found, None for a confirmed missing immutable ID.
             Missing pending references remain ambiguous and raise an error.
         """
-        if sandbox_id.startswith("modal-vm-session:"):
-            identity = json.loads(sandbox_id.removeprefix("modal-vm-session:"))
-            if (
-                not isinstance(identity, list)
-                or len(identity) not in (2, 3)
-                or not all(isinstance(part, str) and part for part in identity)
-                or (len(identity) == 3 and identity[2] != "bounded")
-            ):
+        identity = parse_pending_vm_reference(sandbox_id)
+        if sandbox_id.startswith(PENDING_VM_REFERENCE_PREFIX):
+            if identity is None:
                 raise ValueError("Invalid pending VM reference")
-            session_id, generation_id = identity[:2]
-            modal_sandbox = await self._find_owned_docker_allocation(
-                docker_allocation_name(session_id),
-                docker_allocation_tags(session_id, generation_id),
-            )
-            if modal_sandbox is None:
-                # An in-flight create can still materialize. Never report confirmed
-                # absence/retirement for an unresolved launch intent.
+            try:
+                modal_sandbox = await modal.Sandbox.from_name.aio(
+                    APP_NAME, docker_allocation_name(identity[0])
+                )
+            except modal.exception.NotFoundError:
                 raise PendingVMReferenceNotVisible("VM launch identity is not yet visible")
         else:
             try:
@@ -813,6 +807,8 @@ class SandboxManager:
             except modal.exception.NotFoundError:
                 return None
         tags = await modal_sandbox.get_tags.aio()
+        if identity is not None and tags != docker_allocation_tags(*identity):
+            raise PendingVMReferenceNotVisible("Docker sandbox allocation ownership mismatch")
         backend = tags.get("openinspect_backend", "modal")
         if backend not in ("modal", "modal-vm"):
             raise ValueError("Unknown sandbox backend tag")

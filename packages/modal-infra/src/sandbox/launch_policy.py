@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     import modal
 
 ALLOCATION_NAME_PREFIX = "oi-"
+PENDING_VM_REFERENCE_PREFIX = "modal-vm-session:"
 ALLOCATION_KIND_TAG = "openinspect_kind"
 ALLOCATION_SESSION_TAG = "openinspect_session_id"
 ALLOCATION_SANDBOX_TAG = "openinspect_sandbox_id"
@@ -118,3 +120,25 @@ def docker_allocation_tags(session_id: str, sandbox_id: str) -> dict[str, str]:
         ALLOCATION_SANDBOX_TAG: _identity_digest(sandbox_id)[:48],
         ALLOCATION_BACKEND_TAG: "modal-vm",
     }
+
+
+def parse_pending_vm_reference(value: str) -> tuple[str, str] | None:
+    """Parse modal-vm-session:["sessionId","sandboxId"] or return None.
+
+    Session id selects the allocation name; both ids select its ownership tags.
+    The reference resolves only while that generation's allocation is running.
+    Absence is confirmed only after the launch window, endpoint timeout and margin.
+    """
+    if not value.startswith(PENDING_VM_REFERENCE_PREFIX):
+        return None
+    try:
+        identity = json.loads(value.removeprefix(PENDING_VM_REFERENCE_PREFIX))
+    except ValueError:
+        return None
+    if (
+        not isinstance(identity, list)
+        or len(identity) != 2
+        or any(not isinstance(part, str) or not part for part in identity)
+    ):
+        return None
+    return identity[0], identity[1]

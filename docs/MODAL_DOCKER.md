@@ -60,6 +60,15 @@ allocations have deterministic backend/build names, so a retried create adopts t
 earlier lost response created. Returned build handles are persisted for cleanup before backend
 validation; incompatible builds never start and cannot publish prepared images.
 
+Before create or restore returns, the control plane records a pending VM reference of the form
+`modal-vm-session:["sessionId","sandboxId"]`. The session id selects the named allocation; the
+session and sandbox (generation) ids select its ownership tags at create. The reference resolves
+only while that generation's allocation runs. A not-visible reference is confirmed absent only once
+its generation is older than the materialization bound: the launch window plus the endpoint
+`timeout=` and a margin. Before then, a queued create could still materialize the allocation. An
+older launch that materializes later may briefly block a replacement, but the single allocation name
+and fenced credentials prevent overlapping work.
+
 ## Switching backends
 
 Changing `SANDBOX_PROVIDER` is an operator cutover, not session migration. Existing sessions and

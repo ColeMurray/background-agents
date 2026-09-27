@@ -6,6 +6,7 @@
  */
 
 import { ModalApiError } from "../client";
+import { formatPendingVmReference, parsePendingVmReference } from "./pending-vm-reference";
 import {
   PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
   PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
@@ -100,10 +101,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   readonly capabilities: SandboxProviderCapabilities;
 
   pendingSandboxReference(sessionId: string, sandboxId: string): string | undefined {
-    // Legacy two-part references were not protected by a provider-side launch deadline.
-    return this.name === "modal-vm"
-      ? `modal-vm-session:${JSON.stringify([sessionId, sandboxId, "bounded"])}`
-      : undefined;
+    return this.name === "modal-vm" ? formatPendingVmReference(sessionId, sandboxId) : undefined;
   }
 
   private launchDeadlineAtMs(generationCreatedAtMs: number | undefined): number | undefined {
@@ -338,24 +336,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       if (error instanceof ModalApiError && error.status === 404) return { success: true };
       const pendingNotVisible =
         this.name === "modal-vm" &&
-        config.providerObjectId.startsWith("modal-vm-session:") &&
+        parsePendingVmReference(config.providerObjectId) !== null &&
         error instanceof ModalApiError &&
         error.status === 409 &&
-        error.message.includes("pending_reference_not_visible");
-      let boundedReference = false;
-      if (pendingNotVisible) {
-        try {
-          const identity: unknown = JSON.parse(
-            config.providerObjectId.slice("modal-vm-session:".length)
-          );
-          boundedReference =
-            Array.isArray(identity) && identity.length === 3 && identity[2] === "bounded";
-        } catch {
-          // A malformed reference cannot prove an absent launch.
-        }
-      }
+        error.detail === "pending_reference_not_visible";
       if (
-        boundedReference &&
+        pendingNotVisible &&
         config.generationCreatedAtMs !== undefined &&
         Date.now() - config.generationCreatedAtMs >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
       )

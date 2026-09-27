@@ -3,6 +3,7 @@ import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { ModalSandboxProvider } from "../providers/modal-provider";
+import { parsePendingVmReference } from "../providers/pending-vm-reference";
 import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
 import {
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
@@ -42,9 +43,9 @@ describe("pending VM reference recovery", () => {
       }),
       stopSandbox: vi.fn(async ({ providerObjectId }: { providerObjectId: string }) => {
         if (providerObjectId.startsWith("modal-vm-session:")) {
-          const [, generation] = JSON.parse(providerObjectId.slice("modal-vm-session:".length));
+          const generation = parsePendingVmReference(providerObjectId)?.sandboxId;
           if (!vm.running || vm.generation !== generation)
-            throw new ModalApiError("pending_reference_not_visible", 409);
+            throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         }
         vm.running = false;
       }),
@@ -77,7 +78,7 @@ describe("pending VM reference recovery", () => {
           sandboxBackend: "modal-vm",
         })),
       stopSandbox: vi.fn(async () => {
-        throw new ModalApiError("pending_reference_not_visible", 409);
+        throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
       }),
     };
     const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
@@ -123,7 +124,7 @@ describe("pending VM reference recovery", () => {
       {
         createSandbox,
         stopSandbox: vi.fn(async () => {
-          throw new ModalApiError("pending_reference_not_visible", 409);
+          throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         }),
       } as unknown as ModalClient,
       "modal-vm"
@@ -145,15 +146,19 @@ describe("pending VM reference recovery", () => {
     });
   });
 
-  it("keeps a legacy in-flight launch fenced at 210 seconds despite a 409", async () => {
+  it("respawns a previously written two-part fenced reference after the bound", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
-    const createSandbox = vi.fn();
+    const createSandbox = vi.fn(async (req: { sandboxId: string }) => ({
+      sandboxId: req.sandboxId,
+      modalObjectId: "sb-new",
+      sandboxBackend: "modal-vm",
+    }));
     const provider = new ModalSandboxProvider(
       {
         createSandbox,
         stopSandbox: vi.fn(async () => {
-          throw new ModalApiError("pending_reference_not_visible", 409);
+          throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
         }),
       } as unknown as ModalClient,
       "modal-vm"
@@ -161,22 +166,22 @@ describe("pending VM reference recovery", () => {
     const sandbox = createMockSandbox({
       status: "failed",
       fenced: 1,
+      modal_sandbox_id: "old-generation",
       created_at: Date.now() - PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
       modal_object_id: 'modal-vm-session:["test-session","old-generation"]',
     });
     const fixture = createAlarmFixture(sandbox, provider);
     await fixture.manager.spawnSandbox();
-    expect(createSandbox).not.toHaveBeenCalled();
-    expect(sandbox.fenced).toBe(1);
-    expect(sandbox.modal_object_id).toBe('modal-vm-session:["test-session","old-generation"]');
-    expect(sandbox.last_spawn_error).toMatch(/not yet visible/);
+    expect(createSandbox).toHaveBeenCalledOnce();
+    expect(sandbox.fenced).toBe(0);
+    expect(sandbox.modal_object_id).toBe("sb-new");
   });
 
   it("restores after confirming an old fenced pending reference is absent", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
     const stopSandbox = vi.fn(async () => {
-      throw new ModalApiError("pending_reference_not_visible", 409);
+      throw new ModalApiError("not visible", 409, "pending_reference_not_visible");
     });
     const restoreSandbox = vi.fn(async (req: { sandboxId: string }) => ({
       sandboxId: req.sandboxId,

@@ -225,6 +225,20 @@ describe("ModalClient", () => {
     });
   });
 
+  it("extracts FastAPI error detail without matching message text", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ detail: "pending_reference_not_visible" }, { status: 409 })
+    );
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.stopSandbox({ providerObjectId: "sb-1", sessionId: "session-1" })
+    ).rejects.toMatchObject({
+      name: "ModalApiError",
+      status: 409,
+      detail: "pending_reference_not_visible",
+    });
+  });
+
   it.each([
     {
       endpoint: "create sandbox",

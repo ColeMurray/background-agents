@@ -303,7 +303,8 @@ export interface TerminateImageBuildSandboxRequest {
 export class ModalApiError extends Error {
   constructor(
     message: string,
-    public readonly status: number
+    public readonly status: number,
+    public readonly detail?: string
   ) {
     super(message);
     this.name = "ModalApiError";
@@ -348,7 +349,24 @@ export class ModalClient {
       onResponse(response.status);
       if (!response.ok) {
         const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // Non-JSON provider responses still retain their status and raw text.
+        }
+        const detail =
+          body !== null &&
+          typeof body === "object" &&
+          "detail" in body &&
+          typeof body.detail === "string"
+            ? body.detail
+            : undefined;
+        throw new ModalApiError(
+          `Modal API error: ${response.status} ${text}`,
+          response.status,
+          detail
+        );
       }
       return parseModalApiResponse(schema, await response.json());
     });

@@ -16,6 +16,7 @@ from src.sandbox.launch_policy import (
     docker_runtime_env,
     launch_kwargs,
     parse_launch,
+    parse_pending_vm_reference,
 )
 
 
@@ -87,6 +88,27 @@ def test_allocation_tags_bind_session_generation_and_backend():
     assert tags != docker_allocation_tags("session-1", "sandbox-2")
     for value in tags.values():
         assert re.fullmatch(r"[a-zA-Z0-9._-]{1,63}", value)
+
+
+def test_pending_vm_reference_uses_shared_two_part_wire_format():
+    reference = 'modal-vm-session:["session-1","sandbox-1"]'
+    assert parse_pending_vm_reference(reference) == ("session-1", "sandbox-1")
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "sb-1",
+        "modal-vm-session:not-json",
+        'modal-vm-session:["session-1"]',
+        'modal-vm-session:["session-1","sandbox-1","extra"]',
+        'modal-vm-session:["", "sandbox-1"]',
+        'modal-vm-session:["session-1", 2]',
+        'modal-vm-session:{"sessionId":"session-1","sandboxId":"sandbox-1"}',
+    ],
+)
+def test_pending_vm_reference_rejects_malformed_values(reference):
+    assert parse_pending_vm_reference(reference) is None
 
 
 @pytest.mark.parametrize("settings", [None, {}, {"cpuCores": None, "memoryMib": None}])

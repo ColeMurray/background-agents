@@ -527,9 +527,10 @@ async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(mon
         SimpleNamespace(aio=AsyncMock(return_value=foreign)),
     )
 
-    with pytest.raises(RuntimeError, match="ownership mismatch"):
+    with pytest.raises(RuntimeError, match="ownership mismatch") as exc:
         await manager.create_sandbox(_docker_config())
 
+    assert type(exc.value) is RuntimeError
     assert "kwargs" not in captured
 
 
