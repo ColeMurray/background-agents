@@ -53,6 +53,26 @@ describe("PullRequestAnalyticsStore row decoding", () => {
     });
   });
 
+  it("merges bare and prefixed model rows under the canonical key and re-sorts by cost", () => {
+    const results = Array.from({ length: 10 }, () => result([]));
+    results[8] = result([
+      { key: "openai/gpt-5", created: 1, merged: 1, session_cost: 4 },
+      { key: "anthropic/claude-haiku-4-5", created: 2, merged: 1, session_cost: 3 },
+      { key: "claude-haiku-4-5", created: 1, merged: 0, session_cost: 2 },
+    ]);
+
+    expect(store().decode(results).models).toEqual([
+      {
+        key: "anthropic/claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        created: 3,
+        merged: 1,
+        sessionCost: 5,
+      },
+      { key: "openai/gpt-5", displayName: "openai/gpt-5", created: 1, merged: 1, sessionCost: 4 },
+    ]);
+  });
+
   it("rejects malformed persisted analytics rows", () => {
     expect(() =>
       store().decode([

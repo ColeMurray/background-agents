@@ -264,6 +264,59 @@ describe("GET /analytics/pull-requests", () => {
     );
   });
 
+  it("merges PR-producing sessions with bare and prefixed model ids", async () => {
+    const now = Date.now();
+    const prs = new SessionPullRequestStore(env.DB);
+    await seedSession({
+      id: "canonical-model",
+      spawnSource: "user",
+      totalCost: 1.25,
+      createdAt: now - 2 * DAY_MS,
+      model: "anthropic/claude-haiku-4-5",
+    });
+    await seedSession({
+      id: "legacy-model",
+      spawnSource: "user",
+      totalCost: 2.75,
+      createdAt: now - 2 * DAY_MS,
+      model: "anthropic/claude-haiku-4-5",
+    });
+    await env.DB.prepare("UPDATE sessions SET model = 'claude-haiku-4-5' WHERE id = ?")
+      .bind("legacy-model")
+      .run();
+    await prs.upsert(
+      makePrRecord({
+        artifactId: "canonical-pr",
+        sessionId: "canonical-model",
+        prNumber: 10,
+        lifecycleState: "merged",
+        providerCreatedAt: now - DAY_MS,
+        mergedAt: now - DAY_MS / 2,
+      })
+    );
+    await prs.upsert(
+      makePrRecord({
+        artifactId: "legacy-pr",
+        sessionId: "legacy-model",
+        prNumber: 11,
+        providerCreatedAt: now - DAY_MS,
+      })
+    );
+
+    const response = await serviceFetch("https://test.local/analytics/pull-requests?days=7");
+    expect(response.status).toBe(200);
+    const body = await response.json<AnalyticsPullRequestsResponse>();
+    expect(body.models).toEqual([
+      {
+        key: "anthropic/claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        created: 2,
+        merged: 1,
+        sessionCost: 4,
+      },
+    ]);
+  });
+
   it("returns empty model and harness dimensions when no cohort PRs exist", async () => {
     const now = Date.now();
     await seedSession({

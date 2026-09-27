@@ -11,7 +11,7 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
-import { getModelDisplayName } from "@open-inspect/shared/models";
+import { getModelDisplayName, normalizeModelId } from "@open-inspect/shared/models";
 import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
@@ -255,6 +255,25 @@ export class PullRequestAnalyticsStore {
       }
     }
 
+    const models = new Map<string, AnalyticsPullRequestsResponse["models"][number]>();
+    for (const row of parseRows(modelsResult.results, dimensionRowSchema, "PR model row")) {
+      const key = normalizeModelId(row.key);
+      const previous = models.get(key);
+      if (previous) {
+        previous.created += row.created;
+        previous.merged += row.merged;
+        previous.sessionCost += row.session_cost;
+      } else {
+        models.set(key, {
+          key,
+          displayName: getModelDisplayName(key),
+          created: row.created,
+          merged: row.merged,
+          sessionCost: row.session_cost,
+        });
+      }
+    }
+
     return {
       funnel: {
         created: funnel?.created ?? 0,
@@ -285,13 +304,9 @@ export class PullRequestAnalyticsStore {
         created: row.created,
         merged: row.merged,
       })),
-      models: parseRows(modelsResult.results, dimensionRowSchema, "PR model row").map((row) => ({
-        key: row.key,
-        displayName: getModelDisplayName(row.key),
-        created: row.created,
-        merged: row.merged,
-        sessionCost: row.session_cost,
-      })),
+      models: [...models.values()].sort(
+        (a, b) => b.sessionCost - a.sessionCost || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+      ),
       harnesses: parseRows(harnessesResult.results, dimensionRowSchema, "PR harness row").map(
         (row) => ({
           key: row.key,
