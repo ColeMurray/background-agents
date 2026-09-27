@@ -19,6 +19,7 @@ venv/
 
 # Reference code (vendored)
 opencode-reference/
+packages/linear-bot/linear-schema.graphql
 
 # Lock files
 package-lock.json

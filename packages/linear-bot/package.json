@@ -10,7 +10,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "lint:fix": "eslint src/ --fix",
+    "update:linear-schema": "curl -fsSL -o linear-schema.graphql https://raw.githubusercontent.com/linear/linear/%40linear/sdk%4096.0.0/packages/sdk/src/schema.graphql"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.1",
+    "graphql": "^16.14.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11",
     "wrangler": "^4.103.0"

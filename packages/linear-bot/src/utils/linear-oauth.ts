@@ -5,6 +5,7 @@ import {
   linearIdentityResponseSchema,
   linearOAuthErrorResponseSchema,
 } from "./linear-credential-schemas";
+import { LINEAR_DOCUMENTS } from "./linear-documents";
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 const LINEAR_TOKEN_URL = "https://api.linear.app/oauth/token";
@@ -233,7 +234,7 @@ export async function fetchLinearIdentity(accessToken: string): Promise<LinearId
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        query: `query LinearViewerIdentity { viewer { id organization { id name } } }`,
+        query: LINEAR_DOCUMENTS.LinearViewerIdentity,
       }),
       signal: AbortSignal.timeout(LINEAR_AUTH_REQUEST_TIMEOUT_MS),
     });
