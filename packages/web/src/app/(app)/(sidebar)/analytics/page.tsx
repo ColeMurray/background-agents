@@ -187,7 +187,8 @@ export default function AnalyticsPage() {
                   </div>
                   <div className="mt-3 text-xs leading-5 text-muted-foreground">
                     Human: sessions people started, including via Slack, Linear and GitHub. Agents:
-                    sessions spawned by other sessions.
+                    sessions spawned by other sessions. Automations: sessions started by
+                    automations. All: every session.
                   </div>
                 </div>
               </div>

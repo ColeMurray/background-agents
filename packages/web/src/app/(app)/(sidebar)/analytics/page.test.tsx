@@ -217,6 +217,9 @@ describe("AnalyticsPage", () => {
     }));
 
     expect(screen.getByRole("radio", { name: "Human" })).toHaveAttribute("data-state", "on");
+    expect(
+      screen.getByText(/Automations: sessions started by automations\. All: every session\./)
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("radio", { name: "Agents" }));
 
     await waitFor(() => {
