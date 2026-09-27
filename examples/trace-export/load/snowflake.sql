@@ -23,14 +23,14 @@ SELECT payload:id::string AS id, payload
 FROM YOUR_DB.YOUR_SCHEMA.trace_export_lines
 WHERE payload:type::string = 'session' AND payload:schemaVersion::integer = 2
 QUALIFY ROW_NUMBER() OVER (
-  PARTITION BY payload:id::string ORDER BY loaded_at DESC
+  PARTITION BY payload:id::string ORDER BY payload:updatedAt::bigint DESC, loaded_at DESC, TO_JSON(payload) DESC
 ) = 1;
 
 CREATE OR REPLACE VIEW YOUR_DB.YOUR_SCHEMA.runs AS
 SELECT COALESCE(payload:rootSessionId::string, id) AS root_session_id,
   MIN(payload:createdAt::bigint) AS first_created_at,
   COUNT(*) AS session_count,
-  ARRAY_AGG(id) AS session_ids,
+  ARRAY_AGG(id) WITHIN GROUP (ORDER BY payload:spawnDepth::bigint, payload:createdAt::bigint, id) AS session_ids,
   SUM(payload:totalCost::float) AS total_cost_usd,
   SUM(payload:inputTokens::bigint) AS input_tokens,
   SUM(payload:outputTokens::bigint) AS output_tokens,

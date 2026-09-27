@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +71,32 @@ test("pages complete runs, signs each request and resumes from the last cursor",
     const failed = await run(args);
     assert.equal(failed.code, 1);
     assert.match(failed.stderr, /HTTP 503/);
+    const statePath = join(out, ".resume.json");
+    const savedState = await readFile(statePath, "utf8");
+    for (const changed of [
+      ["--url", "http://localhost:1"],
+      ["--scope", "sessions"],
+      ["--include", "none"],
+      ["--created-before", "2000"],
+      ["--created-after", "2000"],
+    ]) {
+      const next = [...args];
+      if (next.includes(changed[0])) next[next.indexOf(changed[0]) + 1] = changed[1];
+      else next.push(...changed);
+      const mismatch = await run(next);
+      assert.equal(mismatch.code, 1);
+      assert.match(mismatch.stderr, /Resume parameters do not match/);
+    }
+    const formatMismatch = await run(args.filter((arg) => arg !== "--compact"));
+    assert.equal(formatMismatch.code, 1);
+    assert.match(formatMismatch.stderr, /Resume parameters do not match/);
+    assert.equal(requests.length, 2);
+    await rm(statePath);
+    const missing = await run(args);
+    assert.equal(missing.code, 1);
+    assert.match(missing.stderr, /no resume metadata/);
+    assert.equal(requests.length, 2);
+    await writeFile(statePath, savedState);
     failSecondPage = false;
     assert.equal((await run(args)).code, 0);
     assert.equal((await run(args)).code, 0);
@@ -80,12 +106,25 @@ test("pages complete runs, signs each request and resumes from the last cursor",
     assert.equal(requests[0].searchParams.get("scope"), "runs");
     assert.equal(requests[0].searchParams.get("format"), "compact");
     assert.equal(requests[0].searchParams.get("include"), "messages,events,usage");
-    const [date] = await readdir(out);
+    const date = (await readdir(out)).find((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
     const files = await readdir(join(out, date));
     assert.deepEqual(files, ["page-000001.ndjson", "page-000002.ndjson"]);
     assert.match(await readFile(join(out, date, files[0]), "utf8"), /"nextCursor":"page-2"/);
   } finally {
     server.close();
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test("rejects remote HTTP before sending the session cookie", async () => {
+  const out = await mkdtemp(join(tmpdir(), "trace-export-"));
+  try {
+    for (const url of ["http://example.invalid", "ftp://example.invalid"]) {
+      const result = await run(["--url", url, "--out", out]);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /--url must use https/);
+    }
+  } finally {
     await rm(out, { recursive: true, force: true });
   }
 });

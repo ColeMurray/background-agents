@@ -13,7 +13,7 @@ CREATE OR REPLACE VIEW trace_sessions AS
 SELECT id, payload
 FROM (
   SELECT payload->>'id' AS id, payload,
-    ROW_NUMBER() OVER (PARTITION BY payload->>'id' ORDER BY ingest_id DESC) AS rank
+    ROW_NUMBER() OVER (PARTITION BY payload->>'id' ORDER BY (payload->>'updatedAt')::bigint DESC, ingest_id DESC) AS rank
   FROM trace_export_lines
   WHERE payload->>'type' = 'session' AND payload->>'schemaVersion' = '2'
 ) AS deduplicated

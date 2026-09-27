@@ -21,6 +21,11 @@ function optionsFromArgs(args) {
     }
   }
   if (!options.url || !options.out) throw new Error("--url and --out are required");
+  const base = new URL(options.url);
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(base.hostname);
+  if (base.protocol !== "https:" && !(base.protocol === "http:" && loopback))
+    throw new Error("--url must use https (http is allowed only for loopback)");
+  options.url = base.origin;
   if (options.scope && !["sessions", "runs"].includes(options.scope))
     throw new Error("Invalid --scope");
   if (
@@ -74,7 +79,30 @@ async function main() {
   if (!secret || !cookie)
     throw new Error("Set OPEN_INSPECT_WEB_SECRET and OPEN_INSPECT_SESSION_COOKIE");
   await mkdir(options.out, { recursive: true, mode: 0o700 });
+  const include =
+    options.include === "none" ? undefined : (options.include ?? "messages,events,usage");
+  const resumeState = JSON.stringify({
+    url: options.url,
+    scope: options.scope ?? "sessions",
+    include: include ?? null,
+    format: options.compact ? "compact" : "full",
+    createdAfter: options["created-after"] ?? null,
+    createdBefore: options["created-before"] ?? null,
+  });
   const pages = await existingPages(options.out);
+  const statePath = join(options.out, ".resume.json");
+  let savedState;
+  try {
+    savedState = await readFile(statePath, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  if (pages.length && savedState === undefined)
+    throw new Error("Output directory has no resume metadata; use a new output directory");
+  if (savedState !== undefined && savedState !== resumeState)
+    throw new Error("Resume parameters do not match the existing export");
+  if (savedState === undefined)
+    await writeFile(statePath, resumeState, { flag: "wx", mode: 0o600 });
   let cursor;
   if (pages.length) {
     const saved = (await readFile(pages.at(-1), "utf8")).trimEnd();
@@ -86,8 +114,6 @@ async function main() {
     if (typeof cursor !== "string") throw new Error("Invalid saved cursor");
   }
 
-  const include =
-    options.include === "none" ? undefined : (options.include ?? "messages,events,usage");
   let pageNumber = pages.length;
   while (true) {
     const url = new URL("/sessions/export", options.url);

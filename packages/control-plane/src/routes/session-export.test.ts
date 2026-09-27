@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { traceExportLineSchema } from "@open-inspect/shared/types/trace-export";
+import { timelineSequenceSchema } from "@open-inspect/shared/types/sessions";
 import type * as AuthenticateModule from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import {
@@ -318,6 +319,11 @@ describe("published trace export schema", () => {
   it("matches the Zod export line union", () => {
     const published = JSON.parse(readFileSync(publishedSchemaUrl.pathname, "utf8")) as unknown;
     expect(published).toEqual(z.toJSONSchema(traceExportLineSchema, { io: "input" }));
+    expect(z.toJSONSchema(timelineSequenceSchema)).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    });
   });
 
   it("validates session, session_error, cursor and error line fixtures", () => {
@@ -351,6 +357,14 @@ describe("published trace export schema", () => {
     }
     expect(traceExportLineSchema.safeParse({ ...lines[0], schemaVersion: 1 }).success).toBe(false);
     expect(traceExportLineSchema.safeParse({ ...lines[1], status: undefined }).success).toBe(false);
+    expect(
+      traceExportLineSchema.safeParse({
+        ...lines[0],
+        events: [
+          { ...sampleEvent("token:msg-1", 1_100, 1, { type: "token" }), timelineSequence: -1 },
+        ],
+      }).success
+    ).toBe(false);
   });
 });
 

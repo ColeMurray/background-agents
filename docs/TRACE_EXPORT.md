@@ -77,10 +77,11 @@ row no longer exists are excluded by the run join.
   stored value. `tool_call.truncated` (inside event `data`) instead denotes fields truncated by the
   upstream bridge **before persistence**; compact export cannot restore them.
 
-The persisted timeline has tool output in `tool_call.data.output`; there are no separate
-`tool_result` events in this export. Per-step usage is raw harness-reported data: step boundaries
-and counts are **not comparable across harnesses**. Session token totals are index projections;
-older sessions may have zero-valued totals without raw step usage.
+The persisted timeline has tool output in `tool_call.data.output`. Separately emitted `tool_result`
+events are also persisted and exported when present; consumers must handle both types. Per-step
+usage is raw harness-reported data: step boundaries and counts are **not comparable across
+harnesses**. Session token totals are index projections; older sessions may have zero-valued totals
+without raw step usage.
 
 ## Versioning
 

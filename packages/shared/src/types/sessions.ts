@@ -268,7 +268,7 @@ export const sessionMessageSchema = z.object({
 export type SessionMessage = z.infer<typeof sessionMessageSchema>;
 
 /** A persisted event's timeline position; it orders events that share a timestamp. */
-export const timelineSequenceSchema = z.number().int().nonnegative().safe();
+export const timelineSequenceSchema = z.number().int().safe().nonnegative();
 
 /** A persisted timeline event as the session trace export lists it. */
 export const sessionEventSchema = eventResponseSchema.extend({

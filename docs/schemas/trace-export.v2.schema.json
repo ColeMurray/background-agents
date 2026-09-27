@@ -192,11 +192,7 @@
               },
               "messageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
               "createdAt": { "type": "number" },
-              "timelineSequence": {
-                "type": "integer",
-                "minimum": -9007199254740991,
-                "maximum": 9007199254740991
-              }
+              "timelineSequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
             },
             "required": ["id", "type", "data", "messageId", "createdAt", "timelineSequence"]
           }
