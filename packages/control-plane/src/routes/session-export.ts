@@ -5,9 +5,7 @@
  * cursor, or a terminal stream error. `include` inlines a session's messages,
  * timeline events and per-step usage, which the session runtime reads in one
  * storage snapshot under one byte budget and page cap. A failed read never
- * turns a partial trace into a successful session record. Schema 1 session
- * lines gain additive fields; consumers must ignore fields they do not
- * recognize.
+ * turns a partial trace into a successful session record.
  * With `scope=runs`, root creation time defines the window. Families stay
  * consecutive across pages, but can cross page boundaries: limit still counts
  * sessions (at most five with include). Rows whose root no longer exists are
@@ -21,6 +19,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  TRACE_EXPORT_SCHEMA_VERSION,
+  type TraceExportLine,
+} from "@open-inspect/shared/types/trace-export";
+import {
   encodeRunsExportCursor,
   encodeSessionExportCursor,
   parseRunsExportCursor,
@@ -32,7 +34,6 @@ import {
   type ExportSelection,
   type SessionExportRow,
 } from "../db/session-export-store";
-import type { RunsExportCursor } from "../db/session-export-cursor";
 import { createLogger, type Logger } from "../logger";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
@@ -53,7 +54,7 @@ import { parseQuery } from "./query";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 import { error, SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 
-export const EXPORT_SCHEMA_VERSION = 1;
+export const EXPORT_SCHEMA_VERSION = TRACE_EXPORT_SCHEMA_VERSION;
 const MAX_EXPORT_LIMIT = 500;
 export const MAX_INCLUDED_EXPORT_LIMIT = 5;
 const TRACE_READ_TIMEOUT_MS = 10_000;
@@ -86,7 +87,6 @@ const exportQuerySchema = z.object({
 });
 
 const singleExportQuerySchema = exportQuerySchema.pick({
-  scope: true,
   include: true,
   format: true,
 });
@@ -95,34 +95,13 @@ type TraceReadFailure =
   | { ok: false; reason: "http_error"; status: number }
   | {
       ok: false;
-      reason: "runtime_failure" | "page_cap_reached" | "message_budget_exceeded";
+      reason: "runtime_failure" | "page_cap_reached" | "trace_budget_exceeded";
     };
 type TraceReadResult = { ok: true; trace: SessionTrace } | TraceReadFailure;
 
-type SessionExportLine = {
-  schemaVersion: typeof EXPORT_SCHEMA_VERSION;
-  type: "session";
-} & SessionExportRow &
-  SessionTrace;
-type SessionErrorLineBase = {
-  schemaVersion: typeof EXPORT_SCHEMA_VERSION;
-  type: "session_error";
-  sessionId: string;
-};
-type SessionErrorLine = SessionErrorLineBase &
-  (
-    | { reason: "http_error"; status: number }
-    | { reason: "runtime_failure" | "page_cap_reached" | "message_budget_exceeded" }
-  );
-type ExportLine =
-  | SessionExportLine
-  | SessionErrorLine
-  | {
-      schemaVersion: typeof EXPORT_SCHEMA_VERSION;
-      type: "cursor";
-      nextCursor: string;
-    }
-  | { schemaVersion: typeof EXPORT_SCHEMA_VERSION; type: "error" };
+type SessionExportLine = Extract<TraceExportLine, { type: "session" }>;
+type SessionErrorLine = Extract<TraceExportLine, { type: "session_error" }>;
+type ExportLine = TraceExportLine;
 
 function encodeLine(line: ExportLine): Uint8Array {
   return encoder.encode(`${JSON.stringify(line)}\n`);
@@ -138,11 +117,11 @@ function sessionLine(row: SessionExportRow, trace?: SessionTrace): SessionExport
 }
 
 function sessionErrorLine(sessionId: string, failure: TraceReadFailure): SessionErrorLine {
-  const line: SessionErrorLineBase = {
+  const line = {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     type: "session_error",
     sessionId,
-  };
+  } satisfies Pick<SessionErrorLine, "schemaVersion" | "type" | "sessionId">;
   return failure.reason === "http_error"
     ? { ...line, reason: failure.reason, status: failure.status }
     : { ...line, reason: failure.reason };
@@ -189,7 +168,7 @@ async function readTrace(
     const body = await readBoundedJson(response, MAX_INCLUDED_BYTES_PER_SESSION);
     if (!body) {
       log.warn("session_export.trace_budget_exceeded", { session_id: sessionId });
-      return { ok: false, reason: "message_budget_exceeded" };
+      return { ok: false, reason: "trace_budget_exceeded" };
     }
 
     const parsed = sessionTraceExportSchema.safeParse(body.value);
@@ -347,27 +326,16 @@ async function handleSingleExport(
 ): Promise<Response> {
   const query = parseQuery(request, singleExportQuerySchema);
   if (query instanceof Response) return query;
+  if (new URL(request.url).searchParams.has("scope")) return error("scope is not supported", 400);
 
   const store = new SessionExportStore(ctx.db);
   const selected = await store.get(params.id);
   if (!selected) return error("Session not found", 404);
 
   const include = query.include ?? FULL_TRACE_INCLUDE;
-  const rootId = selected.rootSessionId ?? selected.id;
-  const scope = query.scope;
   const session = selected;
   async function* records(): AsyncGenerator<ExportRecord> {
-    if (scope !== "runs") {
-      yield session;
-      return;
-    }
-
-    let cursor: RunsExportCursor | null = null;
-    do {
-      const page = await store.listRun(rootId, cursor);
-      yield* page.sessions;
-      cursor = page.nextCursor;
-    } while (cursor);
+    yield session;
   }
 
   return streamExport(request, ctx, include, query.format, records());

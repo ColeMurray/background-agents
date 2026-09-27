@@ -417,8 +417,8 @@ describe("GET /internal/trace-export", () => {
       ok: true,
       trace: {
         messages: [
-          { id: "msg-2", content: "prompt msg-2" },
           { id: "msg-1", content: "prompt msg-1" },
+          { id: "msg-2", content: "prompt msg-2" },
         ],
         events: [
           { id: "tool_call:call-1", type: "tool_call", data: { output: "1 passed" } },

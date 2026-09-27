@@ -43,7 +43,7 @@ describe("GET /sessions/export with include", () => {
   beforeEach(cleanD1Tables);
   afterEach(cleanD1Tables);
 
-  it("downloads a full single-session trace or its root family without unrelated sessions", async () => {
+  it("downloads only the requested session and rejects scope on the single route", async () => {
     const root = await initSession({ title: "root" });
     const child = await initSession({ title: "child" });
     const other = await initSession({ title: "other" });
@@ -68,14 +68,19 @@ describe("GET /sessions/export with include", () => {
     const run = await serviceFetch(
       `https://cp.test/sessions/${child.sessionName}/export?scope=runs`
     );
-    expect(run.status).toBe(200);
+    expect(run.status).toBe(400);
+    const bulkRun = await serviceFetch("https://cp.test/sessions/export?scope=runs");
+    expect(bulkRun.status).toBe(200);
     const runLines = new TextDecoder()
-      .decode(await run.arrayBuffer())
+      .decode(await bulkRun.arrayBuffer())
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as ExportLine);
-    expect(runLines.map(({ id }) => id)).toEqual([root.sessionName, child.sessionName]);
-    expect(runLines.some(({ id }) => id === other.sessionName)).toBe(false);
+    const runIds = runLines.map(({ id }) => id);
+    expect(
+      runIds.slice(runIds.indexOf(root.sessionName), runIds.indexOf(root.sessionName) + 2)
+    ).toEqual([root.sessionName, child.sessionName]);
+    expect(runIds).toContain(other.sessionName);
 
     const missing = await serviceFetch("https://cp.test/sessions/missing/export");
     expect(missing.status).toBe(404);
@@ -176,7 +181,7 @@ describe("GET /sessions/export with include", () => {
     expect(lines).toHaveLength(1);
     const [line] = lines;
     expect(line).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "session",
       id: sessionName,
       title: "Run the tests",
@@ -234,10 +239,10 @@ describe("GET /sessions/export with include", () => {
 
     expect(lines).toHaveLength(2);
     expect(lines.find((line) => line.sessionId === overBudget.sessionName)).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "session_error",
       sessionId: overBudget.sessionName,
-      reason: "message_budget_exceeded",
+      reason: "trace_budget_exceeded",
     });
     const exported = lines.find((line) => line.id === withinBudget.sessionName);
     expect(exported).toMatchObject({ type: "session", title: "within budget" });
@@ -301,10 +306,10 @@ describe("GET /sessions/export with include", () => {
 
     expect(await exportLines("messages,events", "full")).toEqual([
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session_error",
         sessionId: sessionName,
-        reason: "message_budget_exceeded",
+        reason: "trace_budget_exceeded",
       },
     ]);
     const compact = await exportLines("messages,events", "compact");

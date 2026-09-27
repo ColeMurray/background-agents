@@ -8,6 +8,9 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { z } from "zod";
+import { traceExportLineSchema } from "@open-inspect/shared/types/trace-export";
 import type * as AuthenticateModule from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import {
@@ -25,11 +28,15 @@ import { MAX_INCLUDED_BYTES_PER_SESSION } from "../session/contracts";
 import type { Env } from "../types";
 import { MAX_INCLUDED_EXPORT_LIMIT, sessionExportRoutes } from "./session-export";
 
+const publishedSchemaUrl = new URL(
+  "../../../../docs/schemas/trace-export.v2.schema.json",
+  import.meta.url
+);
+
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
   list: vi.fn(),
   get: vi.fn(),
-  listRun: vi.fn(),
   runtimeFetch: vi.fn(),
   logger: {
     debug: vi.fn(),
@@ -49,7 +56,6 @@ vi.mock("../db/session-export-store", async (importOriginal) => ({
   SessionExportStore: vi.fn().mockImplementation(function () {
     return {
       get: mocks.get,
-      listRun: mocks.listRun,
       list: async (options: ListSessionsForExportOptions) => ({
         scope: options.scope ?? "sessions",
         ...(await mocks.list(options)),
@@ -138,7 +144,7 @@ describe("GET /sessions/:id/export", () => {
     expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await readLines(response)).toEqual([
-      { schemaVersion: 1, type: "session", ...sampleRow, ...trace },
+      { schemaVersion: 2, type: "session", ...sampleRow, ...trace },
     ]);
     expect(mocks.get).toHaveBeenCalledWith("session-1");
     expect(mocks.list).not.toHaveBeenCalled();
@@ -146,24 +152,11 @@ describe("GET /sessions/:id/export", () => {
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=messages%2Cevents%2Cusage");
   });
 
-  it("exports the requested session's root family in order with compact format", async () => {
-    mocks.get.mockResolvedValue(sampleRow);
-    mocks.listRun
-      .mockResolvedValueOnce({ sessions: [{ ...sampleRow, id: "root-1" }], nextCursor: "next" })
-      .mockResolvedValueOnce({ sessions: [sampleRow], nextCursor: null });
-    mocks.runtimeFetch.mockImplementation(async () => traceResponse({ events: [] }));
-
-    const response = await callExport(
-      { scope: "runs", include: "events", format: "compact" },
-      { sessionId: "session-1" }
-    );
-    expect(await readLines(response)).toMatchObject([
-      { type: "session", id: "root-1", events: [] },
-      { type: "session", id: "session-1", events: [] },
-    ]);
-    expect(mocks.listRun).toHaveBeenNthCalledWith(1, "root-1", null);
-    expect(mocks.listRun).toHaveBeenNthCalledWith(2, "root-1", "next");
-    expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
+  it.each(["sessions", "runs"])("rejects scope=%s on the single-session route", async (scope) => {
+    const response = await callExport({ scope }, { sessionId: "session-1" });
+    expect(response.status).toBe(400);
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.runtimeFetch).not.toHaveBeenCalled();
   });
 
   it("reports a trace read failure without emitting a partial session", async () => {
@@ -171,7 +164,7 @@ describe("GET /sessions/:id/export", () => {
     mocks.runtimeFetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
     expect(await readLines(await callExport({}, { sessionId: "session-1" }))).toEqual([
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session_error",
         sessionId: "session-1",
         reason: "http_error",
@@ -321,6 +314,46 @@ async function readLines(response: Response): Promise<Record<string, unknown>[]>
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+describe("published trace export schema", () => {
+  it("matches the Zod export line union", () => {
+    const published = JSON.parse(readFileSync(publishedSchemaUrl.pathname, "utf8")) as unknown;
+    expect(published).toEqual(z.toJSONSchema(traceExportLineSchema, { io: "input" }));
+  });
+
+  it("validates session, session_error, cursor and error line fixtures", () => {
+    const lines = [
+      {
+        schemaVersion: 2,
+        type: "session",
+        ...sampleRow,
+        messages: [sampleMessage("msg-1", "Run the tests")],
+        events: [sampleEvent("token:msg-1", 1_100, 1, { type: "token", content: "passed" })],
+        usage: [sampleUsage("step-1", 1_200, 200)],
+      },
+      {
+        schemaVersion: 2,
+        type: "session_error",
+        sessionId: sampleRow.id,
+        reason: "http_error",
+        status: 503,
+      },
+      {
+        schemaVersion: 2,
+        type: "session_error",
+        sessionId: sampleRow.id,
+        reason: "trace_budget_exceeded",
+      },
+      { schemaVersion: 2, type: "cursor", nextCursor: "opaque-cursor" },
+      { schemaVersion: 2, type: "error" },
+    ];
+    for (const line of lines) {
+      expect(traceExportLineSchema.parse(JSON.parse(JSON.stringify(line)))).toMatchObject(line);
+    }
+    expect(traceExportLineSchema.safeParse({ ...lines[0], schemaVersion: 1 }).success).toBe(false);
+    expect(traceExportLineSchema.safeParse({ ...lines[1], status: undefined }).success).toBe(false);
+  });
+});
+
 describe("GET /sessions/export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -371,7 +404,7 @@ describe("GET /sessions/export", () => {
     const lines = await readLines(response);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "session",
       id: "session-1",
       title: "Fix the login bug",
@@ -416,7 +449,7 @@ describe("GET /sessions/export", () => {
     const lines = await readLines(response);
     expect(lines).toHaveLength(2);
     expect(lines[1]).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "cursor",
       nextCursor: "1000:session-1:42",
     });
@@ -478,7 +511,7 @@ describe("GET /sessions/export", () => {
 
     const lines = await readLines(await callExport({ include: "usage,events,messages" }));
 
-    expect(lines).toEqual([{ schemaVersion: 1, type: "session", ...sampleRow, ...trace }]);
+    expect(lines).toEqual([{ schemaVersion: 2, type: "session", ...sampleRow, ...trace }]);
     expect(mocks.runtimeFetch).toHaveBeenCalledTimes(1);
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=messages%2Cevents%2Cusage");
   });
@@ -531,7 +564,7 @@ describe("GET /sessions/export", () => {
     const original = await (await callExport()).text();
     const explicit = await (await callExport({ scope: "sessions" })).text();
     expect(original).toBe(
-      `${JSON.stringify({ schemaVersion: 1, type: "session", ...sampleRow })}\n`
+      `${JSON.stringify({ schemaVersion: 2, type: "session", ...sampleRow })}\n`
     );
     expect(explicit).toBe(original);
   });
@@ -664,7 +697,7 @@ describe("GET /sessions/export", () => {
 
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "session_error",
       sessionId: "session-1",
       reason: "http_error",
@@ -692,7 +725,7 @@ describe("GET /sessions/export", () => {
     const lines = await readLines(response);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       type: "session_error",
       sessionId: "session-1",
       reason: "runtime_failure",
@@ -738,7 +771,7 @@ describe("GET /sessions/export", () => {
 
     expect(lines).toEqual([
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session_error",
         sessionId: "session-1",
         reason: "runtime_failure",
@@ -746,7 +779,7 @@ describe("GET /sessions/export", () => {
     ]);
   });
 
-  it.each([["page_cap_reached"], ["message_budget_exceeded"]])(
+  it.each([["page_cap_reached"], ["trace_budget_exceeded"]])(
     "emits only a session_error line when the runtime reports %s",
     async (reason) => {
       mocks.list.mockResolvedValue({ sessions: [sampleRow], hasMore: false, nextCursor: null });
@@ -755,7 +788,7 @@ describe("GET /sessions/export", () => {
       const lines = await readLines(await callExport({ include: "messages,events" }));
 
       expect(lines).toEqual([
-        { schemaVersion: 1, type: "session_error", sessionId: "session-1", reason },
+        { schemaVersion: 2, type: "session_error", sessionId: "session-1", reason },
       ]);
     }
   );
@@ -797,10 +830,10 @@ describe("GET /sessions/export", () => {
 
     expect(lines).toEqual([
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session_error",
         sessionId: "session-1",
-        reason: "message_budget_exceeded",
+        reason: "trace_budget_exceeded",
       },
     ]);
   });
@@ -822,10 +855,10 @@ describe("GET /sessions/export", () => {
 
     expect(lines).toEqual([
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         type: "session_error",
         sessionId: "session-1",
-        reason: "message_budget_exceeded",
+        reason: "trace_budget_exceeded",
       },
     ]);
     expect(cancelled).toBe(true);

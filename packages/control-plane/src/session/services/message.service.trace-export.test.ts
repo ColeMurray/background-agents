@@ -96,7 +96,7 @@ describe("MessageService.exportTrace", () => {
     );
   }
 
-  it("lists messages newest first, as schema 1 always has, and events and usage in timeline order", () => {
+  it("lists messages, events and usage in timeline order", () => {
     seedMessage("m1", 1_000);
     seedMessage("m2", 2_000);
     seedEvent("tool_call:call-1", 1_100, {
@@ -119,8 +119,8 @@ describe("MessageService.exportTrace", () => {
       ok: true,
       trace: {
         messages: [
-          { id: "m2", content: "Run the tests", createdAt: 2_000 },
           { id: "m1", content: "Run the tests", createdAt: 1_000 },
+          { id: "m2", content: "Run the tests", createdAt: 2_000 },
         ],
         events: [
           {
@@ -228,7 +228,7 @@ describe("MessageService.exportTrace", () => {
 
     expect(service.exportTrace(["events"], "full")).toEqual({
       ok: false,
-      reason: "message_budget_exceeded",
+      reason: "trace_budget_exceeded",
     });
     const compact = service.exportTrace(["events"], "compact");
     expect(compact.ok && compact.trace.events).toHaveLength(count);
@@ -300,7 +300,7 @@ describe("MessageService.exportTrace", () => {
     expect(service.exportTrace(["events"]).ok).toBe(true);
     expect(service.exportTrace(["messages", "events"])).toEqual({
       ok: false,
-      reason: "message_budget_exceeded",
+      reason: "trace_budget_exceeded",
     });
   });
 
@@ -328,7 +328,7 @@ describe("MessageService.exportTrace", () => {
 
     expect(service.exportTrace(["messages", "events"], "full")).toEqual({
       ok: false,
-      reason: "message_budget_exceeded",
+      reason: "trace_budget_exceeded",
     });
     const compact = service.exportTrace(["messages", "events"], "compact");
     expect(compact).toMatchObject({
@@ -367,7 +367,7 @@ describe("MessageService.exportTrace", () => {
 
     expect(service.exportTrace(["messages"])).toEqual({
       ok: false,
-      reason: "message_budget_exceeded",
+      reason: "trace_budget_exceeded",
     });
   });
 

@@ -56,8 +56,7 @@ export const MAX_INCLUDED_BYTES_PER_SESSION = 4 * 1024 * 1024;
 
 /**
  * One session's trace, read in a single storage snapshot. A collection is
- * present only when requested. Messages are newest first, as the schema 1
- * export has always listed them; events and usage are in timeline order.
+ * present only when requested. All collections are in timeline order.
  */
 const sessionTraceSchema = z.object({
   messages: z.array(sessionMessageSchema).optional(),
@@ -70,7 +69,7 @@ export const sessionTraceExportSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), trace: sessionTraceSchema }),
   z.object({
     ok: z.literal(false),
-    reason: z.enum(["page_cap_reached", "message_budget_exceeded"]),
+    reason: z.enum(["page_cap_reached", "trace_budget_exceeded"]),
   }),
 ]);
 export type SessionTraceExport = z.infer<typeof sessionTraceExportSchema>;

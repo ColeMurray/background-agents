@@ -83,7 +83,7 @@ class TraceExportBudget {
         // Each item also costs at most one separating comma.
         this.bytes += serializedBytes(item) + 1;
         if (this.bytes > MAX_INCLUDED_BYTES_PER_SESSION) {
-          return { ok: false, reason: "message_budget_exceeded" };
+          return { ok: false, reason: "trace_budget_exceeded" };
         }
         items.push(item);
       }
@@ -195,7 +195,6 @@ export class MessageService {
       const budget = new TraceExportBudget(include);
       const trace: SessionTrace = {};
       if (include.includes("messages")) {
-        // Newest first, the order the schema 1 export has always used.
         const messages = budget.readAll((cursor: CreatedAtCursor | null) => {
           const rows = this.deps.repository.listMessages({
             cursor,
@@ -213,7 +212,7 @@ export class MessageService {
           };
         });
         if (!messages.ok) return messages;
-        trace.messages = messages.items;
+        trace.messages = messages.items.reverse();
       }
       if (include.includes("events")) {
         const compaction = format === "compact" ? createCompactionState() : null;

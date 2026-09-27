@@ -2,6 +2,20 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 27, 2026
+
+### Changed
+
+Trace export now emits published schema 2: messages, events and usage are all oldest first, and
+session trace byte-budget errors use `trace_budget_exceeded`. Single-session downloads export only
+the requested session; `scope` on that route now returns 400. Whole runs remain available through
+the paginated bulk export.
+
+### Added
+
+The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema, a resumable Node exporter
+and PostgreSQL, BigQuery and Snowflake run-loading examples.
+
 ## September 26, 2026
 
 ### Added
