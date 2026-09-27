@@ -22,7 +22,11 @@ export async function GET(
   }
   const query = searchParams.size ? `?${searchParams}` : "";
   try {
-    const upstream = await controlPlaneUserFetch(`/sessions/${id}/export${query}`);
+    const upstream = await controlPlaneUserFetch(
+      `/sessions/${id}/export${query}`,
+      { signal: request.signal },
+      { streamResponse: true }
+    );
     const headers = new Headers({
       "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
       "Cache-Control": "private, no-store",

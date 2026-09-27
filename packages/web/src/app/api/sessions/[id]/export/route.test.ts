@@ -41,7 +41,9 @@ describe("single-session export proxy", () => {
       context
     );
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions/session-1/export?include=events&format=compact"
+      "/sessions/session-1/export?include=events&format=compact",
+      { signal: expect.any(AbortSignal) },
+      { streamResponse: true }
     );
     expect(response.body).toBe(body);
     expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
