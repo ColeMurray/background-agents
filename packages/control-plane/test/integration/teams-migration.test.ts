@@ -5,28 +5,52 @@ import { cleanD1Tables } from "./cleanup";
 beforeEach(cleanD1Tables);
 
 describe("team migration constraints", () => {
-  it("retains the default team across cleanup", async () => {
-    const team = await env.DB.prepare(
-      "SELECT id, auto_join, is_default FROM teams WHERE id = 'team_default'"
-    ).first();
-    expect(team).toEqual({ id: "team_default", auto_join: 1, is_default: 1 });
+  it("creates no teams, memberships, or grants", async () => {
+    for (const table of ["teams", "team_memberships", "team_repository_grants"]) {
+      expect((await env.DB.prepare(`SELECT * FROM ${table}`).all()).results).toEqual([]);
+    }
   });
 
   it("rejects unknown owner team ids and restricts deleting a member user", async () => {
     await expect(
       env.DB.prepare(
-        "INSERT INTO sessions (id, owner_team_id) VALUES ('bad-team', 'missing')"
+        "INSERT INTO sessions (id, owner_team_id, created_at, updated_at) VALUES ('bad-team', 'missing', 1, 1)"
+      ).run()
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO sessions (id, visibility, created_at, updated_at) VALUES ('unteamed', 'team', 1, 1)"
       ).run()
     ).rejects.toThrow();
     await env.DB.prepare(
       "INSERT INTO users (id, created_at, updated_at) VALUES ('team-user', 1, 1)"
     ).run();
     await env.DB.prepare(
-      "INSERT INTO team_memberships (team_id, user_id, created_at) VALUES ('team_default', 'team-user', 1)"
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_explicit', 'explicit', 'Explicit', 1, 1)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO team_memberships (team_id, user_id, created_at) VALUES ('team_explicit', 'team-user', 1)"
     ).run();
     await expect(
       env.DB.prepare("DELETE FROM users WHERE id = 'team-user'").run()
     ).rejects.toThrow();
+  });
+
+  it("keeps workspace environment names unique while allowing the same name in different teams", async () => {
+    await env.DB.prepare(
+      "INSERT INTO environments (id, name, created_at, updated_at) VALUES ('env_workspace', 'Staging', 1, 1)"
+    ).run();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO environments (id, name, created_at, updated_at) VALUES ('env_duplicate', 'staging', 1, 1)"
+      ).run()
+    ).rejects.toThrow();
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_a', 'a', 'A', 1, 1), ('team_b', 'b', 'B', 1, 1)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO environments (id, name, owner_team_id, created_at, updated_at) VALUES ('env_a', 'Staging', 'team_a', 1, 1), ('env_b', 'Staging', 'team_b', 1, 1)"
+    ).run();
   });
 
   it("cascades archived-team dependents and session collaborators", async () => {
@@ -49,7 +73,7 @@ describe("team migration constraints", () => {
       "INSERT INTO team_secrets (team_id, key, encrypted_value, created_at, updated_at) VALUES ('team_extra', 'secret', 'encrypted', 1, 1)"
     ).run();
     await env.DB.prepare(
-      "INSERT INTO sessions (id, owner_team_id, created_at, updated_at) VALUES ('collab-session', 'team_default', 1, 1)"
+      "INSERT INTO sessions (id, created_at, updated_at) VALUES ('collab-session', 1, 1)"
     ).run();
     await env.DB.prepare(
       "INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES ('collab-session', 'team-user', 'operator', 1)"

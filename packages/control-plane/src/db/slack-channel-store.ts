@@ -14,7 +14,7 @@
  * so the two can't drift apart on a partial failure.
  */
 
-import { withOwnerTeam, type AutomationRow } from "./automation-store";
+import { withValidatedOwnerTeam, type AutomationRow } from "./automation-store";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export class SlackChannelStore {
@@ -31,7 +31,7 @@ export class SlackChannelStore {
       )
       .bind(channelId)
       .all<AutomationRow>();
-    return (result.results || []).map(withOwnerTeam);
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   /** Distinct channel IDs watched by any enabled slack_event automation. */

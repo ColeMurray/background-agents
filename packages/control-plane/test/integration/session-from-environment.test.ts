@@ -35,7 +35,7 @@ async function seedEnvironment(id: string, name: string, repos: RepoSpec[]): Pro
   await new EnvironmentStore(env.DB).create(
     {
       id,
-      owner_team_id: "team_default",
+      owner_team_id: null,
       name,
       description: null,
       prebuild_enabled: 0,

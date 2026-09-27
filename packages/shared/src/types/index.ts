@@ -97,7 +97,6 @@ export type {
 } from "./sessions";
 
 export {
-  DEFAULT_TEAM_ID,
   teamRoleSchema,
   teamJoinPolicySchema,
   sessionVisibilitySchema,

@@ -42,9 +42,7 @@ describe("applyMigrations", () => {
     expect(applied).toEqual(listMigrations(MIGRATIONS_DIR).map((file) => file.name));
     expect(applied).toHaveLength(files.length);
     expect(ledger(db).map((row) => row.name)).toEqual(applied);
-    expect(db.prepare("SELECT id FROM teams WHERE is_default = 1").get()).toEqual({
-      id: "team_default",
-    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM teams").get()).toEqual({ n: 0 });
     expect(
       db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get()
     ).toMatchObject({ n: expect.any(Number) });
@@ -52,7 +50,7 @@ describe("applyMigrations", () => {
     expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual([]);
   });
 
-  it("backfills team ownership and every existing user's membership", () => {
+  it("leaves existing resources workspace-owned without creating teams or memberships", () => {
     for (const name of readdirSync(MIGRATIONS_DIR).filter(
       (file) => file.endsWith(".sql") && !file.startsWith("0083_")
     )) {
@@ -82,27 +80,15 @@ describe("applyMigrations", () => {
     expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(["0083_teams.sql"]);
     for (const table of ["sessions", "automations", "environments"]) {
       expect(
-        db
-          .prepare(
-            `SELECT COUNT(*) AS n FROM ${table} WHERE owner_team_id IS NULL OR owner_team_id != 'team_default'`
-          )
-          .get()
+        db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE owner_team_id IS NOT NULL`).get()
       ).toEqual({ n: 0 });
     }
-    expect(db.prepare("SELECT user_id, role FROM team_memberships ORDER BY user_id").all()).toEqual(
-      [
-        { user_id: "admin", role: "member" },
-        { user_id: "member", role: "member" },
-        { user_id: "owner", role: "lead" },
-        { user_id: "suspended", role: "member" },
-        { user_id: "viewer", role: "member" },
-      ]
-    );
-    expect(
-      db
-        .prepare("SELECT grant_kind FROM team_repository_grants WHERE team_id = 'team_default'")
-        .get()
-    ).toEqual({ grant_kind: "installation" });
+    expect(db.prepare("SELECT visibility FROM sessions WHERE id = 'old-session'").get()).toEqual({
+      visibility: "workspace",
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM teams").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM team_memberships").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM team_repository_grants").get()).toEqual({ n: 0 });
     expect(
       db
         .prepare(
@@ -125,12 +111,25 @@ describe("applyMigrations", () => {
         .run()
     ).toThrow();
     expect(() =>
+      db
+        .prepare(
+          "INSERT INTO sessions (id, visibility, created_at, updated_at) VALUES ('invalid-team-visibility', 'team', 1, 1)"
+        )
+        .run()
+    ).toThrow();
+    expect(() =>
       db.prepare("INSERT INTO environments (id, name) VALUES ('old-null', 'OLD')").run()
     ).toThrow();
     db.prepare("INSERT INTO environments (id, name) VALUES ('null-first', 'New')").run();
     expect(() =>
       db.prepare("INSERT INTO environments (id, name) VALUES ('null-second', 'new')").run()
     ).toThrow();
+    db.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_a', 'a', 'A', 1, 1), ('team_b', 'b', 'B', 1, 1)"
+    ).run();
+    db.prepare(
+      "INSERT INTO environments (id, name, owner_team_id) VALUES ('env-a', 'New', 'team_a'), ('env-b', 'New', 'team_b')"
+    ).run();
   });
 
   it("applies files in version order and skips the ones already recorded", () => {

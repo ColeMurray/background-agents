@@ -20,7 +20,6 @@ import {
   updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
-import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   checkHarnessCompatibility,
@@ -31,7 +30,7 @@ import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/model
 import {
   AutomationStore,
   parseAutomationTriggerFields,
-  type AutomationInsertRow,
+  type AutomationRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
@@ -275,8 +274,8 @@ async function handleCreateAutomation(
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
-  const row: AutomationInsertRow = {
-    owner_team_id: DEFAULT_TEAM_ID,
+  const row: AutomationRow = {
+    owner_team_id: null,
     id,
     name: body.name.trim(),
     instructions: body.instructions,

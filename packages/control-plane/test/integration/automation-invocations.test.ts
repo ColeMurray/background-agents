@@ -5,7 +5,7 @@ import {
   deriveInvocationStatus,
   isDuplicateKeyError,
   type AutomationInvocationRow,
-  type AutomationInsertRow,
+  type AutomationRow,
   type AutomationRunRow,
 } from "../../src/db/automation-store";
 import { isAutomationExecutionAuthorized } from "../../src/automation/authorization-guard";
@@ -13,11 +13,11 @@ import { cleanD1Tables } from "./cleanup";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
-function makeAutomation(overrides?: Partial<AutomationInsertRow>): AutomationInsertRow {
+function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
-    owner_team_id: "team_default",
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Run tests",
     trigger_type: "schedule",

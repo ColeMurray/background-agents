@@ -17,11 +17,10 @@ import {
 import {
   EnvironmentStore,
   toEnvironment,
-  type EnvironmentInsertRow,
+  type EnvironmentRow,
   type EnvironmentRepositoryInsert,
   type EnvironmentScalarFields,
 } from "../db/environments";
-import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import { createLogger } from "../logger";
@@ -109,9 +108,9 @@ async function handleCreateEnvironment(
 
   const now = Date.now();
   const id = `env_${generateId()}`;
-  const row: EnvironmentInsertRow = {
+  const row: EnvironmentRow = {
     id,
-    owner_team_id: DEFAULT_TEAM_ID,
+    owner_team_id: null,
     name,
     description: normalizeDescription(description),
     prebuild_enabled: prebuildEnabled ? 1 : 0,

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
-import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { hashApiKey } from "../../src/auth/webhook-key";
 import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
@@ -23,10 +23,10 @@ async function signSentryPayload(body: string, secret: string): Promise<string> 
     .join("");
 }
 
-function makeAutomation(overrides: Partial<AutomationInsertRow> = {}): AutomationInsertRow {
+function makeAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow {
   return {
     id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    owner_team_id: "team_default",
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Test instructions",
     trigger_type: "schedule",
@@ -53,8 +53,8 @@ function makeAutomation(overrides: Partial<AutomationInsertRow> = {}): Automatio
 const SENTRY_TEST_SECRET = "test-sentry-client-secret-for-hmac";
 
 async function createSentryAutomation(
-  overrides: Partial<AutomationInsertRow> = {}
-): Promise<AutomationInsertRow> {
+  overrides: Partial<AutomationRow> = {}
+): Promise<AutomationRow> {
   const store = new AutomationStore(env.DB);
   const encrypted = await encryptToken(SENTRY_TEST_SECRET, env.REPO_SECRETS_ENCRYPTION_KEY!);
   const automation = makeAutomation({
@@ -396,8 +396,8 @@ describe("POST /webhooks/automation/:id", () => {
   const TEST_API_KEY = "test-webhook-api-key-abc123";
 
   async function createWebhookAutomation(
-    overrides: Partial<AutomationInsertRow> = {}
-  ): Promise<AutomationInsertRow> {
+    overrides: Partial<AutomationRow> = {}
+  ): Promise<AutomationRow> {
     const store = new AutomationStore(env.DB);
     const hash = await hashApiKey(TEST_API_KEY);
     const automation = makeAutomation({

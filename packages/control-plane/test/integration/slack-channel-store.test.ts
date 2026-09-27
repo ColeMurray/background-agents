@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { sqlDatabase } from "./helpers";
-import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
 
-function makeAutomation(overrides?: Partial<AutomationInsertRow>): AutomationInsertRow {
+function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
-    owner_team_id: "team_default",
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Run tests",
     trigger_type: "schedule",
@@ -33,7 +33,7 @@ function makeAutomation(overrides?: Partial<AutomationInsertRow>): AutomationIns
   };
 }
 
-const makeSlackAutomation = (overrides?: Partial<AutomationInsertRow>) =>
+const makeSlackAutomation = (overrides?: Partial<AutomationRow>) =>
   makeAutomation({
     trigger_type: "slack_event",
     event_type: "message.posted",

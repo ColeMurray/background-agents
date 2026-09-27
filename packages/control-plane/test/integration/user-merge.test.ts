@@ -230,7 +230,10 @@ describe("mergeUsers", () => {
     });
     await insertSession("session-1", LOSER);
     await env.DB.prepare(
-      "INSERT INTO team_memberships (team_id, user_id, role, created_at) VALUES ('team_default', ?, 'lead', 1), ('team_default', ?, 'member', 1)"
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_merge', 'merge', 'Merge', 1, 1)"
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO team_memberships (team_id, user_id, role, created_at) VALUES ('team_merge', ?, 'lead', 1), ('team_merge', ?, 'member', 1)"
     )
       .bind(LOSER, SURVIVOR)
       .run();

@@ -73,7 +73,7 @@ export interface SessionEntry {
   reasoningEffort: string | null;
   baseBranch: string | null;
   status: SessionStatus;
-  ownerTeamId: string;
+  ownerTeamId: string | null;
   visibility: SessionVisibility;
   parentSessionId?: string | null;
   spawnSource?: SpawnSource;

@@ -35,7 +35,6 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 import type { CreatedAtCursor } from "../created-at-cursor";
 import { z } from "zod";
 import { UserStore } from "./user-store";
-import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -81,7 +80,7 @@ export interface AutomationRow {
   consecutive_failures: number;
   created_by: string;
   user_id: string | null;
-  owner_team_id?: string | null;
+  owner_team_id: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -90,14 +89,12 @@ export interface AutomationRow {
   trigger_auth_data: string | null;
 }
 
-export type AutomationInsertRow = AutomationRow & { owner_team_id: string };
-
 const automationOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
 
-export function withOwnerTeam(row: AutomationRow): AutomationRow {
+export function withValidatedOwnerTeam(row: AutomationRow): AutomationRow {
   return {
     ...row,
-    owner_team_id: automationOwnerRowSchema.parse(row).owner_team_id ?? DEFAULT_TEAM_ID,
+    owner_team_id: automationOwnerRowSchema.parse(row).owner_team_id,
   };
 }
 
@@ -397,7 +394,7 @@ export class AutomationStore {
    * Prepared INSERT for an automation row. Public so a route can compose it with
    * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
-  bindAutomationInsert(row: AutomationInsertRow): SqlStatement {
+  bindAutomationInsert(row: AutomationRow): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO automations
@@ -432,7 +429,7 @@ export class AutomationStore {
       );
   }
 
-  async create(row: AutomationInsertRow): Promise<void> {
+  async create(row: AutomationRow): Promise<void> {
     await this.bindAutomationInsert(row).run();
   }
 
@@ -441,7 +438,7 @@ export class AutomationStore {
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
       .bind(id)
       .first<AutomationRow>();
-    return row ? withOwnerTeam(row) : null;
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
   /**
@@ -496,7 +493,7 @@ export class AutomationStore {
       .bind(...params, options.limit + 1)
       .all<AutomationRow>();
 
-    const rows = (result.results || []).map(withOwnerTeam);
+    const rows = (result.results || []).map(withValidatedOwnerTeam);
     const hasMore = rows.length > options.limit;
     const automations = hasMore ? rows.slice(0, options.limit) : rows;
     if (!hasMore) return { automations, hasMore: false, nextCursor: null };
@@ -854,7 +851,7 @@ export class AutomationStore {
       )
       .bind(now, limit)
       .all<AutomationRow>();
-    return (result.results || []).map(withOwnerTeam);
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   // --- Run management ---
@@ -1433,7 +1430,7 @@ export class AutomationStore {
       )
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
       .all<AutomationRow>();
-    return (result.results || []).map(withOwnerTeam);
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   async getActiveRunForKey(

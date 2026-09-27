@@ -4,7 +4,7 @@ import {
   type TeamMembership,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
-import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type { SqlDatabase } from "./sql-database";
 
 export class LastLeadError extends Error {
   constructor() {
@@ -99,45 +99,5 @@ export class TeamMembershipStore {
       .first();
     if (!member) throw new TeamMembershipNotFoundError();
     throw new LastLeadError();
-  }
-
-  autoJoinStatements(userId: string, nowMs: number): SqlStatement[] {
-    return [
-      this.db
-        .prepare(
-          `INSERT INTO team_memberships (team_id, user_id, role, source, created_at)
-                  SELECT id, ?, 'member', 'auto_join', ? FROM teams
-                  WHERE auto_join = 1 AND archived_at IS NULL
-                  ON CONFLICT DO NOTHING`
-        )
-        .bind(userId, nowMs),
-      this.db
-        .prepare(
-          `INSERT INTO authorization_audit_events
-                  (id, occurred_at, request_id, principal_kind, actor_service_snapshot,
-                   action, resource_type, resource_id, target_user_id_snapshot,
-                   reason_code, operation_result, metadata_json, team_id)
-                  SELECT 'team-auto-join:' || ? || ':' || t.id || ':' || m.created_at,
-                         ?, 'team-auto-join:' || ? || ':' || t.id,
-                         'service', 'team-auto-join', 'team.member_auto_joined', 'team', t.id,
-                         ?, 'auto_join', 'applied', ?, t.id
-                  FROM teams t JOIN team_memberships m ON m.team_id = t.id AND m.user_id = ?
-                  WHERE m.source = 'auto_join' AND m.created_at = ?
-                  ON CONFLICT(id) DO NOTHING`
-        )
-        .bind(
-          userId,
-          nowMs,
-          userId,
-          userId,
-          JSON.stringify({
-            before: { member: false },
-            requested: { source: "auto_join" },
-            after: { member: true },
-          }),
-          userId,
-          nowMs
-        ),
-    ];
   }
 }

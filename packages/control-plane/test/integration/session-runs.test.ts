@@ -30,8 +30,8 @@ async function seedSession(
 ): Promise<void> {
   await store.create({
     title: input.id,
-    ownerTeamId: "team_default",
-    visibility: "team",
+    ownerTeamId: null,
+    visibility: "workspace",
     repoOwner: input.repoOwner ?? "acme",
     repoName: input.repoName ?? "app",
     model: "anthropic/claude-haiku-4-5",

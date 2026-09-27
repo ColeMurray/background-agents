@@ -65,7 +65,7 @@ export interface SessionInitInput {
   participantUserId: string;
   /** Canonical platform user ID for D1 analytics attribution. Null when unresolved. */
   platformUserId: string | null;
-  ownerTeamId: string;
+  ownerTeamId: string | null;
   visibility: SessionVisibility;
 
   // SCM identity

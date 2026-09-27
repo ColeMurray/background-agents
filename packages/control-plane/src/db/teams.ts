@@ -1,5 +1,4 @@
 import {
-  DEFAULT_TEAM_ID,
   teamRowSchema,
   type Team,
   type TeamJoinPolicy,
@@ -8,13 +7,6 @@ import {
 import { generateId } from "../auth/crypto";
 import type { SqlDatabase } from "./sql-database";
 
-export class DefaultTeamImmutableError extends Error {
-  constructor() {
-    super("The default team cannot be archived or restored");
-    this.name = "DefaultTeamImmutableError";
-  }
-}
-
 function toTeam(value: unknown): Team {
   const row = teamRowSchema.parse(value);
   return {
@@ -22,9 +14,7 @@ function toTeam(value: unknown): Team {
     slug: row.slug,
     name: row.name,
     description: row.description,
-    isDefault: row.is_default === 1,
     joinPolicy: row.join_policy,
-    autoJoin: row.auto_join === 1,
     defaultVisibility: row.default_visibility,
     defaultEnvironmentId: row.default_environment_id,
     grantsVersion: row.grants_version,
@@ -45,12 +35,6 @@ export class TeamStore {
   async getBySlug(slug: string): Promise<Team | null> {
     const row = await this.db.prepare("SELECT * FROM teams WHERE slug = ?").bind(slug).first();
     return row ? toTeam(row) : null;
-  }
-
-  async getDefault(): Promise<Team> {
-    const team = await this.getById(DEFAULT_TEAM_ID);
-    if (!team || !team.isDefault) throw new Error("Default team is missing");
-    return team;
   }
 
   async list(options: { forUserId?: string; includeArchived?: boolean } = {}): Promise<Team[]> {
@@ -93,7 +77,6 @@ export class TeamStore {
       name?: string;
       description?: string | null;
       joinPolicy?: TeamJoinPolicy;
-      autoJoin?: boolean;
       defaultVisibility?: SessionVisibility;
       defaultEnvironmentId?: string | null;
     }
@@ -110,7 +93,6 @@ export class TeamStore {
       name: fields.name,
       description: fields.description,
       join_policy: fields.joinPolicy,
-      auto_join: fields.autoJoin === undefined ? undefined : Number(fields.autoJoin),
       default_visibility: fields.defaultVisibility,
       default_environment_id: fields.defaultEnvironmentId,
     };
@@ -135,17 +117,13 @@ export class TeamStore {
   }
 
   private async setArchived(id: string, archivedAt: number | null): Promise<boolean> {
-    if (id === DEFAULT_TEAM_ID) throw new DefaultTeamImmutableError();
     const result = await this.db
       .prepare(
         `UPDATE teams SET archived_at = ?, updated_at = ?
-                WHERE id = ? AND is_default = 0 AND ${archivedAt === null ? "archived_at IS NOT NULL" : "archived_at IS NULL"}`
+                 WHERE id = ? AND ${archivedAt === null ? "archived_at IS NOT NULL" : "archived_at IS NULL"}`
       )
       .bind(archivedAt, Date.now(), id)
       .run();
-    if ((result.meta.changes ?? 0) === 0 && (await this.getById(id))?.isDefault) {
-      throw new DefaultTeamImmutableError();
-    }
     return (result.meta.changes ?? 0) > 0;
   }
 

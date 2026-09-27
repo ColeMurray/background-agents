@@ -3,20 +3,8 @@ import { SELF, env } from "cloudflare:test";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
-import {
-  SessionIndexStore as BaseSessionIndexStore,
-  type SessionEntry,
-} from "../../src/db/session-index";
+import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-
-type TestSessionEntry = Omit<SessionEntry, "ownerTeamId" | "visibility"> &
-  Partial<Pick<SessionEntry, "ownerTeamId" | "visibility">>;
-
-class SessionIndexStore extends BaseSessionIndexStore {
-  override create(row: TestSessionEntry): Promise<void> {
-    return super.create({ ownerTeamId: "team_default", visibility: "team", ...row });
-  }
-}
 import {
   initNamedSession,
   initNamedSessionDO,
@@ -47,6 +35,8 @@ describe("Child session operations (list, get, cancel)", () => {
     const now = Date.now();
     await store.create({
       id: pName,
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Parent Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -61,6 +51,8 @@ describe("Child session operations (list, get, cancel)", () => {
     });
     await store.create({
       id: childName,
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Child Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -127,6 +119,8 @@ describe("Child session operations (list, get, cancel)", () => {
     const now = Date.now();
     await store.create({
       id,
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Nested Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -273,6 +267,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: fakeName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Fake Parent",
         repoOwner: "acme",
         repoName: "web-app",
@@ -485,6 +481,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: fakeName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Fake Parent",
         repoOwner: "acme",
         repoName: "web-app",
@@ -745,6 +743,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: fakeName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Fake Parent",
         repoOwner: "acme",
         repoName: "web-app",
@@ -788,6 +788,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: pName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Parent",
         repoOwner: "acme",
         repoName: "web-app",

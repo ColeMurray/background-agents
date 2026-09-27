@@ -1,19 +1,14 @@
--- Teams establish ownership and membership without changing access decisions.
---
--- The default team represents the existing single-workspace behavior. Nullable
--- owner foreign keys allow older Workers to write during the migration deploy
--- window; application writes provide an explicit owner and reads treat a NULL
--- from that window as the default team. A later backfill catches those writes.
--- The timestamp below records the authoring time in epoch milliseconds.
+-- Teams are opt-in overlays over existing workspace-level ownership.
+-- A NULL owner_team_id remains workspace-owned across the deploy window; no
+-- team or membership is created for existing users or resources. Visibility
+-- defaults to workspace and only a team-owned session may be team-visible.
 
 CREATE TABLE teams (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   description TEXT,
-  is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
   join_policy TEXT NOT NULL DEFAULT 'invite_only' CHECK (join_policy IN ('open', 'invite_only')),
-  auto_join INTEGER NOT NULL DEFAULT 0 CHECK (auto_join IN (0, 1)),
   default_visibility TEXT NOT NULL DEFAULT 'team' CHECK (default_visibility IN ('team', 'workspace', 'private')),
   default_environment_id TEXT,
   grants_version INTEGER NOT NULL DEFAULT 0,
@@ -21,13 +16,11 @@ CREATE TABLE teams (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-CREATE UNIQUE INDEX idx_teams_default ON teams(is_default) WHERE is_default = 1;
-
 CREATE TABLE team_memberships (
   team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('lead', 'member')),
-  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'auto_join', 'github_team')),
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'github_team')),
   created_at INTEGER NOT NULL,
   PRIMARY KEY (team_id, user_id)
 );
@@ -77,32 +70,15 @@ CREATE TABLE session_collaborators (
 );
 CREATE INDEX idx_session_collaborators_user ON session_collaborators(user_id, session_id);
 
-INSERT INTO teams (id, slug, name, description, is_default, join_policy, auto_join, default_visibility,
-  grants_version, created_at, updated_at)
-VALUES ('team_default', 'default', 'Workspace', NULL, 1, 'open', 1, 'team', 0, 1790495974810, 1790495974810);
-
-INSERT INTO team_memberships (team_id, user_id, role, source, created_at)
-SELECT 'team_default', u.id,
-  CASE WHEN ura.role_id = 'role_builtin_owner' THEN 'lead' ELSE 'member' END,
-  'manual', 1790495974810
-FROM users u LEFT JOIN user_role_assignments ura ON ura.user_id = u.id;
-
-INSERT INTO team_repository_grants (id, team_id, grant_kind, created_at)
-VALUES ('tgrant_default_installation', 'team_default', 'installation', 1790495974810);
-
 ALTER TABLE sessions ADD COLUMN owner_team_id TEXT REFERENCES teams(id) ON DELETE RESTRICT;
-ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('team', 'workspace', 'private'));
+ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'workspace' CHECK (visibility IN ('team', 'workspace', 'private') AND (visibility != 'team' OR owner_team_id IS NOT NULL));
 ALTER TABLE sessions ADD COLUMN project_id TEXT;
 ALTER TABLE automations ADD COLUMN owner_team_id TEXT REFERENCES teams(id) ON DELETE RESTRICT;
 ALTER TABLE environments ADD COLUMN owner_team_id TEXT REFERENCES teams(id) ON DELETE RESTRICT;
 ALTER TABLE authorization_audit_events ADD COLUMN team_id TEXT;
 
-UPDATE sessions SET owner_team_id = 'team_default' WHERE owner_team_id IS NULL;
-UPDATE automations SET owner_team_id = 'team_default' WHERE owner_team_id IS NULL;
-UPDATE environments SET owner_team_id = 'team_default' WHERE owner_team_id IS NULL;
-
 CREATE INDEX idx_sessions_owner_team ON sessions(owner_team_id, status, updated_at DESC);
 CREATE INDEX idx_sessions_owner_team_visibility ON sessions(owner_team_id, visibility, updated_at DESC);
 CREATE INDEX idx_audit_events_team ON authorization_audit_events(team_id, occurred_at DESC, id DESC);
 DROP INDEX idx_environments_name;
-CREATE UNIQUE INDEX idx_environments_name ON environments (COALESCE(owner_team_id, 'team_default'), lower(name));
+CREATE UNIQUE INDEX idx_environments_name ON environments (COALESCE(owner_team_id, ''), lower(name));

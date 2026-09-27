@@ -31,8 +31,8 @@ async function seed(store: SessionIndexStore, session: SeedSession): Promise<voi
   }));
   await store.create({
     id: session.id,
-    ownerTeamId: "team_default",
-    visibility: "team",
+    ownerTeamId: null,
+    visibility: "workspace",
     title: session.title ?? null,
     repoOwner: session.repoOwner ?? repositories?.[0]?.repoOwner ?? null,
     repoName: session.repoName ?? repositories?.[0]?.repoName ?? null,

@@ -1,7 +1,6 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
 import { createCanonicalBetterAuthAdapter } from "../../db/better-auth-adapter";
-import { TeamMembershipStore } from "../../db/team-memberships";
 import type { SqlDatabase } from "../../db/sql-database";
 import { generateId } from "../crypto";
 import type { ProviderProfileResolver } from "./provider-profile";
@@ -45,17 +44,6 @@ export function createUserAuth(config: UserAuthConfig) {
   return betterAuth({
     baseURL: config.publicWebOrigin,
     database: createCanonicalBetterAuthAdapter(config.database),
-    databaseHooks: {
-      user: {
-        create: {
-          after: async (user) => {
-            await config.database.batch(
-              new TeamMembershipStore(config.database).autoJoinStatements(user.id, Date.now())
-            );
-          },
-        },
-      },
-    },
     secret: config.secret,
     trustedOrigins: [config.publicWebOrigin],
     telemetry: { enabled: false },

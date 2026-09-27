@@ -41,7 +41,6 @@ import {
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
-import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import { authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:session-child-spawn");
@@ -251,8 +250,8 @@ export async function handleSpawnChild(
   );
 
   const input: SessionInitInput = {
-    ownerTeamId: parentSession?.ownerTeamId ?? DEFAULT_TEAM_ID,
-    visibility: parentSession?.visibility ?? "team",
+    ownerTeamId: parentSession?.ownerTeamId ?? null,
+    visibility: parentSession?.visibility ?? "workspace",
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,

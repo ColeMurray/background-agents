@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-export const DEFAULT_TEAM_ID = "team_default";
-
 export const teamRoleSchema = z.enum(["lead", "member"]);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
 
@@ -16,9 +14,7 @@ export const teamRowSchema = z.object({
   slug: z.string(),
   name: z.string(),
   description: z.string().nullable(),
-  is_default: z.number().int(),
   join_policy: teamJoinPolicySchema,
-  auto_join: z.number().int(),
   default_visibility: sessionVisibilitySchema,
   default_environment_id: z.string().nullable(),
   grants_version: z.number().int(),
@@ -32,9 +28,7 @@ export interface Team {
   slug: string;
   name: string;
   description: string | null;
-  isDefault: boolean;
   joinPolicy: TeamJoinPolicy;
-  autoJoin: boolean;
   defaultVisibility: SessionVisibility;
   defaultEnvironmentId: string | null;
   grantsVersion: number;
@@ -47,7 +41,7 @@ export const teamMembershipSchema = z.object({
   teamId: z.string(),
   userId: z.string(),
   role: teamRoleSchema,
-  source: z.enum(["manual", "auto_join", "github_team"]),
+  source: z.enum(["manual", "github_team"]),
   createdAt: z.number(),
 });
 export type TeamMembership = z.infer<typeof teamMembershipSchema>;

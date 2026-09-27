@@ -1,6 +1,5 @@
 import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
 import { generateId } from "../auth/crypto";
-import { TeamMembershipStore } from "./team-memberships";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
@@ -215,22 +214,20 @@ export class UserStore {
     const email = normalizeEmail(user.email);
     const emailVerified = email !== null && user.emailVerified === true;
 
-    await this.db.batch([
-      this.db
-        .prepare(
-          "INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(
-          id,
-          user.displayName ?? null,
-          email,
-          emailVerified ? 1 : 0,
-          user.avatarUrl ?? null,
-          now,
-          now
-        ),
-      ...new TeamMembershipStore(this.db).autoJoinStatements(id, now),
-    ]);
+    await this.db
+      .prepare(
+        "INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      )
+      .bind(
+        id,
+        user.displayName ?? null,
+        email,
+        emailVerified ? 1 : 0,
+        user.avatarUrl ?? null,
+        now,
+        now
+      )
+      .run();
 
     return {
       id,
@@ -400,7 +397,7 @@ export class UserStore {
       }
     }
 
-    // Step 4: Brand new user — batch user + identity + membership creation so a UNIQUE
+    // Step 4: Brand new user — batch user + identity creation so a UNIQUE
     // failure on the identity INSERT rolls back the user INSERT, preventing
     // orphaned user rows under concurrent requests.
     const userId = generateId();
@@ -433,7 +430,6 @@ export class UserStore {
           issuer,
           now
         ),
-      ...new TeamMembershipStore(this.db).autoJoinStatements(userId, now),
     ]);
 
     return {

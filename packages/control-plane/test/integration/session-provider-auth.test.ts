@@ -45,8 +45,8 @@ describe("session provider auth persistence", () => {
       createCloudflareEnv(env),
       {
         sessionId,
-        ownerTeamId: "team_default",
-        visibility: "team",
+        ownerTeamId: null,
+        visibility: "workspace",
         repoOwner: null,
         repoName: null,
         repoId: null,

@@ -1,22 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import {
-  SessionIndexStore as BaseSessionIndexStore,
-  type SessionEntry,
-} from "../../src/db/session-index";
+import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionStatusProjectionStore } from "../../src/db/session-status-projection-store";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { cleanD1Tables } from "./cleanup";
-
-type TestSessionEntry = Omit<SessionEntry, "ownerTeamId" | "visibility"> &
-  Partial<Pick<SessionEntry, "ownerTeamId" | "visibility">>;
-
-class SessionIndexStore extends BaseSessionIndexStore {
-  override create(row: TestSessionEntry): Promise<void> {
-    return super.create({ ownerTeamId: "team_default", visibility: "team", ...row });
-  }
-}
 
 describe("D1 SessionIndexStore", () => {
   beforeEach(cleanD1Tables);
@@ -27,6 +15,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "test-session-1",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Test Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -71,6 +61,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-provider-auth",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: null,
       repoName: null,
@@ -138,6 +130,8 @@ describe("D1 SessionIndexStore", () => {
     const create = (id: string, status: "active" | "completed") =>
       store.create({
         id,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: null,
         repoOwner: "acme",
         repoName: "repo",
@@ -168,6 +162,8 @@ describe("D1 SessionIndexStore", () => {
     const now = Date.now();
     await store.create({
       id: "parent",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "repo",
@@ -193,6 +189,8 @@ describe("D1 SessionIndexStore", () => {
     const now = Date.now();
     await store.create({
       id: "parent",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "repo",
@@ -224,6 +222,8 @@ describe("D1 SessionIndexStore", () => {
 
       await store.create({
         id: "assoc-session-1",
+        ownerTeamId: null,
+        visibility: "workspace",
         title: null,
         repoOwner: "Acme",
         repoName: "Web-App",
@@ -253,6 +253,8 @@ describe("D1 SessionIndexStore", () => {
 
       await store.create({
         id: "assoc-session-2",
+        ownerTeamId: null,
+        visibility: "workspace",
         title: null,
         repoOwner: "acme",
         repoName: "solo",
@@ -280,6 +282,8 @@ describe("D1 SessionIndexStore", () => {
     ] as const) {
       await store.create({
         id,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: null,
         repoOwner: "acme",
         repoName: "web-app",
@@ -341,6 +345,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-active-1",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -354,6 +360,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-completed-1",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -379,6 +387,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-with-effort",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -404,6 +414,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-no-effort",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -425,6 +437,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-with-login",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -448,6 +462,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-no-login",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -470,6 +486,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-metrics",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -530,6 +548,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-metrics-overwrite",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -601,6 +621,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "session-to-delete",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: null,
       repoOwner: "acme",
       repoName: "web-app",
@@ -624,6 +646,8 @@ describe("D1 SessionIndexStore", () => {
 
     await store.create({
       id: "status-ordering-1",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Ordering",
       repoOwner: "acme",
       repoName: "worker",
@@ -660,6 +684,8 @@ describe("D1 SessionIndexStore", () => {
       // Seed parent
       await store.create({
         id: parentId,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Parent",
         repoOwner: "owner",
         repoName: "repo",
@@ -677,6 +703,8 @@ describe("D1 SessionIndexStore", () => {
       // Seed child 1 (active)
       await store.create({
         id: childId1,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Child 1",
         repoOwner: "owner",
         repoName: "repo",
@@ -694,6 +722,8 @@ describe("D1 SessionIndexStore", () => {
       // Seed child 2 (completed)
       await store.create({
         id: childId2,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Child 2",
         repoOwner: "owner",
         repoName: "repo",
@@ -764,6 +794,8 @@ describe("D1 SessionIndexStore", () => {
       ] as const) {
         await store.create({
           id,
+          ownerTeamId: null,
+          visibility: "workspace",
           title: null,
           repoOwner: "owner",
           repoName: "repo",
@@ -791,6 +823,8 @@ describe("D1 SessionIndexStore", () => {
       const now = Date.now();
       await store.create({
         id: "cycle-child",
+        ownerTeamId: null,
+        visibility: "workspace",
         title: null,
         repoOwner: "owner",
         repoName: "repo",
@@ -867,6 +901,8 @@ describe("D1 SessionIndexStore", () => {
 
       await store.create({
         id: "session-with-user",
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "User-linked session",
         repoOwner: "acme",
         repoName: "web-app",
@@ -890,6 +926,8 @@ describe("D1 SessionIndexStore", () => {
 
       await store.create({
         id: "session-no-user",
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "No user",
         repoOwner: "acme",
         repoName: "web-app",
@@ -911,6 +949,8 @@ describe("D1 SessionIndexStore", () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
     const baseSession = {
+      ownerTeamId: null,
+      visibility: "workspace" as const,
       title: null,
       repoOwner: "acme",
       repoName: "web-app",
@@ -959,6 +999,8 @@ describe("D1 SessionIndexStore", () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
     const baseSession = {
+      ownerTeamId: null,
+      visibility: "workspace" as const,
       title: null,
       repoOwner: "acme",
       repoName: "web-app",
@@ -1007,6 +1049,8 @@ describe("D1 SessionIndexStore", () => {
     ): Promise<void> {
       await store.create({
         id,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: id,
         repoOwner: "acme",
         repoName: "web-app",
@@ -1083,6 +1127,8 @@ describe("D1 SessionIndexStore", () => {
     async function seedDraft(store: SessionIndexStore, id: string, updatedAt: number) {
       await store.create({
         id,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: id,
         repoOwner: "acme",
         repoName: "web-app",

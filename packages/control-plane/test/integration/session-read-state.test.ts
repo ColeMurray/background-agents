@@ -19,8 +19,8 @@ async function createUser(userId: string, createdAt: number): Promise<void> {
 async function createSession(store: SessionIndexStore, sessionId: string, updatedAt = 1_000) {
   await store.create({
     id: sessionId,
-    ownerTeamId: "team_default",
-    visibility: "team",
+    ownerTeamId: null,
+    visibility: "workspace",
     title: sessionId,
     repoOwner: "acme",
     repoName: "web",

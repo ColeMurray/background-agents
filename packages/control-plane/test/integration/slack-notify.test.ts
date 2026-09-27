@@ -29,8 +29,8 @@ async function setupSession(opts?: {
   const now = Date.now();
   await sessionStore.create({
     id: sessionName,
-    ownerTeamId: "team_default",
-    visibility: "team",
+    ownerTeamId: null,
+    visibility: "workspace",
     title: "Test session",
     repoOwner: "acme",
     repoName: "web-app",

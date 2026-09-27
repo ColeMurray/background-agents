@@ -4,7 +4,7 @@ import {
   harnessIdSchema,
 } from "@open-inspect/shared/harnesses";
 import { sessionStatusSchema, spawnSourceSchema } from "@open-inspect/shared/types/sessions";
-import { DEFAULT_TEAM_ID, sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
+import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { z } from "zod";
 
 /** Persisted D1 session row shared by index and export readers. */
@@ -70,7 +70,7 @@ export function toSessionFields(row: SessionRow) {
     automationRunId: row.automation_run_id,
     scmLogin: row.scm_login,
     userId: row.user_id,
-    ownerTeamId: row.owner_team_id ?? DEFAULT_TEAM_ID,
+    ownerTeamId: row.owner_team_id,
     visibility: row.visibility,
     totalCost: row.total_cost,
     activeDurationMs: row.active_duration_ms,

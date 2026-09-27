@@ -9,7 +9,6 @@
  */
 
 import type { Environment, EnvironmentRepository } from "@open-inspect/shared/types/environments";
-import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import { z } from "zod";
 import { parseJsonStringArray } from "./json-columns";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
@@ -22,17 +21,15 @@ export interface EnvironmentRow {
   channel_associations: string | null; // JSON string array (mirrors repo_metadata)
   created_at: number;
   updated_at: number;
-  owner_team_id?: string | null;
+  owner_team_id: string | null;
 }
-
-export type EnvironmentInsertRow = EnvironmentRow & { owner_team_id: string };
 
 const environmentOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
 
-function withOwnerTeam(row: EnvironmentRow): EnvironmentRow {
+function withValidatedOwnerTeam(row: EnvironmentRow): EnvironmentRow {
   return {
     ...row,
-    owner_team_id: environmentOwnerRowSchema.parse(row).owner_team_id ?? DEFAULT_TEAM_ID,
+    owner_team_id: environmentOwnerRowSchema.parse(row).owner_team_id,
   };
 }
 
@@ -92,7 +89,7 @@ const MUTABLE_SCALAR_COLUMNS = [
 export class EnvironmentStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  bindEnvironmentInsert(row: EnvironmentInsertRow): SqlStatement {
+  bindEnvironmentInsert(row: EnvironmentRow): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO environments
@@ -112,10 +109,7 @@ export class EnvironmentStore {
   }
 
   /** Insert an environment and its repositories atomically. */
-  async create(
-    row: EnvironmentInsertRow,
-    repositories: EnvironmentRepositoryInsert[]
-  ): Promise<void> {
+  async create(row: EnvironmentRow, repositories: EnvironmentRepositoryInsert[]): Promise<void> {
     await this.db.batch([
       this.bindEnvironmentInsert(row),
       ...this.bindRepositoryInserts(row.id, repositories),
@@ -127,7 +121,7 @@ export class EnvironmentStore {
       .prepare("SELECT * FROM environments WHERE id = ?")
       .bind(id)
       .first<EnvironmentRow>();
-    return row ? withOwnerTeam(row) : null;
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
   /**
@@ -140,14 +134,14 @@ export class EnvironmentStore {
       .prepare("SELECT * FROM environments WHERE lower(name) = lower(?)")
       .bind(name)
       .first<EnvironmentRow>();
-    return row ? withOwnerTeam(row) : null;
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
   async list(): Promise<{ environments: EnvironmentRow[]; total: number }> {
     const result = await this.db
       .prepare("SELECT * FROM environments ORDER BY created_at DESC")
       .all<EnvironmentRow>();
-    const environments = (result.results || []).map(withOwnerTeam);
+    const environments = (result.results || []).map(withValidatedOwnerTeam);
     return { environments, total: environments.length };
   }
 

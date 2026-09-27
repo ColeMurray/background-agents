@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { seedActiveUser, sqlDatabase } from "./helpers";
-import { AutomationStore, type AutomationInsertRow } from "../../src/db/automation-store";
+import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
@@ -19,11 +19,11 @@ function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return new Scheduler(env.DB, schedulerEnv, { submit() {} });
 }
 
-function makeAutomation(overrides?: Partial<AutomationInsertRow>): AutomationInsertRow {
+function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
-    owner_team_id: "team_default",
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Run tests",
     trigger_type: "schedule",
