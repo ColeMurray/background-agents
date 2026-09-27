@@ -52,6 +52,7 @@ interface SessionRightSidebarProps {
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
 
 const DEFAULT_CAN_MANAGE_BUDGET = false;
+const TRACE_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export function SessionRightSidebarContent({
   sessionId,
@@ -100,9 +101,12 @@ export function SessionRightSidebarContent({
 
   const downloadTrace = async () => {
     setDownloading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TRACE_DOWNLOAD_TIMEOUT_MS);
     try {
       const response = await browserApiFetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/export`
+        `/api/sessions/${encodeURIComponent(sessionId)}/export`,
+        { signal: controller.signal }
       );
       if (!response.ok) throw new Error("Trace export failed");
 
@@ -118,6 +122,7 @@ export function SessionRightSidebarContent({
     } catch {
       toast.error("Failed to download trace");
     } finally {
+      clearTimeout(timeoutId);
       setDownloading(false);
     }
   };

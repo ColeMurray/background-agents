@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
@@ -30,6 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -101,7 +102,9 @@ describe("SessionRightSidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
-    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/session-1/export");
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/session-1/export", {
+      signal: expect.any(AbortSignal),
+    });
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
@@ -127,6 +130,79 @@ describe("SessionRightSidebar", () => {
     await waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(click.mock.instances[0]).toHaveProperty("download", "session-session-1.ndjson");
     expect(click.mock.instances[0]).toHaveProperty("href", "blob:session-trace");
+  });
+
+  it("aborts a trace body that stalls after headers and re-enables the download button", async () => {
+    vi.useFakeTimers();
+    let fetchSignal: AbortSignal | undefined;
+    vi.mocked(browserApiFetch).mockImplementationOnce(async (_path, init) => {
+      fetchSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            fetchSignal?.addEventListener("abort", () => controller.error(fetchSignal?.reason), {
+              once: true,
+            });
+          },
+        }),
+        { headers: { "Content-Type": "application/x-ndjson" } }
+      );
+    });
+    render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(toast.error).toHaveBeenCalledWith("Failed to download trace");
+    expect(screen.getByRole("button", { name: "Download trace" })).not.toBeDisabled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("clears the trace deadline after a successful body read", async () => {
+    vi.useFakeTimers();
+    let fetchSignal: AbortSignal | undefined;
+    vi.mocked(browserApiFetch).mockImplementationOnce(async (_path, init) => {
+      fetchSignal = init?.signal ?? undefined;
+      return new Response('{"type":"session"}\n');
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(click).toHaveBeenCalledOnce();
+    expect(fetchSignal?.aborted).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchSignal?.aborted).toBe(false);
   });
 
   it("hides sandbox access controls when the capability is denied", () => {
