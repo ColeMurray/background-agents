@@ -287,8 +287,8 @@ async function joinTeam(
 ) {
   const team = admittedTeam(ctx);
   const userId = viewer(ctx).userId;
-  if (!(await new TeamMembershipStore(ctx.db).add(team.id, userId))) {
-    return json({ error: "Already a member", code: "already_member" }, 409);
+  if (!(await new TeamMembershipStore(ctx.db).addIfJoinable(team.id, userId))) {
+    return json({ error: "Team join is no longer available", code: "join_unavailable" }, 409);
   }
   await auditTeamEvent({
     ctx,

@@ -51,6 +51,30 @@ describe("team and membership stores", () => {
     ).rejects.toBeInstanceOf(TeamSlugConflictError);
   });
 
+  it("rechecks open and active policy when a user joins, without restricting manual additions", async () => {
+    const teams = new TeamStore(env.DB);
+    const members = new TeamMembershipStore(env.DB);
+    const team = await teams.create({ slug: "join-race", name: "Join race", joinPolicy: "open" });
+    for (const userId of ["joiner", "invited"]) {
+      await env.DB.prepare("INSERT INTO users (id, created_at, updated_at) VALUES (?, 1, 1)")
+        .bind(userId)
+        .run();
+    }
+
+    await teams.update(team.id, { joinPolicy: "invite_only" });
+    expect(await members.addIfJoinable(team.id, "joiner")).toBe(false);
+    expect(await members.add(team.id, "invited")).toBe(true);
+    await teams.update(team.id, { joinPolicy: "open" });
+    await teams.archive(team.id);
+    expect(await members.addIfJoinable(team.id, "joiner")).toBe(false);
+    expect((await members.listForUser("joiner")).has(team.id)).toBe(false);
+
+    await teams.restore(team.id);
+    expect(await members.addIfJoinable(team.id, "joiner")).toBe(true);
+    expect(await members.addIfJoinable(team.id, "joiner")).toBe(false);
+    expect((await members.listForUser("joiner")).get(team.id)).toBe("member");
+  });
+
   it("protects the final lead under concurrent demotions", async () => {
     const members = new TeamMembershipStore(env.DB);
     const teamId = (

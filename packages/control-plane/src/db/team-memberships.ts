@@ -117,6 +117,19 @@ export class TeamMembershipStore {
     return result.meta.changes > 0;
   }
 
+  async addIfJoinable(teamId: string, userId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO team_memberships (team_id, user_id, role, source, created_at)
+         SELECT id, ?, 'member', 'manual', ? FROM teams
+         WHERE id = ? AND join_policy = 'open' AND archived_at IS NULL
+         ON CONFLICT DO NOTHING`
+      )
+      .bind(userId, Date.now(), teamId)
+      .run();
+    return result.meta.changes > 0;
+  }
+
   async setRole(teamId: string, userId: string, role: TeamRole): Promise<void> {
     const result = await this.db
       .prepare(
