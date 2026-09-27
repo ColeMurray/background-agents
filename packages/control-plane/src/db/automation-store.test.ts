@@ -76,6 +76,7 @@ function createFakeD1(options?: { allResults?: unknown[] }) {
 const now = Date.now();
 
 const sampleRow: AutomationRow = {
+  owner_team_id: null,
   id: "auto_test1",
   name: "Daily sync",
   instructions: "Run daily sync tasks",

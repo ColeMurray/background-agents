@@ -23,6 +23,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
+import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import type {
   AutomationInvocationSource,
   AutomationRun,
@@ -1596,6 +1597,8 @@ export class Scheduler {
     );
 
     const sessionInput: SessionInitInput = {
+      ownerTeamId: DEFAULT_TEAM_ID,
+      visibility: "team",
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,

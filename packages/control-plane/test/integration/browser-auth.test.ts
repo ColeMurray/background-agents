@@ -148,6 +148,38 @@ describe("browser authentication", () => {
     expect(await response.json()).toBeNull();
   });
 
+  it("auto-joins a browser-created user after the Better Auth user insert", async () => {
+    const userId = `browser-team-${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO users (id, created_at, updated_at) VALUES (?, 1, 1)")
+      .bind(userId)
+      .run();
+    const hook = createTestAuth().options.databaseHooks?.user?.create?.after;
+    expect(hook).toBeDefined();
+    await hook!({
+      id: userId,
+      name: "Browser",
+      email: "browser@example.com",
+      emailVerified: true,
+      image: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT source FROM team_memberships WHERE user_id = ? AND team_id = 'team_default'"
+      )
+        .bind(userId)
+        .first()
+    ).toEqual({ source: "auto_join" });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE target_user_id_snapshot = ? AND action = 'team.member_auto_joined'"
+      )
+        .bind(userId)
+        .first()
+    ).toEqual({ count: 1 });
+  });
+
   it("initiates GitHub App sign-in with PKCE and no classic OAuth scopes", async () => {
     const auth = createUserAuth({
       database: env.DB,

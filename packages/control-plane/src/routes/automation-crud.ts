@@ -20,6 +20,7 @@ import {
   updateAutomationRequestSchema,
 } from "@open-inspect/shared/types/automations";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
+import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import {
   checkHarnessCompatibility,
@@ -275,6 +276,7 @@ async function handleCreateAutomation(
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const row: AutomationRow = {
+    owner_team_id: DEFAULT_TEAM_ID,
     id,
     name: body.name.trim(),
     instructions: body.instructions,

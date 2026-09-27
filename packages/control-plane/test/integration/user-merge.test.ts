@@ -229,6 +229,16 @@ describe("mergeUsers", () => {
       issuer: "https://github.com",
     });
     await insertSession("session-1", LOSER);
+    await env.DB.prepare(
+      "INSERT INTO team_memberships (team_id, user_id, role, created_at) VALUES ('team_default', ?, 'lead', 1), ('team_default', ?, 'member', 1)"
+    )
+      .bind(LOSER, SURVIVOR)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES ('session-1', ?, 'owner', 1)"
+    )
+      .bind(LOSER)
+      .run();
 
     const preview = await mergeUsers(env.DB, {
       survivorId: SURVIVOR,
@@ -240,6 +250,9 @@ describe("mergeUsers", () => {
     expect(preview.counts).toMatchObject({
       identitiesRepointed: 1,
       sessionsRepointed: 1,
+      teamMembershipsDeduped: 1,
+      teamMembershipsRepointed: 0,
+      sessionCollaboratorsRepointed: 1,
       canonicalEmailBackfilled: 1,
       usersDeleted: 1,
     });
@@ -249,6 +262,16 @@ describe("mergeUsers", () => {
 
     const executed = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
     expect(executed.counts).toEqual(preview.counts);
+    expect(
+      await env.DB.prepare("SELECT role FROM team_memberships WHERE user_id = ?")
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ role: "member" });
+    expect(
+      await env.DB.prepare(
+        "SELECT user_id FROM session_collaborators WHERE session_id = 'session-1'"
+      ).first()
+    ).toEqual({ user_id: SURVIVOR });
   });
 
   it("leaves non-canonical created_by values (legacy GitHub numeric ids) untouched", async () => {

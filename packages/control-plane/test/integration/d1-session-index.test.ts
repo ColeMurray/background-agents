@@ -1,10 +1,22 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import { SessionIndexStore } from "../../src/db/session-index";
+import {
+  SessionIndexStore as BaseSessionIndexStore,
+  type SessionEntry,
+} from "../../src/db/session-index";
 import { SessionStatusProjectionStore } from "../../src/db/session-status-projection-store";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { cleanD1Tables } from "./cleanup";
+
+type TestSessionEntry = Omit<SessionEntry, "ownerTeamId" | "visibility"> &
+  Partial<Pick<SessionEntry, "ownerTeamId" | "visibility">>;
+
+class SessionIndexStore extends BaseSessionIndexStore {
+  override create(row: TestSessionEntry): Promise<void> {
+    return super.create({ ownerTeamId: "team_default", visibility: "team", ...row });
+  }
+}
 
 describe("D1 SessionIndexStore", () => {
   beforeEach(cleanD1Tables);

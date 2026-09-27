@@ -592,6 +592,8 @@ describe("AutomationStore (D1 integration)", () => {
       // Create a session
       await sessionStore.create({
         id: "sess-enriched",
+        ownerTeamId: "team_default",
+        visibility: "team",
         title: "Auto Session Title",
         repoOwner: "acme",
         repoName: "web-app",

@@ -44,6 +44,8 @@ describe("PrAutofixFeedbackStore", () => {
     const receipt = await store.receive(COMMENT_ENVELOPE, 1_000);
     await new SessionIndexStore(env.DB).create({
       id: "session-1",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: "acme",
       repoName: "widgets",

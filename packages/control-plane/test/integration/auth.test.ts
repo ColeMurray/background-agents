@@ -46,6 +46,8 @@ describe("Edge authentication", () => {
 
     await store.create({
       id: "alice-session",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -59,6 +61,8 @@ describe("Edge authentication", () => {
     });
     await store.create({
       id: "bob-session",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -72,6 +76,8 @@ describe("Edge authentication", () => {
     });
     await store.create({
       id: "historical-session",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: "acme",
       repoName: "api",
@@ -106,6 +112,8 @@ describe("Edge authentication", () => {
     ] as const) {
       await store.create({
         id,
+        ownerTeamId: "team_default",
+        visibility: "team",
         title: null,
         repoOwner: "acme",
         repoName: "api",

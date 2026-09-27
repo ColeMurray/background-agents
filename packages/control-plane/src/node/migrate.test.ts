@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,11 +42,76 @@ describe("applyMigrations", () => {
     expect(applied).toEqual(listMigrations(MIGRATIONS_DIR).map((file) => file.name));
     expect(applied).toHaveLength(files.length);
     expect(ledger(db).map((row) => row.name)).toEqual(applied);
+    expect(db.prepare("SELECT id FROM teams WHERE is_default = 1").get()).toEqual({
+      id: "team_default",
+    });
     expect(
       db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get()
     ).toMatchObject({ n: expect.any(Number) });
     // A second run finds everything recorded and applies nothing.
     expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual([]);
+  });
+
+  it("backfills team ownership and every existing user's membership", () => {
+    for (const name of readdirSync(MIGRATIONS_DIR).filter(
+      (file) => file.endsWith(".sql") && !file.startsWith("0083_")
+    )) {
+      copyFileSync(join(MIGRATIONS_DIR, name), join(dir, name));
+    }
+    applyMigrations(db, dir);
+    for (const [id, role, suspendedAt] of [
+      ["owner", "role_builtin_owner", null],
+      ["admin", "role_builtin_administrator", null],
+      ["member", "role_builtin_member", null],
+      ["viewer", "role_builtin_viewer", null],
+      ["suspended", "role_builtin_member", 1],
+    ] as const) {
+      db.prepare(
+        "INSERT INTO users (id, suspended_at, created_at, updated_at) VALUES (?, ?, 1, 1)"
+      ).run(id, suspendedAt);
+      db.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?").run(role, id);
+    }
+    db.prepare(
+      "INSERT INTO sessions (id, user_id, created_at, updated_at) VALUES ('old-session', NULL, 1, 1)"
+    ).run();
+    db.prepare(
+      "INSERT INTO automations (id, name, instructions, model, created_by, created_at, updated_at) VALUES ('old-auto', 'old', 'instructions', 'model', 'owner', 1, 1)"
+    ).run();
+    db.prepare("INSERT INTO environments (id, name) VALUES ('old-env', 'Old')").run();
+
+    expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual(["0083_teams.sql"]);
+    for (const table of ["sessions", "automations", "environments"]) {
+      expect(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM ${table} WHERE owner_team_id IS NULL OR owner_team_id != 'team_default'`
+          )
+          .get()
+      ).toEqual({ n: 0 });
+    }
+    expect(db.prepare("SELECT user_id, role FROM team_memberships ORDER BY user_id").all()).toEqual(
+      [
+        { user_id: "admin", role: "member" },
+        { user_id: "member", role: "member" },
+        { user_id: "owner", role: "lead" },
+        { user_id: "suspended", role: "member" },
+        { user_id: "viewer", role: "member" },
+      ]
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT grant_kind, webhook_home FROM team_repository_grants WHERE team_id = 'team_default'"
+        )
+        .get()
+    ).toEqual({ grant_kind: "installation", webhook_home: 1 });
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO sessions (id, owner_team_id, created_at, updated_at) VALUES ('invalid', 'unknown', 1, 1)"
+        )
+        .run()
+    ).toThrow();
   });
 
   it("applies files in version order and skips the ones already recorded", () => {

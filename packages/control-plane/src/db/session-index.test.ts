@@ -22,6 +22,9 @@ type SessionRow = {
   automation_run_id: string | null;
   scm_login: string | null;
   user_id: string | null;
+  owner_team_id: string | null;
+  visibility: "team" | "workspace" | "private";
+  project_id: string | null;
   total_cost: number;
   active_duration_ms: number;
   message_count: number;
@@ -170,6 +173,8 @@ class FakeD1Database {
         environmentId,
         createdAt,
         updatedAt,
+        ownerTeamId,
+        visibility,
       ] = args as [
         string,
         string | null,
@@ -193,6 +198,8 @@ class FakeD1Database {
         string | null,
         number,
         number,
+        string,
+        "team" | "workspace" | "private",
       ];
       // ON CONFLICT DO NOTHING — skip if exists
       const inserted = !this.rows.has(id);
@@ -218,6 +225,9 @@ class FakeD1Database {
           automation_run_id: automationRunId,
           scm_login: scmLogin,
           user_id: userId,
+          owner_team_id: ownerTeamId,
+          visibility,
+          project_id: null,
           total_cost: 0,
           active_duration_ms: 0,
           message_count: 0,
@@ -369,6 +379,8 @@ function makeSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
     reasoningEffort: null,
     baseBranch: null,
     status: "created",
+    ownerTeamId: "team_default",
+    visibility: "team",
     createdAt: 1000,
     updatedAt: 1000,
     ...overrides,

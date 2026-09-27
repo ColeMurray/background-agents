@@ -2,9 +2,21 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
-import { SessionIndexStore } from "../../src/db/session-index";
+import {
+  SessionIndexStore as BaseSessionIndexStore,
+  type SessionEntry,
+} from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
+
+type TestSessionEntry = Omit<SessionEntry, "ownerTeamId" | "visibility"> &
+  Partial<Pick<SessionEntry, "ownerTeamId" | "visibility">>;
+
+class SessionIndexStore extends BaseSessionIndexStore {
+  override create(row: TestSessionEntry): Promise<void> {
+    return super.create({ ownerTeamId: "team_default", visibility: "team", ...row });
+  }
+}
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -23,12 +35,16 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     environmentId?: string | null;
     model?: string;
     reasoningEffort?: string | null;
+    ownerTeamId?: string;
+    visibility?: "team" | "workspace" | "private";
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
     await store.create({
       id: parentName,
+      ownerTeamId: opts?.ownerTeamId ?? "team_default",
+      visibility: opts?.visibility ?? "team",
       title: "Parent",
       repoOwner: "acme",
       repoName: "web-app",
@@ -107,7 +123,12 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   }
 
   it("spawns a child session with sandbox auth (201)", async () => {
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_child', 'child', 'Child', 1, 1)"
+    ).run();
     const { parentName, sandboxToken, store } = await setupParent({
+      ownerTeamId: "team_child",
+      visibility: "workspace",
       repoId: 12345,
       userId: "user-1",
       canonicalUserId: "canonical-abc123",
@@ -135,6 +156,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     const child = await store.get(body.sessionId);
     expect(child).not.toBeNull();
     expect(child!.parentSessionId).toBe(parentName);
+    expect(child!.ownerTeamId).toBe("team_child");
+    expect(child!.visibility).toBe("workspace");
     expect(child!.spawnSource).toBe("agent");
     expect(child!.spawnDepth).toBe(1);
     expect(child!.repoOwner).toBe("acme");

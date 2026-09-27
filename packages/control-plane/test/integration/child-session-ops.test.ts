@@ -3,8 +3,20 @@ import { SELF, env } from "cloudflare:test";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
-import { SessionIndexStore } from "../../src/db/session-index";
+import {
+  SessionIndexStore as BaseSessionIndexStore,
+  type SessionEntry,
+} from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
+
+type TestSessionEntry = Omit<SessionEntry, "ownerTeamId" | "visibility"> &
+  Partial<Pick<SessionEntry, "ownerTeamId" | "visibility">>;
+
+class SessionIndexStore extends BaseSessionIndexStore {
+  override create(row: TestSessionEntry): Promise<void> {
+    return super.create({ ownerTeamId: "team_default", visibility: "team", ...row });
+  }
+}
 import {
   initNamedSession,
   initNamedSessionDO,

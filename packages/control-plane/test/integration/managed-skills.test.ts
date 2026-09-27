@@ -115,6 +115,8 @@ describe("managed skills persistence and resolution", () => {
     const sessions = new SessionIndexStore(env.DB);
     const base = {
       title: null,
+      ownerTeamId: "team_default",
+      visibility: "team" as const,
       repoOwner: null,
       repoName: null,
       model: "anthropic/claude-haiku-4-5",
@@ -203,6 +205,8 @@ describe("managed skills persistence and resolution", () => {
     const createdAt = Date.now();
     await new SessionIndexStore(env.DB).create({
       id: "legacy-without-skills",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: null,
       repoName: null,
@@ -407,6 +411,8 @@ describe("managed skills persistence and resolution", () => {
     const sessions = new SessionIndexStore(env.DB);
     await sessions.create({
       id: "wide",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: null,
       repoName: null,
@@ -456,6 +462,8 @@ describe("managed skills persistence and resolution", () => {
     );
     await new SessionIndexStore(env.DB).create({
       id: "paged",
+      ownerTeamId: "team_default",
+      visibility: "team",
       title: null,
       repoOwner: null,
       repoName: null,

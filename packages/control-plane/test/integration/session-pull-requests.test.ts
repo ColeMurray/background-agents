@@ -18,6 +18,8 @@ async function seedSession(id: string): Promise<void> {
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id,
+    ownerTeamId: "team_default",
+    visibility: "team",
     title: null,
     repoOwner: "acme",
     repoName: "web",

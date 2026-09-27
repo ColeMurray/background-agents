@@ -46,6 +46,20 @@ describe("UserStore", () => {
       expect(user).not.toBeNull();
       expect(user!.displayName).toBe("Alice");
       expect(user!.email).toBeNull();
+      expect(
+        await env.DB.prepare("SELECT team_id, source FROM team_memberships WHERE user_id = ?")
+          .bind(result.id)
+          .first()
+      ).toEqual({ team_id: "team_default", source: "auto_join" });
+      expect(
+        await env.DB.prepare(
+          "SELECT action, team_id FROM authorization_audit_events WHERE target_user_id_snapshot = ? AND action = 'team.member_auto_joined'"
+        )
+          .bind(result.id)
+          .all()
+      ).toMatchObject({
+        results: [{ action: "team.member_auto_joined", team_id: "team_default" }],
+      });
     });
 
     it("creates a new user with email normalized to lowercase", async () => {
@@ -372,6 +386,11 @@ describe("UserStore", () => {
   describe("createIdentity", () => {
     it.each(providerIssuers)("stores the canonical issuer for %s", async (provider, issuer) => {
       const user = await store.createUser({ displayName: "Alice" });
+      expect(
+        await env.DB.prepare("SELECT source FROM team_memberships WHERE user_id = ?")
+          .bind(user.id)
+          .first()
+      ).toEqual({ source: "auto_join" });
 
       await store.createIdentity({
         userId: user.id,

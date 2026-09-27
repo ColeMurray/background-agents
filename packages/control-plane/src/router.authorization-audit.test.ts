@@ -178,6 +178,7 @@ function createEnv(options?: {
             sql.includes("SELECT * FROM automations")
               ? {
                   id: "automation-1",
+                  owner_team_id: null,
                   user_id: options?.automationOwnerId ?? "user-1",
                   created_by: "owner",
                 }

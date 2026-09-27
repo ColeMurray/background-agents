@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared/harnesses";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
+import { DEFAULT_TEAM_ID } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
@@ -245,6 +246,8 @@ export async function handleCreateSession(
   }
 
   const input: SessionInitInput = {
+    ownerTeamId: DEFAULT_TEAM_ID,
+    visibility: "team",
     sessionId,
     repoOwner,
     repoName,

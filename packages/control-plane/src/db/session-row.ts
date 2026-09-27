@@ -4,6 +4,7 @@ import {
   harnessIdSchema,
 } from "@open-inspect/shared/harnesses";
 import { sessionStatusSchema, spawnSourceSchema } from "@open-inspect/shared/types/sessions";
+import { DEFAULT_TEAM_ID, sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { z } from "zod";
 
 /** Persisted D1 session row shared by index and export readers. */
@@ -25,6 +26,9 @@ export const sessionRowSchema = z.object({
   automation_run_id: z.string().nullable(),
   scm_login: z.string().nullable(),
   user_id: z.string().nullable(),
+  owner_team_id: z.string().nullable(),
+  visibility: sessionVisibilitySchema,
+  project_id: z.string().nullable(),
   total_cost: z.number(),
   active_duration_ms: z.number(),
   message_count: z.number(),
@@ -66,6 +70,8 @@ export function toSessionFields(row: SessionRow) {
     automationRunId: row.automation_run_id,
     scmLogin: row.scm_login,
     userId: row.user_id,
+    ownerTeamId: row.owner_team_id ?? DEFAULT_TEAM_ID,
+    visibility: row.visibility,
     totalCost: row.total_cost,
     activeDurationMs: row.active_duration_ms,
     messageCount: row.message_count,
