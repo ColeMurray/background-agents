@@ -139,6 +139,10 @@ export {
 
 export { sandboxShutdownSchema } from "./sandbox-shutdown";
 export type { SandboxShutdownState } from "./sandbox-shutdown";
+export { tokenUsageSchema } from "./sandbox-events";
+export type { TokenUsage } from "./sandbox-events";
+export { normalizeTokenUsage, stepUsageSchema } from "./usage";
+export type { NormalizedTokenUsage, StepUsage } from "./usage";
 export type {
   ParticipantPresence,
   PromptQueueItem,
@@ -228,8 +232,16 @@ export {
   auditEventMetadataSchema,
   auditEventSchema,
   auditEventListResponseSchema,
+  AUTHORIZATION_DECISION_ACTIONS,
+  AUDIT_OPERATION_ACTIONS,
+  AUTHORIZATION_DECISION_METADATA_SCHEMA,
+  authorizationDecisionMetadataV1Schema,
+  interpretAuditEvent,
 } from "./audit-events";
 export type {
+  AuditEventInterpretation,
+  AuditOperationAction,
+  AuthorizationDecisionMetadataV1,
   AuditOperationResult,
   AuditPrincipalKind,
   AuditEventMetadata,
@@ -340,16 +352,19 @@ export type {
 } from "./image-builds";
 export { repositoryShaEntrySchema, repositoryShasSchema } from "./image-builds";
 
-export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";
+export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY, ANALYTICS_RUN_ORDER_BY } from "./analytics";
 export type {
   AnalyticsDays,
   AnalyticsBreakdownBy,
+  AnalyticsRunOrderBy,
   AnalyticsStatusBreakdown,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesPoint,
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  SessionRun,
+  AnalyticsRunsResponse,
   AnalyticsPullRequestFunnel,
   AnalyticsPullRequestTimeseriesPoint,
   AnalyticsPullRequestRepoEntry,

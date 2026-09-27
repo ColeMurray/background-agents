@@ -1,6 +1,6 @@
 /**
- * The `ObjectStorage` port on S3-compatible storage: AWS S3, MinIO in the
- * compose stack, or any service speaking the S3 API. The Node host's media
+ * The `ObjectStorage` port on S3-compatible storage: AWS S3, the compose
+ * stack's SeaweedFS, or any service speaking the S3 API. The Node host's media
  * artifacts (screenshots, uploads, session media) go through it, as they go
  * through R2 on Cloudflare.
  *
@@ -31,7 +31,7 @@ import type { ObjectStorage, ObjectStorageMetadata } from "../storage/object-sto
 export interface S3ObjectStorageConfig {
   bucket: string;
   region: string;
-  /** Set for MinIO or another non-AWS endpoint; AWS S3 when omitted. */
+  /** Set for any non-AWS endpoint; AWS S3 when omitted. */
   endpoint?: string;
   /**
    * Whether a plaintext `http:` endpoint is accepted. Signed requests and
@@ -39,7 +39,7 @@ export interface S3ObjectStorageConfig {
    * compose stack should set it; an `http:` endpoint is otherwise refused.
    */
   allowHttpEndpoint?: boolean;
-  /** `https://host/bucket/key` rather than `https://bucket.host/key`; MinIO needs it. */
+  /** `https://host/bucket/key` rather than `https://bucket.host/key`; the compose stack needs it. */
   forcePathStyle?: boolean;
   /**
    * Static credentials, with the session token of temporary (STS) ones;
@@ -73,7 +73,7 @@ export const AWS_CREDENTIAL_VARIABLE_NAMES = [
   "AWS_SESSION_TOKEN",
 ] as const;
 
-/** The region MinIO and most S3-compatible services answer to. */
+/** The region most S3-compatible services answer to. */
 const DEFAULT_OBJECT_STORE_REGION = "us-east-1";
 
 /**

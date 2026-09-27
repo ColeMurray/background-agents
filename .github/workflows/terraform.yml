@@ -20,6 +20,7 @@ on:
       - "packages/shared/**"
       - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
       - ".github/workflows/terraform.yml"
+      - ".nvmrc"
   pull_request:
     branches: [main]
     paths:
@@ -39,6 +40,7 @@ on:
       - "packages/shared/**"
       - "packages/web/**"
       - ".github/workflows/terraform.yml"
+      - ".nvmrc"
   workflow_dispatch: # Allow manual trigger
 
 permissions:
@@ -178,7 +180,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -257,6 +259,7 @@ jobs:
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
           TF_VAR_slack_bot_default_model: "${{ vars.SLACK_BOT_DEFAULT_MODEL || secrets.SLACK_BOT_DEFAULT_MODEL || 'claude-haiku-4-5' }}"
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}
           TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
           TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
@@ -367,7 +370,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -447,6 +450,7 @@ jobs:
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
           TF_VAR_slack_bot_default_model: "${{ vars.SLACK_BOT_DEFAULT_MODEL || secrets.SLACK_BOT_DEFAULT_MODEL || 'claude-haiku-4-5' }}"
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}
           TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
           TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}

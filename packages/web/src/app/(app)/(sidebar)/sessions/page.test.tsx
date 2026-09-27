@@ -3,7 +3,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@/lib/session-list";
 import SessionsPage from "./page";
 
@@ -140,6 +140,25 @@ function typeSearch(value: string) {
   fireEvent.change(screen.getByRole("searchbox"), { target: { value } });
 }
 
+/** Opens a filter select from the keyboard and picks an option by its label. */
+function chooseOption(trigger: HTMLElement, option: string) {
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
+// Radix Select uses pointer-capture APIs that jsdom doesn't implement.
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+  }
+  if (!Element.prototype.releasePointerCapture) {
+    Element.prototype.releasePointerCapture = () => {};
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+});
+
 describe("SessionsPage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -191,10 +210,14 @@ describe("SessionsPage", () => {
       screen.getByRole("searchbox", { name: "Search sessions by title, ID or repository" })
     ).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: "Creator" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue("");
-    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveValue("");
-    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveValue("nonarchived");
-    expect(screen.getByRole("combobox", { name: "Origin" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent(
+      "Any repository"
+    );
+    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent(
+      "Any environment"
+    );
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveTextContent("Not archived");
+    expect(screen.getByRole("combobox", { name: "Origin" })).toHaveTextContent("Any origin");
     expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Showing 2 sessions · More available");
 
@@ -243,10 +266,10 @@ describe("SessionsPage", () => {
 
     expect(screen.getByRole("searchbox")).toHaveValue("login");
     expect(screen.getByRole("radio", { name: "Mine" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue("partner/sdk");
-    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveValue("env-gone");
-    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveValue("archived");
-    expect(screen.getByRole("combobox", { name: "Origin" })).toHaveValue("automation");
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("partner/sdk");
+    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent("env-gone");
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveTextContent("Archived");
+    expect(screen.getByRole("combobox", { name: "Origin" })).toHaveTextContent("Automation run");
     expect(screen.getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Manage archived sessions" })).toHaveAttribute(
       "href",
@@ -273,9 +296,7 @@ describe("SessionsPage", () => {
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix+login", { scroll: false });
 
     // Until that navigation lands, later control changes still carry it.
-    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), {
-      target: { value: "acme/api" },
-    });
+    chooseOption(screen.getByRole("combobox", { name: "Repository" }), "acme/api");
     expect(mockReplace).toHaveBeenLastCalledWith(
       "/sessions?q=fix+login&repoOwner=acme&repoName=api",
       { scroll: false }
@@ -285,14 +306,12 @@ describe("SessionsPage", () => {
     render(<SessionsPage />);
     mockReplace.mockReset();
     const [, page] = screen.getAllByRole("combobox", { name: "Lifecycle" });
-    fireEvent.change(page, { target: { value: "all" } });
+    chooseOption(page, "All");
     expect(mockReplace).toHaveBeenLastCalledWith(
       "/sessions?q=fix+login&repoOwner=acme&repoName=api&lifecycle=all",
       { scroll: false }
     );
-    fireEvent.change(screen.getAllByRole("combobox", { name: "Origin" })[1], {
-      target: { value: "github-bot" },
-    });
+    chooseOption(screen.getAllByRole("combobox", { name: "Origin" })[1], "GitHub bot");
     expect(mockReplace).toHaveBeenLastCalledWith(
       "/sessions?q=fix+login&repoOwner=acme&repoName=api&lifecycle=all&origin=github-bot",
       { scroll: false }
@@ -308,21 +327,28 @@ describe("SessionsPage", () => {
     render(<SessionsPage />);
 
     // The URL still shows the default view while the first replace is in flight.
-    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
-      target: { value: "all" },
-    });
+    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "All");
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?lifecycle=all", { scroll: false });
-    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
-      target: { value: "nonarchived" },
-    });
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveTextContent("All");
+    expect(screen.getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
+    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Not archived");
     expect(mockReplace).toHaveBeenCalledTimes(2);
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
+    expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
 
     // Re-selecting the state already written is not a navigation.
-    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
-      target: { value: "nonarchived" },
-    });
+    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "Not archived");
     expect(mockReplace).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an environment ID that matches the Any sentinel distinct from Any", () => {
+    mockSearchParamsState.value = new URLSearchParams("environmentId=__any__");
+    render(<SessionsPage />);
+
+    const environment = screen.getByRole("combobox", { name: "Environment" });
+    expect(environment).toHaveTextContent("__any__");
+    chooseOption(environment, "Any environment");
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
   });
 
   it("follows URL changes from browser navigation", () => {
@@ -332,7 +358,7 @@ describe("SessionsPage", () => {
     rerender(<SessionsPage />);
 
     expect(screen.getByRole("searchbox")).toHaveValue("weekly");
-    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveValue("all");
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveTextContent("All");
     expect(lastQuery()).toMatchObject({ q: "weekly", lifecycle: "all" });
     act(() => vi.runOnlyPendingTimers());
     expect(mockReplace).not.toHaveBeenCalled();
@@ -453,15 +479,11 @@ describe("SessionsPage", () => {
     });
 
     // A filter change carries the pending search and the previous filter change.
-    fireEvent.change(screen.getByRole("combobox", { name: "Lifecycle" }), {
-      target: { value: "all" },
-    });
+    chooseOption(screen.getByRole("combobox", { name: "Lifecycle" }), "All");
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=fix+login+now&lifecycle=all", {
       scroll: false,
     });
-    fireEvent.change(screen.getByRole("combobox", { name: "Origin" }), {
-      target: { value: "automation" },
-    });
+    chooseOption(screen.getByRole("combobox", { name: "Origin" }), "Automation run");
     expect(mockReplace).toHaveBeenLastCalledWith(
       "/sessions?q=fix+login+now&lifecycle=all&origin=automation",
       { scroll: false }

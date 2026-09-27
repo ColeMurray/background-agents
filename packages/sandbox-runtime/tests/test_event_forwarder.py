@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
+from sandbox_runtime.event_size import MAX_EVENT_BYTES, event_size_bytes
 from tests.event_forwarder_fakes import (
     hung_ws,
     make_forwarder,
@@ -828,6 +829,151 @@ class TestOverflowEviction:
 
         types = [event["type"] for event in forwarder._event_buffer]
         assert types == ["error", "push_complete"]
+
+
+class TestOversizedEvents:
+    @pytest.mark.asyncio
+    async def test_sends_truncated_tool_call_instead_of_losing_it(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        delivered = await forwarder.send(
+            {
+                "type": "tool_call",
+                "tool": "Read",
+                "callId": "call-1",
+                "messageId": "msg-1",
+                "status": "completed",
+                "args": {"filePath": "/tmp/report"},
+                "output": "x" * (MAX_EVENT_BYTES + 1),
+            }
+        )
+
+        assert delivered is True
+        [event] = sent_events(ws)
+        assert event["truncated"]["fields"] == ["output"]
+        assert event["truncated"]["originalBytes"] > MAX_EVENT_BYTES
+        assert event["args"]["filePath"] == "/tmp/report"
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=event["truncated"]["originalBytes"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_buffered_tool_call_is_truncated_before_reconnect(self):
+        forwarder = make_forwarder()
+        await forwarder.send(
+            {
+                "type": "tool_call",
+                "tool": "Write",
+                "callId": "call-1",
+                "messageId": "msg-1",
+                "args": {"path": "/tmp/report", "content": "x" * MAX_EVENT_BYTES},
+            }
+        )
+
+        assert forwarder._event_buffer[0]["truncated"]["fields"] == ["args.content"]
+        ws = open_ws()
+        await forwarder.bind(ws)
+        assert len(sent_events(ws)) == 1
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=sent_events(ws)[0]["truncated"]["originalBytes"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_non_tool_event_warns_once_and_does_not_close_socket(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        event = {"type": "token", "content": "x" * MAX_EVENT_BYTES}
+        delivered = await forwarder.send(event)
+
+        assert delivered is False
+        ws.send.assert_not_awaited()
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="token",
+            size_bytes=event_size_bytes(event),
+        )
+        assert forwarder._event_buffer == []
+
+        assert await forwarder.send({"type": "heartbeat"}) is True
+        assert len(sent_events(ws)) == 1
+
+    @pytest.mark.asyncio
+    async def test_unshrinkable_tool_call_warns_instead_of_sending_oversized_frame(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+
+        event = {
+            "type": "tool_call",
+            "tool": "Read",
+            "callId": "call-1",
+            "messageId": "msg-1",
+            "args": {"filePath": "p" * MAX_EVENT_BYTES},
+        }
+        delivered = await forwarder.send(event)
+
+        assert delivered is False
+        ws.send.assert_not_awaited()
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="tool_call",
+            size_bytes=event_size_bytes(event),
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_execution_complete_keeps_terminal_identity_and_ack(self):
+        forwarder = make_forwarder()
+        ws = open_ws()
+        await forwarder.bind(ws)
+        event = {
+            "type": "execution_complete",
+            "messageId": "msg-1",
+            "success": False,
+            "messageCostUsd": 0.5,
+            "error": "x" * MAX_EVENT_BYTES,
+        }
+
+        assert await forwarder.send(event) is True
+
+        [sent] = sent_events(ws)
+        assert sent["messageId"] == "msg-1"
+        assert sent["success"] is False
+        assert sent["messageCostUsd"] == 0.5
+        assert sent["ackId"] == "execution_complete:msg-1"
+        assert sent["error"] and len(sent["error"]) < len(event["error"])
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        assert forwarder.acknowledge(sent["ackId"]) is True
+        forwarder._log.warn.assert_called_once_with(
+            "bridge.event_oversized",
+            event_type="execution_complete",
+            size_bytes=event_size_bytes(event),
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_error_is_buffered_and_replayed_on_reconnect(self):
+        forwarder = make_forwarder()
+        await forwarder.send(
+            {"type": "error", "messageId": "msg-1", "error": "x" * MAX_EVENT_BYTES}
+        )
+
+        assert len(forwarder._event_buffer) == 1
+        ws = open_ws()
+        await forwarder.bind(ws)
+        [sent] = sent_events(ws)
+        assert sent["ackId"] == "error:msg-1"
+        assert sent["error"]
+        assert len(ws.send.await_args.args[0].encode("utf-8")) <= MAX_EVENT_BYTES
+        assert forwarder.acknowledge(sent["ackId"]) is True
 
 
 if __name__ == "__main__":

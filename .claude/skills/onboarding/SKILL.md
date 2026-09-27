@@ -19,7 +19,7 @@ Use TodoWrite to create a checklist tracking these phases:
 
 1. Initial setup questions
 2. Repository setup
-3. Credential collection (Cloudflare, Vercel, Modal, Anthropic)
+3. Credential collection (Cloudflare, Vercel if selected, Modal, Anthropic)
 4. GitHub App creation (+ Google OAuth if enabled)
 5. Slack App creation (if enabled)
 6. Security secrets generation
@@ -28,8 +28,9 @@ Use TodoWrite to create a checklist tracking these phases:
 9. Post-deployment Slack setup (if enabled)
 10. Post-deployment GitHub Bot setup (if enabled)
 11. Web app deployment
-12. Verification
-13. CI/CD setup (optional)
+12. Workspace Owner bootstrap
+13. Verification
+14. CI/CD setup (optional)
 
 ## Phase 1: Initial Questions
 
@@ -44,14 +45,21 @@ Use AskUserQuestion to gather:
 1. **Directory location** - Where to create the project (default: current directory or
    ~/workplace/open-inspect-{suffix})
 2. **GitHub account** - Which account/org hosts the private repo
-3. **Deployment name** - A globally unique identifier for URLs (e.g., their GitHub username, company
-   name, or the random suffix generated above). Explain this creates URLs like
-   `open-inspect-{deployment_name}.vercel.app` and must be unique across all Vercel users.
-4. **Slack integration** - Yes or No
-5. **GitHub bot integration** - Yes or No (automated PR reviews and comment-triggered actions)
-6. **Sign-in providers** - GitHub, Google, or both. At least one is required.
-7. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
-   Anthropic
+3. **Deployment name** - A unique identifier for deployment URLs (e.g., their GitHub username,
+   company name, or the random suffix generated above); Vercel project URLs must be globally unique.
+4. **Web platform** - Vercel (default) or Cloudflare Workers. If Cloudflare, ask whether to use a
+   custom domain; if so, collect the hostname and Cloudflare zone ID. Derive one canonical web app
+   URL from this choice and the deployment name using Step 3 of `docs/GETTING_STARTED.md`; use it
+   for both OAuth callbacks and the GitHub App homepage.
+5. **Slack integration** - Yes or No
+6. **GitHub bot integration** - Yes or No (automated PR reviews and comment-triggered actions)
+7. **Sign-in providers** - GitHub, Google, or both. At least one is required.
+8. **Admission mode** - Restricted (collect the allowed GitHub usernames, exact verified emails,
+   email domains, and/or GitHub orgs) or explicitly open to any authenticated user (no allowlists).
+   Validate the chosen providers and admission mode against the compatibility table and allowlist
+   rules in Step 6 of `docs/GETTING_STARTED.md` before proceeding.
+9. **Prerequisites confirmation** - Confirm they have Cloudflare, Modal, Anthropic, and GitHub
+   accounts, plus Vercel only if selected above.
 
 ## Phase 2: Repository Setup
 
@@ -61,7 +69,7 @@ Execute these commands (substitute values from Phase 1):
 mkdir -p {directory_path}
 gh repo create {github_account}/open-inspect-{name} --private --description "Open-Inspect deployment"
 cd {directory_path}
-git clone git@github.com:ColeMurray/open-inspect.git .
+git clone git@github.com:ColeMurray/background-agents.git .
 git remote rename origin upstream
 git remote add origin git@github.com:{github_account}/open-inspect-{name}.git
 git push -u origin main
@@ -82,7 +90,8 @@ Tell the user:
   `*.YOUR-SUBDOMAIN.workers.dev`
 - **API Token**: Create at https://dash.cloudflare.com/profile/api-tokens with template "Edit
   Cloudflare Workers" + permissions for Workers KV Storage (Edit), Workers R2 Storage (Edit), D1
-  (Edit)
+  (Edit), Queues (Edit). For a Cloudflare web app with a custom domain, also grant zone-level
+  Workers Routes (Edit).
 
 ### R2 Bucket
 
@@ -90,13 +99,13 @@ Check wrangler login status, then create bucket:
 
 ```bash
 wrangler whoami
-wrangler r2 bucket create open-inspect-{name}-tf-state
+wrangler r2 bucket create open-inspect-terraform-state
 ```
 
 Tell user to create R2 API Token at R2 → Overview → Manage R2 API Tokens with "Object Read & Write"
 permission.
 
-### Vercel
+### Vercel (Only If Selected In Phase 1)
 
 - **API Token**: https://vercel.com/account/tokens
 - **Team/Account ID**: Settings → "Your ID" (even personal accounts have one, usually starts with
@@ -126,25 +135,25 @@ user selected GitHub:
 
 1. Go to https://github.com/settings/apps → "New GitHub App"
 2. **Name**: `Open-Inspect-{YourName}` (globally unique)
-3. **Homepage URL**: The deployed web app URL for the selected platform:
-   - Vercel: `https://open-inspect-{deployment_name}.vercel.app`
-   - Cloudflare workers.dev: `https://open-inspect-web-{deployment_name}.{subdomain}.workers.dev`
-   - Cloudflare custom domain: `https://{your-custom-domain}`
+3. **Homepage URL**: The canonical web app URL from Phase 1
 4. **Webhook**: Uncheck "Active"
 5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
-   users"): `{deployed-web-app-url}/api/auth/callback/github`
+   users"): `{canonical-web-app-url}/api/auth/callback/github`
    - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
 6. **Repository permissions**: Contents (Read & Write), Pull requests (Read & Write), Metadata
-   (Read-only), and Issues (Read & Write) only if the GitHub bot is enabled. Pull requests
-   permission also authorizes creating and applying labels to session-created pull requests;
-   labeling does not require Issues permission.
-7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
-   (Read-only)
-8. Create app, note **App ID**
-9. If GitHub sign-in is selected, generate a **Client Secret** and note the **Client ID** and
-   **Client Secret**. Otherwise leave both Terraform values empty.
-10. Generate **Private Key** (downloads .pem file)
-11. Install app on account, note **Installation ID** from URL
+   (Read-only). If the GitHub bot is enabled, also grant Actions (Read-only), Checks (Read-only),
+   and Issues (Read & Write). Pull requests permission also authorizes creating and applying labels
+   to session-created pull requests; labeling does not require Issues permission.
+7. If GitHub organizations are allowlisted, set **Organization permissions**: Members (Read-only).
+   Existing Apps need the permission change approved on their installations.
+8. If GitHub sign-in is enabled, set **Account permissions**: Email addresses (Read-only). Every
+   GitHub sign-in requires a verified email, regardless of admission mode. Existing Apps need the
+   permission change approved on their installations.
+9. Create app, note **App ID**
+10. If GitHub sign-in is selected, generate a **Client Secret** and note the **Client ID** and
+    **Client Secret**. Otherwise leave both Terraform values empty.
+11. Generate **Private Key** (downloads .pem file)
+12. Install app on account, note **Installation ID** from URL
 
 After receiving the .pem path, convert to PKCS#8:
 
@@ -162,10 +171,8 @@ Guide user:
 
 1. https://console.cloud.google.com/apis/credentials → "Create Credentials" → "OAuth client ID"
 2. **Application type**: Web application
-3. **Authorized redirect URI**:
-   `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/google` (or your
-   `*.workers.dev` web URL if `web_platform = "cloudflare"`)
-   - **CRITICAL**: Must match deployed web URL exactly!
+3. **Authorized redirect URI**: `{canonical-web-app-url}/api/auth/callback/google`
+   - **CRITICAL**: Must match the web URL from Phase 1 exactly!
 4. OAuth consent screen: request only `openid`, `email`, `profile` scopes (non-sensitive — no Google
    verification review required)
 5. Note **Client ID** and **Client Secret**
@@ -174,8 +181,6 @@ Then in `terraform.tfvars`:
 
 - Set `google_client_id` and `google_client_secret` (both required together; leave both empty to
   disable)
-- Add at least one entry to `allowed_emails` (exact addresses, e.g. `pm@gmail.com`) or
-  `allowed_email_domains`. Prefer `allowed_emails` for shared domains like gmail.com.
 - If Google is the only sign-in provider, leave `github_client_id` and `github_client_secret` empty.
   Keep the GitHub App ID, private key, and installation ID configured for repository access.
 
@@ -204,7 +209,6 @@ to Slack. Reinstall the app whenever either scope is added to an existing instal
 ```bash
 echo "token_encryption_key: $(openssl rand -base64 32)"
 echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
-echo "internal_callback_secret: $(openssl rand -base64 32)"
 echo "nextauth_secret: $(openssl rand -base64 32)"
 echo "modal_api_secret: $(openssl rand -hex 32)"
 echo "github_webhook_secret: $(openssl rand -hex 32)"  # Only if GitHub bot enabled
@@ -212,12 +216,12 @@ echo "github_webhook_secret: $(openssl rand -hex 32)"  # Only if GitHub bot enab
 
 ## Phase 7: Terraform Configuration
 
-Create `terraform/environments/production/backend.tfvars`:
+Create `terraform/environments/production/backend.tfvars`. The bucket is already fixed as
+`open-inspect-terraform-state` in `backend.tf`; do not override it here:
 
 ```hcl
 access_key = "{r2_access_key}"
 secret_key = "{r2_secret_key}"
-bucket     = "open-inspect-{name}-tf-state"
 endpoints = {
   s3 = "https://{cloudflare_account_id}.r2.cloudflarestorage.com"
 }
@@ -226,9 +230,19 @@ endpoints = {
 Create `terraform/environments/production/terraform.tfvars` with all collected values. Set:
 
 ```hcl
+web_platform                   = "{vercel_or_cloudflare_from_phase_1}"
 enable_durable_object_bindings = false
 enable_service_bindings        = false
 ```
+
+If Phase 1 selected a Cloudflare custom domain, also set `cloudflare_custom_domain` and
+`cloudflare_zone_id` to the collected hostname and zone ID. Leave both unset otherwise. If Vercel
+was not selected, leave `vercel_api_token` and `vercel_team_id` unset (not empty strings).
+
+Write the restricted-mode comma-separated Phase 1 answers to `allowed_users`,
+`allowed_email_domains`, `allowed_emails`, and `allowed_github_orgs`; leave unused inputs empty and
+set `unsafe_allow_all_users = false`. For explicitly open mode, leave all four lists empty and set
+`unsafe_allow_all_users = true`. Use Step 6 of `docs/GETTING_STARTED.md` for the admission contract.
 
 If GitHub bot is enabled, also set:
 
@@ -315,8 +329,8 @@ After Terraform deployment, guide user:
 3. **Webhook URL**:
    `https://open-inspect-github-bot-{deployment_name}.{subdomain}.workers.dev/webhooks/github`
 4. **Webhook secret**: Enter the `github_webhook_secret` value
-5. Under **Subscribe to events**, check: **Pull requests**, **Issue comments**, **Pull request
-   review comments**
+5. Under **Subscribe to events**, check: **Pull requests**, **Issues**, **Issue comments**, **Pull
+   request reviews**, **Pull request review comments**, **Check suites**, **Workflow runs**
 6. Save changes
 
 ### Find Bot Username
@@ -332,30 +346,49 @@ terraform.tfvars.
 
 ## Phase 11: Web App Deployment
 
+For the Cloudflare choice from Phase 1, Terraform deploys the web app; no manual step is needed. For
+Vercel, deploy from the repository root:
+
 ```bash
 npx vercel link --project open-inspect-{deployment_name}
 npx vercel --prod
 ```
 
-## Phase 12: Verification
+## Phase 12: Bootstrap the Workspace Owner
+
+After the web app is deployed, guide the intended Owner through Step 7a of
+`docs/GETTING_STARTED.md`. Obtain their canonical user ID after sign-in; run
+`npm run rbac:bootstrap-owner` from the repository root as a dry run, execute only if ready, and
+verify by rerunning the dry run. Follow Step 7a for commands and refusal/no-op handling.
+
+## Phase 13: Verification
+
+From the repository root:
 
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
 curl https://{workspace}--open-inspect-api-health.modal.run
-curl -I "$(terraform output -raw web_app_url)"
+curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
 Present a deployment summary table. Instruct the user to test: visit the web app, sign in with each
 configured provider, create a session, and send a prompt.
 
-## Phase 13: CI/CD Setup (Optional)
+## Phase 14: CI/CD Setup (Optional)
 
-Ask if user wants GitHub Actions CI/CD. If yes, use `gh secret set` for all required secrets.
+Ask if user wants GitHub Actions CI/CD. If yes, follow Step 10 of `docs/GETTING_STARTED.md` for the
+required variables and secrets, including the Phase 1 admission mode and allowlists. CI uses the
+same `open-inspect-terraform-state` R2 bucket as local Terraform.
 
 ## Error Handling
 
 - **"redirect_uri is not associated"**: Callback URL mismatch - update GitHub App settings
 - **Durable Object errors**: Must follow two-phase deployment
+- **"At least one access control allowlist must be configured"**: Set an appropriate `allowed_*`
+  Terraform value or the explicit Phase 1 open-access choice; check Step 6 of
+  `docs/GETTING_STARTED.md` and the corresponding CI variables/secrets.
+- **Queue creation or binding permission errors**: Grant Account | Queues | Edit to the Cloudflare
+  API token and rerun `terraform apply`.
 - **Slack bot not responding**: Check Event Subscriptions URL verified, bot invited to channel,
   reinstall if scopes changed
 - **GitHub bot not responding**: Check webhook URL, secret, `enable_github_bot = true`, and

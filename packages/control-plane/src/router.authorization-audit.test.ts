@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type * as AuthenticateModule from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
 import { Hono } from "hono";
 import {
+  error,
   json,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   permissionRequirement,
@@ -62,6 +63,32 @@ TEST_ROUTES.post(
     authorization: requirePermission("workspace.members.manage"),
   }),
   () => json({ handled: true }, 201)
+);
+TEST_ROUTES.post(
+  "/audit-test/invalid",
+  admit({
+    ...{ authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    authorization: requirePermission("workspace.members.manage"),
+  }),
+  () => error("Invalid body", 400)
+);
+TEST_ROUTES.post(
+  "/audit-test/conflict",
+  admit({
+    ...{ authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    authorization: requirePermission("workspace.members.manage"),
+  }),
+  () => error("Conflict", 409)
+);
+TEST_ROUTES.post(
+  "/audit-test/failure",
+  admit({
+    ...{ authentication: { kind: "user-or-service" }, supportedScmProviders: "all" },
+    authorization: requirePermission("workspace.members.manage"),
+  }),
+  () => {
+    throw new Error("downstream unavailable");
+  }
 );
 TEST_ROUTES.get(
   "/audit-test/managed",
@@ -222,6 +249,10 @@ beforeEach(() => {
   mocks.authenticate.mockReset();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("router authorization decision auditing", () => {
   it("audits allowed and denied user decisions", async () => {
     authenticateAs({ kind: "user", userId: "user-1" });
@@ -262,6 +293,43 @@ describe("router authorization decision auditing", () => {
       metadata: { responseCode: "permission_required", responseReason: "Forbidden" },
     });
   });
+
+  it.each([
+    ["/audit-test/invalid", 400],
+    ["/audit-test/conflict", 409],
+    ["/audit-test/failure", 500],
+  ])(
+    "records the decision separately from a non-2xx handler response for %s",
+    async (path, status) => {
+      if (status === 500) vi.spyOn(console, "error").mockImplementation(() => undefined);
+      authenticateAs({ kind: "user", userId: "user-1" });
+      const allowed = createEnv();
+      const response = await handleRequest(
+        new Request(`https://test.local${path}`, { method: "POST" }),
+        allowed.env,
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+
+      expect(response.status).toBe(status);
+      expect(allowed.auditWrites).toHaveLength(1);
+      // The stored result is the admission encoding, not a domain outcome; the
+      // action and httpStatus are what distinguish the two facts.
+      expect(auditRecord(allowed.auditWrites[0])).toMatchObject({
+        action: "authorization.request_allowed",
+        reasonCode: "authorization_allowed",
+        operationResult: "applied",
+        metadata: {
+          schema: "authorization_decision.v1",
+          httpMethod: "POST",
+          httpPath: path,
+          httpStatus: status,
+          admission: "user",
+          responseCode: null,
+          responseReason: null,
+        },
+      });
+    }
+  );
 
   it("audits allowed actor-backed, allowed service, and denied service decisions", async () => {
     authenticateAs({

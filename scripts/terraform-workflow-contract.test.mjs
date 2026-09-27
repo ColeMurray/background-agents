@@ -7,9 +7,7 @@ const workflow = await readFile(
   "utf8"
 );
 
-test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
-  const assignment =
-    "TF_VAR_daytona_base_snapshot_memory_gib: \"${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}\"";
+function assertInPlanAndApply(assignment, label) {
   const planStart = workflow.indexOf("\n  plan:\n");
   const applyStart = workflow.indexOf("\n  apply:\n");
 
@@ -23,6 +21,20 @@ test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
 
   for (const [name, job] of Object.entries(jobs)) {
     const occurrences = job.split(assignment).length - 1;
-    assert.equal(occurrences, 1, `expected one Daytona memory input in the ${name} job`);
+    assert.equal(occurrences, 1, `expected one ${label} input in the ${name} job`);
   }
+}
+
+test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
+  assertInPlanAndApply(
+    "TF_VAR_daytona_base_snapshot_memory_gib: \"${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}\"",
+    "Daytona memory"
+  );
+});
+
+test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
+  assertInPlanAndApply(
+    "TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}",
+    "classifier Anthropic key"
+  );
 });

@@ -1,35 +1,61 @@
 /**
  * GET /sessions/export - bulk session-trace export as newline-delimited JSON.
  *
- * Each line is a complete session, a session-scoped message error, a page
- * cursor, or a terminal stream error. Message failures never turn partial
- * histories into successful session records.
+ * Each line is a complete session, a session-scoped include error, a page
+ * cursor, or a terminal stream error. `include` inlines a session's messages,
+ * timeline events and per-step usage, which the session runtime reads in one
+ * storage snapshot under one byte budget and page cap. A failed read never
+ * turns a partial trace into a successful session record. Schema 1 session
+ * lines gain additive fields; consumers must ignore fields they do not
+ * recognize.
+ * With `scope=runs`, root creation time defines the window. Families stay
+ * consecutive across pages, but can cross page boundaries: limit still counts
+ * sessions (at most five with include). Rows whose root no longer exists are
+ * excluded by the root join. This is a best-effort export, not a snapshot:
+ * the first page's MAX(rowid) fences inserts unless deletion of the newest
+ * session lets SQLite reuse its rowid. Deletions are not fenced; deleting a
+ * root mid-export re-roots its children and may leave that run incomplete.
+ * Re-exporting a window covering the new root reflects its current lineage.
  */
 
-import type { SessionMessage } from "@open-inspect/shared/types/sessions";
 import { Hono } from "hono";
 import { z } from "zod";
-import { encodeSessionExportCursor, parseSessionExportCursor } from "../db/session-export-cursor";
-import { SessionExportStore, type SessionExportRow } from "../db/session-export-store";
+import {
+  encodeRunsExportCursor,
+  encodeSessionExportCursor,
+  parseRunsExportCursor,
+  parseSessionExportCursor,
+} from "../db/session-export-cursor";
+import {
+  SessionExportStore,
+  type ExportSelection,
+  type SessionExportRow,
+} from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
-import { SessionInternalPaths, sessionMessagePageSchema } from "../session/contracts";
+import {
+  MAX_INCLUDED_BYTES_PER_SESSION,
+  SessionInternalPaths,
+  sessionTraceExportSchema,
+  sessionTraceFormatSchema,
+  sessionTraceIncludeSchema,
+  type SessionTrace,
+  type SessionTraceCollection,
+  type SessionTraceFormat,
+} from "../session/contracts";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { parseQuery } from "./query";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 
 export const EXPORT_SCHEMA_VERSION = 1;
 const DEFAULT_EXPORT_LIMIT = 100;
 const MAX_EXPORT_LIMIT = 500;
-export const MAX_MESSAGE_EXPORT_LIMIT = 5;
-const EXPORT_MESSAGE_PAGE_LIMIT = 100;
-export const MAX_MESSAGE_PAGES_PER_SESSION = 25;
-export const MAX_MESSAGE_BYTES_PER_SESSION = 4 * 1024 * 1024;
-const MESSAGE_PAGE_TIMEOUT_MS = 10_000;
+export const MAX_INCLUDED_EXPORT_LIMIT = 5;
+const TRACE_READ_TIMEOUT_MS = 10_000;
 const encoder = new TextEncoder();
 
 function epochMsQuery(paramName: string) {
@@ -41,17 +67,8 @@ function epochMsQuery(paramName: string) {
 }
 
 const exportQuerySchema = z.object({
-  cursor: z
-    .string()
-    .optional()
-    .transform((raw, context) => {
-      const parsed = parseSessionExportCursor(raw);
-      if (!parsed.ok) {
-        context.addIssue({ code: "custom", message: parsed.error });
-        return z.NEVER;
-      }
-      return parsed.cursor;
-    }),
+  scope: z.enum(["sessions", "runs"]).default("sessions"),
+  cursor: z.string().optional(),
   limit: z
     .string()
     .regex(/^[1-9]\d*$/, { error: "Invalid limit" })
@@ -60,25 +77,25 @@ const exportQuerySchema = z.object({
       error: `limit must be an integer between 1 and ${MAX_EXPORT_LIMIT}`,
     })
     .optional(),
-  include: z.enum(["messages"], { error: "include must be messages" }).optional(),
+  include: sessionTraceIncludeSchema.optional(),
+  format: sessionTraceFormatSchema.optional(),
   createdAfter: epochMsQuery("createdAfter").optional(),
   createdBefore: epochMsQuery("createdBefore").optional(),
 });
 
-type MessageFetchFailure =
+type TraceReadFailure =
   | { ok: false; reason: "http_error"; status: number }
   | {
       ok: false;
       reason: "runtime_failure" | "page_cap_reached" | "message_budget_exceeded";
     };
-type MessageFetchResult = { ok: true; messages: SessionMessage[] } | MessageFetchFailure;
-type BoundedJson = { value: unknown; byteLength: number } | null;
+type TraceReadResult = { ok: true; trace: SessionTrace } | TraceReadFailure;
 
 type SessionExportLine = {
   schemaVersion: typeof EXPORT_SCHEMA_VERSION;
   type: "session";
-  messages?: SessionMessage[];
-} & SessionExportRow;
+} & SessionExportRow &
+  SessionTrace;
 type SessionErrorLineBase = {
   schemaVersion: typeof EXPORT_SCHEMA_VERSION;
   type: "session_error";
@@ -103,16 +120,16 @@ function encodeLine(line: ExportLine): Uint8Array {
   return encoder.encode(`${JSON.stringify(line)}\n`);
 }
 
-function sessionLine(row: SessionExportRow, messages?: SessionMessage[]): SessionExportLine {
+function sessionLine(row: SessionExportRow, trace?: SessionTrace): SessionExportLine {
   return {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     type: "session",
     ...row,
-    ...(messages === undefined ? {} : { messages }),
+    ...trace,
   };
 }
 
-function sessionErrorLine(sessionId: string, failure: MessageFetchFailure): SessionErrorLine {
+function sessionErrorLine(sessionId: string, failure: TraceReadFailure): SessionErrorLine {
   const line: SessionErrorLineBase = {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     type: "session_error",
@@ -123,97 +140,73 @@ function sessionErrorLine(sessionId: string, failure: MessageFetchFailure): Sess
     : { ...line, reason: failure.reason };
 }
 
-async function readBoundedJson(response: Response, maxBytes: number): Promise<BoundedJson> {
+async function readBoundedJson(
+  response: Response,
+  maxBytes: number
+): Promise<{ value: unknown } | null> {
   const result = await readBoundedBytes(
     response.body,
     maxBytes,
     response.headers.get("content-length")
   );
   return result.ok
-    ? {
-        value: JSON.parse(new TextDecoder().decode(result.bytes)) as unknown,
-        byteLength: result.bytes.byteLength,
-      }
+    ? { value: JSON.parse(new TextDecoder().decode(result.bytes)) as unknown }
     : null;
 }
 
-async function fetchAllMessages(
+/** Reads one session's included collections from its runtime in a single snapshot. */
+async function readTrace(
   runtime: SessionRuntimeClient,
   sessionId: string,
+  include: readonly SessionTraceCollection[],
+  format: SessionTraceFormat | undefined,
   log: Pick<Logger, "warn">,
   signal: AbortSignal
-): Promise<MessageFetchResult> {
-  const messages: SessionMessage[] = [];
-  const seenCursors = new Set<string>();
-  let messageBytes = 0;
-  let responseBytes = 0;
-  let cursor: string | undefined;
-
+): Promise<TraceReadResult> {
   try {
-    for (let page = 0; page < MAX_MESSAGE_PAGES_PER_SESSION; page++) {
-      const search = new URLSearchParams({ limit: String(EXPORT_MESSAGE_PAGE_LIMIT) });
-      if (cursor) search.set("cursor", cursor);
-      const response = await runtime.fetch(
-        sessionId,
-        SessionInternalPaths.messages,
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(MESSAGE_PAGE_TIMEOUT_MS)]) },
-        `?${search}`
-      );
-      if (!response.ok) {
-        log.warn("session_export.message_page_failed", {
-          session_id: sessionId,
-          status: response.status,
-        });
-        return { ok: false, reason: "http_error", status: response.status };
-      }
-
-      const pageBody = await readBoundedJson(
-        response,
-        MAX_MESSAGE_BYTES_PER_SESSION - responseBytes
-      );
-      if (!pageBody) {
-        log.warn("session_export.message_budget_exceeded", { session_id: sessionId });
-        return { ok: false, reason: "message_budget_exceeded" };
-      }
-      responseBytes += pageBody.byteLength;
-
-      const parsed = sessionMessagePageSchema.safeParse(pageBody.value);
-      if (!parsed.success) {
-        log.warn("session_export.message_page_invalid", {
-          session_id: sessionId,
-          error: parsed.error.issues[0]?.message,
-        });
-        return { ok: false, reason: "runtime_failure" };
-      }
-
-      for (const message of parsed.data.messages) {
-        messageBytes += encoder.encode(JSON.stringify(message)).byteLength + 1;
-        if (messageBytes > MAX_MESSAGE_BYTES_PER_SESSION) {
-          log.warn("session_export.message_budget_exceeded", { session_id: sessionId });
-          return { ok: false, reason: "message_budget_exceeded" };
-        }
-        messages.push(message);
-      }
-
-      if (!parsed.data.hasMore) return { ok: true, messages };
-      if (seenCursors.has(parsed.data.cursor)) {
-        log.warn("session_export.message_cursor_repeated", { session_id: sessionId });
-        return { ok: false, reason: "runtime_failure" };
-      }
-      seenCursors.add(parsed.data.cursor);
-      cursor = parsed.data.cursor;
+    const response = await runtime.fetch(
+      sessionId,
+      SessionInternalPaths.traceExport,
+      { signal: AbortSignal.any([signal, AbortSignal.timeout(TRACE_READ_TIMEOUT_MS)]) },
+      `?${new URLSearchParams({ include: include.join(","), ...(format ? { format } : {}) })}`
+    );
+    if (!response.ok) {
+      log.warn("session_export.trace_read_failed", {
+        session_id: sessionId,
+        status: response.status,
+      });
+      return { ok: false, reason: "http_error", status: response.status };
     }
+
+    const body = await readBoundedJson(response, MAX_INCLUDED_BYTES_PER_SESSION);
+    if (!body) {
+      log.warn("session_export.trace_budget_exceeded", { session_id: sessionId });
+      return { ok: false, reason: "message_budget_exceeded" };
+    }
+
+    const parsed = sessionTraceExportSchema.safeParse(body.value);
+    if (!parsed.success) {
+      log.warn("session_export.trace_invalid", {
+        session_id: sessionId,
+        error: parsed.error.issues[0]?.message,
+      });
+      return { ok: false, reason: "runtime_failure" };
+    }
+    if (!parsed.data.ok) {
+      log.warn("session_export.trace_limit_reached", {
+        session_id: sessionId,
+        reason: parsed.data.reason,
+      });
+    }
+    return parsed.data;
   } catch (caught) {
     if (signal.aborted) throw caught;
-    log.warn("session_export.message_runtime_failure", {
+    log.warn("session_export.trace_runtime_failure", {
       session_id: sessionId,
       error: caught instanceof Error ? caught.message : String(caught),
     });
     return { ok: false, reason: "runtime_failure" };
   }
-
-  log.warn("session_export.message_page_cap_reached", { session_id: sessionId });
-  return { ok: false, reason: "page_cap_reached" };
 }
 
 async function handleExport(
@@ -224,11 +217,22 @@ async function handleExport(
 ): Promise<Response> {
   const query = parseQuery(request, exportQuerySchema);
   if (query instanceof Response) return query;
+  let selection: ExportSelection;
+  if (query.scope === "runs") {
+    const parsed = parseRunsExportCursor(query.cursor);
+    if (!parsed.ok) return error(parsed.error, 400);
+    selection = { scope: "runs", cursor: parsed.cursor };
+  } else {
+    const parsed = parseSessionExportCursor(query.cursor);
+    if (!parsed.ok) return error(parsed.error, 400);
+    selection = { scope: "sessions", cursor: parsed.cursor };
+  }
 
-  const includeMessages = query.include === "messages";
-  const limit = query.limit ?? (includeMessages ? MAX_MESSAGE_EXPORT_LIMIT : DEFAULT_EXPORT_LIMIT);
-  if (includeMessages && limit > MAX_MESSAGE_EXPORT_LIMIT) {
-    return error(`limit must be at most ${MAX_MESSAGE_EXPORT_LIMIT} when include=messages`, 400);
+  const include = query.include ?? [];
+  const limit =
+    query.limit ?? (include.length > 0 ? MAX_INCLUDED_EXPORT_LIMIT : DEFAULT_EXPORT_LIMIT);
+  if (include.length > 0 && limit > MAX_INCLUDED_EXPORT_LIMIT) {
+    return error(`limit must be at most ${MAX_INCLUDED_EXPORT_LIMIT} when include is set`, 400);
   }
 
   const log = createLogger("session-export");
@@ -256,7 +260,7 @@ async function handleExport(
 
       try {
         page ??= await store.list({
-          cursor: query.cursor,
+          ...selection,
           limit,
           ...(query.createdAfter === undefined ? {} : { createdAfter: query.createdAfter }),
           ...(query.createdBefore === undefined ? {} : { createdBefore: query.createdBefore }),
@@ -264,15 +268,22 @@ async function handleExport(
 
         const row = page.sessions[sessionIndex++];
         if (row) {
-          if (!includeMessages) {
+          if (include.length === 0) {
             controller.enqueue(encodeLine(sessionLine(row)));
             return;
           }
 
-          const result = await fetchAllMessages(ctx.sessionRuntime, row.id, log, signal);
+          const result = await readTrace(
+            ctx.sessionRuntime,
+            row.id,
+            include,
+            query.format,
+            log,
+            signal
+          );
           controller.enqueue(
             encodeLine(
-              result.ok ? sessionLine(row, result.messages) : sessionErrorLine(row.id, result)
+              result.ok ? sessionLine(row, result.trace) : sessionErrorLine(row.id, result)
             )
           );
           return;
@@ -283,7 +294,10 @@ async function handleExport(
             encodeLine({
               schemaVersion: EXPORT_SCHEMA_VERSION,
               type: "cursor",
-              nextCursor: encodeSessionExportCursor(page.nextCursor),
+              nextCursor:
+                page.scope === "runs"
+                  ? encodeRunsExportCursor(page.nextCursor)
+                  : encodeSessionExportCursor(page.nextCursor),
             })
           );
           close(controller);
@@ -317,8 +331,8 @@ async function handleExport(
 }
 
 const EXPORT_READ = admit({
-  ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("sessions.read"),
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("sessions.export"),
   cacheControl: "private, no-store",
 });
 

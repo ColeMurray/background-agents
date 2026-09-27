@@ -200,7 +200,7 @@ development environment.
 **What's in a sandbox:**
 
 - Debian Linux with common dev tools
-- Node.js 22, Python 3.12, git, curl
+- Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
 - OpenCode and the Claude Agent SDK (the coding agent harnesses)

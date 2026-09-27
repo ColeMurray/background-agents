@@ -1,6 +1,7 @@
 import type { Logger } from "../../../logger";
 import { eventTypeSchema } from "@open-inspect/shared/types/sandbox-events";
 import { messageStatusSchema } from "@open-inspect/shared/types/sessions";
+import { promptValidationError } from "@open-inspect/shared/types/prompts";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
@@ -9,6 +10,7 @@ import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { parseMessageListCursor } from "../../message-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { sessionTraceFormatSchema, sessionTraceIncludeSchema } from "../../contracts";
 import {
   BudgetExhaustedError,
   PromptQueueFullError,
@@ -19,7 +21,7 @@ import {
 } from "../../message-queue";
 
 /**
- * HTTP boundary for the prompt/event/artifact/message endpoints: parses
+ * HTTP boundary for the prompt/event/artifact/message/trace endpoints: parses
  * requests, delegates to the message service, and maps thrown domain errors
  * to statuses.
  */
@@ -31,7 +33,7 @@ export class MessagesHandler {
       const raw = await request.json();
       const result = enqueuePromptRequestSchema.safeParse(raw);
       if (!result.success) {
-        return Response.json({ error: "Invalid prompt body" }, { status: 400 });
+        return Response.json(promptValidationError(result.error, raw), { status: 400 });
       }
 
       const body: EnqueuePromptRequest = result.data;
@@ -113,12 +115,8 @@ export class MessagesHandler {
 
   listMessages(url: URL): Response {
     const cursorResult = parseMessageListCursor(url.searchParams.get("cursor"));
-    const rawLimit = url.searchParams.get("limit") ?? "50";
-    if (!/^[1-9]\d*$/.test(rawLimit)) {
-      return Response.json({ error: "Invalid limit" }, { status: 400 });
-    }
-    const limit = Number(rawLimit);
-    if (!Number.isSafeInteger(limit) || limit > 100) {
+    const limit = parsePageLimit(url.searchParams.get("limit"), 50, 100);
+    if (limit === null) {
       return Response.json({ error: "Invalid limit" }, { status: 400 });
     }
     const status = url.searchParams.get("status");
@@ -135,4 +133,36 @@ export class MessagesHandler {
 
     return Response.json(result);
   }
+
+  exportTrace(url: URL): Response {
+    const include = sessionTraceIncludeSchema.safeParse(url.searchParams.get("include") ?? "");
+    if (!include.success) {
+      return Response.json(
+        { error: include.error.issues[0]?.message ?? "Invalid include" },
+        { status: 400 }
+      );
+    }
+
+    const format = sessionTraceFormatSchema.safeParse(url.searchParams.get("format") ?? "full");
+    if (!format.success) {
+      return Response.json(
+        { error: format.error.issues[0]?.message ?? "Invalid format" },
+        { status: 400 }
+      );
+    }
+
+    return Response.json(this.messageService.exportTrace(include.data, format.data));
+  }
+}
+
+/** A positive integer page size up to `maxLimit`, or null when the query value is malformed. */
+function parsePageLimit(
+  rawLimit: string | null,
+  defaultLimit: number,
+  maxLimit: number
+): number | null {
+  const value = rawLimit ?? String(defaultLimit);
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit <= maxLimit ? limit : null;
 }

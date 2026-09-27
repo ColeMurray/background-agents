@@ -46,8 +46,8 @@ brew install terraform
 # Modal CLI (for Modal deployments)
 pip install modal
 
-# Node.js >= 22 (for building workers)
-brew install node@22
+# Node.js >= 24 (for building workers)
+brew install node@24
 ```
 
 ### 2. Cloudflare Setup
@@ -273,7 +273,8 @@ LINEAR_WEBHOOK_SECRET
 LINEAR_API_KEY # Optional; fallback comment posting
 
 # API Keys
-ANTHROPIC_API_KEY # Optional; required only when classification_model is an Anthropic model and the Slack or Linear bot is enabled
+ANTHROPIC_API_KEY # Optional; injected into Modal/OpenComputer sandboxes and used by an Anthropic classifier when CLASSIFICATION_ANTHROPIC_API_KEY is unset
+CLASSIFICATION_ANTHROPIC_API_KEY # Optional; classifier-only Anthropic key that never reaches sandboxes
 CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 
 # Security Secrets
@@ -348,6 +349,15 @@ Since Modal has no Terraform provider, the module uses `null_resource` with `loc
 
 - Changes are detected via source file hashing
 - Manual intervention may be needed for complex updates
+
+Terraform replaces every Modal secret with its configured values whenever any secret changes, so do
+not add keys to Terraform-managed Modal secrets by hand. A failed replacement fails the apply.
+
+Clearing `anthropic_api_key` (for example, after moving the classifier to
+`classification_anthropic_api_key`) keeps `ANTHROPIC_API_KEY=""` in Modal's `llm-api-keys` secret,
+so the next apply overwrites the old value, and drops the OpenComputer control-plane binding. New
+and restored sandboxes stop receiving the key, but sandboxes that are already running keep it until
+they terminate. Rotate the key if it must be revoked immediately.
 
 ## Verification
 

@@ -337,13 +337,13 @@ describe("readS3ObjectStorageConfig", () => {
     expect(
       readS3ObjectStorageConfig({
         OBJECT_STORE_BUCKET: "media",
-        OBJECT_STORE_ENDPOINT: "http://minio:9000",
+        OBJECT_STORE_ENDPOINT: "http://object-store:9000",
         OBJECT_STORE_FORCE_PATH_STYLE: "true",
       })
     ).toEqual({
       bucket: "media",
       region: "us-east-1",
-      endpoint: "http://minio:9000",
+      endpoint: "http://object-store:9000",
       allowHttpEndpoint: false,
       forcePathStyle: true,
     });

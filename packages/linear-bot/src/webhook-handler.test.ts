@@ -9,6 +9,8 @@ import {
 import { clearEnvironmentsLocalCache } from "./environments";
 import { clearReposLocalCache } from "./classifier/repos";
 import type { Environment } from "@open-inspect/shared/types/environments";
+import { MAX_SESSION_INSTRUCTIONS_LENGTH } from "@open-inspect/shared/types/integrations";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 import type { AgentSessionWebhook, Env } from "./types";
 import {
   createFakeKV,
@@ -246,7 +248,10 @@ describe("handleAgentSessionEvent environment targets", () => {
     };
   }
 
-  function stubControlPlane(env: Env) {
+  function stubControlPlane(
+    env: Env,
+    options: { instructions?: string; promptResponse?: Response } = {}
+  ) {
     const fetchMock = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -257,7 +262,23 @@ describe("handleAgentSessionEvent environment targets", () => {
         };
       }
       if (url.startsWith("https://internal/integration-settings/linear/resolved/")) {
-        return { ok: true, json: () => Promise.resolve({ config: null }) };
+        return {
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              config: options.instructions
+                ? {
+                    model: null,
+                    reasoningEffort: null,
+                    allowUserPreferenceOverride: true,
+                    allowLabelModelOverride: true,
+                    emitToolProgressActivities: true,
+                    issueSessionInstructions: options.instructions,
+                    enabledRepos: null,
+                  }
+                : null,
+            }),
+        };
       }
       if (url === "https://internal/sessions") {
         return {
@@ -266,7 +287,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         };
       }
       if (url === "https://internal/sessions/session-xyz/prompt") {
-        return { ok: true, json: () => Promise.resolve({ ok: true }) };
+        return options.promptResponse ?? { ok: true, json: () => Promise.resolve({ ok: true }) };
       }
       if (url === "https://internal/repos") {
         return { ok: true, json: () => Promise.resolve({ repos: [] }) };
@@ -525,6 +546,128 @@ describe("handleAgentSessionEvent environment targets", () => {
 
     expect(promptBody(fetchMock)?.content).toContain(
       '<user_content source="linear_prompt_context" author="linear">\nUse the parent issue\'s migration constraints.'
+    );
+    expect(createSessionBody(fetchMock)).not.toBeNull();
+  });
+
+  it("rejects oversized context before creating or linking a session", async () => {
+    const { kv, store } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env);
+    const webhook = makeWebhook();
+    webhook.promptContext = "x".repeat(MAX_WEB_PROMPT_CHARS);
+    const length = buildPromptContextPrompt(webhook.promptContext).length;
+
+    await handleAgentSessionEvent(webhook, env, "trace-oversized-context");
+
+    expect(createSessionBody(fetchMock)).toBeNull();
+    expect(promptBody(fetchMock)).toBeNull();
+    expect(store.has("issue:issue-1")).toBe(false);
+    const activities = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input) === "https://api.linear.app/graphql")
+      .map(
+        ([, init]) =>
+          JSON.parse(String(init?.body)) as {
+            variables?: { input?: { content?: { type: string; body: string } } };
+          }
+      )
+      .map(({ variables }) => variables?.input?.content)
+      .filter((content) => content?.type === "error");
+    expect(activities).toEqual([
+      {
+        type: "error",
+        body: expect.stringContaining(
+          `${length.toLocaleString("en-US")} characters, exceeding the ${MAX_WEB_PROMPT_CHARS.toLocaleString("en-US")}-character limit`
+        ),
+      },
+    ]);
+    expect(activities[0]?.body).toContain(
+      "shorten this issue, its parent, or the configured instructions, then delegate again"
+    );
+  });
+
+  it.each([0, 1])("handles a configured prompt %i characters over the limit", async (overflow) => {
+    const { kv, store } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const instructions = "i".repeat(MAX_SESSION_INSTRUCTIONS_LENGTH);
+    const fetchMock = stubControlPlane(env, { instructions });
+    const webhook = makeWebhook();
+    const instructionSuffix = `\n\n## Additional Instructions\n\n${instructions}`;
+    webhook.promptContext = "x".repeat(
+      MAX_WEB_PROMPT_CHARS -
+        buildPromptContextPrompt("").length -
+        instructionSuffix.length +
+        overflow
+    );
+    const prompt = buildPromptContextPrompt(webhook.promptContext) + instructionSuffix;
+    expect(prompt).toHaveLength(MAX_WEB_PROMPT_CHARS + overflow);
+
+    await handleAgentSessionEvent(webhook, env, "trace-instructions-limit");
+
+    if (overflow === 0) {
+      expect(createSessionBody(fetchMock)).not.toBeNull();
+      expect(promptBody(fetchMock)?.content).toBe(prompt);
+      expect(store.has("issue:issue-1")).toBe(true);
+      return;
+    }
+
+    expect(createSessionBody(fetchMock)).toBeNull();
+    expect(promptBody(fetchMock)).toBeNull();
+    expect(store.has("issue:issue-1")).toBe(false);
+    const activities = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input) === "https://api.linear.app/graphql")
+      .map(
+        ([, init]) =>
+          JSON.parse(String(init?.body)) as {
+            variables?: { input?: { content?: { type: string; body: string } } };
+          }
+      )
+      .map(({ variables }) => variables?.input?.content);
+    const errorBody = activities.find((content) => content?.type === "error")?.body;
+    expect(errorBody).toContain(
+      `${(MAX_WEB_PROMPT_CHARS + 1).toLocaleString("en-US")} characters, exceeding the ${MAX_WEB_PROMPT_CHARS.toLocaleString("en-US")}-character limit`
+    );
+    expect(errorBody).toContain(
+      "shorten this issue, its parent, or the configured instructions, then delegate again"
+    );
+  });
+
+  it("logs prompt length when the control plane rejects the prompt", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env, {
+      promptResponse: new Response('{"error":"invalid prompt"}', { status: 400 }),
+    });
+    const webhook = makeWebhook();
+    webhook.promptContext = "A normal-size prompt";
+
+    await handleAgentSessionEvent(webhook, env, "trace-prompt-failure");
+
+    expect(createSessionBody(fetchMock)).not.toBeNull();
+    expect(errorSpy.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+      expect.objectContaining({
+        msg: "control_plane.send_prompt",
+        prompt_length: buildPromptContextPrompt(webhook.promptContext).length,
+        http_status: 400,
+      })
     );
   });
 

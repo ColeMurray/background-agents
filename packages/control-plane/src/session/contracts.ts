@@ -4,7 +4,8 @@
  */
 
 import { z } from "zod";
-import { sessionMessageSchema } from "@open-inspect/shared/types/sessions";
+import { stepUsageSchema } from "@open-inspect/shared";
+import { sessionEventSchema, sessionMessageSchema } from "@open-inspect/shared/types/sessions";
 
 /** SCM display fields forwarded from the authenticated route to the Session runtime. */
 export const sessionScmDisplayFieldsSchema = z.object({
@@ -27,6 +28,53 @@ export const sessionMessagePageSchema = z.discriminatedUnion("hasMore", [
 ]);
 export type SessionMessagePage = z.infer<typeof sessionMessagePageSchema>;
 
+const SESSION_TRACE_COLLECTIONS = ["messages", "events", "usage"] as const;
+export type SessionTraceCollection = (typeof SESSION_TRACE_COLLECTIONS)[number];
+
+/** A comma-separated set of trace collections, deduplicated into canonical order. */
+export const sessionTraceIncludeSchema = z
+  .string()
+  .transform((raw) => raw.split(","))
+  .pipe(
+    z.array(
+      z.enum(SESSION_TRACE_COLLECTIONS, {
+        error: `include must be a comma-separated list of ${SESSION_TRACE_COLLECTIONS.join(", ")}`,
+      })
+    )
+  )
+  .transform((requested) =>
+    SESSION_TRACE_COLLECTIONS.filter((collection) => requested.includes(collection))
+  );
+
+export const sessionTraceFormatSchema = z.enum(["full", "compact"], {
+  error: "format must be full or compact",
+});
+export type SessionTraceFormat = z.infer<typeof sessionTraceFormatSchema>;
+
+/** Upper bound on one session's serialized trace-export response. */
+export const MAX_INCLUDED_BYTES_PER_SESSION = 4 * 1024 * 1024;
+
+/**
+ * One session's trace, read in a single storage snapshot. A collection is
+ * present only when requested. Messages are newest first, as the schema 1
+ * export has always listed them; events and usage are in timeline order.
+ */
+const sessionTraceSchema = z.object({
+  messages: z.array(sessionMessageSchema).optional(),
+  events: z.array(sessionEventSchema).optional(),
+  usage: z.array(stepUsageSchema).optional(),
+});
+export type SessionTrace = z.infer<typeof sessionTraceSchema>;
+
+export const sessionTraceExportSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), trace: sessionTraceSchema }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(["page_cap_reached", "message_budget_exceeded"]),
+  }),
+]);
+export type SessionTraceExport = z.infer<typeof sessionTraceExportSchema>;
+
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
@@ -43,6 +91,7 @@ export const SessionInternalPaths = {
   events: "/internal/events",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
+  traceExport: "/internal/trace-export",
   createPr: "/internal/create-pr",
   // Static path + artifactId query param: the router matches paths as exact
   // strings, so the artifact id cannot ride in the path.

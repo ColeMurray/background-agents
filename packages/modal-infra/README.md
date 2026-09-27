@@ -35,7 +35,7 @@ This package provides the data plane for Open-Inspect:
 
 Base image definition with:
 - Debian slim + git, curl, build-essential
-- Node.js 22, pnpm, Bun
+- Node.js 24, pnpm, Bun
 - Python 3.12 with uv
 - OpenCode CLI
 - agent-browser CLI + headless Chrome

@@ -9,13 +9,11 @@ import { cn } from "@/lib/utils";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 import type { ShutdownRecoveryResult } from "@/hooks/use-session-socket";
 
-const PHASE_MESSAGES: Record<Exclude<SandboxShutdownState["phase"], "running">, string> = {
-  draining: "Stopping the prompt to save your sandbox state.",
-  prepared: "Prompt stopped. Preparing final sandbox state.",
-  capturing: "Saving final sandbox state.",
-  retiring: "State saved. Confirming sandbox shutdown.",
+const PHASE_MESSAGES: Record<
+  Extract<SandboxShutdownState["phase"], "saved" | "failed" | "unknown">,
+  string
+> = {
   saved: "Sandbox saved and stopped.",
-  restoring: "Restoring the saved sandbox state.",
   failed: "Final sandbox save failed. Changes since the last verified save may be missing.",
   unknown: "Final sandbox save could not be confirmed. Changes may be missing.",
 };
@@ -29,14 +27,16 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
   const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
-  if (!shutdown || shutdown.phase === "running") return null;
+  if (!shutdown) return null;
 
-  const isContinuationPaused = shutdown.phase === "saved" && shutdown.continuationPaused === true;
-  // A save that interrupted nothing — an idle timeout or a lifetime expiry — is already
-  // reported by the sandbox status and carries no recovery action, so it stays silent.
-  if (shutdown.phase === "saved" && !isContinuationPaused) return null;
+  const { phase } = shutdown;
+  const isError = phase === "failed" || phase === "unknown";
+  const isContinuationPaused = phase === "saved" && shutdown.continuationPaused === true;
+  // Routine stops, saves, and restores are reported by the header's sandbox status, which
+  // projects graceful-stop phases onto it. The banner is reserved for failures and for an
+  // interrupted sandbox that holds queued work.
+  if (!isError && !isContinuationPaused) return null;
 
-  const isError = shutdown.phase === "failed" || shutdown.phase === "unknown";
   const recoveryActions = shutdown.availableRecoveryActions ?? [];
   const canRetry = recoveryActions.includes("retry");
   const canRestoreSaved = recoveryActions.includes("restore_saved");
@@ -74,7 +74,7 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
           : "border-border-muted bg-muted text-foreground"
       )}
     >
-      <span className="font-medium">{PHASE_MESSAGES[shutdown.phase]}</span>
+      <span className="font-medium">{PHASE_MESSAGES[phase]}</span>
       {isContinuationPaused && (
         <span className="ml-2">
           The sandbox was interrupted. Partial state was saved. Queued work will wait until you
@@ -85,7 +85,7 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
       {isError && recoveryActions.length === 0 && (
         <span className="ml-2">{sandboxPromptBlockReason(shutdown)}</span>
       )}
-      {shutdown.phase === "failed" && canRetry && onRecover && (
+      {phase === "failed" && canRetry && onRecover && (
         <button
           type="button"
           className="ml-3 underline disabled:cursor-not-allowed disabled:opacity-60"

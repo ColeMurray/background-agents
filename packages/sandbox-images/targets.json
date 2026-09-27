@@ -2,21 +2,21 @@
   "modal": {
     "os": "debian",
     "base": "python:3.12-slim-bookworm",
-    "node": "22",
+    "node": "24",
     "user": "root",
     "home": "/root"
   },
   "daytona": {
     "os": "debian",
     "base": "python:3.12-slim-bookworm",
-    "node": "22",
+    "node": "24",
     "user": "root",
     "home": "/root"
   },
   "e2b": {
     "os": "debian",
     "base": "python:3.12-slim-bookworm",
-    "node": "22",
+    "node": "24",
     "user": "user",
     "home": "/home/user"
   },

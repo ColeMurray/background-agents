@@ -67,6 +67,7 @@ import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
+import { UsageRepository } from "./usage-repository";
 import { recordSessionWarning } from "./session-warnings";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
@@ -246,6 +247,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const attachmentRepository = new SessionAttachmentRepository(sql);
   const artifactRepository = new ArtifactRepository(sql);
   const eventRepository = new EventRepository(sql, transaction);
+  const usageRepository = new UsageRepository(sql, transaction);
   const messageRepository = new MessageRepository(
     sql,
     transaction,
@@ -393,6 +395,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     messageRepository,
     artifactRepository,
+    usageRepository,
     messenger,
     sessionIndexStore,
     new SessionStatusProjectionStore(db),
@@ -522,9 +525,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     repository: messageRepository,
     eventRepository,
     artifactRepository,
+    usageRepository,
     messageQueue,
     stopExecution: () => executionStop.stop(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
+    transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
   const budgetService = new SessionBudgetService(
@@ -544,7 +549,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     messenger,
     updateLastActivity,
-    budgetService
+    budgetService,
+    usageRepository
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,
@@ -856,6 +862,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     listEvents: (_request, url) => messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
+    exportTrace: (_request, url) => messagesHandler.exportTrace(url),
     createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),
     pullRequestArtifactSnapshot: (request, url) =>
       pullRequestHandler.pullRequestArtifactSnapshot(request, url),
