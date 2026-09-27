@@ -152,10 +152,5 @@ output "docs_site_project_id" {
 
 output "docs_site_url" {
   description = "Documentation site URL (null when docs_site_enabled = false)"
-  value = (var.docs_site_enabled
-    ? (var.docs_custom_domain != null
-      ? "https://${var.docs_custom_domain}"
-      : module.docs_site[0].production_url)
-    : null
-  )
+  value       = var.docs_site_enabled ? coalesce(local.docs_custom_domain_url, module.docs_site[0].production_url) : null
 }

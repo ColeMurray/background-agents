@@ -94,6 +94,9 @@ locals {
     var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
   )
 
+  # Documentation site URL, when it serves a hostname of its own
+  docs_custom_domain_url = var.docs_custom_domain != null ? "https://${var.docs_custom_domain}" : null
+
   # Worker script paths (deterministic output locations)
   control_plane_script_path = "${var.project_root}/packages/control-plane/dist/index.js"
   slack_bot_script_path     = "${var.project_root}/packages/slack-bot/dist/index.js"
