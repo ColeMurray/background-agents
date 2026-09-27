@@ -19,7 +19,6 @@ import {
 } from "./linear-credentials";
 import { z } from "zod";
 import { abortable } from "./abortable";
-import { LINEAR_DOCUMENTS, type LinearDocument } from "./linear-documents";
 
 export {
   completeLinearOAuthInstallation,
@@ -112,7 +111,7 @@ export async function getLinearClientOrThrow(
  */
 export async function linearGraphQL(
   client: LinearApiClient,
-  query: LinearDocument,
+  query: string,
   variables: Record<string, unknown>,
   callerSignal?: AbortSignal
 ): Promise<Record<string, unknown>> {
@@ -224,9 +223,19 @@ export async function emitAgentActivity(
   ephemeral?: boolean
 ): Promise<boolean> {
   try {
-    await linearGraphQL(client, LINEAR_DOCUMENTS.AgentActivityCreate, {
-      input: { agentSessionId, content, ephemeral },
-    });
+    await linearGraphQL(
+      client,
+      `
+      mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
+        agentActivityCreate(input: $input) {
+          success
+        }
+      }
+    `,
+      {
+        input: { agentSessionId, content, ephemeral },
+      }
+    );
     return true;
   } catch (err) {
     log.error("linear.emit_activity_failed", {
@@ -247,7 +256,33 @@ export async function fetchIssueDetails(
   issueId: string
 ): Promise<LinearIssueDetails | null> {
   try {
-    const data = await linearGraphQL(client, LINEAR_DOCUMENTS.IssueDetails, { id: issueId });
+    const data = await linearGraphQL(
+      client,
+      `
+      query IssueDetails($id: String!) {
+        issue(id: $id) {
+          id
+          identifier
+          title
+          description
+          url
+          priority
+          priorityLabel
+          labels { nodes { id name } }
+          project { id name }
+          assignee { id name }
+          team { id key name }
+          comments(first: 10, orderBy: createdAt) {
+            nodes {
+              body
+              user { name }
+            }
+          }
+        }
+      }
+    `,
+      { id: issueId }
+    );
 
     const parsed = linearIssueDetailsResponseSchema.safeParse(data);
     if (!parsed.success) return null;
@@ -276,7 +311,17 @@ export async function updateAgentSession(
   input: Record<string, unknown>
 ): Promise<void> {
   try {
-    await linearGraphQL(client, LINEAR_DOCUMENTS.AgentSessionUpdate, { id: agentSessionId, input });
+    await linearGraphQL(
+      client,
+      `
+      mutation AgentSessionUpdate($id: String!, $input: AgentSessionUpdateInput!) {
+        agentSessionUpdate(id: $id, input: $input) {
+          success
+        }
+      }
+    `,
+      { id: agentSessionId, input }
+    );
   } catch (err) {
     log.error("linear.update_session_failed", {
       agent_session_id: agentSessionId,
@@ -295,11 +340,24 @@ export async function getRepoSuggestions(
   candidateRepos: Array<{ hostname: string; repositoryFullName: string }>
 ): Promise<Array<{ repositoryFullName: string; confidence: number }>> {
   try {
-    const data = await linearGraphQL(client, LINEAR_DOCUMENTS.RepoSuggestions, {
-      issueId,
-      agentSessionId,
-      candidateRepositories: candidateRepos,
-    });
+    const data = await linearGraphQL(
+      client,
+      `
+      query RepoSuggestions($issueId: String!, $agentSessionId: String!, $candidateRepositories: [CandidateRepository!]!) {
+        issueRepositorySuggestions(
+          issueId: $issueId
+          agentSessionId: $agentSessionId
+          candidateRepositories: $candidateRepositories
+        ) {
+          suggestions {
+            repositoryFullName
+            confidence
+          }
+        }
+      }
+    `,
+      { issueId, agentSessionId, candidateRepositories: candidateRepos }
+    );
 
     const parsed = linearRepoSuggestionsResponseSchema.safeParse(data);
     if (!parsed.success) return [];
@@ -324,7 +382,19 @@ export async function fetchUser(
   userId: string
 ): Promise<{ id: string; name: string; email: string | null } | null> {
   try {
-    const data = await linearGraphQL(client, LINEAR_DOCUMENTS.FetchUser, { id: userId });
+    const data = await linearGraphQL(
+      client,
+      `
+      query FetchUser($id: String!) {
+        user(id: $id) {
+          id
+          name
+          email
+        }
+      }
+    `,
+      { id: userId }
+    );
 
     const parsed = linearUserResponseSchema.safeParse(data);
     if (!parsed.success) return null;
@@ -373,7 +443,11 @@ export async function postIssueComment(
         Authorization: apiKey,
       },
       body: JSON.stringify({
-        query: LINEAR_DOCUMENTS.CommentCreate,
+        query: `
+          mutation CommentCreate($input: CommentCreateInput!) {
+            commentCreate(input: $input) { success }
+          }
+        `,
         variables: { input: { issueId, body } },
       }),
       signal: AbortSignal.timeout(LINEAR_GRAPHQL_TIMEOUT_MS),

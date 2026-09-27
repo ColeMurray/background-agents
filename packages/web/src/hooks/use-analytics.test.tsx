@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
 import { ANALYTICS_REFRESH_INTERVAL_MS } from "@/lib/analytics";
+import type { AnalyticsDashboardResponse } from "@open-inspect/shared/types/analytics";
 import { useAnalyticsDashboard } from "./use-analytics";
 
 vi.mock("swr", () => ({ default: vi.fn() }));
@@ -12,7 +13,12 @@ vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 
 const snapshot = {
   generatedAt: 1_700_000_000_000,
-  window: { days: 30 as const, startAt: 1_697_408_000_000, endAt: 1_700_000_000_000 },
+  window: {
+    days: 30 as const,
+    scope: "human" as const,
+    startAt: 1_697_408_000_000,
+    endAt: 1_700_000_000_000,
+  },
   summary: {
     totalSessions: 1,
     activeUsers: 1,
@@ -29,7 +35,14 @@ const snapshot = {
     },
   },
   timeseries: { series: [] },
-  breakdowns: { repository: { entries: [] }, user: { entries: [] } },
+  breakdowns: {
+    repository: { entries: [] },
+    user: { entries: [] },
+    model: { entries: [] },
+    harness: { entries: [] },
+    provider: { entries: [] },
+    automation: { entries: [] },
+  },
   pullRequests: {
     funnel: { created: 2, open: 1, draft: 0, merged: 1, closed: 0 },
     prSessionCost: 1,
@@ -40,7 +53,7 @@ const snapshot = {
     repos: [],
     sources: [],
   },
-};
+} satisfies AnalyticsDashboardResponse;
 
 describe("useAnalyticsDashboard", () => {
   beforeEach(() => {

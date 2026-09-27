@@ -4,6 +4,9 @@ import { controlPlaneJsonGetProxy } from "@/lib/control-plane-json-proxy";
 
 export const { GET } = controlPlaneJsonGetProxy(
   (request: NextRequest) =>
-    buildControlPlanePath("/analytics/summary", new URL(request.url).searchParams, ["days"]),
+    buildControlPlanePath("/analytics/summary", new URL(request.url).searchParams, [
+      "days",
+      "scope",
+    ]),
   "analytics summary"
 );

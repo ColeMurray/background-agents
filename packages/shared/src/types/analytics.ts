@@ -1,10 +1,43 @@
-import type { SpawnSource } from "./sessions";
+import { spawnSourceSchema, type SpawnSource } from "./sessions";
 
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];
 
-export const ANALYTICS_BREAKDOWN_BY = ["user", "repo"] as const;
+export const ANALYTICS_BREAKDOWN_BY = [
+  "user",
+  "repo",
+  "model",
+  "harness",
+  "spawnSource",
+  "automation",
+  "provider",
+] as const;
 export type AnalyticsBreakdownBy = (typeof ANALYTICS_BREAKDOWN_BY)[number];
+
+export const ANALYTICS_SCOPES = ["human", "agent", "automation", "all"] as const;
+export type AnalyticsScope = (typeof ANALYTICS_SCOPES)[number];
+export const DEFAULT_ANALYTICS_SCOPE: AnalyticsScope = "human";
+export const ANALYTICS_SPAWN_SOURCE_SCOPE: Record<SpawnSource, Exclude<AnalyticsScope, "all">> = {
+  user: "human",
+  "slack-bot": "human",
+  "linear-bot": "human",
+  "github-bot": "human",
+  agent: "agent",
+  automation: "automation",
+};
+const spawnSources = Object.keys(ANALYTICS_SPAWN_SOURCE_SCOPE).map((source) =>
+  spawnSourceSchema.parse(source)
+);
+export const ANALYTICS_SCOPE_SPAWN_SOURCES: Record<
+  Exclude<AnalyticsScope, "all">,
+  readonly SpawnSource[]
+> = {
+  human: spawnSources.filter((source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "human"),
+  agent: spawnSources.filter((source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "agent"),
+  automation: spawnSources.filter(
+    (source) => ANALYTICS_SPAWN_SOURCE_SCOPE[source] === "automation"
+  ),
+};
 
 export const ANALYTICS_RUN_ORDER_BY = ["cost", "created"] as const;
 export type AnalyticsRunOrderBy = (typeof ANALYTICS_RUN_ORDER_BY)[number];
@@ -39,6 +72,8 @@ export interface AnalyticsTimeseriesResponse {
 export interface AnalyticsBreakdownEntry {
   key: string;
   displayName?: string;
+  /** Session count billed through a matching provider account; present only for provider breakdowns. */
+  subscriptionSessions?: number;
   sessions: number;
   completed: number;
   failed: number;
@@ -151,6 +186,7 @@ export interface AnalyticsDashboardResponse {
   /** Half-open interval [startAt, endAt) shared by every windowed metric. */
   window: {
     days: AnalyticsDays;
+    scope: AnalyticsScope;
     startAt: number;
     endAt: number;
   };
@@ -159,6 +195,10 @@ export interface AnalyticsDashboardResponse {
   breakdowns: {
     repository: AnalyticsBreakdownResponse;
     user: AnalyticsBreakdownResponse;
+    model: AnalyticsBreakdownResponse;
+    harness: AnalyticsBreakdownResponse;
+    provider: AnalyticsBreakdownResponse;
+    automation: AnalyticsBreakdownResponse;
   };
   pullRequests: AnalyticsPullRequestsResponse;
 }
