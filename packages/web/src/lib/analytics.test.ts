@@ -8,6 +8,7 @@ import {
   formatAnalyticsRatio,
   formatCompletionRate,
   formatPullRequestAcceptanceRate,
+  getAnalyticsDimensionLabels,
   getCostPerMergedPullRequest,
   getPullRequestAcceptanceRate,
   sortAnalyticsUserEntries,
@@ -22,6 +23,21 @@ const zeroTokens = {
 };
 
 describe("analytics utilities", () => {
+  it("keeps final dimension labels unique when a fallback key matches another display name", () => {
+    const labels = getAnalyticsDimensionLabels([
+      { key: "a", displayName: "Daily" },
+      { key: "b", displayName: "Daily" },
+      { key: "d", displayName: "a (c)" },
+      { key: "c", displayName: "a" },
+    ]);
+
+    expect(labels.get("a")).toBe("a");
+    expect(labels.get("b")).toBe("b");
+    expect(labels.get("d")).toBe("a (c)");
+    expect(labels.get("c")).toContain("c");
+    expect(new Set(labels.values()).size).toBe(4);
+  });
+
   it("formats a nullable ratio as a rounded percentage", () => {
     expect(formatAnalyticsRatio(null)).toBe("—");
     expect(formatAnalyticsRatio(0)).toBe("0%");

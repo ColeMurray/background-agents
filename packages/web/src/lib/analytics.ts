@@ -106,10 +106,18 @@ export function getAnalyticsDimensionLabels(
     nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
   }
 
+  const usedLabels = new Set<string>();
   return new Map<string, string>(
     entries.map((entry) => {
       const name = entry.displayName ?? entry.key;
-      return [entry.key, (nameCounts.get(name) ?? 0) > 1 ? entry.key : name];
+      let label = (nameCounts.get(name) ?? 0) > 1 ? entry.key : name;
+      let suffix = 2;
+      while (usedLabels.has(label)) {
+        label = `${name} (${entry.key}${suffix === 2 ? "" : `, ${suffix}`})`;
+        suffix++;
+      }
+      usedLabels.add(label);
+      return [entry.key, label];
     })
   );
 }
