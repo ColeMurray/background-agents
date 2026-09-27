@@ -147,6 +147,8 @@ export interface CreateSandboxConfig {
   sandboxSettings?: SandboxSettings;
   /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
   retireSandboxId?: string | null;
+  /** Generation reservation time used to bound pending provider launches. */
+  generationCreatedAtMs?: number;
   /**
    * Ordered member list for multi-repo sessions. Only set when the session
    * has more than one member — single-repo sessions keep the scalar
@@ -239,6 +241,8 @@ export interface RestoreConfig {
   sandboxSettings?: SandboxSettings;
   /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
   retireSandboxId?: string | null;
+  /** Generation reservation time used to bound pending provider launches. */
+  generationCreatedAtMs?: number;
   /** Multi-repo member list — see CreateSandboxConfig. */
   repositories?: SessionRepositoryInfo[];
 }

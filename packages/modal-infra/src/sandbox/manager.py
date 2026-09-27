@@ -143,6 +143,7 @@ class SandboxConfig:
     # after an ambiguous create (the control plane lost the response). Only
     # Docker launches act on it; the named allocation is retired if owned.
     retire_sandbox_id: str | None = None
+    launch_deadline_at_ms: int | None = None
 
 
 @dataclass
@@ -506,6 +507,7 @@ class SandboxManager:
                 retire_sandbox_id=config.retire_sandbox_id,
                 create_kwargs=create_kwargs,
                 repository_image=repository_image,
+                launch_deadline_at_ms=config.launch_deadline_at_ms,
             )
             if adopted:
                 passwords = await self._read_access_passwords(
@@ -559,6 +561,7 @@ class SandboxManager:
         retire_sandbox_id: str | None,
         create_kwargs: dict[str, Any],
         repository_image: bool,
+        launch_deadline_at_ms: int | None = None,
     ) -> tuple[modal.Sandbox, bool]:
         """Create a Docker VM under a deterministic name, adopting an existing one.
 
@@ -572,6 +575,8 @@ class SandboxManager:
         tags = docker_allocation_tags(session_id, sandbox_id)
         existing = await self._find_owned_docker_allocation(name, tags)
         if existing is None:
+            if launch_deadline_at_ms is not None and time.time() * 1000 >= launch_deadline_at_ms:
+                raise RuntimeError("VM launch deadline expired")
             try:
                 sandbox = await _create_sandbox(
                     {**create_kwargs, "name": name, "tags": tags},
@@ -788,11 +793,12 @@ class SandboxManager:
             identity = json.loads(sandbox_id.removeprefix("modal-vm-session:"))
             if (
                 not isinstance(identity, list)
-                or len(identity) != 2
+                or len(identity) not in (2, 3)
                 or not all(isinstance(part, str) and part for part in identity)
+                or (len(identity) == 3 and identity[2] != "bounded")
             ):
                 raise ValueError("Invalid pending VM reference")
-            session_id, generation_id = identity
+            session_id, generation_id = identity[:2]
             modal_sandbox = await self._find_owned_docker_allocation(
                 docker_allocation_name(session_id),
                 docker_allocation_tags(session_id, generation_id),
@@ -835,6 +841,7 @@ class SandboxManager:
         settings: dict[str, Any] | None = None,
         retire_sandbox_id: str | None = None,
         sandbox_backend: ModalBackend = "modal",
+        launch_deadline_at_ms: int | None = None,
     ) -> SandboxHandle:
         """
         Create a new sandbox from a filesystem snapshot Image.
@@ -888,6 +895,7 @@ class SandboxManager:
                     retire_sandbox_id=retire_sandbox_id,
                     settings=settings,
                     sandbox_backend=sandbox_backend,
+                    launch_deadline_at_ms=launch_deadline_at_ms,
                 ),
                 source=_SnapshotImageSource(
                     image_id=snapshot_image_id,

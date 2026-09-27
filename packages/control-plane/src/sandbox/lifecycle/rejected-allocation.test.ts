@@ -37,7 +37,7 @@ describe("rejected provider allocation", () => {
     const sandbox = createMockSandbox({ status: "pending", modal_object_id: null });
     const client = {
       createSandbox: vi.fn(async () => {
-        expect(sandbox.modal_object_id).toContain("modal-vm-session:");
+        expect(sandbox.modal_object_id).toContain('modal-vm-session:["');
         sandbox.status = "ready";
         vi.mocked(fixture.wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
         throw new Error("response lost");

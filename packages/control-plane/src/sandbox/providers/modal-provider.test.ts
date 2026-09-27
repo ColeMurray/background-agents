@@ -660,6 +660,18 @@ describe("ModalSandboxProvider", () => {
         vi.setSystemTime(createdAt + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS);
         await expect(provider.stopSandbox(config)).resolves.toEqual({ success: true });
         await expect(
+          provider.stopSandbox({
+            ...config,
+            providerObjectId: 'modal-vm-session:["test-session","generation"]',
+          })
+        ).rejects.toThrow();
+        await expect(
+          provider.stopSandbox({
+            ...config,
+            providerObjectId: 'modal-vm-session:["test-session","bounded"]',
+          })
+        ).rejects.toThrow();
+        await expect(
           provider.stopSandbox({ ...config, generationCreatedAtMs: undefined })
         ).rejects.toThrow();
 

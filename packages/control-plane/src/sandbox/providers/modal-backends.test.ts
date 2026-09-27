@@ -15,6 +15,7 @@ const config = {
   provider: "anthropic",
   model: "model",
   retireSandboxId: "prior-generation",
+  generationCreatedAtMs: Date.now(),
 };
 const build = {
   buildId: "build-1",
@@ -84,6 +85,7 @@ describe("distinct Modal backend identities", () => {
       expect(call).toHaveBeenCalledWith(
         expect.objectContaining({
           sandboxBackend: "modal-vm",
+          launchDeadlineAtMs: config.generationCreatedAtMs + 30_000,
           retireSandboxId: "prior-generation",
           sandboxSettings: settings,
         }),

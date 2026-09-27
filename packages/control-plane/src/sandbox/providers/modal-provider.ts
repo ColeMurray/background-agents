@@ -6,7 +6,10 @@
  */
 
 import { ModalApiError } from "../client";
-import { PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS } from "../lifecycle/decisions";
+import {
+  PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
+  PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
+} from "../lifecycle/decisions";
 import type { ModalClient, ModalBackend, CreateImageBuildSandboxResponse } from "../client";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../../logger";
@@ -97,9 +100,20 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   readonly capabilities: SandboxProviderCapabilities;
 
   pendingSandboxReference(sessionId: string, sandboxId: string): string | undefined {
+    // Legacy two-part references were not protected by a provider-side launch deadline.
     return this.name === "modal-vm"
-      ? `modal-vm-session:${JSON.stringify([sessionId, sandboxId])}`
+      ? `modal-vm-session:${JSON.stringify([sessionId, sandboxId, "bounded"])}`
       : undefined;
+  }
+
+  private launchDeadlineAtMs(generationCreatedAtMs: number | undefined): number | undefined {
+    if (this.name !== "modal-vm") return undefined;
+    if (generationCreatedAtMs === undefined)
+      throw new SandboxProviderError("Missing VM generation reservation time", "permanent");
+    const deadline = generationCreatedAtMs + PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS;
+    if (Date.now() >= deadline)
+      throw new SandboxProviderError("VM launch deadline expired before dispatch", "transient");
+    return deadline;
   }
 
   constructor(
@@ -124,9 +138,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
+      const launchDeadlineAtMs = this.launchDeadlineAtMs(config.generationCreatedAtMs);
       const result = await this.client.createSandbox(
         {
           sessionId: config.sessionId,
+          launchDeadlineAtMs,
           sandboxId: config.sandboxId,
           repoOwner: config.repoOwner,
           repoName: config.repoName,
@@ -185,9 +201,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
     try {
+      const launchDeadlineAtMs = this.launchDeadlineAtMs(config.generationCreatedAtMs);
       const result = await this.client.restoreSandbox(
         {
           snapshotImageId: config.snapshotImageId,
+          launchDeadlineAtMs,
           sessionId: config.sessionId,
           sandboxId: config.sandboxId,
           sandboxAuthToken: config.sandboxAuthToken,
@@ -324,8 +342,20 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         error instanceof ModalApiError &&
         error.status === 409 &&
         error.message.includes("pending_reference_not_visible");
+      let boundedReference = false;
+      if (pendingNotVisible) {
+        try {
+          const identity: unknown = JSON.parse(
+            config.providerObjectId.slice("modal-vm-session:".length)
+          );
+          boundedReference =
+            Array.isArray(identity) && identity.length === 3 && identity[2] === "bounded";
+        } catch {
+          // A malformed reference cannot prove an absent launch.
+        }
+      }
       if (
-        pendingNotVisible &&
+        boundedReference &&
         config.generationCreatedAtMs !== undefined &&
         Date.now() - config.generationCreatedAtMs >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
       )

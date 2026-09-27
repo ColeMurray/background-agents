@@ -18,20 +18,26 @@ from src.sandbox.manager import (
 
 
 @pytest.mark.asyncio
-async def test_pending_vm_reference_recovers_owned_allocation(monkeypatch):
+@pytest.mark.parametrize(
+    "identity", ['["session","generation"]', '["session","generation","bounded"]']
+)
+async def test_pending_vm_reference_recovers_owned_allocation(monkeypatch, identity):
     sandbox = SimpleNamespace(
         object_id="sb-owned",
         get_tags=_async_method(docker_allocation_tags("session", "generation")),
     )
     lookup = _async_method(sandbox)
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", lookup)
-    handle = await SandboxManager().get_sandbox_by_id('modal-vm-session:["session","generation"]')
+    handle = await SandboxManager().get_sandbox_by_id(f"modal-vm-session:{identity}")
     assert handle is not None and handle.modal_sandbox is sandbox
     assert handle.sandbox_backend == "modal-vm"
 
 
 @pytest.mark.asyncio
-async def test_pending_vm_reference_stops_only_its_owned_allocation(monkeypatch):
+@pytest.mark.parametrize(
+    "identity", ['["session","generation"]', '["session","generation","bounded"]']
+)
+async def test_pending_vm_reference_stops_only_its_owned_allocation(monkeypatch, identity):
     sandbox = SimpleNamespace(
         object_id="sb-owned",
         get_tags=_async_method(docker_allocation_tags("session", "generation")),
@@ -42,7 +48,7 @@ async def test_pending_vm_reference_stops_only_its_owned_allocation(monkeypatch)
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", from_name)
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
 
-    await SandboxManager().stop_sandbox('modal-vm-session:["session","generation"]')
+    await SandboxManager().stop_sandbox(f"modal-vm-session:{identity}")
 
     from_id.aio.assert_awaited_once_with("sb-owned")
     sandbox.terminate.aio.assert_awaited_once_with(wait=True)

@@ -146,6 +146,7 @@ class CreateSandboxRequest(_RepositoryContextModel):
     sandbox_settings: dict[str, Any] | None = None
     sandbox_backend: ModalBackend = "modal"
     retire_sandbox_id: str | None = None
+    launch_deadline_at_ms: int | None = Field(default=None, gt=0)
 
 
 class RestoreSessionConfigRequest(_RepositoryContextModel):
@@ -180,6 +181,7 @@ class RestoreSandboxRequest(_ModalRequestModel):
     sandbox_settings: dict[str, Any] | None = None
     sandbox_backend: ModalBackend = "modal"
     retire_sandbox_id: str | None = None
+    launch_deadline_at_ms: int | None = Field(default=None, gt=0)
 
 
 @dataclass
@@ -459,6 +461,7 @@ async def api_create_sandbox(
                 else DEFAULT_SANDBOX_TIMEOUT_SECONDS
             ),
             retire_sandbox_id=parsed_request.retire_sandbox_id or None,
+            launch_deadline_at_ms=parsed_request.launch_deadline_at_ms,
         )
 
         try:
@@ -823,6 +826,7 @@ async def api_restore_sandbox(
             settings=parsed_request.sandbox_settings or None,
             sandbox_backend=parsed_request.sandbox_backend,
             retire_sandbox_id=parsed_request.retire_sandbox_id or None,
+            launch_deadline_at_ms=parsed_request.launch_deadline_at_ms,
         )
 
         return {

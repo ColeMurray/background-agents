@@ -731,7 +731,6 @@ export class SandboxLifecycleManager
         return;
       }
 
-      const now = Date.now();
       const sessionId = session.session_name || session.id;
       const previous = this.storage.getSandbox();
       const replaced =
@@ -762,6 +761,7 @@ export class SandboxLifecycleManager
       // A fenced allocation must be retired before its durable identity is replaced.
       if (priorSandbox?.fenced) await this.stopPriorProviderSandbox(true);
       this.storage.setLastSpawnError(null, null);
+      const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       let { sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(reserved, {
@@ -811,6 +811,7 @@ export class SandboxLifecycleManager
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
         sessionId,
+        generationCreatedAtMs: generation.createdAt,
         retireSandboxId: priorSandboxId,
         sandboxId: expectedSandboxId,
         repoOwner: session.repo_owner,
@@ -875,6 +876,7 @@ export class SandboxLifecycleManager
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
+          generationCreatedAtMs: retry.createdAt,
           sandboxAuthToken,
           prebuiltImageId: null,
           prebuiltImageSha: null,
@@ -1187,12 +1189,12 @@ export class SandboxLifecycleManager
         return;
       }
 
-      const now = Date.now();
       const priorSandbox = this.storage.getSandbox();
       const priorSandboxId = priorSandbox?.modal_sandbox_id ?? null;
       // A fenced allocation must be retired before its durable identity is replaced.
       if (priorSandbox?.fenced) await this.stopPriorProviderSandbox(true);
       this.storage.setLastSpawnError(null, null);
+      const now = Date.now();
       const reserved = this.spawnGeneration(session, now);
       generation = reserved;
       const shutdownPolicy = shutdownPolicyForLaunch("existing", snapshotRuntimeVersion);
@@ -1223,6 +1225,7 @@ export class SandboxLifecycleManager
       this.recordPendingProviderReference(generation, session.session_name || session.id);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
+        generationCreatedAtMs: generation.createdAt,
         retireSandboxId: priorSandboxId,
         sessionId: session.session_name || session.id,
         sandboxId: expectedSandboxId,

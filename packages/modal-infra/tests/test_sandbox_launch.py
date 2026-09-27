@@ -356,6 +356,31 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "snapshot"])
+async def test_expired_vm_launch_cannot_materialize_after_lookup(monkeypatch, image_source):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: object())
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
+    )
+    if image_source == "base":
+        launch = manager.create_sandbox(_docker_config(launch_deadline_at_ms=1))
+    else:
+        launch = manager.restore_from_snapshot(
+            snapshot_image_id="snapshot-1",
+            session_config={"session_id": "session-1"},
+            sandbox_id="sandbox-acme-repo-1700000000000",
+            settings=dict(DOCKER_SETTINGS),
+            sandbox_backend="modal-vm",
+            launch_deadline_at_ms=1,
+        )
+    with pytest.raises(RuntimeError, match="launch deadline"):
+        await launch
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
 async def test_docker_launch_without_a_provisioned_image_never_uses_the_default(monkeypatch):
     manager, captured, _ = _docker_manager(monkeypatch)
     monkeypatch.setattr("src.images.base.docker_image", None)

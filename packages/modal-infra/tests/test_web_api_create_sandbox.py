@@ -445,11 +445,13 @@ async def test_create_sandbox_forwards_timeout(monkeypatch):
             "control_plane_url": "https://control-plane.example",
             "sandbox_auth_token": "sandbox-token",
             "timeout_seconds": 14_400,
+            "launch_deadline_at_ms": 123456,
         }
     )
 
     assert result["success"] is True
     assert captured["config"].timeout_seconds == 14_400
+    assert captured["config"].launch_deadline_at_ms == 123456
 
 
 @pytest.mark.asyncio
@@ -636,11 +638,13 @@ async def test_restore_sandbox_forwards_timeout(monkeypatch):
             "control_plane_url": "https://control-plane.example",
             "sandbox_auth_token": "sandbox-token",
             "timeout_seconds": 14_400,
+            "launch_deadline_at_ms": 123456,
         }
     )
 
     assert result["success"] is True
     assert captured["restore"]["timeout_seconds"] == 14_400
+    assert captured["restore"]["launch_deadline_at_ms"] == 123456
 
 
 @pytest.mark.asyncio

@@ -245,7 +245,10 @@ export interface SpawnConfig {
  */
 const CONNECT_WATCHDOG_MS = 240_000;
 
-/** Modal api_create_sandbox/api_restore_sandbox timeout=150s plus 60s margin. */
+/** Latest a VM launch may start after reservation; enforced by both launch endpoints. */
+export const PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS = 30_000;
+
+/** Launch window + Modal api_create_sandbox/api_restore_sandbox timeout=150s + 30s margin. */
 export const PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS = 210_000;
 
 /**

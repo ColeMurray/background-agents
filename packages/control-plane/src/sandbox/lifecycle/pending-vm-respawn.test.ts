@@ -6,6 +6,7 @@ import { ModalSandboxProvider } from "../providers/modal-provider";
 import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
 import {
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+  PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
   PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
 } from "./decisions";
 import { createAlarmFixture, createMockSandbox } from "./test-helpers";
@@ -14,6 +15,9 @@ describe("pending VM reference recovery", () => {
   afterEach(() => vi.useRealTimers());
 
   it("fits inside the connect watchdog", () => {
+    expect(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS).toBeGreaterThan(
+      PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS + 150_000
+    );
     expect(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS).toBeLessThan(
       DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs
     );
@@ -89,6 +93,28 @@ describe("pending VM reference recovery", () => {
     expect(sandbox.fenced).toBe(0);
   });
 
+  it("does not dispatch a VM launch after configuration delays past the launch window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const sandbox = createMockSandbox({ status: "pending", modal_object_id: null });
+    const createSandbox = vi.fn();
+    const fixture = createAlarmFixture(
+      sandbox,
+      new ModalSandboxProvider({ createSandbox } as unknown as ModalClient, "modal-vm")
+    );
+    let finishLookup!: (value: undefined) => void;
+    vi.mocked(fixture.storage.getUserEnvVars).mockImplementationOnce(
+      () => new Promise((resolve) => (finishLookup = resolve))
+    );
+    const spawning = fixture.manager.spawnSandbox();
+    await vi.waitFor(() => expect(fixture.storage.getUserEnvVars).toHaveBeenCalledOnce());
+    vi.setSystemTime(Date.now() + 120_000);
+    finishLookup(undefined);
+    await spawning;
+    expect(createSandbox).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("failed");
+  });
+
   it("refuses an invisible young fenced generation and reports the failed preflight", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
@@ -117,6 +143,33 @@ describe("pending VM reference recovery", () => {
       type: "sandbox_error",
       error: sandbox.last_spawn_error,
     });
+  });
+
+  it("keeps a legacy in-flight launch fenced at 210 seconds despite a 409", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const createSandbox = vi.fn();
+    const provider = new ModalSandboxProvider(
+      {
+        createSandbox,
+        stopSandbox: vi.fn(async () => {
+          throw new ModalApiError("pending_reference_not_visible", 409);
+        }),
+      } as unknown as ModalClient,
+      "modal-vm"
+    );
+    const sandbox = createMockSandbox({
+      status: "failed",
+      fenced: 1,
+      created_at: Date.now() - PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS,
+      modal_object_id: 'modal-vm-session:["test-session","old-generation"]',
+    });
+    const fixture = createAlarmFixture(sandbox, provider);
+    await fixture.manager.spawnSandbox();
+    expect(createSandbox).not.toHaveBeenCalled();
+    expect(sandbox.fenced).toBe(1);
+    expect(sandbox.modal_object_id).toBe('modal-vm-session:["test-session","old-generation"]');
+    expect(sandbox.last_spawn_error).toMatch(/not yet visible/);
   });
 
   it("restores after confirming an old fenced pending reference is absent", async () => {
