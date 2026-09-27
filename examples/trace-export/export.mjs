@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -41,26 +41,6 @@ function optionsFromArgs(args) {
   return options;
 }
 
-function signedHeaders(url, secret, cookie) {
-  const timestamp = Date.now();
-  const nonce = randomBytes(8).toString("hex");
-  const canonicalQuery = Array.from(url.searchParams.entries())
-    .sort((a, b) =>
-      Buffer.compare(Buffer.from(`${a[0]}\0${a[1]}`), Buffer.from(`${b[0]}\0${b[1]}`))
-    )
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
-  const emptyBodyHash = createHash("sha256").update("").digest("hex");
-  const canonical = `sig1\nweb\n${timestamp}\n${nonce}\nGET\n${url.pathname}\n${canonicalQuery}\n${emptyBodyHash}\n`;
-  const signature = createHmac("sha256", secret).update(canonical).digest("hex");
-  return {
-    "X-OpenInspect-Service": "web",
-    "X-OpenInspect-Service-Signature": `sig1.${timestamp}.${nonce}.${signature}`,
-    Cookie: cookie,
-    Accept: "application/x-ndjson",
-  };
-}
-
 async function existingPages(out) {
   const pages = [];
   for (const entry of await readdir(out, { withFileTypes: true })) {
@@ -74,15 +54,13 @@ async function existingPages(out) {
 
 async function main() {
   const options = optionsFromArgs(process.argv.slice(2));
-  const secret = process.env.OPEN_INSPECT_WEB_SECRET;
   const cookie = process.env.OPEN_INSPECT_SESSION_COOKIE;
-  if (!secret || !cookie)
-    throw new Error("Set OPEN_INSPECT_WEB_SECRET and OPEN_INSPECT_SESSION_COOKIE");
+  if (!cookie) throw new Error("Set OPEN_INSPECT_SESSION_COOKIE");
   await mkdir(options.out, { recursive: true, mode: 0o700 });
   const include =
     options.include === "none" ? undefined : (options.include ?? "messages,events,usage");
   const resumeState = JSON.stringify({
-    url: options.url,
+    url: new URL("/api/sessions/export", options.url).href,
     scope: options.scope ?? "sessions",
     include: include ?? null,
     format: options.compact ? "compact" : "full",
@@ -116,7 +94,7 @@ async function main() {
 
   let pageNumber = pages.length;
   while (true) {
-    const url = new URL("/sessions/export", options.url);
+    const url = new URL("/api/sessions/export", options.url);
     if (options.scope) url.searchParams.set("scope", options.scope);
     if (include) url.searchParams.set("include", include);
     if (options.compact) url.searchParams.set("format", "compact");
@@ -126,7 +104,7 @@ async function main() {
     if (cursor) url.searchParams.set("cursor", cursor);
 
     const response = await fetch(url, {
-      headers: signedHeaders(url, secret, cookie),
+      headers: { Cookie: cookie, Accept: "application/x-ndjson" },
       signal: AbortSignal.timeout(120_000),
     });
     if (!response.ok) throw new Error(`Export request failed (HTTP ${response.status})`);

@@ -4,20 +4,19 @@ This dependency-free Node 24 example pulls schema 2 trace pages into dated NDJSO
 the session lines into a warehouse. No export is sent to the Open-Inspect project or a vendor. Start
 with an operator account with `sessions.export` (Owner, Administrator, or custom role).
 
-The control-plane endpoint does **not** accept API bearer tokens. Supply its reachable HTTPS base
-URL, the deployment's `SERVICE_AUTH_SECRET_WEB` as `OPEN_INSPECT_WEB_SECRET`, and a current Better
-Auth session cookie for that operator as `OPEN_INSPECT_SESSION_COOKIE`. The script signs each GET as
-the `web` service (`sig1`) and forwards the user session; the control plane still checks the user's
-permission. Obtain the cookie from your own browser session (the `Cookie` request header for an
-authenticated web request). Use a trusted machine and protect both credentials; do not put them on
-the command line, commit them, or reuse the web service secret for other services. An expired
-session produces HTTP 401 and must be refreshed before resuming.
+Run this against the **web app** origin, not the control plane. Supply a current authenticated
+operator session cookie as `OPEN_INSPECT_SESSION_COOKIE`; the web app checks that session and keeps
+its control-plane service secret server-side. The control plane still enforces `sessions.export`.
+Obtain the cookie from your own browser session (the `Cookie` request header for an authenticated
+web request). Use a trusted machine and protect the cookie; do not put it on the command line or
+commit it. Sessions expire, so refresh the cookie before resuming after HTTP 401. This is an
+operator-run export, not an unattended scheduler: scheduled export needs a machine credential, which
+is not yet available for this endpoint.
 
 ```sh
-export OPEN_INSPECT_WEB_SECRET='your deployed SERVICE_AUTH_SECRET_WEB'
 export OPEN_INSPECT_SESSION_COOKIE='__Secure-openinspect.session_token=your-session-cookie'
 node examples/trace-export/export.mjs \
-  --url https://your-control-plane.example \
+  --url https://your-web-app.example \
   --out ./trace-export-data \
   --created-after 1767225600000 \
   --created-before 1767311999999 \

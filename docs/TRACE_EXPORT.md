@@ -9,8 +9,10 @@ into files and load a warehouse table of runs.
 
 Both routes require an active user with `sessions.export` (Owners and Administrators by default, or
 a custom role granting it). `sessions.read` alone is insufficient; the bot services cannot export.
-Requests to the control plane use a `sig1` web-service signature **and** the user's authenticated
-session cookie, not a bearer API token. Treat the exported files as sensitive session data.
+Operator scripts use the web app's `/api/sessions/export` proxy with an authenticated session
+cookie; the web app holds its service secret and signs the control-plane request server-side. The
+web app also proxies single-session downloads at `/api/sessions/:id/export`. There is no bearer API
+token path for export. Treat the exported files as sensitive session data.
 
 | Route                      | Behavior                                                                                                                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

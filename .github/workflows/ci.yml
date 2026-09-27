@@ -30,6 +30,7 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "examples/trace-export/**"
       - "packages/sandbox-runtime/src/**"
       - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
@@ -64,6 +65,7 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      - "examples/trace-export/**"
       - "packages/sandbox-runtime/src/**"
       - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
@@ -265,6 +267,9 @@ jobs:
 
       - name: Run web tests
         run: npm test -w @open-inspect/web
+
+      - name: Run trace exporter tests
+        run: npm run test:trace-export
 
   test-bots:
     name: Test (bots)

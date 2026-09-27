@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -14,7 +13,6 @@ function run(args) {
     const child = spawn(process.execPath, [script, ...args], {
       env: {
         ...process.env,
-        OPEN_INSPECT_WEB_SECRET: "test-secret",
         OPEN_INSPECT_SESSION_COOKIE: "session=authenticated",
       },
     });
@@ -27,7 +25,7 @@ function run(args) {
   });
 }
 
-test("pages complete runs, signs each request and resumes from the last cursor", async () => {
+test("pages complete runs with an operator cookie and resumes from the last cursor", async () => {
   const out = await mkdtemp(join(tmpdir(), "trace-export-"));
   const requests = [];
   let failSecondPage = true;
@@ -35,15 +33,9 @@ test("pages complete runs, signs each request and resumes from the last cursor",
     const url = new URL(request.url, "http://localhost");
     requests.push(url);
     assert.equal(request.headers.cookie, "session=authenticated");
-    assert.equal(request.headers["x-openinspect-service"], "web");
-    const [, timestamp, nonce, actual] =
-      request.headers["x-openinspect-service-signature"].split(".");
-    const query = Array.from(url.searchParams)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-      .join("&");
-    const canonical = `sig1\nweb\n${timestamp}\n${nonce}\nGET\n${url.pathname}\n${query}\n${createHash("sha256").update("").digest("hex")}\n`;
-    assert.equal(actual, createHmac("sha256", "test-secret").update(canonical).digest("hex"));
+    assert.equal(request.headers["x-openinspect-service"], undefined);
+    assert.equal(request.headers["x-openinspect-service-signature"], undefined);
+    assert.equal(url.pathname, "/api/sessions/export");
     if (!url.searchParams.has("cursor")) {
       response.end(
         `${JSON.stringify({ schemaVersion: 2, type: "session", id: "root" })}\n${JSON.stringify({ schemaVersion: 2, type: "cursor", nextCursor: "page-2" })}\n`
