@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isEnvironmentId } from "./environments";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
@@ -59,7 +60,11 @@ export const updateTeamRequestSchema = z.object({
   description: z.string().nullable().optional(),
   joinPolicy: teamJoinPolicySchema.optional(),
   defaultVisibility: sessionVisibilitySchema.optional(),
-  defaultEnvironmentId: z.string().nullable().optional(),
+  defaultEnvironmentId: z
+    .string()
+    .refine(isEnvironmentId, "Invalid environment ID")
+    .nullable()
+    .optional(),
 });
 
 export const teamCapabilitiesSchema = z.object({

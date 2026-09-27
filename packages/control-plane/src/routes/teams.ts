@@ -14,7 +14,7 @@ import {
   TeamMembershipNotFoundError,
   TeamMembershipStore,
 } from "../db/team-memberships";
-import { TeamStore } from "../db/teams";
+import { TeamSlugConflictError, TeamStore } from "../db/teams";
 import type { RequestContext } from "../http/request-context";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -73,7 +73,7 @@ function admittedTeam(ctx: RequestContext): Team {
 function mutationError(cause: unknown): Response {
   if (cause instanceof LastLeadError) return json({ error: cause.message, code: "last_lead" }, 409);
   if (cause instanceof TeamMembershipNotFoundError) return error("Team membership not found", 404);
-  if (cause instanceof Error && cause.message.includes("UNIQUE constraint failed: teams.slug")) {
+  if (cause instanceof TeamSlugConflictError) {
     return json({ error: "Team slug already exists", code: "slug_taken" }, 409);
   }
   if (cause instanceof Error && cause.message === "Default environment must belong to the team") {

@@ -99,6 +99,32 @@ describe("team routes", () => {
     );
   });
 
+  it("rejects invalid default environments and reports duplicate team slugs", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "duplicate",
+      name: "Existing",
+      joinPolicy: "invite_only",
+    });
+    const duplicate = await request("/teams", "POST", { slug: "duplicate", name: "Other" });
+    expect(duplicate.status).toBe(409);
+    expect(await duplicate.json()).toMatchObject({ code: "slug_taken" });
+
+    const other = await new TeamStore(env.DB).create({
+      slug: "other",
+      name: "Other",
+      joinPolicy: "invite_only",
+    });
+    const duplicateRename = await request(`/teams/${other.id}`, "PATCH", { slug: team.slug });
+    expect(duplicateRename.status).toBe(409);
+    expect(await duplicateRename.json()).toMatchObject({ code: "slug_taken" });
+    expect((await new TeamStore(env.DB).getById(other.id))?.slug).toBe("other");
+
+    const invalid = await request(`/teams/${team.id}`, "PATCH", { defaultEnvironmentId: "" });
+    expect(invalid.status).toBe(400);
+    expect((await new TeamStore(env.DB).getById(team.id))?.defaultEnvironmentId).toBeNull();
+    expect(await auditEvents(team.id)).toEqual([]);
+  });
+
   it("lets leads manage their team without exposing another team", async () => {
     await setRole(OWNER, "member");
     const teams = new TeamStore(env.DB);

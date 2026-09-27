@@ -5,7 +5,20 @@ import {
   type SessionVisibility,
 } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
+import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+
+export class TeamSlugConflictError extends Error {
+  constructor() {
+    super("Team slug already exists");
+    this.name = "TeamSlugConflictError";
+  }
+}
+
+function rethrowTeamWriteError(cause: unknown): never {
+  if (isUniqueConstraintError(cause)) throw new TeamSlugConflictError();
+  throw cause;
+}
 
 function toTeam(value: unknown): Team {
   const row = teamRowSchema.parse(value);
@@ -94,7 +107,11 @@ export class TeamStore {
     joinPolicy: TeamJoinPolicy;
   }): Promise<Team> {
     const id = `team_${generateId()}`;
-    await this.insertStatement(input, id, Date.now()).run();
+    try {
+      await this.insertStatement(input, id, Date.now()).run();
+    } catch (cause) {
+      rethrowTeamWriteError(cause);
+    }
     return (await this.getById(id))!;
   }
 
@@ -105,15 +122,19 @@ export class TeamStore {
   ): Promise<Team> {
     const id = `team_${generateId()}`;
     const now = Date.now();
-    await this.db.batch([
-      this.insertStatement(input, id, now),
-      this.db
-        .prepare(
-          "INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES (?, ?, 'lead', 'manual', ?)"
-        )
-        .bind(id, leadUserId, now),
-      auditStatement(id),
-    ]);
+    try {
+      await this.db.batch([
+        this.insertStatement(input, id, now),
+        this.db
+          .prepare(
+            "INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES (?, ?, 'lead', 'manual', ?)"
+          )
+          .bind(id, leadUserId, now),
+        auditStatement(id),
+      ]);
+    } catch (cause) {
+      rethrowTeamWriteError(cause);
+    }
     return (await this.getById(id))!;
   }
 
@@ -128,7 +149,7 @@ export class TeamStore {
       defaultEnvironmentId?: string | null;
     }
   ): Promise<Team | null> {
-    if (fields.defaultEnvironmentId) {
+    if (fields.defaultEnvironmentId !== undefined && fields.defaultEnvironmentId !== null) {
       const environment = await this.db
         .prepare("SELECT 1 AS ok FROM environments WHERE id = ? AND owner_team_id = ?")
         .bind(fields.defaultEnvironmentId, id)
@@ -145,12 +166,16 @@ export class TeamStore {
     };
     const entries = Object.entries(columns).filter((entry) => entry[1] !== undefined);
     if (entries.length) {
-      await this.db
-        .prepare(
-          `UPDATE teams SET ${entries.map(([key]) => `${key} = ?`).join(", ")}, updated_at = ? WHERE id = ?`
-        )
-        .bind(...entries.map((entry) => entry[1]), Date.now(), id)
-        .run();
+      try {
+        await this.db
+          .prepare(
+            `UPDATE teams SET ${entries.map(([key]) => `${key} = ?`).join(", ")}, updated_at = ? WHERE id = ?`
+          )
+          .bind(...entries.map((entry) => entry[1]), Date.now(), id)
+          .run();
+      } catch (cause) {
+        rethrowTeamWriteError(cause);
+      }
     }
     return this.getById(id);
   }

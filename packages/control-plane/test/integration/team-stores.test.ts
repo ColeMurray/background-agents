@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { TeamStore } from "../../src/db/teams";
+import { TeamSlugConflictError, TeamStore } from "../../src/db/teams";
 import {
   TeamMembershipStore,
   LastLeadError,
@@ -28,6 +28,27 @@ describe("team and membership stores", () => {
     expect(await store.list()).toEqual([]);
     expect(await store.restore(created.id)).toBe(true);
     expect(await store.bumpGrantsVersion(created.id)).toBe(1);
+  });
+
+  it("rejects an empty default environment ID without changing the team", async () => {
+    const store = new TeamStore(env.DB);
+    const team = await store.create({
+      slug: "empty-default",
+      name: "Empty",
+      joinPolicy: "invite_only",
+    });
+    await expect(store.update(team.id, { defaultEnvironmentId: "" })).rejects.toThrow(
+      "Default environment must belong to the team"
+    );
+    expect((await store.getById(team.id))?.defaultEnvironmentId).toBeNull();
+  });
+
+  it("reports duplicate slugs as a typed store conflict", async () => {
+    const store = new TeamStore(env.DB);
+    await store.create({ slug: "duplicate", name: "First", joinPolicy: "invite_only" });
+    await expect(
+      store.create({ slug: "duplicate", name: "Second", joinPolicy: "invite_only" })
+    ).rejects.toBeInstanceOf(TeamSlugConflictError);
   });
 
   it("protects the final lead under concurrent demotions", async () => {
