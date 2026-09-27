@@ -30,6 +30,7 @@ export class AnalyticsDashboardStore {
       endAt: filters.endAt,
       now: filters.endAt,
     });
+    const [modelStatement, billingStatement] = analytics.prepareProviderBreakdown(sessionFilters);
 
     const [
       summary,
@@ -46,10 +47,10 @@ export class AnalyticsDashboardStore {
       analytics.prepareTimeseries(sessionFilters),
       analytics.prepareBreakdown(sessionFilters, "repo"),
       analytics.prepareBreakdown(sessionFilters, "user"),
-      analytics.prepareBreakdown(sessionFilters, "model"),
+      modelStatement,
       analytics.prepareBreakdown(sessionFilters, "harness"),
       analytics.prepareBreakdown(sessionFilters, "automation"),
-      analytics.prepareBilling(sessionFilters),
+      billingStatement,
       ...pullRequestStatements,
     ]);
     const modelBreakdown = analytics.decodeBreakdown(model, "model");

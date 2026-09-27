@@ -82,6 +82,7 @@ const billingRowSchema = z.object({
 });
 
 type BreakdownRow = z.infer<typeof breakdownRowSchema>;
+type SqlBreakdownBy = Exclude<AnalyticsBreakdownBy, "provider">;
 
 const NO_REPOSITORY_ANALYTICS_KEY = "No repository";
 
@@ -228,14 +229,15 @@ export class AnalyticsStore {
     by: AnalyticsBreakdownBy
   ): Promise<AnalyticsBreakdownResponse> {
     if (by === "provider") {
-      const [models, billing] = await this.db.batch([
-        this.prepareBreakdown(filters, "model"),
-        this.prepareBilling(filters),
-      ]);
+      const [models, billing] = await this.db.batch(this.prepareProviderBreakdown(filters));
       return this.decodeProviderBreakdown(this.decodeBreakdown(models, "model"), billing);
     }
     const result = await this.prepareBreakdown(filters, by).all<BreakdownRow>();
     return this.decodeBreakdown(result, by);
+  }
+
+  prepareProviderBreakdown(filters: AnalyticsFilters): [SqlStatement, SqlStatement] {
+    return [this.prepareBreakdown(filters, "model"), this.prepareBilling(filters)];
   }
 
   prepareBilling(filters: AnalyticsFilters): SqlStatement {
@@ -252,7 +254,7 @@ export class AnalyticsStore {
       .bind(filters.startAt, filters.endAt, ...binds);
   }
 
-  prepareBreakdown(filters: AnalyticsFilters, by: AnalyticsBreakdownBy): SqlStatement {
+  prepareBreakdown(filters: AnalyticsFilters, by: SqlBreakdownBy): SqlStatement {
     const isUserBreakdown = by === "user";
     const repoGroupExpression =
       "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN NULL ELSE s.repo_owner || '/' || s.repo_name END";
@@ -264,7 +266,6 @@ export class AnalyticsStore {
       harness: "s.harness",
       spawnSource: "s.spawn_source",
       automation: "s.automation_id",
-      provider: "s.model",
     }[by];
 
     const displayNameSelect = isUserBreakdown
@@ -311,7 +312,7 @@ export class AnalyticsStore {
       .bind(filters.startAt, filters.endAt, ...binds);
   }
 
-  decodeBreakdown(result: SqlResult, by: AnalyticsBreakdownBy): AnalyticsBreakdownResponse {
+  decodeBreakdown(result: SqlResult, by: SqlBreakdownBy): AnalyticsBreakdownResponse {
     const entries: AnalyticsBreakdownEntry[] = parseRows(
       result.results,
       by === "repo" ? breakdownRowSchema : groupedBreakdownRowSchema,

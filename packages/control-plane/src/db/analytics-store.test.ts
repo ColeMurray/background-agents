@@ -230,6 +230,7 @@ describe("scope and breakdown merging", () => {
   it("filters billing on the session's qualified spawn source with positional binds", () => {
     let sql = "";
     let binds: unknown[] = [];
+    const queries: string[] = [];
     const statement = {
       bind: (...values: unknown[]) => {
         binds = values;
@@ -242,6 +243,7 @@ describe("scope and breakdown merging", () => {
     const store = new AnalyticsStore({
       prepare: (query) => {
         sql = query;
+        queries.push(query);
         return statement;
       },
       batch: async () => [],
@@ -255,6 +257,15 @@ describe("scope and breakdown merging", () => {
     store.prepareBilling({ startAt: 10, endAt: 20, scope: "all" });
     expect(sql).not.toContain("s.spawn_source");
     expect(binds).toEqual([10, 20]);
+
+    const providerStatements = store.prepareProviderBreakdown({
+      startAt: 10,
+      endAt: 20,
+      scope: "agent",
+    });
+    expect(providerStatements).toHaveLength(2);
+    expect(queries.slice(-2)[0]).toContain("s.model AS key");
+    expect(queries.slice(-2)[1]).toContain("JOIN session_model_provider_auth a");
   });
 
   it("merges weighted terminal durations, zero-terminal rows, totals, last active and sorts by key on ties", () => {
