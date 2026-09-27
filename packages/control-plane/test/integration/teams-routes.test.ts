@@ -27,7 +27,7 @@ async function setRole(userId: string, role: "member" | "administrator") {
 
 async function auditEvents(teamId: string) {
   const result = await env.DB.prepare(
-    "SELECT action, team_id, metadata_json FROM authorization_audit_events WHERE resource_type = 'team' AND team_id = ? ORDER BY occurred_at, id"
+    "SELECT action, team_id, target_user_id_snapshot, metadata_json FROM authorization_audit_events WHERE resource_type = 'team' AND team_id = ? ORDER BY occurred_at, id"
   )
     .bind(teamId)
     .all();
@@ -187,6 +187,7 @@ describe("team routes", () => {
     ]);
     for (const row of rows) {
       expect(row.team_id).toBe(team.id);
+      expect(row.target_user_id_snapshot).toBe(MEMBER);
       expect(JSON.parse(String(row.metadata_json))).toMatchObject({ before: {}, after: {} });
     }
   });
