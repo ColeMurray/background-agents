@@ -489,6 +489,16 @@ class SpawnSupersededError extends Error {
   }
 }
 
+class SandboxLaunchExpiredError extends SandboxProviderError {
+  constructor() {
+    super(
+      "The sandbox timeout leaves no time before the final save begins. Increase the sandbox timeout or reduce the final snapshot buffer in the sandbox settings.",
+      "transient"
+    );
+    this.name = "SandboxLaunchExpiredError";
+  }
+}
+
 export class SandboxLifecycleManager
   implements
     SandboxLifecycle,
@@ -873,28 +883,16 @@ export class SandboxLifecycleManager
         // user-initiated respawn would.
         const retryNow = Math.max(Date.now(), now + 1);
         const retry = this.spawnGeneration(session, retryNow);
-        const firstAttemptReference =
-          this.provider.pendingSandboxAllocation?.(createConfig)?.reference;
-        const pendingCleanupHandle =
-          this.storage.getSandbox()?.modal_object_id === firstAttemptReference
-            ? firstAttemptReference
-            : undefined;
         generation = retry;
-        try {
-          ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
-            preserveProviderObjectId: false,
-            shutdownPolicy: shutdownPolicyForLaunch("new", null),
-          }));
-          await this.recordPendingProviderReference(generation, {
-            ...createConfig,
-            sandboxId: expectedSandboxId,
-            generationCreatedAtMs: retry.createdAt,
-          });
-        } catch (error) {
-          if (pendingCleanupHandle)
-            await this.destroyLateProviderResult(pendingCleanupHandle, reserved.createdAt);
-          throw error;
-        }
+        ({ sandboxAuthToken, expectedSandboxId } = await this.reserveSpawnIdentity(retry, {
+          preserveProviderObjectId: false,
+          shutdownPolicy: shutdownPolicyForLaunch("new", null),
+        }));
+        await this.recordPendingProviderReference(generation, {
+          ...createConfig,
+          sandboxId: expectedSandboxId,
+          generationCreatedAtMs: retry.createdAt,
+        });
         result = await this.provider.createSandbox({
           ...createConfig,
           sandboxId: expectedSandboxId,
@@ -1243,7 +1241,6 @@ export class SandboxLifecycleManager
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
-      this.shutdown.markRecoveryInvoked(generation);
       const restoreConfig = {
         snapshotImageId,
         generationCreatedAtMs: generation.createdAt,
@@ -1268,6 +1265,7 @@ export class SandboxLifecycleManager
         ...multiRepoSpawnFields(repositories),
       };
       await this.recordPendingProviderReference(generation, restoreConfig);
+      this.shutdown.markRecoveryInvoked(generation);
       const result = await this.provider.restoreFromSnapshot(restoreConfig);
 
       if (result.success) {
@@ -1352,7 +1350,8 @@ export class SandboxLifecycleManager
       });
       this.failAttempt(generation, "spawning", errorMessage);
       if (generation === null) this.reportSandboxError(errorMessage);
-      this.shutdown.holdFailedRecovery(errorMessage, generation ?? undefined);
+      if (!(error instanceof SandboxLaunchExpiredError))
+        this.shutdown.holdFailedRecovery(errorMessage, generation ?? undefined);
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
@@ -2421,11 +2420,7 @@ export class SandboxLifecycleManager
       pending.lifetime
     );
     if (registered === "superseded") throw new SpawnSupersededError();
-    if (registered === "expired")
-      throw new SandboxProviderError(
-        "Sandbox lifetime drain began before provider launch",
-        "transient"
-      );
+    if (registered === "expired") throw new SandboxLaunchExpiredError();
   }
 
   private async handleRejectedStartupAllocation(
@@ -2523,10 +2518,7 @@ export class SandboxLifecycleManager
     return true;
   }
 
-  private async destroyLateProviderResult(
-    providerObjectId: string | undefined,
-    generationCreatedAtMs?: number
-  ): Promise<boolean> {
+  private async destroyLateProviderResult(providerObjectId: string | undefined): Promise<boolean> {
     if (!providerObjectId || !this.canStopProviderSandbox()) return false;
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -2542,8 +2534,7 @@ export class SandboxLifecycleManager
           "startup_superseded",
           "destroy",
           controller.signal,
-          providerObjectId,
-          generationCreatedAtMs
+          providerObjectId
         ),
         timeout,
       ]);

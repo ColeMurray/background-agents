@@ -14,6 +14,7 @@ import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
 import type { SessionRepositoryInfo } from "./provider";
+import { parsePendingVmReference } from "./providers/pending-vm-reference";
 import { withRequestDeadline } from "./request-deadline";
 
 export type ModalBackend = "modal" | "modal-vm";
@@ -143,7 +144,7 @@ export function buildModalSandboxDashboardUrl(params: {
   if (
     !params.workspace ||
     !params.providerObjectId ||
-    params.providerObjectId.startsWith("modal-vm-session:")
+    parsePendingVmReference(params.providerObjectId) !== null
   )
     return null;
   const workspace = encodeURIComponent(params.workspace);

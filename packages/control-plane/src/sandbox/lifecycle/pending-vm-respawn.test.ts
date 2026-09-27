@@ -45,6 +45,7 @@ describe("pending VM reference recovery", () => {
     ["create", 5_400, 0],
     ["restore", 5_400, 0],
     ["create", 601, 2_000],
+    ["restore", 601, 2_000],
   ] as const)(
     "tracks a %s's pending handle with %s-second timeout after %s ms setup",
     async (action, timeoutSeconds, setupDelayMs) => {
@@ -81,9 +82,33 @@ describe("pending VM reference recovery", () => {
         createSandbox: vi.fn(loseResponse),
         restoreSandbox: vi.fn(loseResponse),
         stopSandbox: vi.fn(async () => {}),
+        snapshotSandbox: vi.fn(async () => {
+          throw new ModalApiError("snapshot unavailable", 500);
+        }),
       };
       const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
-      let state: ShutdownRecord | null = null;
+      let state: ShutdownRecord | null =
+        action === "restore" && setupDelayMs
+          ? {
+              phase: "saved",
+              generation: { sandboxId: sandbox.modal_sandbox_id!, createdAt: sandbox.created_at },
+              provider: "modal-vm",
+              providerObjectId: null,
+              sourceRetired: true,
+              lifetimeKind: "none",
+              expiresAtMs: null,
+              drainAtMs: null,
+              generationReady: true,
+              lifecyclePolicy: "confirmed",
+              receipt: {
+                kind: "snapshot",
+                artifactId: "im-saved",
+                provider: "modal-vm",
+                savedAtMs: Date.now(),
+                runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+              },
+            }
+          : null;
       const deps = {
         store: {
           read: () => (state ? structuredClone(state) : null),
@@ -129,7 +154,33 @@ describe("pending VM reference recovery", () => {
         );
         expect(launch).not.toHaveBeenCalled();
         expect(sandbox.status).toBe("failed");
-        expect(restarted.snapshot()?.phase).toBe("running");
+        expect(sandbox.last_spawn_error).toContain(
+          "Increase the sandbox timeout or reduce the final snapshot buffer"
+        );
+        vi.setSystemTime(Date.now() + 5_000);
+        await restarted.handleAlarm();
+        vi.setSystemTime(Date.now() + 61_000);
+        await restarted.handleAlarm();
+        expect(client.snapshotSandbox).not.toHaveBeenCalled();
+        expect(deps.store.read()).toMatchObject({
+          phase: action === "restore" ? "restoring" : "running",
+          providerObjectId: null,
+          lifetimeKind: "unknown",
+          expiresAtMs: null,
+          drainAtMs: null,
+        });
+        if (action === "restore") {
+          expect(deps.store.read()).toMatchObject({
+            sourceRetired: true,
+            receipt: { artifactId: "im-saved" },
+          });
+          expect(restarted.isHolding()).toBe(false);
+          expect(restarted.admissionDecision()).toBe("restore_required");
+          expect(restarted.startupDecision()).toMatchObject({
+            kind: "restore_snapshot",
+            snapshotId: "im-saved",
+          });
+        }
         return;
       }
       expect(launch).toHaveBeenCalledOnce();

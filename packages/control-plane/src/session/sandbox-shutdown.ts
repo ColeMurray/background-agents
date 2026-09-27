@@ -197,7 +197,7 @@ export class SandboxShutdownCoordinator {
       restoreInvoked: true,
       // Only retained resume reactivates the source described by the receipt.
       sourceRetired: providerObjectId ? false : state.sourceRetired,
-      providerObjectId: providerObjectId ?? null,
+      providerObjectId: providerObjectId ?? state.providerObjectId,
     });
   }
 
@@ -213,6 +213,11 @@ export class SandboxShutdownCoordinator {
       this.deps.session.getSession()?.sandbox_settings ?? null
     );
     const expiresAtMs = lifetime.expiresAtMs;
+    const drainAtMs =
+      state.lifecyclePolicy === "legacy"
+        ? null
+        : expiresAtMs - (settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS);
+    if (drainAtMs !== null && this.now() >= drainAtMs) return "expired";
     const next: ShutdownRecord = {
       ...state,
       providerObjectId: reference,
@@ -220,13 +225,9 @@ export class SandboxShutdownCoordinator {
       lifetimeKind: "finite",
       lifetimeSource: lifetime.source,
       expiresAtMs,
-      drainAtMs:
-        state.lifecyclePolicy === "legacy"
-          ? null
-          : expiresAtMs - (settings.finalSnapshotBufferMs ?? DEFAULT_FINAL_SNAPSHOT_BUFFER_MS),
+      drainAtMs,
     };
     this.publish(next);
-    if (next.drainAtMs !== null && this.now() >= next.drainAtMs) return "expired";
     if (next.phase === "running" && next.drainAtMs !== null)
       await this.deps.alarm.schedule(next.drainAtMs);
     return "registered";
