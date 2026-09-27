@@ -179,6 +179,31 @@ describe("GET /sessions/:id/export", () => {
       },
     ]);
   });
+
+  it("aborts an in-flight single-session trace read when the download is cancelled", async () => {
+    mocks.get.mockResolvedValue(sampleRow);
+    let fetchSignal: AbortSignal | undefined;
+    let notifyStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    mocks.runtimeFetch.mockImplementation((_sessionId, _path, init: RequestInit) => {
+      fetchSignal = init.signal as AbortSignal;
+      notifyStarted?.();
+      return new Promise<Response>((_resolve, reject) => {
+        fetchSignal?.addEventListener("abort", () => reject(fetchSignal?.reason), { once: true });
+      });
+    });
+
+    const response = await callExport({}, { sessionId: "session-1" });
+    const reader = response.body!.getReader();
+    const pendingRead = reader.read();
+    await started;
+    await reader.cancel();
+
+    expect(fetchSignal?.aborted).toBe(true);
+    await expect(pendingRead).resolves.toEqual({ done: true, value: undefined });
+  });
 });
 
 const sampleRow = {

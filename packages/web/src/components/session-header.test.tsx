@@ -32,6 +32,7 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   collaborate: true,
   lifecycle: true,
   sandboxAccess: true,
+  exportTrace: true,
 };
 
 function SessionHeader({
@@ -108,6 +109,7 @@ describe("SessionHeader", () => {
           collaborate: false,
           lifecycle: false,
           sandboxAccess: false,
+          exportTrace: false,
         }}
       />
     );
@@ -919,7 +921,7 @@ describe("SessionHeader mobile presentation", () => {
       }),
       {},
       undefined,
-      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false }
+      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false, exportTrace: false }
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {

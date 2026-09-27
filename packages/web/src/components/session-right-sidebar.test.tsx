@@ -1,26 +1,37 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import type { SessionState } from "@open-inspect/shared/types/server-messages";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { SessionDetailsOverlay } from "./session-details-overlay";
 import { SessionRightSidebar } from "./session-right-sidebar";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
-const permissions = vi.hoisted(() => new Set<string>());
-
-vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ hasPermission: (id: string) => permissions.has(id) }),
-}));
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 vi.mock("swr", () => ({
   default: () => ({ data: undefined }),
   useSWRConfig: () => ({ fetcher: undefined }),
 }));
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubGlobal(
+    "URL",
+    Object.assign(class extends URL {}, {
+      createObjectURL: vi.fn(() => "blob:session-trace"),
+      revokeObjectURL: vi.fn(),
+    })
+  );
+});
+
 afterEach(() => {
   cleanup();
-  permissions.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const FULL_CAPABILITIES: SessionCapabilities = {
@@ -28,6 +39,7 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   collaborate: true,
   lifecycle: true,
   sandboxAccess: true,
+  exportTrace: true,
 };
 
 describe("SessionRightSidebar", () => {
@@ -58,22 +70,63 @@ describe("SessionRightSidebar", () => {
       onOpenMedia: vi.fn(),
       capabilities: FULL_CAPABILITIES,
     };
-    permissions.add("sessions.read");
-    const { rerender } = render(<SessionRightSidebar {...props} />);
-    expect(screen.queryByRole("link", { name: "Download trace" })).not.toBeInTheDocument();
-
-    permissions.add("sessions.export");
-    rerender(<SessionRightSidebar {...props} />);
-    expect(screen.getByRole("link", { name: "Download trace" })).toHaveAttribute(
-      "href",
-      "/api/sessions/session-1/export"
+    const { rerender } = render(
+      <SessionRightSidebar {...props} capabilities={{ ...FULL_CAPABILITIES, exportTrace: false }} />
     );
+    expect(screen.queryByRole("button", { name: "Download trace" })).not.toBeInTheDocument();
+
+    rerender(<SessionRightSidebar {...props} />);
+    expect(screen.getByRole("button", { name: "Download trace" })).toBeInTheDocument();
 
     rerender(<SessionDetailsOverlay {...props} open isPhone onOpenChange={vi.fn()} />);
-    expect(screen.getByRole("link", { name: "Download trace" })).toHaveAttribute(
-      "href",
-      "/api/sessions/session-1/export"
+    expect(screen.getByRole("button", { name: "Download trace" })).toBeInTheDocument();
+  });
+
+  it("keeps the session page open when the trace request fails", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json({ error: "Forbidden" }, { status: 403 })
     );
+    render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/session-1/export");
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("downloads a successful trace with the session filename", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      new Response('{"type":"session"}\n', { headers: { "Content-Type": "application/x-ndjson" } })
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(click.mock.instances[0]).toHaveProperty("download", "session-session-1.ndjson");
+    expect(click.mock.instances[0]).toHaveProperty("href", "blob:session-trace");
   });
 
   it("hides sandbox access controls when the capability is denied", () => {

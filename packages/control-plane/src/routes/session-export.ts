@@ -32,6 +32,7 @@ import {
   type ExportSelection,
   type SessionExportRow,
 } from "../db/session-export-store";
+import type { RunsExportCursor } from "../db/session-export-cursor";
 import { createLogger, type Logger } from "../logger";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
@@ -216,6 +217,79 @@ async function readTrace(
   }
 }
 
+type ExportRecord = SessionExportRow | { nextCursor: string };
+
+function streamExport(
+  request: Request,
+  ctx: SessionRouteContext,
+  include: readonly SessionTraceCollection[],
+  format: SessionTraceFormat | undefined,
+  records: AsyncIterator<ExportRecord>
+): Response {
+  const log = createLogger("session-export");
+  const streamAbort = new AbortController();
+  const signal = AbortSignal.any([request.signal, streamAbort.signal]);
+  let cancelled = false;
+  let closed = false;
+
+  const close = (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (closed || cancelled) return;
+    closed = true;
+    controller.close();
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (closed || cancelled) return;
+      if (signal.aborted) return close(controller);
+
+      try {
+        const { value, done } = await records.next();
+        if (cancelled) return;
+        if (signal.aborted) return close(controller);
+        if (done) return close(controller);
+        if ("nextCursor" in value) {
+          controller.enqueue(
+            encodeLine({
+              schemaVersion: EXPORT_SCHEMA_VERSION,
+              type: "cursor",
+              nextCursor: value.nextCursor,
+            })
+          );
+          close(controller);
+          return;
+        }
+
+        if (include.length === 0) {
+          controller.enqueue(encodeLine(sessionLine(value)));
+          return;
+        }
+
+        const result = await readTrace(ctx.sessionRuntime, value.id, include, format, log, signal);
+        controller.enqueue(
+          encodeLine(
+            result.ok ? sessionLine(value, result.trace) : sessionErrorLine(value.id, result)
+          )
+        );
+      } catch (caught) {
+        if (cancelled) return;
+        if (signal.aborted) return close(controller);
+        log.error("session_export.stream_failed", {
+          error: caught instanceof Error ? caught.message : String(caught),
+        });
+        controller.enqueue(encodeLine({ schemaVersion: EXPORT_SCHEMA_VERSION, type: "error" }));
+        close(controller);
+      }
+    },
+    cancel() {
+      cancelled = true;
+      streamAbort.abort();
+    },
+  });
+
+  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+}
+
 async function handleExport(
   request: Request,
   _env: Env,
@@ -242,99 +316,27 @@ async function handleExport(
     return error(`limit must be at most ${MAX_INCLUDED_EXPORT_LIMIT} when include is set`, 400);
   }
 
-  const log = createLogger("session-export");
   const store = new SessionExportStore(ctx.db);
-  const streamAbort = new AbortController();
-  const signal = AbortSignal.any([request.signal, streamAbort.signal]);
-  let cancelled = false;
-  let closed = false;
-  let page: Awaited<ReturnType<SessionExportStore["list"]>> | undefined;
-  let sessionIndex = 0;
+  const { createdAfter, createdBefore } = query;
+  async function* records(): AsyncGenerator<ExportRecord> {
+    const page = await store.list({
+      ...selection,
+      limit,
+      ...(createdAfter === undefined ? {} : { createdAfter }),
+      ...(createdBefore === undefined ? {} : { createdBefore }),
+    });
+    yield* page.sessions;
+    if (page.nextCursor) {
+      yield {
+        nextCursor:
+          page.scope === "runs"
+            ? encodeRunsExportCursor(page.nextCursor)
+            : encodeSessionExportCursor(page.nextCursor),
+      };
+    }
+  }
 
-  const close = (controller: ReadableStreamDefaultController<Uint8Array>) => {
-    if (closed || cancelled) return;
-    closed = true;
-    controller.close();
-  };
-
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (closed || cancelled) return;
-      if (signal.aborted) {
-        close(controller);
-        return;
-      }
-
-      try {
-        page ??= await store.list({
-          ...selection,
-          limit,
-          ...(query.createdAfter === undefined ? {} : { createdAfter: query.createdAfter }),
-          ...(query.createdBefore === undefined ? {} : { createdBefore: query.createdBefore }),
-        });
-
-        const row = page.sessions[sessionIndex++];
-        if (row) {
-          if (include.length === 0) {
-            controller.enqueue(encodeLine(sessionLine(row)));
-            return;
-          }
-
-          const result = await readTrace(
-            ctx.sessionRuntime,
-            row.id,
-            include,
-            query.format,
-            log,
-            signal
-          );
-          controller.enqueue(
-            encodeLine(
-              result.ok ? sessionLine(row, result.trace) : sessionErrorLine(row.id, result)
-            )
-          );
-          return;
-        }
-
-        if (page.nextCursor) {
-          controller.enqueue(
-            encodeLine({
-              schemaVersion: EXPORT_SCHEMA_VERSION,
-              type: "cursor",
-              nextCursor:
-                page.scope === "runs"
-                  ? encodeRunsExportCursor(page.nextCursor)
-                  : encodeSessionExportCursor(page.nextCursor),
-            })
-          );
-          close(controller);
-          return;
-        }
-
-        close(controller);
-      } catch (caught) {
-        if (cancelled) return;
-        if (signal.aborted) {
-          close(controller);
-          return;
-        }
-        log.error("session_export.stream_failed", {
-          error: caught instanceof Error ? caught.message : String(caught),
-        });
-        controller.enqueue(encodeLine({ schemaVersion: EXPORT_SCHEMA_VERSION, type: "error" }));
-        close(controller);
-      }
-    },
-    cancel() {
-      cancelled = true;
-      streamAbort.abort();
-    },
-  });
-
-  return new Response(stream, {
-    status: 200,
-    headers: { "Content-Type": "application/x-ndjson" },
-  });
+  return streamExport(request, ctx, include, query.format, records());
 }
 
 async function handleSingleExport(
@@ -352,71 +354,23 @@ async function handleSingleExport(
 
   const include = query.include ?? FULL_TRACE_INCLUDE;
   const rootId = selected.rootSessionId ?? selected.id;
-  const log = createLogger("session-export");
-  const streamAbort = new AbortController();
-  const signal = AbortSignal.any([request.signal, streamAbort.signal]);
-  let page: Awaited<ReturnType<SessionExportStore["listRun"]>> | undefined;
-  let index = 0;
-  let cancelled = false;
-  let closed = false;
+  const scope = query.scope;
+  const session = selected;
+  async function* records(): AsyncGenerator<ExportRecord> {
+    if (scope !== "runs") {
+      yield session;
+      return;
+    }
 
-  const close = (controller: ReadableStreamDefaultController<Uint8Array>) => {
-    if (closed || cancelled) return;
-    closed = true;
-    controller.close();
-  };
+    let cursor: RunsExportCursor | null = null;
+    do {
+      const page = await store.listRun(rootId, cursor);
+      yield* page.sessions;
+      cursor = page.nextCursor;
+    } while (cursor);
+  }
 
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (closed || cancelled) return;
-      if (signal.aborted) return close(controller);
-
-      try {
-        let row: SessionExportRow | undefined;
-        if (query.scope === "runs") {
-          if (!page || index >= page.sessions.length) {
-            if (page && !page.nextCursor) return close(controller);
-            page = await store.listRun(rootId, page?.nextCursor ?? null);
-            index = 0;
-          }
-          row = page.sessions[index++];
-        } else {
-          row = index++ === 0 ? selected : undefined;
-        }
-        if (!row) return close(controller);
-
-        if (include.length === 0) {
-          controller.enqueue(encodeLine(sessionLine(row)));
-          return;
-        }
-        const result = await readTrace(
-          ctx.sessionRuntime,
-          row.id,
-          include,
-          query.format,
-          log,
-          signal
-        );
-        controller.enqueue(
-          encodeLine(result.ok ? sessionLine(row, result.trace) : sessionErrorLine(row.id, result))
-        );
-      } catch (caught) {
-        if (cancelled) return;
-        if (signal.aborted) return close(controller);
-        log.error("session_export.stream_failed", {
-          error: caught instanceof Error ? caught.message : String(caught),
-        });
-        controller.enqueue(encodeLine({ schemaVersion: EXPORT_SCHEMA_VERSION, type: "error" }));
-        close(controller);
-      }
-    },
-    cancel() {
-      cancelled = true;
-      streamAbort.abort();
-    },
-  });
-
-  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+  return streamExport(request, ctx, include, query.format, records());
 }
 
 const EXPORT_READ = admit({

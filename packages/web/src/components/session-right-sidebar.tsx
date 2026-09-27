@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CollapsibleSection } from "./sidebar/collapsible-section";
 import { ParticipantsSection } from "./sidebar/participants-section";
 import { MetadataSection } from "./sidebar/metadata-section";
@@ -27,7 +27,8 @@ import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { BudgetSection } from "./sidebar/budget-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { toast } from "sonner";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -69,7 +70,7 @@ export function SessionRightSidebarContent({
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
 }: SessionRightSidebarContentProps) {
-  const { hasPermission } = useCurrentUserAuthorization();
+  const [downloading, setDownloading] = useState(false);
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
     () =>
@@ -96,6 +97,30 @@ export function SessionRightSidebarContent({
     state: diffState ?? null,
     isLoading: diffLoading ?? false,
   });
+
+  const downloadTrace = async () => {
+    setDownloading(true);
+    try {
+      const response = await browserApiFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/export`
+      );
+      if (!response.ok) throw new Error("Trace export failed");
+
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `session-${sessionId}.ndjson`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      const revoke = URL.revokeObjectURL.bind(URL);
+      setTimeout(() => revoke(url), 0);
+    } catch {
+      toast.error("Failed to download trace");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (!sessionState) {
     return (
@@ -143,14 +168,16 @@ export function SessionRightSidebarContent({
         />
       </div>
 
-      {hasPermission("sessions.export") && (
+      {capabilities.exportTrace && (
         <div className="px-4 py-3 border-b border-border-muted">
-          <a
-            href={`/api/sessions/${encodeURIComponent(sessionId)}/export`}
+          <button
+            type="button"
+            onClick={() => void downloadTrace()}
+            disabled={downloading}
             className="text-sm text-accent hover:underline"
           >
             Download trace
-          </a>
+          </button>
         </div>
       )}
 
