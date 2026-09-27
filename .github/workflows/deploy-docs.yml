@@ -15,61 +15,57 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_TEAM_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_DOCS_PROJECT_ID }}
+  VERCEL_ORG_ID: ${{ vars.VERCEL_TEAM_ID || secrets.VERCEL_TEAM_ID }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_DOCS_PROJECT_ID || secrets.VERCEL_DOCS_PROJECT_ID }}
 
 jobs:
   deploy:
     name: Deploy docs to Vercel
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Check if docs deployment is configured
-        id: check-secrets
+      # A maintainer asked for a deployment, so a run that cannot publish has to
+      # fail. Skipping the remaining steps would report success for a deployment
+      # that never happened.
+      - name: Require a publishable ref and Vercel credentials
         env:
           VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
         run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Deploy Docs publishes main only; this run targets $GITHUB_REF."
+            exit 1
+          fi
           missing=""
           [ -z "$VERCEL_API_TOKEN" ] && missing="$missing VERCEL_API_TOKEN"
           [ -z "$VERCEL_ORG_ID" ] && missing="$missing VERCEL_TEAM_ID"
           [ -z "$VERCEL_PROJECT_ID" ] && missing="$missing VERCEL_DOCS_PROJECT_ID"
           if [ -n "$missing" ]; then
-            echo "Skipping deployment - not configured:$missing"
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Missing Vercel configuration (repository variable or secret):$missing"
+            exit 1
           fi
 
       - name: Checkout
-        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
-        if: steps.check-secrets.outputs.configured == 'true'
         run: npm ci
 
       - name: Install Vercel CLI 58.4.0
-        if: steps.check-secrets.outputs.configured == 'true'
         run: npm install -g vercel@58.4.0
 
       - name: Pull Vercel environment
-        if: steps.check-secrets.outputs.configured == 'true'
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_API_TOKEN }}
 
       - name: Build docs
-        if: steps.check-secrets.outputs.configured == 'true'
         run: vercel build --prod --token=${{ secrets.VERCEL_API_TOKEN }}
 
       - name: Deploy docs
-        if: steps.check-secrets.outputs.configured == 'true'
         run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_API_TOKEN }}
