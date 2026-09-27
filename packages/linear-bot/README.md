@@ -224,9 +224,6 @@ npm run build
 wrangler dev  # Local development
 ```
 
-GraphQL documents sent to Linear live in `src/utils/linear-documents.ts`; `linearGraphQL` only
-accepts a registered document.
-
 ## Architecture
 
 Built on Linear's [Agents API](https://linear.app/developers/agents):

@@ -9,10 +9,8 @@ import {
   postIssueComment,
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
-import type { LinearDocument } from "./linear-documents";
 
-/** Transport tests don't care what is sent; production documents come from the registry. */
-const VIEWER_QUERY = "query { viewer { id } }" as LinearDocument;
+const VIEWER_QUERY = "query { viewer { id } }";
 
 const client: LinearApiClient = {
   accessToken: "test-token",
