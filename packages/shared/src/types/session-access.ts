@@ -1,4 +1,4 @@
-import type { BuiltInRoleKey, PermissionId } from "../rbac";
+import { hasScopedPermission, type BuiltInRoleKey, type PermissionId } from "../rbac";
 import type { SessionVisibility, TeamRole } from "./teams";
 
 export type SessionAction =
@@ -20,6 +20,7 @@ export type SessionViewer =
       suspended: boolean;
       memberships: ReadonlyMap<string, TeamRole>;
     }
+  /** An unbound bot (teamId null) reads every non-private session; private is always refused. */
   | { kind: "service"; teamId: string | null };
 
 export interface SessionAccessRow {
@@ -202,22 +203,29 @@ export function resolveAutomationAccess(
   viewer: SessionViewer,
   row: { ownerTeamId: string | null; executorUserId: string | null }
 ): AutomationAccess {
-  if (viewer.kind === "service" || viewer.suspended) {
+  if (viewer.kind === "service") {
+    return {
+      read: row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId,
+      manage: false,
+      trigger: false,
+      move: false,
+    };
+  }
+  if (viewer.suspended) {
     return { read: false, manage: false, trigger: false, move: false };
   }
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
   const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-  const read = row.ownerTeamId === null || teamRole !== undefined || isAdmin;
+  const eligible = row.ownerTeamId === null || teamRole !== undefined || isAdmin;
   const own = row.executorUserId === viewer.userId || teamRole === "lead";
-  const manage =
-    read &&
-    ((own && viewer.permissions.includes("automations.manage.own")) ||
-      (isAdmin && viewer.permissions.includes("automations.manage.any")));
-  const trigger =
-    read &&
-    ((own && viewer.permissions.includes("automations.trigger.own")) ||
-      (isAdmin && viewer.permissions.includes("automations.trigger.any")));
-  return { read, manage, trigger, move: manage };
+  const manage = eligible && hasScopedPermission("automations.manage", viewer.permissions, own);
+  const trigger = eligible && hasScopedPermission("automations.trigger", viewer.permissions, own);
+  return {
+    read: eligible && viewer.permissions.includes("automations.read"),
+    manage,
+    trigger,
+    move: manage,
+  };
 }
 
 export interface EnvironmentAccess {
@@ -230,7 +238,12 @@ export function resolveEnvironmentAccess(
   viewer: SessionViewer,
   row: { ownerTeamId: string | null }
 ): EnvironmentAccess {
-  if (viewer.kind === "service" || viewer.suspended) {
+  if (viewer.kind === "service") {
+    const allowed =
+      row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId;
+    return { read: allowed, manage: false, use: allowed };
+  }
+  if (viewer.suspended) {
     return { read: false, manage: false, use: false };
   }
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);

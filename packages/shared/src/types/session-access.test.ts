@@ -288,7 +288,7 @@ describe("resolveSessionAccess", () => {
 });
 
 describe("resolveAutomationAccess", () => {
-  it("uses team membership, executor and lead own grants, and admin any grants", () => {
+  it("uses team membership and read grants independently of executor and lead own grants", () => {
     const permissions: PermissionId[] = ["automations.manage.own", "automations.trigger.own"];
     for (const relation of relations) {
       for (const roleKey of roles) {
@@ -304,7 +304,7 @@ describe("resolveAutomationAccess", () => {
               executorUserId: "user_owner",
             })
           ).toEqual({
-            read: !suspended && (member || owner),
+            read: false,
             manage: !suspended && (member || owner) && (executor || lead),
             trigger: !suspended && (member || owner) && (executor || lead),
             move: !suspended && (member || owner) && (executor || lead),
@@ -322,7 +322,7 @@ describe("resolveAutomationAccess", () => {
     expect(
       resolveAutomationAccess(admin, { ownerTeamId: "team_one", executorUserId: "user_owner" })
     ).toEqual({
-      read: true,
+      read: false,
       manage: true,
       trigger: true,
       move: true,
@@ -332,7 +332,7 @@ describe("resolveAutomationAccess", () => {
         ownerTeamId: "team_one",
         executorUserId: "user_owner",
       })
-    ).toEqual({ read: true, manage: false, trigger: true, move: false });
+    ).toEqual({ read: false, manage: false, trigger: true, move: false });
     expect(
       resolveAutomationAccess(viewer("team member", "member"), {
         ownerTeamId: "team_one",
@@ -341,7 +341,7 @@ describe("resolveAutomationAccess", () => {
     ).toEqual({ read: true, manage: false, trigger: false, move: false });
   });
 
-  it("preserves workspace-level access and denies service viewers", () => {
+  it("preserves workspace-level automation access for users and services", () => {
     const workspaceRow = { ownerTeamId: null, executorUserId: "user_none" };
     expect(resolveAutomationAccess(viewer("non-member", "member"), workspaceRow)).toEqual({
       read: true,
@@ -350,7 +350,7 @@ describe("resolveAutomationAccess", () => {
       move: true,
     });
     expect(resolveAutomationAccess({ kind: "service", teamId: null }, workspaceRow)).toEqual({
-      read: false,
+      read: true,
       manage: false,
       trigger: false,
       move: false,
@@ -365,7 +365,7 @@ describe("resolveAutomationAccess", () => {
     expect(
       resolveAutomationAccess(actor, { ownerTeamId: null, executorUserId: "user_other" })
     ).toEqual({
-      read: true,
+      read: false,
       manage: false,
       trigger: false,
       move: false,
@@ -379,6 +379,78 @@ describe("resolveAutomationAccess", () => {
       move: false,
     });
   });
+
+  it("requires automations.read for a member without blocking separate scoped grants", () => {
+    const actor = viewer("owner", "member", false, ["automations.manage.own"]);
+    expect(
+      resolveAutomationAccess(actor, { ownerTeamId: "team_one", executorUserId: "user_owner" })
+    ).toEqual({
+      read: false,
+      manage: true,
+      trigger: false,
+      move: true,
+    });
+  });
+
+  it("honors custom-role any grants only within the team eligibility boundary", () => {
+    const actor = viewer("team member", null, false, [
+      "automations.read",
+      "automations.manage.any",
+      "automations.trigger.any",
+    ]);
+    expect(
+      resolveAutomationAccess(actor, { ownerTeamId: "team_one", executorUserId: "user_other" })
+    ).toEqual({
+      read: true,
+      manage: true,
+      trigger: true,
+      move: true,
+    });
+    expect(
+      resolveAutomationAccess(actor, { ownerTeamId: "team_other", executorUserId: "user_other" })
+    ).toEqual({
+      read: false,
+      manage: false,
+      trigger: false,
+      move: false,
+    });
+  });
+
+  it("allows a lead with own grants to manage another executor's automation", () => {
+    const actor = viewer("team lead", "member", false, [
+      "automations.manage.own",
+      "automations.trigger.own",
+    ]);
+    expect(
+      resolveAutomationAccess(actor, { ownerTeamId: "team_one", executorUserId: "user_other" })
+    ).toEqual({
+      read: false,
+      manage: true,
+      trigger: true,
+      move: true,
+    });
+  });
+
+  it.each([
+    [null, null, true],
+    [null, "team_one", true],
+    ["team_one", "team_one", true],
+    ["team_one", "team_other", false],
+    ["team_other", "team_one", false],
+    ["team_other", null, true],
+  ] as const)(
+    "limits service automation reads for row team %s and binding %s",
+    (ownerTeamId, teamId, read) => {
+      expect(
+        resolveAutomationAccess({ kind: "service", teamId }, { ownerTeamId, executorUserId: null })
+      ).toEqual({
+        read,
+        manage: false,
+        trigger: false,
+        move: false,
+      });
+    }
+  );
 });
 
 describe("resolveEnvironmentAccess", () => {
@@ -412,7 +484,7 @@ describe("resolveEnvironmentAccess", () => {
     });
   });
 
-  it("preserves workspace-level environment access and denies service viewers", () => {
+  it("preserves workspace-level environment access", () => {
     expect(resolveEnvironmentAccess(viewer("non-member", "member"), { ownerTeamId: null })).toEqual(
       {
         read: true,
@@ -420,12 +492,22 @@ describe("resolveEnvironmentAccess", () => {
         manage: false,
       }
     );
-    expect(
-      resolveEnvironmentAccess({ kind: "service", teamId: null }, { ownerTeamId: null })
-    ).toEqual({
-      read: false,
-      use: false,
-      manage: false,
-    });
   });
+
+  it.each([
+    [null, null, true],
+    [null, "team_other", true],
+    ["team_one", "team_one", true],
+    ["team_one", "team_other", false],
+    ["team_one", null, true],
+  ] as const)(
+    "limits service environment use for row team %s and binding %s",
+    (ownerTeamId, teamId, allowed) => {
+      expect(resolveEnvironmentAccess({ kind: "service", teamId }, { ownerTeamId })).toEqual({
+        read: allowed,
+        use: allowed,
+        manage: false,
+      });
+    }
+  );
 });
