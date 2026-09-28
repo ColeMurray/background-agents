@@ -8,6 +8,8 @@ import modal
 from sandbox_runtime.constants import DEFAULT_SANDBOX_TIMEOUT_SECONDS
 from sandbox_runtime.types import SandboxStatus, SessionConfig
 
+from .launch_policy import ModalBackend
+
 DEFAULT_VNC_ENABLED = False
 
 
@@ -33,6 +35,9 @@ class SandboxConfig:
     settings: dict[str, Any] | None = (
         None  # Sandbox settings (tunnelPorts, etc.) from control plane
     )
+    sandbox_backend: ModalBackend = "modal"
+    retire_sandbox_id: str | None = None
+    launch_deadline_at_ms: int | None = None
 
 
 @dataclass
@@ -51,3 +56,4 @@ class SandboxHandle:
     vnc_password: str | None = None
     ttyd_url: str | None = None  # proxy tunnel URL (not ttyd directly)
     tunnel_urls: dict[int, str] | None = None  # port -> tunnel URL mapping for extra ports
+    sandbox_backend: ModalBackend = "modal"

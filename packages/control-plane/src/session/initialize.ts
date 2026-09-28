@@ -2,6 +2,7 @@ import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import {
   omitUnsupportedSandboxSettings,
@@ -64,6 +65,8 @@ export interface SessionInitInput {
   participantUserId: string;
   /** Canonical platform user ID for D1 analytics attribution. Null when unresolved. */
   platformUserId: string | null;
+  ownerTeamId: string | null;
+  visibility: SessionVisibility;
 
   // SCM identity
   scmLogin?: string | null;
@@ -183,6 +186,8 @@ export async function initializeSession(
     automationRunId: input.automationRunId,
     scmLogin: input.scmLogin || null,
     userId: input.platformUserId,
+    ownerTeamId: input.ownerTeamId,
+    visibility: input.visibility,
     createdAt: now,
     updatedAt: now,
     skillManifest: input.managedSkillsManifest,

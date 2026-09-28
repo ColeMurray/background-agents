@@ -5,6 +5,7 @@ import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
+const PENDING_VM_REFERENCE = 'modal-vm-session:["session-1","sandbox-1"]';
 
 class MemoryStore implements ShutdownStore {
   value: ShutdownRecord | null = null;
@@ -55,6 +56,11 @@ function fixture(providerValue = provider()) {
         sandboxRow.status = to;
         return true;
       }),
+      discardSandboxState: vi.fn(() => {
+        sandboxRow.status = "stopped";
+        sandboxRow.modal_object_id = null;
+        return true;
+      }),
     },
     session: {
       getSession: vi.fn(() => ({
@@ -79,7 +85,7 @@ function fixture(providerValue = provider()) {
       getSandboxSocket: vi.fn(() => socket),
       send: vi.fn(),
     },
-    alarm: { schedule: vi.fn(async () => undefined) },
+    alarm: { schedule: vi.fn(async (_atMs: number) => undefined) },
     background: {
       submit: vi.fn((task: () => Promise<void>) => backgroundTasks.push(task)),
     },
@@ -142,6 +148,15 @@ function reserveGeneration(
   });
 }
 
+/** Every recovery action the public projection offers, including discard. */
+function recoveryActions(shutdown: SandboxShutdownCoordinator): string[] {
+  const state = shutdown.snapshot();
+  return [
+    ...(state?.availableRecoveryActions ?? []),
+    ...(state?.discardAvailable ? ["discard"] : []),
+  ];
+}
+
 function preparedEvent(
   state: ShutdownRecord
 ): Extract<SandboxEvent, { type: "preservation_prepared" }> {
@@ -157,6 +172,230 @@ function preparedEvent(
 
 describe("SandboxShutdownCoordinator", () => {
   beforeEach(() => vi.restoreAllMocks());
+
+  function pendingVmFixture(overrides: Partial<SandboxProvider> = {}) {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true as const,
+      imageId: "im-1",
+      sourceStopped: false,
+      sourceObjectId: "sb-real",
+    }));
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        name: "modal-vm",
+        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+        ...overrides,
+      })
+    );
+    reserveGeneration(f, GENERATION, "confirmed");
+    f.sandboxRow.modal_object_id = PENDING_VM_REFERENCE;
+    return { ...f, takeSnapshot, stopSandbox };
+  }
+
+  async function pendingVmReady(f: ReturnType<typeof pendingVmFixture>) {
+    await f.shutdown.recordPendingProviderHandle(GENERATION, PENDING_VM_REFERENCE, {
+      kind: "finite",
+      expiresAtMs: GENERATION.createdAt + 1_200_000,
+      observedAtMs: GENERATION.createdAt,
+      source: "conservative_start_bound",
+    });
+    f.shutdown.runtimeReady(1);
+    f.shutdown.generationReady({
+      type: "sandbox_generation_ready",
+      generation: GENERATION,
+      sandboxId: GENERATION.sandboxId,
+      timestamp: 1,
+    });
+  }
+
+  it("admits a ready VM after its create response is lost", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+
+    expect(f.store.value).toMatchObject({
+      providerObjectId: PENDING_VM_REFERENCE,
+      lifetimeKind: "finite",
+      lifetimeSource: "conservative_start_bound",
+      expiresAtMs: 1_201_000,
+      drainAtMs: 601_000,
+    });
+    expect(f.deps.alarm.schedule).toHaveBeenCalledWith(601_000);
+    expect(f.shutdown.admissionDecision()).toBe("ready");
+  });
+
+  it("saves a VM through its pending handle and retires the resolved source", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+
+    expect(f.takeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: PENDING_VM_REFERENCE })
+    );
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: { artifactId: "im-1", sourceObjectId: "sb-real" },
+    });
+    expect(f.stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "sb-real" })
+    );
+  });
+
+  it("stops the pending VM before discarding a failed capture", async () => {
+    const f = pendingVmFixture({
+      takeSnapshot: vi.fn(async () => ({ success: false as const, error: "capture failed" })),
+    });
+    await pendingVmReady(f);
+
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    expect(f.store.value?.phase).toBe("unknown");
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
+
+    await f.shutdown.recover("discard");
+    expect(f.stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: PENDING_VM_REFERENCE })
+    );
+    expect(f.deps.sandbox.discardSandboxState).toHaveBeenCalled();
+  });
+
+  it("retains the pending handle for a graceful archive during startup", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+    await f.shutdown.requestShutdown("archive");
+    expect(f.shutdown.isHolding()).toBe(true);
+
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+    expect(f.takeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: PENDING_VM_REFERENCE })
+    );
+    expect(f.store.value?.phase).toBe("saved");
+  });
+
+  it("does not attach another generation's pending handle", async () => {
+    const f = pendingVmFixture();
+    const result = await f.shutdown.recordPendingProviderHandle(
+      { ...GENERATION, createdAt: GENERATION.createdAt + 1 },
+      "other-handle",
+      {
+        kind: "finite",
+        expiresAtMs: 1_201_000,
+        observedAtMs: GENERATION.createdAt,
+        source: "conservative_start_bound",
+      }
+    );
+    expect(result).toBe("superseded");
+    expect(f.store.value).toMatchObject({ providerObjectId: null, lifetimeKind: "unknown" });
+  });
+
+  it("replaces a pending handle with a confirmed provider id", async () => {
+    const f = pendingVmFixture();
+    await pendingVmReady(f);
+    f.sandboxRow.modal_object_id = "sb-confirmed";
+    await f.shutdown.recordProviderStartup(GENERATION, {
+      kind: "finite",
+      expiresAtMs: 1_301_000,
+      observedAtMs: GENERATION.createdAt,
+      source: "conservative_start_bound",
+    });
+    expect(f.store.value?.providerObjectId).toBe("sb-confirmed");
+    expect(f.store.value?.expiresAtMs).toBe(1_201_000);
+  });
+
+  it("commits a VM image before retiring its retained source", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true as const,
+      imageId: "vm-image",
+      sourceStopped: false,
+      sourceObjectId: "sb-immutable",
+    }));
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        name: "modal-vm",
+        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("execution_complete");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      sourceRetired: true,
+      receipt: {
+        artifactId: "vm-image",
+        provider: "modal-vm",
+        sourceObjectId: "sb-immutable",
+      },
+    });
+    expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledWith(
+      GENERATION.sandboxId,
+      "vm-image",
+      "runtime-1"
+    );
+    expect(f.deps.sandbox.recordSandboxSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      stopSandbox.mock.invocationCallOrder[0]
+    );
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "sb-immutable" })
+    );
+  });
+
+  it("holds a lost VM capture response without retiring the source", async () => {
+    const takeSnapshot = vi.fn(async () => {
+      throw new Error("capture response lost");
+    });
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        name: "modal-vm",
+        capabilities: { ...provider().capabilities, snapshotRequiresShutdown: true },
+        takeSnapshot,
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    f.shutdown.prepared(preparedEvent(f.store.value!));
+    await f.shutdown.handleAlarm();
+
+    expect(f.store.value).toMatchObject({ phase: "unknown" });
+    expect(stopSandbox).not.toHaveBeenCalled();
+    // The source is kept, so it can be captured again.
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
+  });
+
+  it("does not capture over a checkpoint whose result a restart lost", async () => {
+    const takeSnapshot = vi.fn();
+    const f = fixture(provider({ takeSnapshot }));
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    f.store.write({ ...f.store.value!, checkpointInFlight: true });
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+
+    f.setNow(f.store.value!.stopByMs!);
+    await restarted.handleAlarm();
+
+    expect(takeSnapshot).not.toHaveBeenCalled();
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      checkpointInFlight: true,
+      error: "An earlier checkpoint has an unknown result.",
+    });
+    expect(recoveryActions(restarted)).not.toContain("retry");
+  });
 
   it("distinguishes unmanaged and held shutdown requests", async () => {
     const f = fixture();
@@ -442,7 +681,7 @@ describe("SandboxShutdownCoordinator", () => {
     f.deps.reconcileStatusFromMessages.mockImplementation(async () => {
       expect(f.deps.failures.record).toHaveBeenCalledWith(
         "message-1",
-        "sandbox_lifetime_expiring",
+        "The sandbox reached its maximum lifetime.",
         100_000,
         "processing"
       );
@@ -455,7 +694,7 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.deps.failures.record).toHaveBeenCalledOnce();
     expect(f.deps.failures.record).toHaveBeenCalledWith(
       "message-1",
-      "sandbox_lifetime_expiring",
+      "The sandbox reached its maximum lifetime.",
       100_000,
       "processing"
     );
@@ -514,7 +753,7 @@ describe("SandboxShutdownCoordinator", () => {
     expect(await f.shutdown.handleAlarm()).toBe("hold_watchdogs");
     expect(f.store.value).toMatchObject({
       phase: "unknown",
-      error: expect.stringContaining("provider result is unknown"),
+      error: expect.stringContaining("result is unknown"),
     });
     expect(f.deps.provider.takeSnapshot).toBeUndefined();
   });
@@ -733,7 +972,7 @@ describe("SandboxShutdownCoordinator", () => {
 
       expect(f.store.value).toMatchObject({
         phase: "unknown",
-        error: expect.stringContaining("deadline exceeded"),
+        error: expect.stringContaining("did not finish before its deadline"),
       });
       expect(stopSandbox).not.toHaveBeenCalled();
     } finally {
@@ -741,96 +980,399 @@ describe("SandboxShutdownCoordinator", () => {
     }
   });
 
-  it("retries only a confirmed pre-capture failure with a new operation", async () => {
-    const f = fixture(
-      provider({
-        takeSnapshot: vi.fn(async () => ({
-          success: true,
-          imageId: "snapshot-1",
-          sourceStopped: true,
-        })),
-      })
-    );
+  it("captures without the runtime when it cannot confirm that execution stopped", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true,
+      imageId: "snapshot-1",
+      sourceStopped: true,
+    }));
+    const f = fixture(provider({ takeSnapshot }));
     await readyFinite(f);
     await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
-    const firstOperation = f.store.value!.operationId;
+    f.backgroundTasks.length = 0;
     f.shutdown.prepared({
       ...preparedEvent(f.store.value!),
       executionStopped: false,
       error: "execution_stop_unconfirmed",
     });
-    expect(f.store.value?.phase).toBe("failed");
-    f.deps.sockets.send.mockClear();
+    await Promise.all(f.backgroundTasks.splice(0).map((task) => task()));
+
+    expect(takeSnapshot).toHaveBeenCalledOnce();
+    // The capture cannot prove quiescence, so queued work waits for the user.
+    expect(f.store.value).toMatchObject({ phase: "saved", continuationPaused: true });
+    expect(f.deps.sandbox.updateSandboxStatus).toHaveBeenCalledWith("stale");
+    expect(f.calls).toContain("access-retired");
+  });
+
+  it("captures without the runtime when the drain deadline passes", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true,
+      imageId: "snapshot-1",
+      sourceStopped: true,
+    }));
+    const f = fixture(provider({ takeSnapshot }));
+    f.deps.sockets.getSandboxSocket.mockReturnValue(null as never); // An unresponsive runtime.
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("inactivity_timeout");
+    expect(f.store.value?.phase).toBe("draining");
+
+    f.setNow(f.store.value!.stopByMs!);
+    await f.shutdown.handleAlarm();
+
+    expect(takeSnapshot).toHaveBeenCalledOnce();
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      reason: "inactivity_timeout",
+      continuationPaused: true,
+    });
+  });
+
+  it("retries a failed capture as a new operation", async () => {
+    const takeSnapshot = vi
+      .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+      .mockRejectedValueOnce(new Error("guest unresponsive"))
+      .mockResolvedValue({ success: true, imageId: "snapshot-2", sourceStopped: false });
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(provider({ takeSnapshot, stopSandbox }));
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    const failed = f.store.value!;
+    expect(failed).toMatchObject({ phase: "unknown", continuationPaused: true });
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
 
     await f.shutdown.recover("retry");
 
-    expect(f.store.value).toMatchObject({ phase: "draining", error: undefined });
-    expect(f.store.value?.operationId).not.toBe(firstOperation);
-    expect(f.deps.sockets.send).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        type: "prepare_preservation",
-        operationId: f.store.value?.operationId,
-      })
+    expect(takeSnapshot).toHaveBeenCalledTimes(2);
+    expect(f.store.value?.operationId).not.toBe(failed.operationId);
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      continuationPaused: true,
+      receipt: { artifactId: "snapshot-2" },
+    });
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "provider-object-1", intent: "destroy" })
     );
   });
 
-  it("refuses to repeat capture after an unknown provider result", async () => {
-    const f = fixture();
-    await readyFinite(f);
-    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
-    f.store.write({ ...f.store.value!, phase: "unknown", error: "capture outcome unknown" });
-    f.deps.provider.takeSnapshot = vi.fn();
-
-    await expect(f.shutdown.recover("retry")).rejects.toThrow(
-      "unknown provider result cannot be retried"
+  it("stops offering a retry once the window after the shutdown closes", async () => {
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("guest unresponsive");
+        }),
+        stopSandbox: vi.fn(async () => ({ success: true as const })),
+      })
     );
-    expect(f.deps.provider.takeSnapshot).not.toHaveBeenCalled();
-    expect(f.store.value?.phase).toBe("unknown");
+    await readyWithoutDeadline(f);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    const failed = f.store.value!;
+
+    f.setNow(failed.stopByMs! + 30 * 60_000 - 1);
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
+    f.setNow(failed.stopByMs! + 30 * 60_000);
+    expect(recoveryActions(f.shutdown)).toEqual(["discard"]);
+    await expect(f.shutdown.recover("retry")).rejects.toThrow("Shutdown recovery is unavailable");
+    // The runtime is no longer kept up for a save.
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+  });
+
+  it("keeps a refused runtime up while its source is being captured", async () => {
+    let resolveCapture!: (value: { success: true; imageId: string; sourceStopped: true }) => void;
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(
+          () =>
+            new Promise<{ success: true; imageId: string; sourceStopped: true }>(
+              (resolve) => (resolveCapture = resolve)
+            )
+        ),
+      })
+    );
+    await readyFinite(f);
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+
+    const capture = f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    await vi.waitFor(() => expect(f.store.value?.phase).toBe("capturing"));
+    expect(f.shutdown.onRefusedReconnect()).toBe("retry");
+
+    resolveCapture({ success: true, imageId: "image-1", sourceStopped: true });
+    await capture;
+    expect(f.store.value?.phase).toBe("saved");
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+  });
+
+  it("retries a failed save when the runtime reconnects after the capture window", async () => {
+    const takeSnapshot = vi
+      .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+      .mockRejectedValueOnce(new Error("guest unresponsive"))
+      .mockResolvedValue({ success: true, imageId: "snapshot-2", sourceStopped: false });
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(provider({ takeSnapshot, stopSandbox }));
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    const failed = f.store.value!;
+    f.backgroundTasks.length = 0;
+
+    // Within the failed attempt's own window the runtime is kept, but not captured again.
+    expect(f.shutdown.onRefusedReconnect()).toBe("retry");
+    expect(f.backgroundTasks).toHaveLength(0);
+
+    f.setNow(failed.captureByMs!);
+    expect(f.shutdown.onRefusedReconnect()).toBe("retry");
+    expect(f.backgroundTasks).toHaveLength(1);
+    // A second reconnect before the retry runs does not start another capture.
+    expect(f.shutdown.onRefusedReconnect()).toBe("retry");
+    await Promise.all(f.backgroundTasks.splice(0).map((task) => task()));
+
+    expect(takeSnapshot).toHaveBeenCalledTimes(2);
+    expect(f.store.value).toMatchObject({ phase: "saved", receipt: { artifactId: "snapshot-2" } });
+    expect(stopSandbox).toHaveBeenCalledOnce();
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+  });
+
+  it("discards a held sandbox by stopping its source and making the next start fresh", async () => {
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("capture failed");
+        }),
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    f.store.write({
+      ...f.store.value!,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "older-image",
+        provider: "modal",
+        savedAtMs: 500,
+        runtimeVersion: "runtime-1",
+      },
+    });
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "restore_saved", "discard"]);
+    // Clients whose schema predates discard still parse the action list.
+    expect(f.shutdown.snapshot()).toMatchObject({
+      availableRecoveryActions: ["retry", "restore_saved"],
+      discardAvailable: true,
+    });
+    f.deps.background.submit.mockClear();
+
+    await f.shutdown.recover("discard");
+
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerObjectId: "provider-object-1",
+        reason: "discard",
+        intent: "destroy",
+      })
+    );
+    expect(f.deps.sandbox.discardSandboxState).toHaveBeenCalledWith(GENERATION);
+    expect(f.store.value).toMatchObject({
+      phase: "running",
+      providerObjectId: null,
+      sourceRetired: true,
+    });
+    expect(f.store.value?.receipt).toBeUndefined();
+    expect(f.shutdown.snapshot()).toMatchObject({
+      phase: "running",
+      hasRecoveryPoint: false,
+      availableRecoveryActions: [],
+      discardAvailable: false,
+    });
+    expect(f.shutdown.isHolding()).toBe(false);
+    expect(f.shutdown.startupDecision()).toEqual({ kind: "normal" });
+    expect(f.shutdown.admissionDecision()).toBe("spawn_required");
+    expect(f.deps.background.submit).toHaveBeenCalledWith(expect.any(Function), {
+      name: "sandbox.lifecycle_change",
+    });
+  });
+
+  it("claims a discard durably so no other recovery can act while its source stops", async () => {
+    let resolveStop!: (value: { success: true }) => void;
+    const stopSandbox = vi.fn(
+      () => new Promise<{ success: true }>((resolve) => (resolveStop = resolve))
+    );
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("capture failed");
+        }),
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    f.store.write({
+      ...f.store.value!,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "older-image",
+        provider: "modal",
+        savedAtMs: 500,
+        runtimeVersion: "runtime-1",
+      },
+    });
+    const operationId = f.store.value!.operationId;
+
+    const discarding = f.shutdown.recover("discard");
+    await vi.waitFor(() => expect(stopSandbox).toHaveBeenCalledOnce());
+
+    expect(f.store.value).toMatchObject({ discarding: expect.any(String), operationId });
+    expect(recoveryActions(f.shutdown)).toEqual([]);
+    await expect(f.shutdown.recover("retry")).rejects.toThrow("Shutdown recovery is unavailable");
+    await expect(f.shutdown.recover("restore_saved")).rejects.toThrow(
+      "Shutdown recovery is unavailable"
+    );
+    await expect(f.shutdown.recover("discard")).rejects.toThrow("Shutdown recovery is unavailable");
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+
+    resolveStop({ success: true });
+    await discarding;
+    expect(stopSandbox).toHaveBeenCalledOnce();
+    expect(f.store.value).toMatchObject({ phase: "running", providerObjectId: null });
+    expect(f.store.value?.discarding).toBeUndefined();
+  });
+
+  it("lets a discard interrupted by a restart be completed, and only completed", async () => {
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(provider({ stopSandbox, takeSnapshot: vi.fn() }));
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "unknown",
+      error: "capture outcome unknown",
+      operationId: "failed-capture",
+      stopByMs: 100_000,
+      captureByMs: 400_000,
+      retireByMs: 1_270_000,
+      discarding: "interrupted-discard",
+    });
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+
+    expect(recoveryActions(restarted)).toEqual(["discard"]);
+    await restarted.recover("discard");
+
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "provider-object-1", reason: "discard" })
+    );
+    expect(f.store.value).toMatchObject({ phase: "running", providerObjectId: null });
+  });
+
+  it("keeps the hold when the source cannot be stopped for a discard", async () => {
+    const stopSandbox = vi.fn(async () => ({ success: false as const, error: "unavailable" }));
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("capture failed");
+        }),
+        stopSandbox,
+      })
+    );
+    await readyFinite(f);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+
+    await f.shutdown.recover("discard");
+
+    expect(stopSandbox).toHaveBeenCalledOnce();
+    expect(f.deps.sandbox.discardSandboxState).not.toHaveBeenCalled();
+    expect(f.store.value).toMatchObject({
+      phase: "unknown",
+      providerObjectId: "provider-object-1",
+      error: expect.stringContaining("could not be stopped"),
+    });
+    // The claim is released, so every recovery is available again.
+    expect(f.store.value?.discarding).toBeUndefined();
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
+  });
+
+  it("retires this generation's source, not an older receipt's, before restoring it", async () => {
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(provider({ stopSandbox }));
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "unknown",
+      error: "capture outcome unknown",
+      receipt: {
+        kind: "snapshot",
+        artifactId: "last-good-image",
+        sourceObjectId: "previous-generation-source",
+        provider: "modal",
+        savedAtMs: 500,
+        runtimeVersion: "runtime-1",
+      },
+    });
+
+    await f.shutdown.recover("restore_saved");
+
+    expect(stopSandbox).toHaveBeenCalledOnce();
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "provider-object-1" })
+    );
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      receipt: { artifactId: "last-good-image" },
+    });
+  });
+
+  it("retries a boot that died after the provider created its sandbox", async () => {
+    const f = fixture();
+    reserveGeneration(f, GENERATION, "confirmed");
+    await f.shutdown.recordProviderStartup(GENERATION, { kind: "none", observedAtMs: 100_000 });
+    expect(f.store.value).toMatchObject({ providerObjectId: "provider-object-1" });
+    expect(f.shutdown.admissionDecision()).toBe("held");
+
+    for (const status of ["failed", "stale"]) {
+      f.sandboxRow.status = status;
+      expect(f.shutdown.admissionDecision()).toBe("spawn_required");
+    }
+    // A runtime that became ready may have served work, so its loss is never a fresh start.
+    f.shutdown.runtimeReady(1);
+    expect(f.shutdown.admissionDecision()).toBe("held");
   });
 
   it("projects exactly the recovery actions accepted for the current provider and phase", async () => {
     const f = fixture(
       provider({
-        takeSnapshot: vi.fn(async () => ({
-          success: true,
-          imageId: "snapshot-1",
-          sourceStopped: true,
-        })),
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("capture failed");
+        }),
         stopSandbox: vi.fn(async () => ({ success: true })),
       })
     );
     await readyFinite(f);
-    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
-    f.shutdown.prepared({
-      ...preparedEvent(f.store.value!),
-      executionStopped: false,
-      error: "execution_stop_unconfirmed",
-    });
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual(["retry"]);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    expect(f.store.value?.phase).toBe("unknown");
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "discard"]);
 
+    // A receipt carried from an earlier generation: save again, or go back to it.
     const receipt = {
       kind: "snapshot" as const,
       artifactId: "last-good-image",
       provider: "modal",
-      savedAtMs: 50_000,
+      savedAtMs: 500,
       runtimeVersion: "runtime-1",
     };
-    f.store.write({ ...f.store.value!, phase: "unknown", receipt });
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
+    f.store.write({ ...f.store.value!, receipt });
+    expect(recoveryActions(f.shutdown)).toEqual(["retry", "restore_saved", "discard"]);
 
-    f.store.write({ ...f.store.value!, receipt: undefined });
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+    // This generation's source is already captured, so it is restored, not captured again.
+    f.store.write({ ...f.store.value!, receipt: { ...receipt, savedAtMs: 90_000 } });
+    expect(recoveryActions(f.shutdown)).toEqual(["restore_saved", "discard"]);
 
     f.store.write({ ...f.store.value!, receipt, provider: "other" });
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+    expect(recoveryActions(f.shutdown)).toEqual([]);
 
     f.store.write({
       ...f.store.value!,
       provider: "modal",
       receipt: { ...receipt, provider: "other" },
     });
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+    expect(recoveryActions(f.shutdown)).toEqual([]);
     await expect(f.shutdown.recover("restore_saved")).rejects.toThrow(
       "Shutdown recovery is unavailable"
     );
@@ -853,7 +1395,7 @@ describe("SandboxShutdownCoordinator", () => {
       },
     });
 
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).toEqual([]);
+    expect(recoveryActions(f.shutdown)).toEqual([]);
     await expect(f.shutdown.recover("restore_saved")).rejects.toThrow();
     expect(f.store.value).toMatchObject({ phase: "saved", continuationPaused: true });
   });
@@ -862,6 +1404,13 @@ describe("SandboxShutdownCoordinator", () => {
     {
       name: "stale generation",
       action: "retry" as const,
+      mutate: (f: ReturnType<typeof fixture>) => {
+        f.sandboxRow.created_at += 1;
+      },
+    },
+    {
+      name: "discard of a generation that was replaced",
+      action: "discard" as const,
       mutate: (f: ReturnType<typeof fixture>) => {
         f.sandboxRow.created_at += 1;
       },
@@ -892,17 +1441,17 @@ describe("SandboxShutdownCoordinator", () => {
       },
     },
     {
-      name: "legacy lifecycle retry",
+      name: "retired source",
       action: "retry" as const,
       mutate: (f: ReturnType<typeof fixture>) => {
-        f.store.write({ ...f.store.value!, lifecyclePolicy: "legacy" });
+        f.store.write({ ...f.store.value!, sourceRetired: true });
       },
     },
     {
-      name: "missing runtime protocol",
+      name: "retry after the retry window",
       action: "retry" as const,
       mutate: (f: ReturnType<typeof fixture>) => {
-        f.store.write({ ...f.store.value!, protocolVersion: undefined });
+        f.setNow(f.store.value!.stopByMs! + 30 * 60_000);
       },
     },
     {
@@ -915,24 +1464,18 @@ describe("SandboxShutdownCoordinator", () => {
   ])("rejects $name without advertising it", async ({ action, mutate }) => {
     const f = fixture(
       provider({
-        takeSnapshot: vi.fn(async () => ({
-          success: true,
-          imageId: "snapshot-1",
-          sourceStopped: true,
-        })),
+        takeSnapshot: vi.fn(async () => {
+          throw new Error("capture failed");
+        }),
       })
     );
     await readyFinite(f);
-    await f.shutdown.requestShutdown("sandbox_lifetime_expiring");
-    f.shutdown.prepared({
-      ...preparedEvent(f.store.value!),
-      executionStopped: false,
-      error: "execution_stop_unconfirmed",
-    });
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    expect(f.store.value?.phase).toBe("unknown");
     mutate(f);
     const before = structuredClone(f.store.value);
 
-    expect(f.shutdown.snapshot()?.availableRecoveryActions).not.toContain(action);
+    expect(recoveryActions(f.shutdown)).not.toContain(action);
     await expect(f.shutdown.recover(action)).rejects.toThrow("Shutdown recovery is unavailable");
     expect(f.store.value).toEqual(before);
   });
@@ -995,6 +1538,44 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value?.sourceRetired).toBe(true);
   });
 
+  it.each(["discard", "restore_saved"] as const)(
+    "stops the allocation an interrupted restore created before %s",
+    async (action) => {
+      const stopSandbox = vi.fn(async () => ({ success: true as const }));
+      const f = fixture(provider({ stopSandbox }));
+      await readyFinite(f);
+      f.store.write({
+        ...f.store.value!,
+        phase: "saved",
+        sourceRetired: true,
+        receipt: {
+          kind: "snapshot",
+          artifactId: "saved-image",
+          provider: "modal",
+          savedAtMs: 50_000,
+          runtimeVersion: "runtime-1",
+        },
+      });
+      const next = { sandboxId: "sandbox-2", createdAt: 2_000 };
+      f.sandboxRow.modal_sandbox_id = next.sandboxId;
+      f.sandboxRow.created_at = next.createdAt;
+      reserveGeneration(f, next, "confirmed");
+      f.shutdown.markRecoveryInvoked(next);
+      f.sandboxRow.modal_object_id = "restored-provider-object";
+
+      // The retirement proof still describes the source the restore replaced.
+      expect(f.store.value).toMatchObject({ restoreInvoked: true, sourceRetired: true });
+      const interrupted = new SandboxShutdownCoordinator(f.deps as never);
+      expect(recoveryActions(interrupted)).toContain(action);
+      await interrupted.recover(action);
+
+      expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ providerObjectId: "restored-provider-object", intent: "destroy" })
+      );
+      expect(f.store.value?.phase).toBe(action === "discard" ? "running" : "saved");
+    }
+  );
+
   it("holds an interrupted snapshot restore until explicit recovery from the retired source", async () => {
     const f = fixture();
     await readyFinite(f);
@@ -1035,7 +1616,7 @@ describe("SandboxShutdownCoordinator", () => {
       providerObjectId: "restored-provider-object",
       receipt: { artifactId: "saved-image" },
     });
-    expect(interrupted.snapshot()?.availableRecoveryActions).toEqual(["restore_saved"]);
+    expect(recoveryActions(interrupted)).toEqual(["restore_saved", "discard"]);
     await interrupted.recover("restore_saved");
     expect(f.store.value).toMatchObject({
       phase: "saved",

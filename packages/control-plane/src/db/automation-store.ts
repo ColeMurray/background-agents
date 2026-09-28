@@ -80,12 +80,22 @@ export interface AutomationRow {
   consecutive_failures: number;
   created_by: string;
   user_id: string | null;
+  owner_team_id: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
   event_type: string | null;
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
+}
+
+const automationOwnerRowSchema = z.object({ owner_team_id: z.string().nullable() });
+
+export function withValidatedOwnerTeam(row: AutomationRow): AutomationRow {
+  return {
+    ...row,
+    owner_team_id: automationOwnerRowSchema.parse(row).owner_team_id,
+  };
 }
 
 type AutomationListResult = { automations: AutomationRow[] } & (
@@ -391,8 +401,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-          event_type, trigger_config, trigger_auth_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -414,7 +424,8 @@ export class AutomationStore {
         row.deleted_at,
         row.event_type,
         row.trigger_config,
-        row.trigger_auth_data
+        row.trigger_auth_data,
+        row.owner_team_id
       );
   }
 
@@ -423,10 +434,11 @@ export class AutomationStore {
   }
 
   async getById(id: string): Promise<AutomationRow | null> {
-    return this.db
+    const row = await this.db
       .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
       .bind(id)
       .first<AutomationRow>();
+    return row ? withValidatedOwnerTeam(row) : null;
   }
 
   /**
@@ -481,7 +493,7 @@ export class AutomationStore {
       .bind(...params, options.limit + 1)
       .all<AutomationRow>();
 
-    const rows = result.results || [];
+    const rows = (result.results || []).map(withValidatedOwnerTeam);
     const hasMore = rows.length > options.limit;
     const automations = hasMore ? rows.slice(0, options.limit) : rows;
     if (!hasMore) return { automations, hasMore: false, nextCursor: null };
@@ -839,7 +851,7 @@ export class AutomationStore {
       )
       .bind(now, limit)
       .all<AutomationRow>();
-    return result.results || [];
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   // --- Run management ---
@@ -1418,7 +1430,7 @@ export class AutomationStore {
       )
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
       .all<AutomationRow>();
-    return result.results || [];
+    return (result.results || []).map(withValidatedOwnerTeam);
   }
 
   async getActiveRunForKey(

@@ -196,6 +196,8 @@ fix instead.
   guard, the harness ignores the result of any turn it did not submit.
 - **Follow-ups queue.** Both harnesses hold follow-up prompts until the running turn completes.
 - **Image.** The sandbox image pins `claude-agent-sdk`, whose wheel bundles the `claude` binary. The
-  runtime manifest names the first generation that carries it under `harnessMinimumGeneration`, so a
-  Claude session never boots a prebuilt image from before that generation; OpenCode sessions keep
-  their images and snapshots, since the global compatibility floor did not move.
+  runtime manifest names the generation carrying the current pin under `harnessMinimumGeneration`,
+  so a Claude session never boots a prebuilt image from before that generation; this floor does not
+  touch OpenCode sessions' images or snapshots, since the global compatibility floor did not move.
+  Raise this floor whenever the SDK pin moves for a model the catalog advertises, otherwise a
+  session can be handed an older image whose bundled `claude` does not know that model.

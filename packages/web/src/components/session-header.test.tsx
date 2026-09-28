@@ -32,6 +32,7 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   collaborate: true,
   lifecycle: true,
   sandboxAccess: true,
+  exportTrace: true,
 };
 
 function SessionHeader({
@@ -108,6 +109,7 @@ describe("SessionHeader", () => {
           collaborate: false,
           lifecycle: false,
           sandboxAccess: false,
+          exportTrace: false,
         }}
       />
     );
@@ -452,6 +454,39 @@ describe("SessionHeader", () => {
     expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
   });
 
+  it.each([
+    ["draining", "Saving..."],
+    ["prepared", "Saving..."],
+    ["capturing", "Saving..."],
+    ["retiring", "Saving..."],
+    ["running", "Ready"],
+    ["restoring", "Ready"],
+  ] as const)("reports a ready sandbox in the %s shutdown phase as %s", (phase, label) => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "ready",
+          sandboxPreservation: { phase, expiresAtMs: 2, drainAtMs: 1 },
+        })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Stopping" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: `Sandbox status: ${label}` })).toBeInTheDocument();
+  });
+
   it("shows the failed phase metadata without a boot output region", async () => {
     render(
       <SessionHeader
@@ -700,6 +735,19 @@ describe("SessionHeader mobile presentation", () => {
     expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
   });
 
+  it("raises a strip while a ready sandbox is saving before a graceful stop", () => {
+    renderMobileHeader(
+      createSessionState({
+        sandboxStatus: "ready",
+        sandboxPreservation: { phase: "capturing", expiresAtMs: 2, drainAtMs: 1 },
+      })
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Show sandbox status: Saving..." })
+    ).toBeInTheDocument();
+  });
+
   it("raises a strip for a sandbox that needs attention", () => {
     renderMobileHeader(createSessionState({ sandboxStatus: "failed" }));
 
@@ -873,7 +921,7 @@ describe("SessionHeader mobile presentation", () => {
       }),
       {},
       undefined,
-      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false }
+      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false, exportTrace: false }
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {

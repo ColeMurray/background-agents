@@ -250,6 +250,8 @@ export async function handleSpawnChild(
   );
 
   const input: SessionInitInput = {
+    ownerTeamId: parentSession?.ownerTeamId ?? null,
+    visibility: parentSession?.visibility ?? "workspace",
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
     repoName: spawnContext.repoName,

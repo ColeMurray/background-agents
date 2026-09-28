@@ -23,6 +23,7 @@
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -66,6 +67,7 @@ import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
+import { UsageRepository } from "./usage-repository";
 import { recordSessionWarning } from "./session-warnings";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
@@ -245,6 +247,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const attachmentRepository = new SessionAttachmentRepository(sql);
   const artifactRepository = new ArtifactRepository(sql);
   const eventRepository = new EventRepository(sql, transaction);
+  const usageRepository = new UsageRepository(sql, transaction);
   const messageRepository = new MessageRepository(
     sql,
     transaction,
@@ -392,6 +395,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     messageRepository,
     artifactRepository,
+    usageRepository,
     messenger,
     sessionIndexStore,
     new SessionStatusProjectionStore(db),
@@ -502,7 +506,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     executionStop,
     getExecutionTimeoutMs,
-    () => lifecycleManager.mayProcessQueuedWork()
+    () => lifecycleManager.mayProcessQueuedWork(),
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -520,9 +525,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     repository: messageRepository,
     eventRepository,
     artifactRepository,
+    usageRepository,
     messageQueue,
     stopExecution: () => executionStop.stop(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
+    transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
   const budgetService = new SessionBudgetService(
@@ -542,7 +549,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     messenger,
     updateLastActivity,
-    budgetService
+    budgetService,
+    usageRepository
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,
@@ -854,6 +862,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     listEvents: (_request, url) => messagesHandler.listEvents(url),
     listArtifacts: (_request, url) => messagesHandler.listArtifacts(url),
     listMessages: (_request, url) => messagesHandler.listMessages(url),
+    exportTrace: (_request, url) => messagesHandler.exportTrace(url),
     createPr: (request, _url, requestLog) => pullRequestHandler.createPr(request, requestLog),
     pullRequestArtifactSnapshot: (request, url) =>
       pullRequestHandler.pullRequestArtifactSnapshot(request, url),
@@ -974,6 +983,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           async () => {
             await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
+            await lifecycleManager.rearmRejectedStartupCleanupAlarm();
             await terminalMessageProjection.rearm();
           },
           {
@@ -1059,7 +1069,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   };
 
   const sandboxDashboardUrlBuilder =
-    sandboxBackend === "modal"
+    sandboxBackend === "modal" || sandboxBackend === "modal-vm"
       ? (providerObjectId: string) =>
           resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
       : undefined;

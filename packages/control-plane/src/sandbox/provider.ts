@@ -62,8 +62,8 @@ export interface SandboxProviderCapabilities {
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */
   supportsExplicitStop?: boolean;
-  /** Whether taking a snapshot also stops the source sandbox. */
-  snapshotStopsSandbox?: boolean;
+  /** An ordinary checkpoint must enter the terminal shutdown flow first. */
+  snapshotRequiresShutdown?: boolean;
 }
 
 export type SandboxLifetime =
@@ -75,6 +75,11 @@ export type SandboxLifetime =
     }
   | { kind: "none"; observedAtMs: number }
   | { kind: "unknown"; observedAtMs: number; reason: string };
+
+export interface PendingSandboxAllocation {
+  reference: string;
+  lifetime: Extract<SandboxLifetime, { kind: "finite" }>;
+}
 
 /**
  * One member repository of a session, in position order (first = primary).
@@ -145,6 +150,10 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
+  retireSandboxId?: string | null;
+  /** Generation reservation time used to bound pending provider launches. */
+  generationCreatedAtMs?: number;
   /**
    * Ordered member list for multi-repo sessions. Only set when the session
    * has more than one member — single-repo sessions keep the scalar
@@ -235,6 +244,10 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
+  retireSandboxId?: string | null;
+  /** Generation reservation time used to bound pending provider launches. */
+  generationCreatedAtMs?: number;
   /** Multi-repo member list — see CreateSandboxConfig. */
   repositories?: SessionRepositoryInfo[];
 }
@@ -303,6 +316,8 @@ export interface SnapshotResult {
   error?: string;
   /** True when snapshot creation itself stopped the source sandbox. */
   sourceStopped?: boolean;
+  /** Immutable source ID to retire after committing the snapshot receipt. */
+  sourceObjectId?: string;
 }
 
 /**
@@ -341,6 +356,8 @@ interface ResumeResultFields {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
+  /** ttyd proxy tunnel URL (if available) */
+  ttydUrl?: string;
   /** Complete browser-based VNC credential (if available) */
   vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
@@ -377,6 +394,8 @@ export interface StopConfig {
   signal?: AbortSignal;
   /** Absolute caller deadline shared by every nested provider operation. */
   deadlineAtMs?: number;
+  /** Reservation time of the generation being stopped, if known. */
+  generationCreatedAtMs?: number;
 }
 
 /**
@@ -489,6 +508,18 @@ export class SandboxProviderError extends Error {
   }
 }
 
+/** A rejected execution; a non-null handle remains a cleanup obligation. */
+export class SandboxLaunchRejectedError extends SandboxProviderError {
+  constructor(
+    message: string,
+    readonly providerObjectId: string | null,
+    cause?: Error
+  ) {
+    super(message, "permanent", cause);
+    this.name = "SandboxLaunchRejectedError";
+  }
+}
+
 /** The provider confirmed that the selected prebuilt artifact cannot be restored. */
 export class PrebuiltImageUnavailableError extends SandboxProviderError {
   constructor(message: string, cause?: Error) {
@@ -547,6 +578,14 @@ export interface SandboxProvider {
 
   /** Provider capabilities */
   readonly capabilities: SandboxProviderCapabilities;
+
+  /** Reference and lifetime to persist before launch; neither confirms startup succeeded. */
+  pendingSandboxAllocation?(
+    config: Pick<
+      CreateSandboxConfig,
+      "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
+    >
+  ): PendingSandboxAllocation | undefined;
 
   /**
    * Create a new sandbox.

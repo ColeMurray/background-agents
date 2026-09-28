@@ -1,0 +1,246 @@
+---
+title: Prompt templates
+description: Copyable prompt templates for common task types, each ending with an explicit validation and handoff line.
+audience: user
+owner: platform
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - docs/MANAGED_SKILLS.md
+  - docs/AUTOMATIONS.md
+  - docs/HOW_IT_WORKS.md
+---
+
+This page gives you starting prompts for the task types that come up most often, so you fill in facts instead of writing structure from scratch.
+
+<Callout type="idea" title="How to use these">
+  Replace every bracketed slot such as `[symptom]` or `[command]` with your own facts, and delete
+  lines that do not apply. If you find yourself reusing a template with the same rules every time,
+  save the rules as a [managed skill](/configure/managed-skills) so the agent receives them in every
+  matching session and your prompt shrinks to the task-specific part.
+</Callout>
+
+Every template ends with a validation line and a handoff line. Keep both; they are the two parts most often left out.
+
+## Bug fix
+
+```text
+Fix: [one-line symptom].
+
+Repro: [command or steps that show the failure]. Expected [expected
+behavior]; actual [actual behavior]. Error output:
+[paste verbatim]
+
+Likely area: [file or module]. [Anything you already ruled out.]
+
+Constraints: smallest change that fixes the cause, not the symptom.
+[Files or behavior that must not change.]
+
+Validation: add a regression test in [test file] that fails before the
+fix and passes after; run [command] and [command].
+Handoff: open a PR titled "[title]" with the test output in the body.
+```
+
+## Feature implementation
+
+```text
+Add [feature] to [file or module].
+
+Behavior: [what the user sees or what the API returns, step by step].
+Follow the existing pattern in [file that does something similar].
+Reuse [component, helper, or endpoint] rather than adding a new one.
+
+Out of scope: [things not to build]. No new dependencies unless you
+explain why in the PR.
+
+Validation: run [test command] and [typecheck or build command]; add
+tests in [test file] covering [cases].
+Handoff: open a draft PR titled "[title]"; list what you built and what
+you left out.
+```
+
+## Refactor
+
+```text
+Refactor [file or module] so that [target structure, in one sentence].
+
+Behavior must not change. Keep [exported API, signatures, or routes]
+unchanged. Keep the diff inside [directory].
+
+Before editing, run [test command] and paste the result as a baseline.
+
+Validation: after editing, run [test command] and [lint command]; the
+results must match the baseline.
+Handoff: open a PR titled "[title]" with a short description of the new
+structure and why it is simpler.
+```
+
+## Test coverage
+
+```text
+Add tests for [file or module]. Current coverage: [none, or which cases
+exist].
+
+Cover these cases: [case 1], [case 2], [case 3], [edge case]. Use the
+setup and fixture style from [existing test file].
+
+Do not change [file or module] itself. If a test reveals a bug, leave
+the test failing and describe the bug in your summary.
+
+Validation: run [test command]; all new tests pass except any that
+expose a bug you have reported.
+Handoff: open a PR titled "Add tests for [module]" and list the cases
+covered and any bugs found.
+```
+
+## Documentation
+
+```text
+Document [feature, module, or process] in [target file or directory].
+
+Audience: [who reads it and what they already know]. Source of truth:
+[files, commands, or configs to read]. Match the tone and structure of
+[existing doc].
+
+Include: [sections or questions the doc must answer]. Do not describe
+internals the reader cannot see; describe behavior and commands.
+
+Validation: every command in the doc must run successfully in the
+sandbox; run each one and fix any that fail.
+Handoff: open a PR titled "[title]" and list any behavior you could not
+verify.
+```
+
+## Migration or upgrade
+
+```text
+Upgrade [package] from [current version] to [target version] in
+[directory].
+
+First, read the release or migration notes and list the breaking changes
+that affect this codebase (search for [APIs or identifiers likely
+affected]). Then apply the migration. Do not upgrade other packages
+unless required, and list any that were.
+
+Validation: run [build command], [test command], and [typecheck
+command]. [If UI: start the app with [command], open [routes] with
+agent-browser, and register screenshots as artifacts.]
+Handoff: open a PR titled "Upgrade [package] to [version]"; in the body,
+list the breaking changes handled and any you could not verify.
+```
+
+For a codebase-wide pattern migration:
+
+```text
+Migrate every remaining use of [old pattern] to [new pattern] in
+[directory], following the completed example in [file].
+
+Do not change behavior. Skip files under [excluded paths]. If a file
+cannot be migrated mechanically, leave it and list it in the summary.
+
+Validation: run [test command] and [lint command].
+Handoff: open a PR titled "[title]" listing the files changed and the
+files skipped with a reason for each.
+```
+
+## Investigation and root cause
+
+```text
+Investigate only. Do not edit files or open a PR.
+
+Question: [what is happening and why it matters]. Evidence: [logs,
+timing, frequency, environment]. Start from [file or module].
+
+Write up: the most likely cause with the code that supports it, [N]
+options to fix it with trade-offs, and which files each option touches.
+Keep it under [word count] words.
+
+Validation: if you can reproduce the issue with a command or test, do so
+and include the output.
+Handoff: post the write-up as your final message; end with the single
+option you recommend and why.
+```
+
+## Code review response
+
+```text
+Address the review comments on the PR from this session.
+
+- [File and line or thread]: [do it / do it this way / decline]. [Reason
+  if declining.]
+- [File and line or thread]: [decision].
+- [File and line or thread]: [decision].
+
+Push to the same branch so the existing PR updates. Do not open a new
+PR.
+
+Validation: run [test command] and [typecheck command] after the
+changes.
+Handoff: reply to each review thread with what you changed or why you
+did not; summarize in one PR comment.
+```
+
+## Performance
+
+```text
+Improve the performance of [operation] in [file or module]. Current:
+[measurement and how it was taken]. Target: [measurement].
+
+First, reproduce the measurement with [benchmark command or script] and
+paste the result. Then profile and identify the top cost before
+changing anything.
+
+Constraints: behavior and outputs must not change. No new dependencies.
+[Memory or API constraints.]
+
+Validation: rerun [benchmark command] and [test command]; include before
+and after numbers.
+Handoff: open a PR titled "[title]" with the numbers in the body and a
+note on what you tried that did not help.
+```
+
+## Security fix
+
+```text
+Fix [vulnerability class] in [file or endpoint]. Report: [paste the
+finding or describe the attack path].
+
+Fix the root cause, not only the reported instance: search for the same
+pattern elsewhere in [directory] and fix or list each occurrence.
+
+Constraints: do not change the public API. Do not log or print any
+secret or user data while testing.
+
+Validation: add a test in [test file] that exercises the attack path and
+fails before the fix; run [test command].
+Handoff: open a PR titled "[title]" describing the fix without including
+a working exploit in the body.
+```
+
+## Release notes or digest
+
+Use this shape as the Instructions field of a scheduled [automation](/automations). The session title is prefixed with `[Auto]`, and instructions are limited to 15,000 characters.
+
+```text
+Produce a [weekly or daily] digest of changes to [repository] since
+[period, such as "the last 7 days"].
+
+Use `git log` and `gh pr list --state merged` to gather merged pull
+requests. Group them by [area or label]. For each, give the title, the
+PR number, and one line on the user-facing effect. Skip [bot PRs,
+dependency bumps, or other noise].
+
+Write the digest to [path, such as docs/changelog/YYYY-WW.md] using the
+format of the most recent file in that directory.
+
+Validation: every PR number in the digest must exist and be merged in
+the period.
+Handoff: open a PR titled "Digest: [period]" containing only the new
+file.
+```
+
+## Next steps
+
+- [Workflow recipes](/prompting/workflow-recipes)
+- [Managed skills](/configure/managed-skills)
+- [Your first automation](/automations/first-automation)

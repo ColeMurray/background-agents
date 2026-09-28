@@ -23,6 +23,7 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter {
     await this.provider.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
+      resources: plan.resources,
       buildId: plan.buildId,
       repositories: plan.repositories,
       cloneToken: plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.token : undefined,

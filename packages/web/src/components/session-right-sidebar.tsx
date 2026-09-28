@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CollapsibleSection } from "./sidebar/collapsible-section";
 import { ParticipantsSection } from "./sidebar/participants-section";
 import { MetadataSection } from "./sidebar/metadata-section";
@@ -27,6 +27,8 @@ import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { BudgetSection } from "./sidebar/budget-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { toast } from "sonner";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -50,6 +52,7 @@ interface SessionRightSidebarProps {
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
 
 const DEFAULT_CAN_MANAGE_BUDGET = false;
+const TRACE_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export function SessionRightSidebarContent({
   sessionId,
@@ -68,6 +71,7 @@ export function SessionRightSidebarContent({
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
 }: SessionRightSidebarContentProps) {
+  const [downloading, setDownloading] = useState(false);
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
     () =>
@@ -94,6 +98,34 @@ export function SessionRightSidebarContent({
     state: diffState ?? null,
     isLoading: diffLoading ?? false,
   });
+
+  const downloadTrace = async () => {
+    setDownloading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TRACE_DOWNLOAD_TIMEOUT_MS);
+    try {
+      const response = await browserApiFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/export`,
+        { signal: controller.signal }
+      );
+      if (!response.ok) throw new Error("Trace export failed");
+
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `session-${sessionId}.ndjson`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      const revoke = URL.revokeObjectURL.bind(URL);
+      setTimeout(() => revoke(url), 0);
+    } catch {
+      toast.error("Failed to download trace");
+    } finally {
+      clearTimeout(timeoutId);
+      setDownloading(false);
+    }
+  };
 
   if (!sessionState) {
     return (
@@ -140,6 +172,19 @@ export function SessionRightSidebarContent({
           canManageBudget={canManageBudget}
         />
       </div>
+
+      {capabilities.exportTrace && (
+        <div className="px-4 py-3 border-b border-border-muted">
+          <button
+            type="button"
+            onClick={() => void downloadTrace()}
+            disabled={downloading}
+            className="text-sm text-accent hover:underline"
+          >
+            Download trace
+          </button>
+        </div>
+      )}
 
       {/* Code Server */}
       {capabilities.sandboxAccess && sessionState.codeServerUrl && (

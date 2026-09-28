@@ -37,7 +37,8 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
   create(provider: ImageBuildProvider, operation: "start" | "existing_session"): ImageBuildAdapter {
     switch (provider) {
       case "modal":
-        return new ModalImageBuildAdapter(createSandboxProviderFromEnv(this.env, "modal"));
+      case "modal-vm":
+        return new ModalImageBuildAdapter(createSandboxProviderFromEnv(this.env, provider));
       case "vercel":
         return new VercelImageBuildAdapter(createSandboxProviderFromEnv(this.env, "vercel"));
       case "opencomputer":

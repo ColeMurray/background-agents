@@ -23,12 +23,16 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     environmentId?: string | null;
     model?: string;
     reasoningEffort?: string | null;
+    ownerTeamId?: string | null;
+    visibility?: "team" | "workspace" | "private";
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();
     await store.create({
       id: parentName,
+      ownerTeamId: opts?.ownerTeamId ?? null,
+      visibility: opts?.visibility ?? "workspace",
       title: "Parent",
       repoOwner: "acme",
       repoName: "web-app",
@@ -107,7 +111,12 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
   }
 
   it("spawns a child session with sandbox auth (201)", async () => {
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_child', 'child', 'Child', 1, 1)"
+    ).run();
     const { parentName, sandboxToken, store } = await setupParent({
+      ownerTeamId: "team_child",
+      visibility: "workspace",
       repoId: 12345,
       userId: "user-1",
       canonicalUserId: "canonical-abc123",
@@ -135,6 +144,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     const child = await store.get(body.sessionId);
     expect(child).not.toBeNull();
     expect(child!.parentSessionId).toBe(parentName);
+    expect(child!.ownerTeamId).toBe("team_child");
+    expect(child!.visibility).toBe("workspace");
     expect(child!.spawnSource).toBe("agent");
     expect(child!.spawnDepth).toBe(1);
     expect(child!.repoOwner).toBe("acme");
@@ -512,6 +523,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     for (let i = 0; i < 5; i++) {
       await store.create({
         id: `child-active-${i}-${Date.now()}`,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: `Active Child ${i}`,
         repoOwner: "acme",
         repoName: "web-app",
@@ -551,6 +564,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     for (let i = 0; i < 15; i++) {
       await store.create({
         id: `child-total-${i}-${Date.now()}`,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: `Child ${i}`,
         repoOwner: "acme",
         repoName: "web-app",
@@ -646,6 +661,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     // Seed some children in D1
     await store.create({
       id: "child-list-1",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Child A",
       repoOwner: "acme",
       repoName: "web-app",
@@ -662,6 +679,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
 
     await store.create({
       id: "child-list-2",
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Child B",
       repoOwner: "acme",
       repoName: "web-app",

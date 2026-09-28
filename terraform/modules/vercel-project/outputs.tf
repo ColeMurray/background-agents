@@ -17,3 +17,8 @@ output "custom_domain" {
   description = "The custom domain (if configured)"
   value       = var.custom_domain != null ? vercel_project_domain.this[0].domain : null
 }
+
+output "root_directory" {
+  description = "The repository directory the project builds from"
+  value       = var.root_directory
+}

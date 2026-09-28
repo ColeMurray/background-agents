@@ -828,6 +828,7 @@ describe("Integration settings API", () => {
       await store.create(
         {
           id,
+          owner_team_id: null,
           name: `Env ${id}`,
           description: null,
           prebuild_enabled: 0,

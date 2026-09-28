@@ -31,6 +31,7 @@ import { sessionRoutes } from "./sessions";
 import { slackNotifyRoutes } from "./slack-notify";
 import { signInProviderRoutes } from "./sign-in-providers";
 import { skillRoutes } from "./skills";
+import { teamRoutes } from "./teams";
 
 /** Registration order is the precedence order: each module is mounted where it appears. */
 export const catalog: readonly RouteModule[] = [
@@ -38,6 +39,8 @@ export const catalog: readonly RouteModule[] = [
 
   browserAuthRoutes,
   signInProviderRoutes,
+
+  teamRoutes,
 
   // Session management, then the agent-initiated Slack notification
   sessionRoutes,

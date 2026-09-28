@@ -11,6 +11,8 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
+import { getModelDisplayName, normalizeModelId } from "@open-inspect/shared/models";
+import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
 import { z } from "zod";
@@ -63,6 +65,13 @@ const sourceRowSchema = z.object({
   merged: z.number(),
 });
 
+const dimensionRowSchema = z.object({
+  key: z.string(),
+  created: z.number(),
+  merged: z.number(),
+  session_cost: z.number(),
+});
+
 /**
  * When a PR entered the world, for windowing and cycle time. The row's own
  * created_at is the fallback for rows that predate the provider_created_at
@@ -97,7 +106,7 @@ export class PullRequestAnalyticsStore {
     const cohortWindow = `${prCreatedAt} >= ? AND ${prCreatedAt} < ?`;
     const cohortBinds = [filters.startAt, filters.endAt];
 
-    return [
+    const statements = [
       this.db
         .prepare(
           `SELECT
@@ -184,6 +193,30 @@ export class PullRequestAnalyticsStore {
         )
         .bind(...cohortBinds),
     ];
+    for (const dimension of ["model", "harness"] as const) {
+      statements.push(
+        this.db
+          .prepare(
+            `SELECT s.${dimension} AS key,
+                    COUNT(*) AS created,
+                    COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
+                    (SELECT COALESCE(SUM(x.total_cost), 0)
+                     FROM sessions x
+                     WHERE x.${dimension} = s.${dimension}
+                       AND x.id IN (
+                         SELECT DISTINCT cost_p.session_id FROM session_pull_requests cost_p
+                         WHERE ${prCreatedAtExpr("cost_p")} >= ? AND ${prCreatedAtExpr("cost_p")} < ?
+                       )) AS session_cost
+             FROM session_pull_requests p
+             JOIN sessions s ON p.session_id = s.id
+             WHERE ${prCreatedAtExpr("p")} >= ? AND ${prCreatedAtExpr("p")} < ?
+             GROUP BY s.${dimension}
+             ORDER BY session_cost DESC, key ASC`
+          )
+          .bind(...cohortBinds, ...cohortBinds)
+      );
+    }
+    return statements;
   }
 
   decode(results: SqlResult[]): AnalyticsPullRequestsResponse {
@@ -196,6 +229,8 @@ export class PullRequestAnalyticsStore {
       mergedResult,
       reposResult,
       sourcesResult,
+      modelsResult,
+      harnessesResult,
     ] = results;
 
     const funnel = parseOptionalRow(funnelResult.results?.[0], funnelRowSchema, "PR funnel row");
@@ -217,6 +252,25 @@ export class PullRequestAnalyticsStore {
         point.merged = row.count;
       } else {
         timeseries.set(row.day_index, { created: 0, merged: row.count });
+      }
+    }
+
+    const models = new Map<string, AnalyticsPullRequestsResponse["models"][number]>();
+    for (const row of parseRows(modelsResult.results, dimensionRowSchema, "PR model row")) {
+      const key = normalizeModelId(row.key);
+      const previous = models.get(key);
+      if (previous) {
+        previous.created += row.created;
+        previous.merged += row.merged;
+        previous.sessionCost += row.session_cost;
+      } else {
+        models.set(key, {
+          key,
+          displayName: getModelDisplayName(key),
+          created: row.created,
+          merged: row.merged,
+          sessionCost: row.session_cost,
+        });
       }
     }
 
@@ -250,6 +304,18 @@ export class PullRequestAnalyticsStore {
         created: row.created,
         merged: row.merged,
       })),
+      models: [...models.values()].sort(
+        (a, b) => b.sessionCost - a.sessionCost || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+      ),
+      harnesses: parseRows(harnessesResult.results, dimensionRowSchema, "PR harness row").map(
+        (row) => ({
+          key: row.key,
+          displayName: isValidHarness(row.key) ? HARNESS_CATALOG[row.key].label : row.key,
+          created: row.created,
+          merged: row.merged,
+          sessionCost: row.session_cost,
+        })
+      ),
     };
   }
 }

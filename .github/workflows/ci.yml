@@ -6,6 +6,7 @@ on:
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
       - "eslint.config.js"
@@ -34,11 +35,14 @@ on:
       # Re-included after the exclusion above, which later patterns override: a
       # unit test holds this document's quick start to the required variables.
       - "docs/CONTROL_PLANE_CONTAINER.md"
+      # Re-include docs content and its package README after the Markdown exclusion.
+      - "packages/docs/**"
   pull_request:
     branches: [main]
     paths:
       - ".env.example"
       - ".github/workflows/ci.yml"
+      - ".nvmrc"
       - ".prettierignore"
       - ".prettierrc"
       - "eslint.config.js"
@@ -67,6 +71,8 @@ on:
       # Re-included after the exclusion above, which later patterns override: a
       # unit test holds this document's quick start to the required variables.
       - "docs/CONTROL_PLANE_CONTAINER.md"
+      # Re-include docs content and its package README after the Markdown exclusion.
+      - "packages/docs/**"
 
 permissions:
   contents: read
@@ -91,9 +97,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          # Minimum supported release: node:sqlite is available without an
-          # additional flag and --experimental-transform-types is present.
-          node-version: "22.13.0"
+          # Minimum supported release, matching `engines` in package.json.
+          # Every other job runs the version in .nvmrc.
+          node-version: "24.0.0"
           cache: "npm"
 
       - name: Install dependencies
@@ -126,6 +132,9 @@ jobs:
       - name: Test Terraform workflow contract
         run: npm run test:terraform-workflow-contract
 
+      - name: Test Node version workflow contract
+        run: npm run test:node-version-workflow-contract
+
       - name: Check Prettier formatting
         run: npm run format:check
 
@@ -143,7 +152,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -166,7 +175,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -177,6 +186,28 @@ jobs:
 
       - name: Build web package
         run: npm run build -w @open-inspect/web
+
+  build-docs:
+    name: Build (Docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build docs package
+        run: npm run build -w @open-inspect/docs
 
   test-cp-unit:
     name: Test (control-plane unit)
@@ -191,7 +222,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -224,7 +255,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -249,7 +280,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies
@@ -260,6 +291,28 @@ jobs:
 
       - name: Run web tests
         run: npm test -w @open-inspect/web
+
+  test-docs:
+    name: Test (docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run docs tests
+        run: npm test -w @open-inspect/docs
 
   test-bots:
     name: Test (bots)
@@ -272,7 +325,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: "npm"
 
       - name: Install dependencies

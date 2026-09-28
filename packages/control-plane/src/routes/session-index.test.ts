@@ -451,3 +451,59 @@ describe("session index routes", () => {
     );
   });
 });
+
+describe("session discovery filters", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionIndexStore.list.mockResolvedValue({ sessions: [], hasMore: false });
+  });
+
+  it("passes search and discovery filters through to the store", async () => {
+    const response = await listSessions(
+      "?q=%20login%20&repoOwner=acme&repoName=web-app&environmentId=env-1&origin=automation&excludeStatus=archived&createdBy=me",
+      { kind: "user", userId: "0123456789abcdef0123456789abcdef" }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
+      status: undefined,
+      excludeStatus: "archived",
+      excludeAutomationLineage: false,
+      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+      search: "login",
+      repository: { repoOwner: "acme", repoName: "web-app" },
+      environmentId: "env-1",
+      spawnSource: "automation",
+      limit: 50,
+      offset: 0,
+      viewerUserId: "0123456789abcdef0123456789abcdef",
+    });
+  });
+
+  it("omits discovery filters that were not supplied", async () => {
+    await listSessions("?q=%20%20");
+
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        search: expect.anything(),
+        repository: expect.anything(),
+        environmentId: expect.anything(),
+        spawnSource: expect.anything(),
+      })
+    );
+  });
+
+  it.each([
+    [`?q=${"x".repeat(201)}`, "Invalid q"],
+    ["?repoOwner=acme", "Invalid repoName"],
+    ["?repoName=web-app", "Invalid repoOwner"],
+    ["?environmentId=%20", "Invalid environmentId"],
+    ["?origin=cron", "Invalid origin"],
+  ])("rejects the discovery query %s before querying the store", async (query, message) => {
+    const response = await listSessions(query);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+});

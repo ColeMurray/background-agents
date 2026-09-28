@@ -139,8 +139,9 @@ The build process runs the same setup steps that a normal session would:
 1. Clones every repository in the scope at its base branch (for an environment, **concurrently**)
 2. Runs each repository's `.openinspect/setup.sh` script (if present) **sequentially, in position
    order**, so a later repository's setup can rely on an earlier one's
-3. Calls the control plane with the exact bound provider session id
-4. Lets a durable Jobs consumer save the provider image artifact and terminate the build session
+3. Refreshes OpenCode's model catalog (see [Model catalog](#model-catalog))
+4. Calls the control plane with the exact bound provider session id
+5. Lets a durable Jobs consumer save the provider image artifact and terminate the build session
 
 ```mermaid
 flowchart TD
@@ -170,6 +171,19 @@ flowchart TD
     artifact -->|outcome ambiguous| terminal[Mark failed; do not create again]
     terminal --> cleanup
 ```
+
+#### Model catalog
+
+OpenCode reads its provider and model catalog from `~/.cache/opencode/models.json` when that file
+exists, and otherwise from the catalog compiled into the pinned OpenCode binary. It downloads a
+newer catalog in the background, but only the next OpenCode process reads it. Without a file on
+disk, a fresh sandbox would never know about a model published after the pinned OpenCode release.
+
+The build runs `opencode models --refresh`, which writes the published catalog to that file, so
+every session started from the image resolves models as of the build and session boots do no extra
+work. The step is best-effort: a failure is logged and the build continues. OpenCode's own
+environment variables (`OPENCODE_MODELS_URL`, `OPENCODE_MODELS_PATH`) apply to the refresh as they
+do to sessions.
 
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
@@ -368,9 +382,11 @@ Updating the shared sandbox toolchain does not automatically refresh prepared re
 environment images. Use the refresh button below after a dependency-only update when those images
 must pick up the new tools. Existing compatible saved sessions remain usable.
 
-Pre-built images are rebuilt every 30 minutes when new commits are detected. If you just pushed code
-and want the image updated immediately, trigger a manual rebuild — the refresh button next to the
-repository in Settings > Images, or next to the environment in Settings > Environments.
+Pre-built images are rebuilt every 30 minutes when new commits are detected. The image's
+[model catalog](#model-catalog) is as old as the image, so a newly published model reaches a quiet
+repository only on its next rebuild. If you just pushed code, or want a new model available
+immediately, trigger a manual rebuild — the refresh button next to the repository in Settings >
+Images, or next to the environment in Settings > Environments.
 
 ---
 

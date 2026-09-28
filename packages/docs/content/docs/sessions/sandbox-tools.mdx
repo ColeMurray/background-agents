@@ -1,0 +1,134 @@
+---
+title: "Sandbox tools: terminal, code-server, VNC, and tunnels"
+description: What the web terminal, code-server, VNC desktop, and port tunnels are, who can use them, how to enable them, and how tunnel URLs reach processes inside the sandbox.
+audience: team-owner
+owner: web
+status: published
+lastReviewed: "2026-09-23"
+relatedCode:
+  - packages/web/src/components/terminal-panel.tsx
+  - packages/web/src/components/sidebar/code-server-section.tsx
+  - packages/web/src/components/sidebar/vnc-section.tsx
+  - packages/web/src/components/sidebar/tunnel-urls-section.tsx
+  - packages/web/src/components/settings/sandbox-settings.tsx
+  - packages/web/src/components/settings/integrations/code-server-integration-settings.tsx
+  - packages/control-plane/src/routes/session-runtime-proxy.ts
+  - packages/shared/src/rbac.ts
+  - docs/HOW_IT_WORKS.md
+---
+
+This page explains the four ways to reach inside a running sandbox, who can use them, and how to turn them on for your workspace.
+
+## What each tool is
+
+| Tool         | What it gives you                                                                                                                            | Where it appears                                                                                                                                           |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web terminal | A shell in the sandbox, served by ttyd. Use it to run commands, inspect files, or start a process the agent did not.                         | The **Terminal** section of the session sidebar, with "Show" / "Hide" to open a panel under the timeline and "Open in new tab" for a full-window terminal. |
+| Code server  | Browser-based VS Code attached to the session workspace. Open it to read and edit files directly.                                            | The **Code server** section with an "Open Editor" link and a "Copy password" button; paste the password when the editor asks for it.                       |
+| VNC desktop  | The sandbox's graphical desktop through noVNC. Use it to watch the browser the agent drives with its browser tools, or to drive it yourself. | The **VNC** section with an "Open Desktop" link.                                                                                                           |
+| Port tunnels | Public URLs for ports inside the sandbox, such as a dev server on 3000.                                                                      | The **Tunnel URLs** section with one "Port 3000"-style link per configured port.                                                                           |
+
+All four run inside the session's sandbox, so anything you do in them happens in the same workspace the agent is using.
+
+## Who can use them
+
+Sandbox tools need the `sessions.sandbox_access` permission. Members, Administrators, and Owners have it; Viewers do not. Without it, the Terminal, Code server, VNC, and Tunnel URLs sections are not shown at all, and the "Open provider dashboard" link in the sandbox status popover is hidden.
+
+Access is workspace-wide: anyone with the permission can open the tools in any session, not only sessions they created. See [workspace access](/administration/workspace-access).
+
+## Enabling the tools
+
+Changes apply to sessions created after you save. Sessions already running keep the configuration they started with.
+
+<Steps>
+<Step>
+### Web terminal and ports
+
+Open Settings › Sandbox. Turn on the **Web Terminal** switch ("Enable a browser-based terminal in sandbox sessions."). The same page has **Code server port**, **VNC port**, and **Terminal port** fields. Leave them blank for the defaults; change one only to free that port for your own service on a tunnel. The three ports and every tunnel port must all be different.
+
+Sandbox settings can be set globally, per repository, and per environment.
+
+</Step>
+<Step>
+### Code server
+
+Open Settings › Integrations › **Code Server**. Turn on **Enable code-server** ("Attach a VS Code editor to new sandbox sessions"). Choose the scope: all repositories, or selected repositories only ("Code-server is only available for repositories in the allowlist."). Add per-repository overrides under the same section to enable or disable it for specific repositories regardless of the global choice.
+
+</Step>
+<Step>
+### VNC desktop
+
+Open Settings › Integrations › **VNC Desktop**. Turn on **Enable VNC desktop** ("Attach a remote desktop to new sandbox sessions"), then choose the scope and any per-repository overrides in the same way as code-server.
+
+</Step>
+<Step>
+### Tunnel ports
+
+Back in Settings › Sandbox, use **Tunnel Ports** and "Add port" to list the ports to expose (for example 3000 or 5173). You can configure up to 10. Each port gets a public tunnel URL when a sandbox starts.
+
+</Step>
+</Steps>
+
+<Callout type="info" title="Child sessions">
+  Child sessions resolve code-server and VNC from their own repository's settings when they are
+  spawned, so a child on the same repository gets the same tools as its parent.
+</Callout>
+
+## Tunnel URLs inside the sandbox
+
+Tunnel URLs are also written into the sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs, so a process you start can learn its own public address:
+
+```dotenv
+# /workspace/.tunnels.env
+TUNNEL_SANDBOX_ID=sandbox-acme-app-1783614336426
+TUNNEL_3000=https://abc123-3000.modal.host
+TUNNEL_5173=https://abc123-5173.modal.host
+```
+
+The file is plain `KEY=value`, so any tool that reads an env file can load it. For when the file is written and how long the runtime waits for fresh URLs, see [Lifecycle scripts](/configure/lifecycle-scripts#tunnel-urls).
+
+## When the tools are unavailable
+
+The tools work only while the sandbox is **Ready**. In every other sandbox state the control plane answers "Sandbox access is unavailable" and the session page hides the tool sections:
+
+- While the sandbox is starting, the sections that are visible say "Editor starting…" or "Desktop starting…", and tunnel links are shown as plain text.
+- After the sandbox stops from inactivity, or becomes unresponsive or failed, the sections are hidden or read "Editor unavailable" / "Desktop unavailable". Send a prompt to restore the sandbox; the tools come back once it is Ready.
+
+The sandbox status popover in the header tells you which state the sandbox is in.
+
+## Troubleshooting
+
+<Accordions>
+  <Accordion title="The terminal shows Connecting to terminal... and never connects">
+    The terminal panel embeds a ttyd session authenticated with a token issued for your session. If
+    the sandbox stopped or the token is no longer valid, the panel shows "Terminal session expired
+    or failed to load." with "Refresh the page to reconnect." Reload the session page; if the
+    sandbox is no longer Ready, send a prompt to restore it first.
+
+</Accordion>
+  <Accordion title="The Code server or VNC section is missing">
+    Check, in order: the tool is enabled for this repository under Settings › Integrations (a global
+    "selected repositories" scope or a per-repository override may exclude it); you have
+    `sessions.sandbox_access` (Viewers do not); and the sandbox is Ready. The session must also have
+    been created after the tool was enabled.
+
+</Accordion>
+  <Accordion title="Tunnel URLs are listed but the link does not respond">
+    A tunnel URL only routes to a process that is listening on that port inside the sandbox. Confirm
+    your dev server started (check `start.sh` output in the terminal or ask the agent) and that it
+    binds to the configured port. Make sure the port is not the same as the code-server, VNC, or
+    terminal port.
+
+</Accordion>
+  <Accordion title="start.sh could not read /workspace/.tunnels.env">
+    The tunnel URLs were not resolved within the 30-second wait, so `start.sh` ran without them.
+    Restart the process after the sidebar shows the URLs, or have your script poll the file.
+
+</Accordion>
+</Accordions>
+
+## Next steps
+
+- [Sandbox settings](/configure/sandbox-settings)
+- [Lifecycle scripts](/configure/lifecycle-scripts)
+- [The session page](/sessions/session-page)

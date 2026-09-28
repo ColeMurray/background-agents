@@ -2,6 +2,102 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 28, 2026
+
+### Added
+
+OpenCode sessions using a connected ChatGPT subscription now report estimated model costs through
+the existing session cost display and spending limit. These are API-price equivalents, not
+additional subscription charges or an OpenAI invoice; estimates remain zero if catalog pricing is
+unavailable.
+
+Workspace settings now includes Teams. Administrators can create teams, manage members and leads,
+edit team defaults, and archive or restore teams. Team leads can manage their own teams where
+permitted.
+
+## September 27, 2026
+
+### Changed
+
+Trace export now emits published schema 2: messages, events and usage are all oldest first, and
+session trace byte-budget errors use `trace_budget_exceeded`. Single-session downloads export only
+the requested session; `scope` on that route now returns 400. Whole runs remain available through
+the paginated bulk export.
+
+### Added
+
+Operators can select `modal-vm` deployment-wide for Docker-capable Modal sandboxes, with separate
+prepared images and filesystem snapshot recovery. The existing `modal` backend remains the default;
+switching backends does not migrate existing sessions or images. See
+[Modal VM setup](docs/MODAL_DOCKER.md).
+
+The analytics dashboard now shows harness metrics, automation performance in automation and all
+scopes, complete runs, and pull-request cost per merged PR by model and harness.
+
+The analytics dashboard now lets operators select human, agent, automation or all sessions and
+compare token usage, cost by model and provider billing in the selected scope.
+
+Analytics responses now include session token totals and cache hit ratio, pull-request cost by model
+and harness, and the top 20 scoped runs in the dashboard snapshot. Run titles may be null.
+
+Session analytics API now accepts `scope=human|agent|automation|all` (default `human`) on the
+dashboard, summary, timeseries, and breakdown routes, and supports `by=model`, `by=harness`,
+`by=spawnSource`, `by=automation`, and `by=provider` breakdowns. Provider rows include the number of
+sessions billed through a matching provider account.
+
+The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema and instructions for
+manually downloading paginated runs through the web app.
+
+## September 26, 2026
+
+### Added
+
+Bulk session export accepts `include` as a comma-separated list of `messages`, `events`, and
+`usage`, so one session line can carry the prompt, the persisted timeline events, and per-step token
+usage. Each session's included collections are read in one storage snapshot and share one 4 MiB byte
+budget and one page cap, and any include limits the request to 5 sessions per page. Messages keep
+their existing newest-first order; events and usage are listed in timeline order.
+
+## September 25, 2026
+
+### Added
+
+Bulk session export now includes run identity, harness, model provider, repository membership, pull
+request lifecycle, and projected token totals on session lines. Schema 1 consumers must ignore
+unknown fields; `source` is unchanged and also appears as `spawnSource`.
+
+### Changed
+
+Bulk session export now requires `sessions.export` instead of `sessions.read`. Owners,
+Administrators, and users granted the permission through a custom role may export; Viewers, Members,
+and bot services cannot.
+
+## September 23, 2026
+
+**Sessions discovery across full history.** A new **Sessions** destination in the sidebar (above
+Automations) searches every session the viewer may read, including archived work and history beyond
+the command menu's recent window. Search matches titles, session-id prefixes, and any member
+repository of a multi-repository session; creator, repository, environment, lifecycle, and
+automation-origin filters compose on the server and live in the URL, so a filtered view can be
+shared or reloaded. The command menu now labels its results as recent sessions and offers **Search
+all sessions**, carrying typed text to the page; the sidebar's Archived shortcut opens the archived
+view, with archive management still under Settings → Data Controls. The Inbox is unchanged.
+
+**Open changed files from agent output.** Repository file links in a session's agent output now open
+matching files in the Changes panel, including renamed files and line references. Links to files
+outside the session diff remain inert; external links retain their existing behavior.
+
+**Clearer audit log outcomes.** Authorization decisions in the workspace audit log now show
+**Allowed** or **Denied** with the recorded HTTP response (for example, HTTP 409 Conflict) instead
+of a green **Applied** badge, because admitting a request does not prove the change took effect.
+**Applied**, **No change**, and **Rejected** are reserved for events recorded by the operation
+itself. Older rows without a recorded status show the decision with the response marked as not
+recorded; stored audit data is unchanged.
+
+**Claude Opus 5.5.** Adds `anthropic/claude-opus-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max. The Claude Agent harness now uses
+`claude-agent-sdk` 0.2.158, whose bundled Claude Code release natively supports Opus 5.5.
+
 ## September 21, 2026
 
 **Grok 4.7.** Adds `xai/grok-4.7` to the model picker and integrations, with reasoning efforts from

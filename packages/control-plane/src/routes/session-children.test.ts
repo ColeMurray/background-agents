@@ -64,6 +64,8 @@ describe("handleListChildren", () => {
         reasoningEffort: null,
         baseBranch: "main",
         status: "active",
+        ownerTeamId: null,
+        visibility: "workspace",
         parentSessionId: "parent",
         spawnSource: "agent",
         spawnDepth: 1,

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SESSION_LIST_SEARCH_LENGTH,
+  normalizeSessionListSearch,
   parseSessionListQuery,
   serializeSessionListQuery,
   SESSION_LIST_CURRENT_USER,
@@ -96,5 +98,112 @@ describe("session list query codec", () => {
         )
       )
     ).toEqual({ success: false, invalidParam: "status" });
+  });
+});
+
+describe("session discovery query codec", () => {
+  it("serializes search and discovery filters after the established params", () => {
+    expect(
+      serializeSessionListQuery({
+        limit: 50,
+        offset: 0,
+        excludeStatus: "archived",
+        createdBy: [SESSION_LIST_CURRENT_USER],
+        q: "  fix login  ",
+        repoOwner: "acme",
+        repoName: "web-app",
+        environmentId: "env-1",
+        origin: "automation",
+      }).toString()
+    ).toBe(
+      "limit=50&offset=0&excludeStatus=archived&createdBy=me&q=fix+login&repoOwner=acme&repoName=web-app&environmentId=env-1&origin=automation"
+    );
+  });
+
+  it("omits blank search text and half-specified repositories", () => {
+    expect(serializeSessionListQuery({ q: "   ", repoOwner: "acme" }).toString()).toBe("");
+    expect(serializeSessionListQuery({ repoName: "web-app" }).toString()).toBe("");
+  });
+
+  it("parses trimmed search text and discovery filters", () => {
+    expect(
+      parseSessionListQuery(
+        new URLSearchParams(
+          "q=%20Fix%20Login%20&repoOwner=acme&repoName=web-app&environmentId=env-1&origin=github-bot"
+        )
+      )
+    ).toEqual({
+      success: true,
+      data: {
+        limit: 50,
+        offset: 0,
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdBy: [],
+        q: "Fix Login",
+        repoOwner: "acme",
+        repoName: "web-app",
+        environmentId: "env-1",
+        origin: "github-bot",
+      },
+    });
+  });
+
+  it("treats blank search and identifier values as absent", () => {
+    const parsed = parseSessionListQuery(
+      new URLSearchParams("q=%20%20&repoOwner=&repoName=&environmentId=&origin=")
+    );
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).not.toHaveProperty("q");
+    expect(parsed.data).not.toHaveProperty("repoOwner");
+    expect(parsed.data).not.toHaveProperty("environmentId");
+    expect(parsed.data).not.toHaveProperty("origin");
+  });
+
+  it("accepts search text up to the documented bound and rejects longer input", () => {
+    const longest = "x".repeat(MAX_SESSION_LIST_SEARCH_LENGTH);
+    expect(parseSessionListQuery(new URLSearchParams({ q: ` ${longest} ` }))).toMatchObject({
+      success: true,
+      data: { q: longest },
+    });
+    expect(parseSessionListQuery(new URLSearchParams({ q: `${longest}y` }))).toEqual({
+      success: false,
+      invalidParam: "q",
+    });
+    expect(normalizeSessionListSearch(`${longest}y`)).toBeNull();
+    expect(normalizeSessionListSearch(undefined)).toBe("");
+  });
+
+  it.each([
+    ["repoOwner=acme", "repoName"],
+    ["repoName=web-app", "repoOwner"],
+    ["repoOwner=%20&repoName=web-app", "repoOwner"],
+    [`repoOwner=acme&repoName=${"n".repeat(257)}`, "repoName"],
+    ["environmentId=%20", "environmentId"],
+    ["origin=cron", "origin"],
+  ] as const)("rejects the discovery input %s", (query, invalidParam) => {
+    expect(parseSessionListQuery(new URLSearchParams(query))).toEqual({
+      success: false,
+      invalidParam,
+    });
+  });
+
+  it("round-trips a discovery query through serialize and parse", () => {
+    const query = {
+      limit: 25,
+      offset: 25,
+      status: "archived" as const,
+      excludeAutomationLineage: false,
+      createdBy: ["a".repeat(32)],
+      q: "owner/repo",
+      repoOwner: "group/subgroup",
+      repoName: "service",
+      environmentId: "env-2",
+      origin: "user" as const,
+    };
+    const parsed = parseSessionListQuery(serializeSessionListQuery(query));
+    expect(parsed).toEqual({ success: true, data: { ...query, excludeStatus: undefined } });
   });
 });

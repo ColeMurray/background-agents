@@ -9,15 +9,26 @@ from typing import Any
 import modal
 
 from sandbox_runtime.constants import (
+    DOCKER_ENABLED_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
     SANDBOX_TIMEOUT_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
     VNC_PASSWORD_MAX_BYTES,
 )
+from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus
 
-from ..app import app, llm_secrets
+from ..app import app
+from ..app_config import APP_NAME
 from ..images.base import base_image
+from .launch_policy import (
+    docker_allocation_name,
+    docker_allocation_tags,
+    docker_base_image,
+    docker_runtime_env,
+    launch_kwargs,
+    parse_launch,
+)
 from .models import SandboxConfig, SandboxHandle
 from .tunnels import SandboxTunnels
 from .vcs_env import inject_vcs_env_vars
@@ -32,34 +43,15 @@ _RESERVED_LAUNCH_ENV_VARS = {
     "SESSION_CONFIG",
     VNC_PASSWORD_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
+    DOCKER_ENABLED_ENV_VAR,
 }
+
+log = get_logger("manager")
+ACCESS_PASSWORD_READ_TIMEOUT_SECONDS = 30
 
 
 class RepositoryImageUnavailableError(RuntimeError):
     """The selected repository image no longer exists in Modal."""
-
-
-def _resource_kwargs(settings: dict[str, Any] | None) -> dict[str, Any]:
-    """Map sandbox settings to Modal resource kwargs.
-
-    `cpuCores` -> Modal `cpu` (cores, fractional allowed), `memoryMib` -> Modal
-    `memory` (MiB). The control plane owns normalization; this only maps
-    already-normalized settings into provider-specific argument names.
-    """
-    if not settings:
-        return {}
-
-    kwargs: dict[str, Any] = {}
-
-    cpu_cores = settings.get("cpuCores")
-    if cpu_cores is not None:
-        kwargs["cpu"] = float(cpu_cores)
-
-    memory_mib = settings.get("memoryMib")
-    if memory_mib is not None:
-        kwargs["memory"] = memory_mib
-
-    return kwargs
 
 
 @dataclass(frozen=True)
@@ -80,6 +72,30 @@ class SnapshotImageSource:
 
 
 type SandboxImageSource = BaseImageSource | RepositoryImageSource | SnapshotImageSource
+
+
+async def _create_sandbox(
+    create_kwargs: dict[str, Any], *, repository_image: bool
+) -> modal.Sandbox:
+    """Only a missing repository image at create time is classified as unavailable."""
+    try:
+        return await modal.Sandbox.create.aio(
+            "python", "-m", "sandbox_runtime.entrypoint", **create_kwargs
+        )
+    except modal.exception.NotFoundError as e:
+        if repository_image:
+            raise RepositoryImageUnavailableError("repository image is unavailable") from e
+        raise
+
+
+def _session_identity(session_config: Any) -> str:
+    if isinstance(session_config, dict):
+        session_id = session_config.get("session_id")
+    elif session_config is not None:
+        session_id = session_config.session_id
+    else:
+        session_id = None
+    return session_id if isinstance(session_id, str) else ""
 
 
 @dataclass(frozen=True)
@@ -114,6 +130,7 @@ class SandboxLauncher:
             )
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
+        docker = parse_launch(config.sandbox_backend, config.settings)
         env_vars = {
             key: value
             for key, value in (config.user_env_vars or {}).items()
@@ -128,6 +145,7 @@ class SandboxLauncher:
                 SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
                 "REPO_OWNER": config.repo_owner or "",
                 "REPO_NAME": config.repo_name or "",
+                **docker_runtime_env(docker),
             }
         )
 
@@ -135,7 +153,7 @@ class SandboxLauncher:
         include_github_cli_aliases = False
         snapshot_id: str | None = None
         if isinstance(spec.source, BaseImageSource):
-            image = base_image
+            image = docker_base_image() if docker.enabled else base_image
         elif isinstance(spec.source, RepositoryImageSource):
             try:
                 image = modal.Image.from_id(spec.source.image_id)
@@ -183,6 +201,9 @@ class SandboxLauncher:
         )
         env_vars.update(tunnels.environment)
 
+        # A fresh handle avoids Modal caching the ID of a deleted/recreated secret.
+        llm_secrets = modal.Secret.from_name("llm-api-keys")
+        await llm_secrets.hydrate.aio()
         create_kwargs: dict[str, Any] = {
             "image": image,
             "app": app,
@@ -190,22 +211,31 @@ class SandboxLauncher:
             "timeout": config.timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,
-            **_resource_kwargs(config.settings),
+            **launch_kwargs(docker),
         }
         if tunnels.exposed_ports:
             create_kwargs["encrypted_ports"] = tunnels.exposed_ports
 
-        try:
-            sandbox = await modal.Sandbox.create.aio(
-                "python",
-                "-m",
-                "sandbox_runtime.entrypoint",
-                **create_kwargs,
+        repository_image = isinstance(spec.source, RepositoryImageSource)
+        if docker.enabled:
+            sandbox, adopted = await self._launch_docker_sandbox(
+                session_id=_session_identity(config.session_config),
+                sandbox_id=sandbox_id,
+                retire_sandbox_id=config.retire_sandbox_id,
+                create_kwargs=create_kwargs,
+                repository_image=repository_image,
+                launch_deadline_at_ms=config.launch_deadline_at_ms,
             )
-        except modal.exception.NotFoundError as e:
-            if isinstance(spec.source, RepositoryImageSource):
-                raise RepositoryImageUnavailableError("repository image is unavailable") from e
-            raise
+            if adopted:
+                passwords = await self._read_access_passwords(
+                    sandbox,
+                    code_server_enabled=config.code_server_enabled,
+                    vnc_enabled=config.vnc_enabled,
+                )
+                code_server_password = passwords.get("CODE_SERVER_PASSWORD")
+                vnc_password = passwords.get(VNC_PASSWORD_ENV_VAR)
+        else:
+            sandbox = await _create_sandbox(create_kwargs, repository_image=repository_image)
         modal_object_id = sandbox.object_id
         urls = await tunnels.resolve(sandbox, sandbox_id)
 
@@ -222,4 +252,103 @@ class SandboxLauncher:
             vnc_password=vnc_password,
             ttyd_url=urls.ttyd_url,
             tunnel_urls=urls.tunnel_urls,
+            sandbox_backend=docker.backend,
+        )
+
+    async def _launch_docker_sandbox(
+        self,
+        *,
+        session_id: str,
+        sandbox_id: str,
+        retire_sandbox_id: str | None,
+        create_kwargs: dict[str, Any],
+        repository_image: bool,
+        launch_deadline_at_ms: int | None = None,
+    ) -> tuple[modal.Sandbox, bool]:
+        """Create a named VM or adopt only the allocation owned by this generation."""
+        if retire_sandbox_id:
+            await self._retire_docker_allocation(session_id, retire_sandbox_id)
+        name = docker_allocation_name(session_id)
+        tags = docker_allocation_tags(session_id, sandbox_id)
+        existing = await self._find_owned_docker_allocation(name, tags)
+        if existing is None:
+            if launch_deadline_at_ms is not None and time.time() * 1000 >= launch_deadline_at_ms:
+                raise RuntimeError("VM launch deadline expired")
+            try:
+                sandbox = await _create_sandbox(
+                    {**create_kwargs, "name": name, "tags": tags},
+                    repository_image=repository_image,
+                )
+                return sandbox, False
+            except modal.exception.AlreadyExistsError:
+                existing = await self._find_owned_docker_allocation(name, tags)
+                if existing is None:
+                    raise
+        log.info(
+            "sandbox.docker_allocation_adopted",
+            sandbox_id=sandbox_id,
+            modal_object_id=existing.object_id,
+        )
+        return existing, True
+
+    @staticmethod
+    async def _read_access_passwords(
+        sandbox: modal.Sandbox, *, code_server_enabled: bool, vnc_enabled: bool
+    ) -> dict[str, str]:
+        """Recover enabled service credentials from the owned VM launch environment."""
+        keys = []
+        if code_server_enabled:
+            keys.append("CODE_SERVER_PASSWORD")
+        if vnc_enabled:
+            keys.append(VNC_PASSWORD_ENV_VAR)
+        if not keys:
+            return {}
+        process = await sandbox.exec.aio(
+            "python",
+            "-I",
+            "-c",
+            "import json, os, sys; print(json.dumps({k: os.environ.get(k) for k in sys.argv[1:]}))",
+            *keys,
+            timeout=ACCESS_PASSWORD_READ_TIMEOUT_SECONDS,
+        )
+        output = await process.stdout.read.aio()
+        if await process.wait.aio() != 0:
+            raise RuntimeError("Could not recover adopted sandbox access credentials")
+        try:
+            passwords = json.loads(output)
+        except ValueError:
+            raise RuntimeError("Could not recover adopted sandbox access credentials") from None
+        if not isinstance(passwords, dict) or any(
+            not isinstance(passwords.get(key), str) or not passwords[key] for key in keys
+        ):
+            raise RuntimeError("Could not recover adopted sandbox access credentials")
+        return {key: passwords[key] for key in keys}
+
+    @staticmethod
+    async def _find_owned_docker_allocation(
+        name: str, tags: dict[str, str]
+    ) -> modal.Sandbox | None:
+        try:
+            sandbox = await modal.Sandbox.from_name.aio(APP_NAME, name)
+        except modal.exception.NotFoundError:
+            return None
+        if await sandbox.get_tags.aio() != tags:
+            raise RuntimeError("Docker sandbox allocation ownership mismatch")
+        return sandbox
+
+    async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:
+        """Terminate a prior named VM only when its ownership tags match."""
+        name = docker_allocation_name(session_id)
+        try:
+            sandbox = await modal.Sandbox.from_name.aio(APP_NAME, name)
+        except modal.exception.NotFoundError:
+            return
+        if await sandbox.get_tags.aio() != docker_allocation_tags(session_id, sandbox_id):
+            log.warn("sandbox.docker_allocation_retire_mismatch", sandbox_id=sandbox_id)
+            return
+        await sandbox.terminate.aio(wait=True)
+        log.info(
+            "sandbox.docker_allocation_retired",
+            sandbox_id=sandbox_id,
+            modal_object_id=sandbox.object_id,
         )

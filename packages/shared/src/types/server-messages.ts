@@ -3,11 +3,9 @@ import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
-import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
+import { sandboxStatusSchema, sessionStatusSchema, timelineSequenceSchema } from "./sessions";
 import { sandboxShutdownSchema, shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 import { clientRequestIdSchema } from "./prompts";
-
-const timelineSequenceSchema = z.number().int().nonnegative().safe();
 
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),

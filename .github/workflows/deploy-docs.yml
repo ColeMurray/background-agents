@@ -1,0 +1,71 @@
+name: Deploy Docs
+
+# Docs publication is manual: a maintainer runs this workflow from the Actions
+# tab after CI is green on main. It only runs for the main branch and deploys
+# the commit at the tip of main when it starts.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Queue a second request behind an active deployment instead of cancelling it.
+concurrency:
+  group: deploy-docs-production
+  cancel-in-progress: false
+
+env:
+  VERCEL_ORG_ID: ${{ vars.VERCEL_TEAM_ID || secrets.VERCEL_TEAM_ID }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_DOCS_PROJECT_ID || secrets.VERCEL_DOCS_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy docs to Vercel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # A maintainer asked for a deployment, so a run that cannot publish has to
+      # fail. Skipping the remaining steps would report success for a deployment
+      # that never happened.
+      - name: Require a publishable ref and Vercel credentials
+        env:
+          VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Deploy Docs publishes main only; this run targets $GITHUB_REF."
+            exit 1
+          fi
+          missing=""
+          [ -z "$VERCEL_API_TOKEN" ] && missing="$missing VERCEL_API_TOKEN"
+          [ -z "$VERCEL_ORG_ID" ] && missing="$missing VERCEL_TEAM_ID"
+          [ -z "$VERCEL_PROJECT_ID" ] && missing="$missing VERCEL_DOCS_PROJECT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing Vercel configuration (repository variable or secret):$missing"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel CLI 58.4.0
+        run: npm install -g vercel@58.4.0
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_API_TOKEN }}
+
+      - name: Build docs
+        run: vercel build --prod --token=${{ secrets.VERCEL_API_TOKEN }}
+
+      - name: Deploy docs
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_API_TOKEN }}

@@ -1,10 +1,15 @@
 import {
   ANALYTICS_BREAKDOWN_BY,
   ANALYTICS_DAYS,
+  ANALYTICS_RUN_ORDER_BY,
+  ANALYTICS_SCOPES,
+  DEFAULT_ANALYTICS_SCOPE,
   type AnalyticsDays,
+  type AnalyticsScope,
 } from "@open-inspect/shared/types/analytics";
-import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
+import { type AnalyticsFilters, AnalyticsStore } from "../db/analytics-store";
 import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
+import { SessionRunStore } from "../db/session-run-store";
 import {
   type PullRequestAnalyticsFilters,
   PullRequestAnalyticsStore,
@@ -23,6 +28,8 @@ import {
 } from "./shared";
 
 export const DEFAULT_ANALYTICS_DAYS: AnalyticsDays = 30;
+const DEFAULT_RUNS_LIMIT = 50;
+const MAX_RUNS_LIMIT = 100;
 
 /** The reporting window; absent, the default. The value is read the way `Number()` reads it. */
 const daysQuery = z.object({
@@ -35,16 +42,40 @@ const daysQuery = z.object({
     ),
 });
 
-const breakdownQuery = daysQuery.extend({
+const windowQuery = daysQuery.extend({
+  scope: z
+    .enum(ANALYTICS_SCOPES, { error: `scope must be one of: ${ANALYTICS_SCOPES.join(", ")}` })
+    .default(DEFAULT_ANALYTICS_SCOPE),
+});
+
+const breakdownQuery = windowQuery.extend({
   by: z.enum(ANALYTICS_BREAKDOWN_BY, {
     error: `by must be one of: ${ANALYTICS_BREAKDOWN_BY.join(", ")}`,
   }),
 });
 
-function getFilters(days: AnalyticsDays): AnalyticsFilters {
+const runsQuery = daysQuery.extend({
+  scope: z
+    .enum(ANALYTICS_SCOPES, { error: `scope must be one of: ${ANALYTICS_SCOPES.join(", ")}` })
+    .default("all"),
+  limit: z
+    .string()
+    .optional()
+    .transform((raw) => (raw === undefined ? DEFAULT_RUNS_LIMIT : Number(raw)))
+    .refine((value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_RUNS_LIMIT, {
+      error: `limit must be an integer between 1 and ${MAX_RUNS_LIMIT}`,
+    }),
+  orderBy: z
+    .enum(ANALYTICS_RUN_ORDER_BY, {
+      error: `orderBy must be one of: ${ANALYTICS_RUN_ORDER_BY.join(", ")}`,
+    })
+    .default("cost"),
+});
+
+function getFilters(days: AnalyticsDays, scope: AnalyticsScope): AnalyticsFilters {
   const endAt = Date.now();
   const startAt = endAt - days * 24 * 60 * 60 * 1000;
-  return { startAt, endAt, spawnSources: HUMAN_SPAWN_SOURCES };
+  return { startAt, endAt, scope };
 }
 
 /**
@@ -63,15 +94,16 @@ async function handleDashboard(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const query = parseQuery(request, daysQuery);
+  const query = parseQuery(request, windowQuery);
   if (query instanceof Response) return query;
-  const { days } = query;
+  const { days, scope } = query;
 
   const generatedAt = Date.now();
   const store = new AnalyticsDashboardStore(ctx.db);
   return json(
     await store.get({
       days,
+      scope,
       startAt: generatedAt - days * 24 * 60 * 60 * 1000,
       endAt: generatedAt,
     })
@@ -84,12 +116,12 @@ async function handleSummary(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const query = parseQuery(request, daysQuery);
+  const query = parseQuery(request, windowQuery);
   if (query instanceof Response) return query;
-  const { days } = query;
+  const { days, scope } = query;
 
   const store = new AnalyticsStore(ctx.db);
-  return json(await store.getSummary(getFilters(days)));
+  return json(await store.getSummary(getFilters(days, scope)));
 }
 
 async function handleTimeseries(
@@ -98,12 +130,12 @@ async function handleTimeseries(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const query = parseQuery(request, daysQuery);
+  const query = parseQuery(request, windowQuery);
   if (query instanceof Response) return query;
-  const { days } = query;
+  const { days, scope } = query;
 
   const store = new AnalyticsStore(ctx.db);
-  return json(await store.getTimeseries(getFilters(days)));
+  return json(await store.getTimeseries(getFilters(days, scope)));
 }
 
 async function handleBreakdown(
@@ -114,10 +146,10 @@ async function handleBreakdown(
 ): Promise<Response> {
   const query = parseQuery(request, breakdownQuery);
   if (query instanceof Response) return query;
-  const { days, by } = query;
+  const { days, scope, by } = query;
 
   const store = new AnalyticsStore(ctx.db);
-  return json(await store.getBreakdown(getFilters(days), by));
+  return json(await store.getBreakdown(getFilters(days, scope), by));
 }
 
 async function handlePullRequests(
@@ -134,6 +166,27 @@ async function handlePullRequests(
   return json(await store.get(getPullRequestFilters(days)));
 }
 
+async function handleRuns(
+  request: Request,
+  _env: Env,
+  _params: object,
+  ctx: RequestContext
+): Promise<Response> {
+  const query = parseQuery(request, runsQuery);
+  if (query instanceof Response) return query;
+  const endAt = Date.now();
+  const store = new SessionRunStore(ctx.db);
+  return json({
+    runs: await store.list({
+      startAt: endAt - query.days * 24 * 60 * 60 * 1000,
+      endAt,
+      limit: query.limit,
+      orderBy: query.orderBy,
+      scope: query.scope,
+    }),
+  });
+}
+
 const ANALYTICS_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("analytics.read"),
@@ -145,6 +198,7 @@ analyticsRoutes.get("/analytics/dashboard", ANALYTICS_READ, (c) => dispatch(c, h
 analyticsRoutes.get("/analytics/summary", ANALYTICS_READ, (c) => dispatch(c, handleSummary));
 analyticsRoutes.get("/analytics/timeseries", ANALYTICS_READ, (c) => dispatch(c, handleTimeseries));
 analyticsRoutes.get("/analytics/breakdown", ANALYTICS_READ, (c) => dispatch(c, handleBreakdown));
+analyticsRoutes.get("/analytics/runs", ANALYTICS_READ, (c) => dispatch(c, handleRuns));
 analyticsRoutes.get("/analytics/pull-requests", ANALYTICS_READ, (c) =>
   dispatch(c, handlePullRequests)
 );

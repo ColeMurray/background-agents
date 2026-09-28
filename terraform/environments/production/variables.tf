@@ -59,8 +59,8 @@ variable "modal_token_id" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_token_id) > 0
-    error_message = "modal_token_id must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_token_id) > 0
+    error_message = "modal_token_id must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -71,8 +71,8 @@ variable "modal_token_secret" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_token_secret) > 0
-    error_message = "modal_token_secret must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_token_secret) > 0
+    error_message = "modal_token_secret must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -82,8 +82,8 @@ variable "modal_workspace" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_workspace) > 0
-    error_message = "modal_workspace must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_workspace) > 0
+    error_message = "modal_workspace must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -93,8 +93,8 @@ variable "modal_environment" {
   default     = "main"
 
   validation {
-    condition     = var.sandbox_provider != "modal" || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
-    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || (length(trimspace(var.modal_environment)) > 0 && can(regex("^[^:/\\\\]+$", var.modal_environment)))
+    error_message = "modal_environment must be set and must not contain colons, slashes, or backslashes when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -104,8 +104,8 @@ variable "modal_environment_web_suffix" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
-    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || can(regex("^$|^[a-z0-9-]+$", var.modal_environment_web_suffix))
+    error_message = "modal_environment_web_suffix must be empty or contain only lowercase letters, digits, and dashes when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -344,7 +344,15 @@ variable "linear_bot_default_model" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Anthropic API key for the Slack and Linear bot classifiers, also injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider. Required only when a classifier bot is enabled and classification_model is an Anthropic model."
+  description = "Deployment-wide Anthropic API key injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Also serves the Slack and Linear bot classifiers when classification_anthropic_api_key is blank. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider."
+  type        = string
+  sensitive   = true
+  default     = ""
+  nullable    = false
+}
+
+variable "classification_anthropic_api_key" {
+  description = "Anthropic API key used specifically by the Slack and Linear bot classifiers; never injected into sandboxes. Falls back to anthropic_api_key when blank. Set this and leave anthropic_api_key blank to keep the classifier key out of sandboxes."
   type        = string
   sensitive   = true
   default     = ""
@@ -359,14 +367,15 @@ variable "anthropic_api_key" {
       (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
       startswith(var.classification_model, "openai/") ||
       startswith(var.classification_model, "gpt-") ||
+      trimspace(var.classification_anthropic_api_key) != "" ||
       trimspace(var.anthropic_api_key) != ""
     )
-    error_message = "anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
+    error_message = "classification_anthropic_api_key or anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
   }
 }
 
 variable "classification_model" {
-  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by classification_anthropic_api_key (falling back to anthropic_api_key); an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
   type        = string
   default     = "claude-haiku-4-5"
   nullable    = false
@@ -443,8 +452,8 @@ variable "modal_api_secret" {
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "modal" || length(var.modal_api_secret) > 0
-    error_message = "modal_api_secret must be set when sandbox_provider = 'modal'."
+    condition     = !contains(["modal", "modal-vm"], var.sandbox_provider) || length(var.modal_api_secret) > 0
+    error_message = "modal_api_secret must be set when sandbox_provider is 'modal' or 'modal-vm'."
   }
 }
 
@@ -456,6 +465,14 @@ variable "daytona_api_url" {
   validation {
     condition     = var.sandbox_provider != "daytona" || length(var.daytona_api_url) > 0
     error_message = "daytona_api_url must be set when sandbox_provider = 'daytona'."
+  }
+
+  # Daytona credentials outlive the backend that used them: the control plane
+  # keeps reclaiming sandboxes and snapshots after a provider switch, and it
+  # refuses to build a Daytona client unless both the URL and the key are set.
+  validation {
+    condition     = trimspace(var.daytona_api_key) == "" || length(trimspace(var.daytona_api_url)) > 0
+    error_message = "daytona_api_url must be set whenever daytona_api_key is set, so the control plane can still reclaim existing Daytona sandboxes after switching sandbox_provider."
   }
 }
 
@@ -666,13 +683,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
+    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
   }
 }
 
@@ -813,4 +830,16 @@ variable "unsafe_allow_all_users" {
   description = "Bypass Terraform's access-control safety check and allow any authenticated user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
   type        = bool
   default     = false
+}
+
+variable "docs_site_enabled" {
+  description = "Provision the public documentation site's Vercel project (packages/docs). Requires vercel_api_token and vercel_team_id. Deployment stays manual: the project has no git integration, so only the Deploy Docs workflow publishes it."
+  type        = bool
+  default     = false
+}
+
+variable "docs_custom_domain" {
+  description = "Production hostname for the documentation site, e.g. 'docs.example.com'. Leave unset to serve the project's vercel.app URL only. Requires docs_site_enabled = true."
+  type        = string
+  default     = null
 }

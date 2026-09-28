@@ -252,6 +252,8 @@ export async function initSession(overrides?: {
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: defaults.sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: defaults.title ?? null,
     repoOwner: defaults.repoOwner,
     repoName: defaults.repoName,
@@ -406,6 +408,8 @@ export async function initNamedSession(
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: defaults.title ?? null,
     repoOwner: defaults.repoOwner ?? null,
     repoName: defaults.repoName ?? null,

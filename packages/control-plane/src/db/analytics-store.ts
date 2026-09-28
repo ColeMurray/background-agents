@@ -4,22 +4,59 @@ import type {
   AnalyticsBreakdownResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
+  AnalyticsScope,
+  AnalyticsTokenTotals,
+} from "@open-inspect/shared/types/analytics";
+import {
+  ANALYTICS_SCOPE_SPAWN_SOURCES,
+  getCacheHitRatio,
 } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import {
+  getModelDisplayName,
+  normalizeModelId,
+  extractProviderAndModel,
+} from "@open-inspect/shared/models";
+import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses";
+import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
 import { z } from "zod";
 
-/** Spawn sources that represent direct human-initiated sessions. */
-export const HUMAN_SPAWN_SOURCES: SpawnSource[] = ["user", "slack-bot", "linear-bot", "github-bot"];
-
 export interface AnalyticsFilters {
   startAt: number;
   endAt: number;
-  spawnSources?: SpawnSource[];
+  scope: AnalyticsScope;
 }
 
-const summaryRowSchema = z.object({
+export function scopePredicate(
+  scope: AnalyticsScope,
+  column: string
+): { sql: string; binds: SpawnSource[] } {
+  if (scope === "all") return { sql: "", binds: [] };
+  const binds = [...ANALYTICS_SCOPE_SPAWN_SOURCES[scope]];
+  return { sql: `AND ${column} IN (${binds.map(() => "?").join(", ")})`, binds };
+}
+
+const tokenRowSchema = z.object({
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  reasoning_tokens: z.number(),
+  cache_read_tokens: z.number(),
+  cache_write_tokens: z.number(),
+});
+
+function decodeTokens(row: z.infer<typeof tokenRowSchema> | undefined): AnalyticsTokenTotals {
+  return {
+    inputTokens: row?.input_tokens ?? 0,
+    outputTokens: row?.output_tokens ?? 0,
+    reasoningTokens: row?.reasoning_tokens ?? 0,
+    cacheReadTokens: row?.cache_read_tokens ?? 0,
+    cacheWriteTokens: row?.cache_write_tokens ?? 0,
+  };
+}
+
+const summaryRowSchema = tokenRowSchema.extend({
   total_sessions: z.number(),
   active_users: z.number(),
   total_cost: z.number(),
@@ -42,7 +79,7 @@ const timeseriesRowSchema = z.object({
 
 type TimeseriesRow = z.infer<typeof timeseriesRowSchema>;
 
-const breakdownRowSchema = z.object({
+const breakdownRowSchema = tokenRowSchema.extend({
   key: z.string().nullable(),
   display_name: z.string().nullable().optional(),
   sessions: z.number(),
@@ -56,9 +93,62 @@ const breakdownRowSchema = z.object({
   last_active: z.number(),
 });
 
+const groupedBreakdownRowSchema = breakdownRowSchema.extend({
+  key: z.string(),
+  display_name: z.string().nullable(),
+});
+const billingRowSchema = z.object({
+  model: z.string(),
+  provider: z.string(),
+  sessions: z.number(),
+});
+
 type BreakdownRow = z.infer<typeof breakdownRowSchema>;
+type SqlBreakdownBy = Exclude<AnalyticsBreakdownBy, "provider">;
 
 const NO_REPOSITORY_ANALYTICS_KEY = "No repository";
+
+export function mergeBreakdownEntries(
+  entries: AnalyticsBreakdownEntry[],
+  keyOf: (entry: AnalyticsBreakdownEntry) => string,
+  displayNameOf: (key: string) => string | undefined
+): AnalyticsBreakdownEntry[] {
+  const merged = new Map<string, AnalyticsBreakdownEntry>();
+  for (const entry of entries) {
+    const key = keyOf(entry);
+    const previous = merged.get(key);
+    const displayName = displayNameOf(key);
+    if (!previous) {
+      merged.set(key, { ...entry, key, ...(displayName !== undefined && { displayName }) });
+      continue;
+    }
+    const oldTerminal = previous.completed + previous.failed + previous.cancelled;
+    const newTerminal = entry.completed + entry.failed + entry.cancelled;
+    const terminal = oldTerminal + newTerminal;
+    merged.set(key, {
+      ...previous,
+      sessions: previous.sessions + entry.sessions,
+      completed: previous.completed + entry.completed,
+      failed: previous.failed + entry.failed,
+      cancelled: previous.cancelled + entry.cancelled,
+      cost: previous.cost + entry.cost,
+      prs: previous.prs + entry.prs,
+      messageCount: previous.messageCount + entry.messageCount,
+      inputTokens: previous.inputTokens + entry.inputTokens,
+      outputTokens: previous.outputTokens + entry.outputTokens,
+      reasoningTokens: previous.reasoningTokens + entry.reasoningTokens,
+      cacheReadTokens: previous.cacheReadTokens + entry.cacheReadTokens,
+      cacheWriteTokens: previous.cacheWriteTokens + entry.cacheWriteTokens,
+      avgDuration: terminal
+        ? (previous.avgDuration * oldTerminal + entry.avgDuration * newTerminal) / terminal
+        : 0,
+      lastActive: Math.max(previous.lastActive, entry.lastActive),
+    });
+  }
+  return [...merged.values()].sort(
+    (a, b) => b.sessions - a.sessions || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  );
+}
 
 export class AnalyticsStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -69,8 +159,7 @@ export class AnalyticsStore {
   }
 
   prepareSummary(filters: AnalyticsFilters): SqlStatement {
-    const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
-    const placeholders = sources.map(() => "?").join(", ");
+    const { sql, binds } = scopePredicate(filters.scope, "spawn_source");
 
     return this.db
       .prepare(
@@ -83,6 +172,11 @@ export class AnalyticsStore {
            COUNT(DISTINCT COALESCE(user_id, NULLIF(scm_login, ''))) AS active_users,
            COALESCE(SUM(total_cost), 0) AS total_cost,
            COALESCE(SUM(pr_count), 0) AS total_prs,
+           COALESCE(SUM(input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(output_tokens), 0) AS output_tokens,
+           COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+           COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+           COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
            COALESCE(SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END), 0) AS created_count,
            COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_count,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_count,
@@ -91,9 +185,9 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count
          FROM sessions
          WHERE created_at >= ? AND created_at < ?
-           AND spawn_source IN (${placeholders})`
+            ${sql}`
       )
-      .bind(filters.startAt, filters.endAt, ...sources);
+      .bind(filters.startAt, filters.endAt, ...binds);
   }
 
   decodeSummary(result: SqlResult): AnalyticsSummaryResponse {
@@ -101,6 +195,7 @@ export class AnalyticsStore {
 
     const totalSessions = row?.total_sessions ?? 0;
     const totalCost = row?.total_cost ?? 0;
+    const tokens = decodeTokens(row);
 
     return {
       totalSessions,
@@ -108,6 +203,8 @@ export class AnalyticsStore {
       totalCost,
       avgCost: totalSessions > 0 ? totalCost / totalSessions : 0,
       totalPrs: row?.total_prs ?? 0,
+      ...tokens,
+      cacheHitRatio: getCacheHitRatio(tokens),
       statusBreakdown: {
         created: row?.created_count ?? 0,
         active: row?.active_count ?? 0,
@@ -125,8 +222,7 @@ export class AnalyticsStore {
   }
 
   prepareTimeseries(filters: AnalyticsFilters): SqlStatement {
-    const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
-    const placeholders = sources.map(() => "?").join(", ");
+    const { sql, binds } = scopePredicate(filters.scope, "s.spawn_source");
 
     return this.db
       .prepare(
@@ -137,11 +233,11 @@ export class AnalyticsStore {
          FROM sessions s
          LEFT JOIN users u ON s.user_id = u.id
          WHERE s.created_at >= ? AND s.created_at < ?
-           AND s.spawn_source IN (${placeholders})
+            ${sql}
          GROUP BY day_index, COALESCE(s.user_id, '__unlinked__' || COALESCE(s.scm_login, '__none__'))
          ORDER BY day_index ASC, group_key ASC`
       )
-      .bind(filters.startAt, filters.endAt, ...sources);
+      .bind(filters.startAt, filters.endAt, ...binds);
   }
 
   decodeTimeseries(result: SqlResult): AnalyticsTimeseriesResponse {
@@ -167,29 +263,61 @@ export class AnalyticsStore {
     filters: AnalyticsFilters,
     by: AnalyticsBreakdownBy
   ): Promise<AnalyticsBreakdownResponse> {
+    if (by === "provider") {
+      const [models, billing] = await this.db.batch(this.prepareProviderBreakdown(filters));
+      return this.decodeProviderBreakdown(this.decodeBreakdown(models, "model"), billing);
+    }
     const result = await this.prepareBreakdown(filters, by).all<BreakdownRow>();
-    return this.decodeBreakdown(result);
+    return this.decodeBreakdown(result, by);
   }
 
-  prepareBreakdown(filters: AnalyticsFilters, by: AnalyticsBreakdownBy): SqlStatement {
+  prepareProviderBreakdown(filters: AnalyticsFilters): [SqlStatement, SqlStatement] {
+    return [this.prepareBreakdown(filters, "model"), this.prepareBilling(filters)];
+  }
+
+  prepareBilling(filters: AnalyticsFilters): SqlStatement {
+    const { sql, binds } = scopePredicate(filters.scope, "s.spawn_source");
+    return this.db
+      .prepare(
+        `SELECT s.model AS model, a.provider AS provider, COUNT(*) AS sessions
+       FROM sessions s
+       JOIN session_model_provider_auth a ON a.session_id = s.id AND a.auth_mode = 'provider_account'
+       WHERE s.created_at >= ? AND s.created_at < ?
+         ${sql}
+       GROUP BY s.model, a.provider`
+      )
+      .bind(filters.startAt, filters.endAt, ...binds);
+  }
+
+  prepareBreakdown(filters: AnalyticsFilters, by: SqlBreakdownBy): SqlStatement {
     const isUserBreakdown = by === "user";
     const repoGroupExpression =
       "CASE WHEN s.repo_owner IS NULL OR s.repo_name IS NULL THEN NULL ELSE s.repo_owner || '/' || s.repo_name END";
 
-    const groupExpression = isUserBreakdown
-      ? "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')"
-      : repoGroupExpression;
+    const groupExpression = {
+      user: "COALESCE(s.user_id, NULLIF(s.scm_login, ''), '__unknown__')",
+      repo: repoGroupExpression,
+      model: "s.model",
+      harness: "s.harness",
+      spawnSource: "s.spawn_source",
+      automation: "s.automation_id",
+    }[by];
 
     const displayNameSelect = isUserBreakdown
       ? "COALESCE(MAX(NULLIF(u.display_name, '')), MAX(NULLIF(s.scm_login, '')), 'Unknown user') AS display_name,"
-      : "NULL AS display_name,";
+      : by === "automation"
+        ? "MAX(a.name) AS display_name,"
+        : "NULL AS display_name,";
 
-    const joinClause = isUserBreakdown ? "LEFT JOIN users u ON s.user_id = u.id" : "";
+    const joinClause = isUserBreakdown
+      ? "LEFT JOIN users u ON s.user_id = u.id"
+      : by === "automation"
+        ? "LEFT JOIN automations a ON a.id = s.automation_id"
+        : "";
 
-    const orderTail = isUserBreakdown ? "display_name ASC" : "key ASC";
+    const orderTail = isUserBreakdown || by === "automation" ? "display_name ASC" : "key ASC";
 
-    const sources = filters.spawnSources ?? HUMAN_SPAWN_SOURCES;
-    const placeholders = sources.map(() => "?").join(", ");
+    const { sql, binds } = scopePredicate(filters.scope, "s.spawn_source");
 
     return this.db
       .prepare(
@@ -202,6 +330,11 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
            COALESCE(SUM(total_cost), 0) AS cost,
            COALESCE(SUM(pr_count), 0) AS prs,
+           COALESCE(SUM(s.input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(s.output_tokens), 0) AS output_tokens,
+           COALESCE(SUM(s.reasoning_tokens), 0) AS reasoning_tokens,
+           COALESCE(SUM(s.cache_read_tokens), 0) AS cache_read_tokens,
+           COALESCE(SUM(s.cache_write_tokens), 0) AS cache_write_tokens,
            COALESCE(SUM(message_count), 0) AS message_count,
            COALESCE(
              AVG(CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN active_duration_ms END),
@@ -211,17 +344,18 @@ export class AnalyticsStore {
          FROM sessions s
          ${joinClause}
          WHERE s.created_at >= ? AND s.created_at < ?
-           AND s.spawn_source IN (${placeholders})
+            ${sql}
+            ${by === "automation" ? "AND s.automation_id IS NOT NULL" : ""}
          GROUP BY key
          ORDER BY sessions DESC, ${orderTail}`
       )
-      .bind(filters.startAt, filters.endAt, ...sources);
+      .bind(filters.startAt, filters.endAt, ...binds);
   }
 
-  decodeBreakdown(result: SqlResult): AnalyticsBreakdownResponse {
+  decodeBreakdown(result: SqlResult, by: SqlBreakdownBy): AnalyticsBreakdownResponse {
     const entries: AnalyticsBreakdownEntry[] = parseRows(
       result.results,
-      breakdownRowSchema,
+      by === "repo" ? breakdownRowSchema : groupedBreakdownRowSchema,
       "analytics breakdown row"
     ).map((row) => ({
       key: row.key ?? NO_REPOSITORY_ANALYTICS_KEY,
@@ -235,9 +369,51 @@ export class AnalyticsStore {
       messageCount: row.message_count,
       avgDuration: row.avg_duration,
       lastActive: row.last_active,
+      ...decodeTokens(row),
     }));
 
+    if (by === "model")
+      return {
+        entries: mergeBreakdownEntries(
+          entries,
+          (entry) => normalizeModelId(entry.key),
+          getModelDisplayName
+        ),
+      };
+    if (by === "harness")
+      return {
+        entries: entries.map((entry) => ({
+          ...entry,
+          displayName: isValidHarness(entry.key) ? HARNESS_CATALOG[entry.key].label : entry.key,
+        })),
+      };
     return { entries };
+  }
+
+  decodeProviderBreakdown(
+    models: AnalyticsBreakdownResponse,
+    billing: SqlResult
+  ): AnalyticsBreakdownResponse {
+    const entries = mergeBreakdownEntries(
+      models.entries,
+      (entry) => extractProviderAndModel(entry.key).provider,
+      (key) =>
+        Object.entries(SUBSCRIPTION_PROVIDER_DISPLAY_METADATA).find(
+          ([provider]) => provider === key
+        )?.[1].displayName ?? key
+    );
+    const counts = new Map<string, number>();
+    for (const row of parseRows(billing.results, billingRowSchema, "analytics billing row")) {
+      const provider = extractProviderAndModel(normalizeModelId(row.model)).provider;
+      if (provider === row.provider)
+        counts.set(provider, (counts.get(provider) ?? 0) + row.sessions);
+    }
+    return {
+      entries: entries.map((entry) => ({
+        ...entry,
+        subscriptionSessions: counts.get(entry.key) ?? 0,
+      })),
+    };
   }
 }
 

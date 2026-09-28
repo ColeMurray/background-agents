@@ -52,6 +52,25 @@ describe("collapseReplayTokenEvents", () => {
     ]);
   });
 
+  it("shows only the last stored text part after tool calls in one turn", () => {
+    const first = { ...tokenEvent("msg-1", "Let me check", 1), partId: "part-1" };
+    const last = { ...tokenEvent("msg-1", "Here is the answer", 3), partId: "part-2" };
+    const tool: SandboxEvent = {
+      type: "tool_call",
+      tool: "bash",
+      args: {},
+      callId: "call-1",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 2,
+    };
+    expect(collapseReplayTokenEvents([first, tool, last, completionEvent("msg-1", 4)])).toEqual([
+      tool,
+      last,
+      completionEvent("msg-1", 4),
+    ]);
+  });
+
   it("keeps final tokens from both sides of a compaction boundary", () => {
     const events = [
       tokenEvent("msg-1", "pre-partial", 1),

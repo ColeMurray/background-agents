@@ -29,6 +29,8 @@ describe("PullRequestAnalyticsStore row decoding", () => {
         result([{ day_index: 2, count: 2 }]),
         result([{ key: "acme/app", created: 5, merged: 1, closed: 1, avg_time_to_merge_ms: null }]),
         result([{ source: "automation", created: 3, merged: 1 }]),
+        result([{ key: "openai/gpt-5", created: 3, merged: 1, session_cost: 8 }]),
+        result([{ key: "claude", created: 2, merged: 1, session_cost: 4 }]),
       ])
     ).toEqual({
       funnel: { created: 5, open: 2, draft: 1, merged: 1, closed: 1 },
@@ -42,7 +44,33 @@ describe("PullRequestAnalyticsStore row decoding", () => {
       ],
       repos: [{ key: "acme/app", created: 5, merged: 1, closed: 1, avgTimeToMergeMs: null }],
       sources: [{ source: "automation", created: 3, merged: 1 }],
+      models: [
+        { key: "openai/gpt-5", displayName: "openai/gpt-5", created: 3, merged: 1, sessionCost: 8 },
+      ],
+      harnesses: [
+        { key: "claude", displayName: "Claude Agent", created: 2, merged: 1, sessionCost: 4 },
+      ],
     });
+  });
+
+  it("merges bare and prefixed model rows under the canonical key and re-sorts by cost", () => {
+    const results = Array.from({ length: 10 }, () => result([]));
+    results[8] = result([
+      { key: "openai/gpt-5", created: 1, merged: 1, session_cost: 4 },
+      { key: "anthropic/claude-haiku-4-5", created: 2, merged: 1, session_cost: 3 },
+      { key: "claude-haiku-4-5", created: 1, merged: 0, session_cost: 2 },
+    ]);
+
+    expect(store().decode(results).models).toEqual([
+      {
+        key: "anthropic/claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        created: 3,
+        merged: 1,
+        sessionCost: 5,
+      },
+      { key: "openai/gpt-5", displayName: "openai/gpt-5", created: 1, merged: 1, sessionCost: 4 },
+    ]);
   });
 
   it("rejects malformed persisted analytics rows", () => {
@@ -58,5 +86,14 @@ describe("PullRequestAnalyticsStore row decoding", () => {
         result([]),
       ])
     ).toThrow("Invalid PR funnel row");
+  });
+
+  it("validates model and harness results at their appended batch positions", () => {
+    const results = Array.from({ length: 10 }, () => result([]));
+    results[8] = result([{ key: "openai/gpt-5", created: 2, merged: 1, session_cost: "3" }]);
+    expect(() => store().decode(results)).toThrow("Invalid PR model row");
+    results[8] = result([]);
+    results[9] = result([{ key: "claude", created: 2, merged: 1, session_cost: "3" }]);
+    expect(() => store().decode(results)).toThrow("Invalid PR harness row");
   });
 });

@@ -1,7 +1,9 @@
 import { harnessIdSchema, type HarnessId } from "../harnesses";
 import { z } from "zod";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
+import { eventResponseSchema } from "./sandbox-events";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
+import type { PullRequestLifecycleState } from "./artifacts";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -85,6 +87,22 @@ export const pullRequestSummarySchema = z.object({
   closed: z.number(),
 });
 export type PullRequestSummary = z.infer<typeof pullRequestSummarySchema>;
+
+/** PR lifecycle and repository identity on a session export line. Timestamps are epoch ms. */
+export interface ExportPullRequest {
+  repoOwner: string;
+  repoName: string;
+  prNumber: number;
+  url: string;
+  lifecycleState: PullRequestLifecycleState;
+  isDraft: boolean;
+  headBranch: string;
+  baseBranch: string;
+  headSha: string | null;
+  providerCreatedAt: number | null;
+  mergedAt: number | null;
+  closedAt: number | null;
+}
 
 export const INITIAL_SESSION_READ_STATE_VERSION = 0;
 
@@ -248,6 +266,15 @@ export const sessionMessageSchema = z.object({
   completedAt: z.number().nullable(),
 });
 export type SessionMessage = z.infer<typeof sessionMessageSchema>;
+
+/** A persisted event's timeline position; it orders events that share a timestamp. */
+export const timelineSequenceSchema = z.number().int().safe().nonnegative();
+
+/** A persisted timeline event as the session trace export lists it. */
+export const sessionEventSchema = eventResponseSchema.extend({
+  timelineSequence: timelineSequenceSchema,
+});
+export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
 export const sessionParticipantProfileSchema = z.object({
   userId: z.string(),

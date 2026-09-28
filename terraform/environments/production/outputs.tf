@@ -143,3 +143,14 @@ output "verification_commands" {
 
   EOF
 }
+
+# Documentation Site
+output "docs_site_project_id" {
+  description = "Vercel project ID for the documentation site; set it as the VERCEL_DOCS_PROJECT_ID repository variable so Deploy Docs can publish (null when docs_site_enabled = false)"
+  value       = var.docs_site_enabled ? module.docs_site[0].project_id : null
+}
+
+output "docs_site_url" {
+  description = "Documentation site URL (null when docs_site_enabled = false)"
+  value       = var.docs_site_enabled ? coalesce(local.docs_custom_domain_url, module.docs_site[0].production_url) : null
+}

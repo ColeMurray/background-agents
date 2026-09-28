@@ -1,6 +1,8 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 
+// Service actors need a ceiling grant as well as an actor role grant (which may
+// come from a custom role). Bot ceilings omit sessions.export even for such actors.
 const SERVICE_PERMISSION_CEILINGS: Record<ServiceName, readonly PermissionId[]> = {
   web: [],
   "github-bot": [

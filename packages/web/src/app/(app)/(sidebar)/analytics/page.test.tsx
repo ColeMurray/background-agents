@@ -14,6 +14,14 @@ import AnalyticsPage from "./page";
 
 expect.extend(matchers);
 
+const zeroTokens = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
 const { mockUseAnalyticsDashboard, mockUseSidebarContext } = vi.hoisted(() => ({
   mockUseAnalyticsDashboard: vi.fn(),
   mockUseSidebarContext: vi.fn(),
@@ -31,6 +39,60 @@ vi.mock("@/components/analytics/summary-cards", () => ({
   AnalyticsSummaryCards: () => <div data-testid="analytics-summary-cards" />,
 }));
 
+vi.mock("@/components/analytics/token-cards", () => ({
+  AnalyticsTokenCards: () => <div data-testid="analytics-token-cards" />,
+}));
+
+vi.mock("@/components/analytics/model-bar-chart", () => ({
+  AnalyticsModelBarChart: ({ entries }: { entries?: AnalyticsBreakdownResponse["entries"] }) => (
+    <div data-testid="analytics-model-chart" data-entries={JSON.stringify(entries)} />
+  ),
+}));
+
+vi.mock("@/components/analytics/dimension-table", () => ({
+  AnalyticsDimensionTable: ({
+    title,
+    entries,
+  }: {
+    title: string;
+    entries?: AnalyticsBreakdownResponse["entries"];
+  }) => (
+    <div
+      data-testid={
+        title === "Providers" ? "analytics-provider-table" : "analytics-automation-table"
+      }
+      data-entries={JSON.stringify(entries)}
+    />
+  ),
+}));
+
+vi.mock("@/components/analytics/harness-cards", () => ({
+  AnalyticsHarnessCards: ({ entries }: { entries?: AnalyticsBreakdownResponse["entries"] }) => (
+    <div data-testid="analytics-harness-cards" data-entries={JSON.stringify(entries)} />
+  ),
+}));
+
+vi.mock("@/components/analytics/runs-table", () => ({
+  AnalyticsRunsTable: ({ runs }: { runs?: unknown[] }) => (
+    <div data-testid="analytics-runs-table" data-runs={JSON.stringify(runs)} />
+  ),
+}));
+
+vi.mock("@/components/analytics/pull-request-cost-table", () => ({
+  AnalyticsPullRequestCostTable: ({ title, entries }: { title: string; entries?: unknown[] }) => (
+    <div
+      data-testid={
+        title === "Cost by Model" ? "analytics-pr-model-cost" : "analytics-pr-harness-cost"
+      }
+      data-entries={JSON.stringify(entries)}
+    />
+  ),
+}));
+
+vi.mock("@/components/analytics/pull-request-cards", () => ({
+  AnalyticsPullRequestCards: () => <div data-testid="analytics-pr-cards" />,
+}));
+
 vi.mock("@/components/analytics/timeseries-chart", () => ({
   AnalyticsTimeseriesChart: () => <div data-testid="analytics-timeseries-chart" />,
 }));
@@ -45,6 +107,8 @@ afterEach(() => {
 });
 
 const summary: AnalyticsSummaryResponse = {
+  ...zeroTokens,
+  cacheHitRatio: null,
   totalSessions: 13,
   activeUsers: 3,
   totalCost: 12.5,
@@ -76,6 +140,7 @@ const repoBreakdown: AnalyticsBreakdownResponse = {
   entries: [
     {
       key: "open-inspect/background-agents",
+      ...zeroTokens,
       sessions: 8,
       completed: 7,
       failed: 1,
@@ -93,6 +158,7 @@ const userBreakdown: AnalyticsBreakdownResponse = {
   entries: [
     {
       key: "zoe",
+      ...zeroTokens,
       sessions: 8,
       completed: 7,
       failed: 1,
@@ -105,6 +171,7 @@ const userBreakdown: AnalyticsBreakdownResponse = {
     },
     {
       key: "anna",
+      ...zeroTokens,
       sessions: 3,
       completed: 2,
       failed: 0,
@@ -117,6 +184,7 @@ const userBreakdown: AnalyticsBreakdownResponse = {
     },
     {
       key: "mike",
+      ...zeroTokens,
       sessions: 1,
       completed: 1,
       failed: 0,
@@ -154,18 +222,130 @@ function getUserRows() {
 }
 
 describe("AnalyticsPage", () => {
+  it("shows automation only for automation and all scopes and orders the new views", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    mockUseAnalyticsDashboard.mockImplementation(() => ({
+      summary,
+      timeseries,
+      repoBreakdown,
+      userBreakdown,
+      harnessBreakdown: { entries: [repoBreakdown.entries[0]] },
+      automationBreakdown: { entries: [repoBreakdown.entries[0]] },
+      runs: [{ rootSessionId: "root-1" }],
+      pullRequests: { models: [{ key: "model-1" }], harnesses: [{ key: "harness-1" }] },
+      loading: false,
+    }));
+
+    expect(screen.queryByTestId("analytics-automation-table")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Agents" }));
+    expect(screen.queryByTestId("analytics-automation-table")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Automations" }));
+    expect(screen.getByTestId("analytics-automation-table")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([repoBreakdown.entries[0]])
+    );
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    expect(screen.getByTestId("analytics-automation-table")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Human" }));
+    expect(screen.queryByTestId("analytics-automation-table")).not.toBeInTheDocument();
+
+    expect(screen.getByTestId("analytics-harness-cards")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([repoBreakdown.entries[0]])
+    );
+    expect(screen.getByTestId("analytics-runs-table")).toHaveAttribute(
+      "data-runs",
+      JSON.stringify([{ rootSessionId: "root-1" }])
+    );
+    expect(screen.getByTestId("analytics-pr-model-cost")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([{ key: "model-1" }])
+    );
+    expect(screen.getByTestId("analytics-pr-harness-cost")).toHaveAttribute(
+      "data-entries",
+      JSON.stringify([{ key: "harness-1" }])
+    );
+    const widgets = Array.from(document.querySelectorAll("[data-testid]")).map((node) =>
+      node.getAttribute("data-testid")
+    );
+    expect(widgets.indexOf("analytics-harness-cards")).toBeGreaterThan(
+      widgets.indexOf("analytics-provider-table")
+    );
+    expect(widgets.indexOf("analytics-runs-table")).toBeGreaterThan(
+      widgets.indexOf("analytics-harness-cards")
+    );
+    expect(widgets.indexOf("analytics-pr-model-cost")).toBeGreaterThan(
+      widgets.indexOf("analytics-pr-cards")
+    );
+    expect(widgets.indexOf("analytics-pr-harness-cost")).toBeGreaterThan(
+      widgets.indexOf("analytics-pr-model-cost")
+    );
+  });
+
   it("refetches analytics when the selected range changes", async () => {
     const user = userEvent.setup();
 
     renderPage();
 
-    expect(mockUseAnalyticsDashboard).toHaveBeenCalledWith(30);
+    expect(mockUseAnalyticsDashboard).toHaveBeenCalledWith(30, "human");
 
     await user.click(screen.getByRole("radio", { name: "7d" }));
 
     await waitFor(() => {
-      expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(7);
+      expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(7, "human");
     });
+  });
+
+  it("refetches analytics when the selected scope changes", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    mockUseAnalyticsDashboard.mockImplementation((_days, selectedScope) => ({
+      summary,
+      timeseries,
+      repoBreakdown,
+      userBreakdown,
+      modelBreakdown: {
+        entries: [
+          {
+            ...repoBreakdown.entries[0],
+            key: "anthropic/sonnet",
+            cost: selectedScope === "agent" ? 7 : 2,
+          },
+        ],
+      },
+      loading: false,
+    }));
+
+    expect(screen.getByRole("radio", { name: "Human" })).toHaveAttribute("data-state", "on");
+    expect(
+      screen.getByText(/Automations: sessions started by automations\. All: every session\./)
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Agents" }));
+
+    await waitFor(() => {
+      expect(mockUseAnalyticsDashboard).toHaveBeenLastCalledWith(30, "agent");
+    });
+    expect(screen.getByTestId("analytics-token-cards")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-model-chart")).toBeInTheDocument();
+    expect(
+      JSON.parse(screen.getByTestId("analytics-model-chart").dataset.entries ?? "[]")
+    ).toMatchObject([{ key: "anthropic/sonnet", cost: 7 }]);
+    expect(screen.getByTestId("analytics-provider-table")).toBeInTheDocument();
+  });
+
+  it("renders cached dimensions when a refresh fails without summary data", () => {
+    mockUseSidebarContext.mockReturnValue({ isOpen: true });
+    mockUseAnalyticsDashboard.mockReturnValue({
+      modelBreakdown: { entries: [{ key: "a" }] },
+      error: new Error("request failed"),
+      loading: false,
+    });
+
+    render(<AnalyticsPage />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByTestId("analytics-model-chart")).toBeInTheDocument();
   });
 
   it("re-sorts the per-user table when a header is clicked", async () => {

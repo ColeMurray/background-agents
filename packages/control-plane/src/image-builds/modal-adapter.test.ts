@@ -41,6 +41,10 @@ function createPlan(): ImageBuildPlan {
 }
 
 describe("ModalImageBuildAdapter", () => {
+  it("does not advertise unbound source recovery", () => {
+    expect("recoverUnboundSource" in new ModalImageBuildAdapter(createProvider())).toBe(false);
+  });
+
   it("delegates build startup to the Modal provider", async () => {
     const provider = createProvider();
     const adapter = new ModalImageBuildAdapter(provider);
