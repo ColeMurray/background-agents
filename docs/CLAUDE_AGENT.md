@@ -197,7 +197,7 @@ fix instead.
 - **Follow-ups queue.** Both harnesses hold follow-up prompts until the running turn completes.
 - **Image.** The sandbox image pins `claude-agent-sdk`, whose wheel bundles the `claude` binary. The
   runtime manifest names the generation carrying the current pin under `harnessMinimumGeneration`,
-  so a Claude session never boots a prebuilt image from before that generation; this floor does not
-  touch OpenCode sessions' images or snapshots, since the global compatibility floor did not move.
-  Raise this floor whenever the SDK pin moves for a model the catalog advertises, otherwise a
-  session can be handed an older image whose bundled `claude` does not know that model.
+  so a Claude session never boots a prebuilt image from before that generation. The Sonnet 5.5
+  rollout also raises the OpenCode image floor and rebuild floor: older prepared images may have a
+  stale model catalog. Existing sessions can still resume older snapshots and use older models, but
+  Sonnet 5.5 requires a session running a generation-74 or newer sandbox runtime.

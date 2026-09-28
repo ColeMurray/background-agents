@@ -507,7 +507,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
-    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
+    () => sandboxRepository.getSandbox()?.runtime_version ?? null
   );
 
   // Tier 7 — services over the queue and lifecycle.

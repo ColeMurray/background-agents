@@ -44,6 +44,7 @@ import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platf
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
+import { parseRuntimeVersionNumber } from "../image-builds/model";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
 import {
@@ -59,6 +60,7 @@ import type {
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
+const SONNET_5_5_MIN_RUNTIME_GENERATION = 74;
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -172,7 +174,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly getSandboxRuntimeVersion: () => string | null
   ) {}
 
   async enqueueAutofix(
@@ -500,6 +503,28 @@ export class SessionMessageQueue {
           context: { message_id: message.id },
         }
       );
+      return;
+    }
+
+    // Restored and retained sandboxes keep their original filesystem, even
+    // when the control plane and launch environment have moved to v74.
+    if (
+      resolvedModel === "anthropic/claude-sonnet-5-5" &&
+      (parseRuntimeVersionNumber(this.getSandboxRuntimeVersion() ?? "") ?? 0) <
+        SONNET_5_5_MIN_RUNTIME_GENERATION
+    ) {
+      if (
+        this.failMessage(
+          message,
+          "Claude Sonnet 5.5 requires a newer sandbox runtime. Start a new session to use it.",
+          now,
+          "pending"
+        )
+      ) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
       return;
     }
 
