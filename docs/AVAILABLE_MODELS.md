@@ -35,7 +35,8 @@ Accounts) applies only on the Claude Agent harness; OpenCode sessions use `ANTHR
 | `anthropic/claude-haiku-4-5`  | Claude Haiku 4.5  | Fast and efficient                                | high, max                     | max            |
 | `anthropic/claude-sonnet-4-5` | Claude Sonnet 4.5 | Balanced performance                              | high, max                     | max            |
 | `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | Balanced, fast coding                             | low, medium, high, max        | high           |
-| `anthropic/claude-sonnet-5`   | Claude Sonnet 5   | Latest Sonnet, adaptive thinking                  | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-sonnet-5`   | Claude Sonnet 5   | Balanced performance, adaptive thinking           | low, medium, high, xhigh, max | high           |
+| `anthropic/claude-sonnet-5-5` | Claude Sonnet 5.5 | Latest Sonnet, fast and intelligent               | low, medium, high, xhigh, max | high           |
 | `anthropic/claude-opus-4-5`   | Claude Opus 4.5   | Most capable                                      | high, max                     | max            |
 | `anthropic/claude-opus-4-6`   | Claude Opus 4.6   | Most capable, adaptive thinking                   | low, medium, high, max        | high           |
 | `anthropic/claude-opus-4-7`   | Claude Opus 4.7   | Most capable, adaptive thinking                   | low, medium, high, xhigh, max | high           |

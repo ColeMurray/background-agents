@@ -1,11 +1,11 @@
 {
-  "runtimeVersion": "v73-node-24",
-  "generation": 73,
+  "runtimeVersion": "v74-claude-sonnet-5-5",
+  "generation": 74,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 73,
   "harnessMinimumGeneration": {
-    "claude": 73,
+    "claude": 74,
     "opencode": 73
   }
 }

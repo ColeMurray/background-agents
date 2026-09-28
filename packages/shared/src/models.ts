@@ -70,7 +70,16 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-sonnet-5",
         name: "Claude Sonnet 5",
-        description: "Latest Sonnet, adaptive thinking",
+        description: "Balanced performance, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-sonnet-5-5",
+        name: "Claude Sonnet 5.5",
+        description: "Latest Sonnet, fast and intelligent",
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",

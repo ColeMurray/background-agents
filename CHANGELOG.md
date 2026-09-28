@@ -6,6 +6,10 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Added
 
+**Claude Sonnet 5.5.** Adds `anthropic/claude-sonnet-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max. Claude Agent SDK 0.2.161 bundles Claude Code
+2.1.284, which supports the new model.
+
 OpenCode sessions using a connected ChatGPT subscription now report estimated model costs through
 the existing session cost display and spending limit. These are API-price equivalents, not
 additional subscription charges or an OpenAI invoice; estimates remain zero if catalog pricing is
