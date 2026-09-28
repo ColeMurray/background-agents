@@ -157,21 +157,6 @@ test("keeps the Chat Completions contract when spilling over", async () => {
   assert.equal(spilloverCall.body, chatInit.body);
 });
 
-test("maps a subscription-only Spark model to its platform fallback", async () => {
-  process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
-  const calls = stubFetch({ codex: () => usageLimitResponse() });
-  const loaded = await loadProxy("spark-model");
-  const sparkInit = {
-    ...REQUEST_INIT,
-    body: JSON.stringify({ model: "gpt-5.3-codex-spark", input: "hi" }),
-  };
-
-  const response = await loaded.fetch(MODEL_REQUEST_URL, sparkInit);
-
-  assert.equal(response.status, 200);
-  assert.equal(JSON.parse(calls.at(-1).body).model, "gpt-5.3-codex");
-});
-
 test("passes a throttling 429 through without spending the fallback key", async () => {
   process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
   const calls = stubFetch({
@@ -763,12 +748,12 @@ test("an init header set replaces the source Request's headers", async () => {
   );
 });
 
-test("a Spark spillover drops entity headers that described the original body", async () => {
+test("a spillover drops entity headers that described the original body", async () => {
   process.env.OPENAI_API_KEY_FALLBACK = "sk-fallback";
   delete process.env.OPENAI_SUBSCRIPTION_MAX_PERCENT;
-  const body = JSON.stringify({ model: "gpt-5.3-codex-spark", input: "hi" });
+  const body = JSON.stringify({ model: "gpt-5.4", input: "hi" });
   const calls = stubFetch({ codex: () => usageLimitResponse() });
-  const loaded = await loadProxy("spark-entity-headers");
+  const loaded = await loadProxy("entity-headers");
 
   await loaded.fetch(MODEL_REQUEST_URL, {
     method: "POST",
@@ -781,16 +766,12 @@ test("a Spark spillover drops entity headers that described the original body", 
   });
 
   const spilloverCall = calls.at(-1);
-  assert.equal(
-    JSON.parse(spilloverCall.body).model,
-    "gpt-5.3-codex",
-    "Spark aliases to the platform model"
-  );
-  assert.notEqual(spilloverCall.body, body, "the body really was rewritten");
+  assert.equal(spilloverCall.headers.get("authorization"), "Bearer sk-fallback");
+  assert.equal(spilloverCall.body, body);
   assert.equal(
     spilloverCall.headers.get("content-length"),
     null,
-    "a stale length would make the transport reject the fallback"
+    "fetch sizes the buffered body itself"
   );
   assert.equal(spilloverCall.headers.get("content-encoding"), null);
 });

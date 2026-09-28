@@ -141,8 +141,6 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex",
 ]);
 
-const PLATFORM_MODEL_ALIASES = new Map([["gpt-5.3-codex-spark", "gpt-5.3-codex"]]);
-
 // Latched for the rest of the sandbox's life once the subscription is spent, so
 // a doomed Codex call is not repeated on every later turn.
 let spilloverLatched = false;
@@ -475,24 +473,13 @@ function whenAborted(signal) {
 function spilloverHeaders(headers, apiKey) {
   const next = new Headers(headers);
   for (const name of CHATGPT_ONLY_HEADERS) next.delete(name);
-  // A source Request's content-length describes the subscription body, which a
-  // Spark alias rewrite changes; forwarding it makes the transport reject the
-  // fallback before it is sent. content-encoding never describes this
-  // already-decoded string body.
+  // The body was buffered to a decoded string, which fetch sizes itself. A
+  // content-length or content-encoding copied from the caller describes the
+  // original bytes, and a disagreeing length makes the transport reject the
+  // fallback before it is sent.
   for (const name of TRANSPORT_HEADERS) next.delete(name);
   next.set("authorization", `Bearer ${apiKey}`);
   return next;
-}
-
-function platformFallbackBody(body) {
-  if (typeof body !== "string") return body;
-  try {
-    const parsed = JSON.parse(body);
-    const platformModel = PLATFORM_MODEL_ALIASES.get(parsed?.model);
-    return platformModel ? JSON.stringify({ ...parsed, model: platformModel }) : body;
-  } catch {
-    return body;
-  }
 }
 
 /** Re-materialize a response whose body was read to classify a 429. */
@@ -543,7 +530,6 @@ async function fetchFallback(fallbackUrl, baseInit, headers, apiKey, reason = nu
   try {
     response = await fetch(fallbackUrl, {
       ...baseInit,
-      body: platformFallbackBody(baseInit.body),
       headers: spilloverHeaders(headers, apiKey),
     });
   } catch (error) {

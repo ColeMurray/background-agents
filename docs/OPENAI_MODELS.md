@@ -109,16 +109,15 @@ spend money. Codex tracks a short (roughly 5-hour) and a weekly window, and the 
 two decides. An unparseable ceiling is ignored with a log line and treated as 100. If the usage
 probe fails, the sandbox stays on the subscription and relies on response headers instead.
 
-`gpt-5.3-codex-spark` is subscription-only, so its platform fallback uses `gpt-5.3-codex`. Other
-allowed models are sent unchanged. If the platform rejects a fallback request, the latch is cleared
-and the next turn retries the subscription instead of remaining on a permanently failing paid path.
+Requests are sent to the platform with the model unchanged. If the platform rejects a fallback
+request, the latch is cleared and the next turn retries the subscription instead of remaining on a
+permanently failing paid path.
 
 Every switch is logged in the sandbox logs as
 `[codex-auth-plugin] spilling OpenAI traffic over to OPENAI_API_KEY_FALLBACK: <reason>`.
 
 One caveat: after a successful spillover, the latch lasts as long as the sandbox even if the
-subscription window resets under it. OpenCode also reports OpenAI token costs as `0` because the
-Codex proxy zeroes them at startup.
+subscription window resets under it.
 
 ---
 
