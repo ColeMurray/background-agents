@@ -89,7 +89,7 @@ stateDiagram-v2
     stale --> failed: no recovery
     spawning --> failed: watchdog or boot budget trips
     connecting --> failed: watchdog or boot budget trips
-    failed --> [*]: next prompt starts a new sandbox
+    failed --> [*]: failed boot without saved state; next prompt starts fresh
 ```
 
 Sandbox tools such as the terminal and code server are usable only while the sandbox is `ready`.
