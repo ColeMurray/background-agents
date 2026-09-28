@@ -30,7 +30,6 @@ function session(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 8,
-    api_equivalent_cost_usd: 0,
     sandbox_settings: null,
     max_cost_usd: 10,
     budget_exhausted: 0,
@@ -50,12 +49,6 @@ function createService(row = session()) {
       current = { ...current, total_cost: current.total_cost + cost };
       return current.total_cost;
     }),
-    addSessionApiEquivalentCost: vi.fn((cost: number) => {
-      current = {
-        ...current,
-        api_equivalent_cost_usd: current.api_equivalent_cost_usd + cost,
-      };
-    }),
     markBudgetExhausted: vi.fn(() => {
       current = { ...current, budget_exhausted: 1 };
     }),
@@ -71,7 +64,6 @@ function createService(row = session()) {
     createEvent: vi.fn(),
   };
   const reportedCosts = new Map<string, number>();
-  const reportedEstimates = new Map<string, { cost: number; revision: number; final: boolean }>();
   const messageRepository = {
     raiseReportedCost: vi.fn((messageId: string, reported: number) => {
       const previous = reportedCosts.get(messageId) ?? 0;
@@ -79,19 +71,6 @@ function createService(row = session()) {
       reportedCosts.set(messageId, reported);
       return reported - previous;
     }),
-    reconcileReportedApiEquivalentCost: vi.fn(
-      (messageId: string, reported: number, revision: number, final: boolean) => {
-        const previous = reportedEstimates.get(messageId) ?? { cost: 0, revision: 0, final: false };
-        if (
-          previous.final ||
-          revision < previous.revision ||
-          (!final && revision === previous.revision)
-        )
-          return 0;
-        reportedEstimates.set(messageId, { cost: reported, revision, final });
-        return reported - previous.cost;
-      }
-    ),
   };
   const broadcast = vi.fn();
   const preparation: ExecutionStopPreparation = {
@@ -203,7 +182,6 @@ describe("SessionBudgetService", () => {
     expect(h.broadcast).toHaveBeenLastCalledWith({
       type: "budget_status",
       totalCost: 1.5,
-      apiEquivalentCostUsd: 0,
       maxSessionCostUsd: maxCostUsd,
       budgetExhausted: false,
     });
@@ -223,7 +201,6 @@ describe("SessionBudgetService", () => {
     expect(h.broadcast).toHaveBeenLastCalledWith({
       type: "budget_status",
       totalCost: 2,
-      apiEquivalentCostUsd: 0,
       maxSessionCostUsd: maxCostUsd,
       budgetExhausted: false,
     });
@@ -253,89 +230,6 @@ describe("SessionBudgetService", () => {
     expect(h.repository.addSessionCost).toHaveBeenNthCalledWith(1, 1, 1000);
     expect(h.repository.addSessionCost).toHaveBeenNthCalledWith(2, 1.5, 1002);
     expect(h.repository.transaction).toHaveBeenCalledTimes(3);
-  });
-
-  it("tracks OAuth estimates idempotently without exhausting the real-cost budget", async () => {
-    const h = createService(session({ total_cost: 0, max_cost_usd: 0.1 }));
-    const step = {
-      type: "step_finish" as const,
-      messageId: "message-1",
-      sandboxId: "sandbox-1",
-      timestamp: 1,
-      messageCostUsd: 0,
-      messageApiEquivalentCostUsd: 0.5,
-      messageApiEquivalentCostRevision: 1,
-    };
-
-    await h.service.ingestStepFinish(step, "message-1", 1000);
-    await h.service.ingestStepFinish(step, "message-1", 1001);
-    const transition = h.service.observeExecutionCost(
-      {
-        type: "execution_complete",
-        messageId: "message-1",
-        sandboxId: "sandbox-1",
-        timestamp: 2,
-        success: true,
-        messageCostUsd: 0,
-        messageApiEquivalentCostUsd: 0.75,
-        messageApiEquivalentCostRevision: 2,
-      },
-      1002
-    );
-    await h.service.deliverTransition(transition);
-
-    expect(h.repository.getSession()).toMatchObject({
-      total_cost: 0,
-      api_equivalent_cost_usd: 0.75,
-      budget_exhausted: 0,
-    });
-    expect(h.repository.addSessionApiEquivalentCost).toHaveBeenCalledTimes(2);
-    expect(h.prepareBudgetStop).not.toHaveBeenCalled();
-    expect(h.broadcast).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        type: "budget_status",
-        totalCost: 0,
-        apiEquivalentCostUsd: 0.75,
-      })
-    );
-  });
-
-  it("applies a downward estimate correction and fences late steps after completion", async () => {
-    const h = createService(session({ total_cost: 0, max_cost_usd: 0.1 }));
-    const step = (estimate: number, revision: number) => ({
-      type: "step_finish" as const,
-      messageId: "message-1",
-      sandboxId: "sandbox-1",
-      timestamp: revision,
-      messageCostUsd: 0,
-      messageApiEquivalentCostUsd: estimate,
-      messageApiEquivalentCostRevision: revision,
-    });
-    await h.service.ingestStepFinish(step(0.75, 1), "message-1", 1000);
-    await h.service.ingestStepFinish(step(0.5, 2), "message-1", 1001);
-    await h.service.ingestStepFinish(step(0.75, 1), "message-1", 1002);
-    const transition = h.service.observeExecutionCost(
-      {
-        type: "execution_complete",
-        messageId: "message-1",
-        sandboxId: "sandbox-1",
-        timestamp: 3,
-        success: true,
-        messageApiEquivalentCostUsd: 0.5,
-        messageApiEquivalentCostRevision: 2,
-      },
-      1003
-    );
-    await h.service.deliverTransition(transition);
-    await h.service.ingestStepFinish(step(0.9, 3), "message-1", 1004);
-
-    expect(h.repository.getSession()).toMatchObject({
-      total_cost: 0,
-      api_equivalent_cost_usd: 0.5,
-      budget_exhausted: 0,
-    });
-    expect(h.repository.addSessionApiEquivalentCost).toHaveBeenNthCalledWith(2, -0.25, 1001);
-    expect(h.repository.addSessionApiEquivalentCost).toHaveBeenCalledTimes(2);
   });
 
   it("attributes cost to the context message when the event names another", async () => {

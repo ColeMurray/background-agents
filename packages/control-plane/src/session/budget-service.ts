@@ -36,10 +36,7 @@ type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete"
 export class SessionBudgetService {
   constructor(
     private readonly repository: SessionCoreRepository,
-    private readonly messageRepository: Pick<
-      MessageRepository,
-      "raiseReportedCost" | "reconcileReportedApiEquivalentCost"
-    >,
+    private readonly messageRepository: Pick<MessageRepository, "raiseReportedCost">,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly executionStop: Pick<ExecutionStopCoordinator, "prepare" | "deliver">,
@@ -55,11 +52,6 @@ export class SessionBudgetService {
     let transition = NO_BUDGET_TRANSITION;
     this.repository.transaction(() => {
       const delta = this.observeReportedCost(event, messageId);
-      const estimateDelta = this.observeReportedEstimate(event, messageId);
-      if (estimateDelta !== 0) {
-        this.repository.addSessionApiEquivalentCost(estimateDelta, now);
-        transition = { ...transition, statusChanged: true };
-      }
       if (delta > 0) {
         const totalCost = this.repository.addSessionCost(delta, now);
         transition = { ...this.applyObservedCost(totalCost, messageId, now), statusChanged: true };
@@ -70,23 +62,13 @@ export class SessionBudgetService {
 
   /** Synchronous so completion and cost can share the caller's storage transaction. */
   observeExecutionCost(event: ExecutionCompleteEvent, now: number): BudgetTransition {
-    if (
-      typeof event.messageCostUsd !== "number" &&
-      typeof event.messageApiEquivalentCostUsd !== "number"
-    ) {
-      return NO_BUDGET_TRANSITION;
-    }
+    if (typeof event.messageCostUsd !== "number") return NO_BUDGET_TRANSITION;
     let transition = NO_BUDGET_TRANSITION;
     this.repository.transaction(() => {
-      const estimateDelta = this.observeReportedEstimate(event, event.messageId);
-      if (estimateDelta !== 0) {
-        this.repository.addSessionApiEquivalentCost(estimateDelta, now);
-        transition = { ...transition, statusChanged: true };
-      }
-      const delta =
-        typeof event.messageCostUsd === "number"
-          ? this.messageRepository.raiseReportedCost(event.messageId, event.messageCostUsd)
-          : 0;
+      const delta = this.messageRepository.raiseReportedCost(
+        event.messageId,
+        event.messageCostUsd as number
+      );
       if (delta <= 0) return;
       const totalCost = this.repository.addSessionCost(delta, now);
       transition = {
@@ -119,7 +101,6 @@ export class SessionBudgetService {
     this.messenger.broadcast({
       type: "budget_status",
       totalCost: session.total_cost,
-      apiEquivalentCostUsd: session.api_equivalent_cost_usd,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,
     });
@@ -135,21 +116,6 @@ export class SessionBudgetService {
       return event.cost;
     }
     return 0;
-  }
-
-  private observeReportedEstimate(
-    event: StepFinishEvent | ExecutionCompleteEvent,
-    messageId: string | null
-  ): number {
-    const reported = event.messageApiEquivalentCostUsd;
-    const revision = event.messageApiEquivalentCostRevision;
-    if (typeof reported !== "number" || typeof revision !== "number") return 0;
-    return this.messageRepository.reconcileReportedApiEquivalentCost(
-      messageId ?? event.messageId,
-      reported,
-      revision,
-      event.type === "execution_complete"
-    );
   }
 
   private applyObservedCost(

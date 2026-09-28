@@ -7,7 +7,6 @@ function createHandler() {
   const session = {
     id: "session-1",
     total_cost: 8,
-    api_equivalent_cost_usd: 0,
     max_cost_usd: 10,
     budget_exhausted: 0,
   };

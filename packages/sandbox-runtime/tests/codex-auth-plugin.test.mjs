@@ -44,10 +44,10 @@ test("preserves a source Request while proxying Codex authentication", async () 
   assert.equal(await upstreamRequest.text(), "request-body");
 });
 
-test("fails closed if managed OpenAI authentication switches away from OAuth", async () => {
-  let upstreamCalls = 0;
+test("preserves API-key requests if OpenAI authentication switches away from OAuth", async () => {
+  let upstreamRequest;
   globalThis.fetch = async (input, init) => {
-    upstreamCalls++;
+    upstreamRequest = input instanceof Request ? input : new Request(input, init);
     return new Response(null, { status: 200 });
   };
   let authReadCount = 0;
@@ -56,15 +56,14 @@ test("fails closed if managed OpenAI authentication switches away from OAuth", a
   const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
   const loaded = await plugin.auth.loader(getAuth);
 
-  await assert.rejects(
-    loaded.fetch(new Request("https://api.openai.com/v1/responses")),
-    /changed away from OAuth/
+  await loaded.fetch(
+    new Request("https://api.openai.com/v1/responses", {
+      headers: { Authorization: "Bearer api-key" },
+    })
   );
-  await assert.rejects(
-    plugin.auth.loader(async () => ({ type: "api" })),
-    /changed away from OAuth/
-  );
-  assert.equal(upstreamCalls, 0);
+  assert.equal(upstreamRequest.url, "https://api.openai.com/v1/responses");
+  assert.equal(upstreamRequest.headers.get("authorization"), "Bearer api-key");
+  assert.deepEqual(await plugin.auth.loader(async () => ({ type: "api" })), {});
 });
 
 test("restores known prices and missing Codex models after the built-in OAuth hook", async () => {

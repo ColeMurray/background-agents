@@ -38,7 +38,6 @@ class OpencodeHarness:
         attachment_processor: AttachmentProcessor,
         log: StructuredLogger,
         limits: PromptLimits,
-        openai_oauth_managed: bool = False,
     ) -> None:
         self.client = client
         self.attachment_processor = attachment_processor
@@ -46,7 +45,6 @@ class OpencodeHarness:
         # Read when the prompt stream is first built, so a caller can still
         # adjust budgets between construction and the first prompt.
         self.limits = limits
-        self.openai_oauth_managed = openai_oauth_managed
         self.session_id: str | None = None
         self._prompt_stream: OpenCodePromptStream | None = None
 
@@ -61,7 +59,6 @@ class OpencodeHarness:
                 sse_inactivity_timeout_seconds=self.limits.inactivity_timeout_seconds,
                 prompt_max_duration_seconds=self.limits.prompt_max_duration_seconds,
                 prompt_cleanup_timeout_seconds=self.limits.prompt_cleanup_timeout_seconds,
-                openai_oauth_managed=self.openai_oauth_managed,
             )
         return self._prompt_stream
 
@@ -113,42 +110,21 @@ class OpencodeHarness:
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         error_message: str | None = None
         message_cost_usd: float | None = None
-        message_api_equivalent_cost_usd: float | None = None
-        message_api_equivalent_cost_revision: int | None = None
         try:
             async for event in self.stream_events(prompt):
                 if event.get("type") == "error":
                     error_message = str(event.get("error") or "Unknown error")
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
                     message_cost_usd = event["messageCostUsd"]
-                if event.get("type") == "step_finish" and "messageApiEquivalentCostUsd" in event:
-                    message_api_equivalent_cost_usd = event["messageApiEquivalentCostUsd"]
-                    message_api_equivalent_cost_revision = event.get(
-                        "messageApiEquivalentCostRevision"
-                    )
                 await emit(event)
         except asyncio.CancelledError:
             raise
         except Exception as error:
             self.log.error("harness.prompt_error", exc=error, message_id=prompt.message_id)
-            return TurnOutcome.failed(
-                str(error),
-                message_cost_usd=message_cost_usd,
-                message_api_equivalent_cost_usd=message_api_equivalent_cost_usd,
-                message_api_equivalent_cost_revision=message_api_equivalent_cost_revision,
-            )
+            return TurnOutcome.failed(str(error), message_cost_usd=message_cost_usd)
         if error_message is not None:
-            return TurnOutcome.failed(
-                error_message,
-                message_cost_usd=message_cost_usd,
-                message_api_equivalent_cost_usd=message_api_equivalent_cost_usd,
-                message_api_equivalent_cost_revision=message_api_equivalent_cost_revision,
-            )
-        return TurnOutcome.ok(
-            message_cost_usd=message_cost_usd,
-            message_api_equivalent_cost_usd=message_api_equivalent_cost_usd,
-            message_api_equivalent_cost_revision=message_api_equivalent_cost_revision,
-        )
+            return TurnOutcome.failed(error_message, message_cost_usd=message_cost_usd)
+        return TurnOutcome.ok(message_cost_usd=message_cost_usd)
 
     async def abort(self) -> bool:
         if not self.session_id:

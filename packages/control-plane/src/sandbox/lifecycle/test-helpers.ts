@@ -57,7 +57,6 @@ export function createMockSession(overrides: Partial<SessionRow> = {}): SessionR
     code_server_enabled: 0,
     vnc_enabled: 0,
     total_cost: 0,
-    api_equivalent_cost_usd: 0,
     max_cost_usd: null,
     budget_exhausted: 0,
     sandbox_settings: null,

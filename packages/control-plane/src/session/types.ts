@@ -56,7 +56,6 @@ export const sessionRowSchema = z.object({
   code_server_enabled: z.number(), // 0 = disabled (default), 1 = enabled
   vnc_enabled: z.number(), // 0 = disabled (default), 1 = enabled
   total_cost: z.number(), // Running aggregate of step_finish event costs
-  api_equivalent_cost_usd: z.number().nonnegative(),
   sandbox_settings: z.string().nullable(), // JSON blob of SandboxSettings
   max_cost_usd: z.number().nullable(), // Mutable effective session cost limit; NULL = unlimited
   budget_exhausted: z.number(), // 0 = promptable by budget, 1 = paused
@@ -132,9 +131,6 @@ export const messageRowSchema = z.object({
   error_message: z.string().nullable(),
   stop_confirmation_deadline: z.number().nullable(),
   reported_cost_usd: z.number(),
-  reported_api_equivalent_cost_usd: z.number().nonnegative(),
-  reported_api_equivalent_cost_revision: z.number().int().nonnegative(),
-  reported_api_equivalent_final: z.number().int().min(0).max(1),
   created_at: z.number(),
   started_at: z.number().nullable(),
   completed_at: z.number().nullable(),

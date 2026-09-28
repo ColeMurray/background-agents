@@ -160,36 +160,6 @@ describe("sessionSocketReducer", () => {
     expect(state.sessionState?.totalCost).toBe(2);
   });
 
-  it("hydrates and updates the estimate independently of budgeted spend", () => {
-    let state = createSessionSocketState(
-      createSnapshot({ session: createSessionState({ totalCost: 0, apiEquivalentCostUsd: 0.25 }) })
-    );
-    expect(state.sessionState?.apiEquivalentCostUsd).toBe(0.25);
-
-    state = reduce(
-      state,
-      serverMessage({
-        type: "budget_status",
-        totalCost: 0,
-        apiEquivalentCostUsd: 0.5,
-        maxSessionCostUsd: null,
-        budgetExhausted: false,
-      })
-    );
-    expect(state.sessionState?.totalCost).toBe(0);
-    expect(state.sessionState?.apiEquivalentCostUsd).toBe(0.5);
-
-    state = reduce(
-      state,
-      serverMessage(
-        createSubscribedMessage({
-          session: createSessionState({ totalCost: 0, apiEquivalentCostUsd: 0.75 }),
-        })
-      )
-    );
-    expect(state.sessionState?.apiEquivalentCostUsd).toBe(0.75);
-  });
-
   describe("snapshot", () => {
     it("hydrates the authoritative prompt queue", () => {
       const promptQueue = [

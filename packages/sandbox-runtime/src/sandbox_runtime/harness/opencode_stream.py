@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from contextlib import AsyncExitStack
@@ -25,8 +26,6 @@ from .opencode_client import (
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
 )
-from .opencode_costs import StepCostAccumulator
-from .opencode_final_state import _message_created_epoch_ms, recover_final_message_state
 from .opencode_step_ids import StepIdTracker
 
 if TYPE_CHECKING:
@@ -71,7 +70,9 @@ class _PromptState:
     pending_drop_logged: bool = False
     child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
     emitted_error_messages: set[str] = field(default_factory=set)
-    costs: StepCostAccumulator = field(default_factory=StepCostAccumulator)
+    # Priced step costs keyed by OpenCode part id. Last write wins, so a part
+    # OpenCode re-emits with a corrected cost replaces its earlier value.
+    step_costs: dict[str, float] = field(default_factory=dict)
     step_ids: StepIdTracker = field(default_factory=StepIdTracker)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
@@ -85,6 +86,10 @@ class _PromptState:
             # OpenCode creates for this prompt can predate it.
             int(self.start_time * 1000),
         )
+
+    def message_cost_usd(self) -> float:
+        """Cumulative priced cost of this turn, including subtask steps."""
+        return sum(self.step_costs.values())
 
 
 class _Disposition(Enum):
@@ -107,6 +112,24 @@ class _StreamStep:
 
     events: list[dict[str, Any]]
     disposition: _Disposition
+
+
+def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
+    """Read `time.created` off an OpenCode message, or None when it is absent.
+
+    Non-finite values are treated as absent rather than converted: `int()`
+    raises on NaN and infinity, which would tear down the SSE loop over a
+    malformed payload.
+    """
+    time_info = info.get("time")
+    if not isinstance(time_info, dict):
+        return None
+    created = time_info.get("created")
+    if isinstance(created, bool) or not isinstance(created, (int, float)):
+        return None
+    if not math.isfinite(created):
+        return None
+    return int(created)
 
 
 class OpenCodePromptStream:
@@ -133,7 +156,6 @@ class OpenCodePromptStream:
         sse_inactivity_timeout_seconds: float,
         prompt_max_duration_seconds: float,
         prompt_cleanup_timeout_seconds: float,
-        openai_oauth_managed: bool = False,
     ) -> None:
         self._client = client
         self._attachment_processor = attachment_processor
@@ -141,7 +163,6 @@ class OpenCodePromptStream:
         self._sse_inactivity_timeout_seconds = sse_inactivity_timeout_seconds
         self._prompt_max_duration_seconds = prompt_max_duration_seconds
         self._prompt_cleanup_timeout_seconds = prompt_cleanup_timeout_seconds
-        self._openai_oauth_managed = openai_oauth_managed
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
@@ -223,8 +244,6 @@ class OpenCodePromptStream:
                             yield final_event
                         return
                     if step.disposition is _Disposition.FAILED:
-                        async for final_event in self._fetch_final_message_state(state):
-                            yield final_event
                         return
 
                 for event in self._flush_unassociated_child_activity(state):
@@ -398,7 +417,6 @@ class OpenCodePromptStream:
 
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
-                state.costs.note_provider(oc_msg_id, info.get("providerID"))
                 disposition = state.attribution.assistant_disposition(
                     oc_msg_id,
                     parent_id,
@@ -429,7 +447,6 @@ class OpenCodePromptStream:
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
-                state.costs.note_provider(oc_msg_id, info.get("providerID"))
                 child_disposition = state.child_activity.authorize_or_queue_message(
                     msg_session_id, oc_msg_id
                 )
@@ -658,27 +675,21 @@ class OpenCodePromptStream:
             step_id = state.step_ids.finish(
                 message_id, part_id if isinstance(part_id, str) else None
             )
-            priced = state.costs.record_step(
-                step_id,
-                part.get("messageID", ""),
-                part.get("cost"),
-                openai_oauth_managed=self._openai_oauth_managed,
-            )
+            cost = part.get("cost")
+            if isinstance(cost, int | float) and not isinstance(cost, bool):
+                state.step_costs[str(part.get("id", ""))] = float(cost)
             finish_event = {
                 "type": "step_finish",
                 "messageId": state.message_id,
                 "stepId": step_id,
-                "messageCostUsd": state.costs.budgeted_total(),
+                "messageCostUsd": state.message_cost_usd(),
             }
-            if self._openai_oauth_managed:
-                finish_event["messageApiEquivalentCostUsd"] = state.costs.estimated_total()
-                finish_event["messageApiEquivalentCostRevision"] = state.costs.estimate_revision
             if part.get("tokens") is not None:
                 finish_event["tokens"] = part["tokens"]
             if part.get("reason") is not None:
                 finish_event["reason"] = part["reason"]
-            if priced:
-                finish_event["apiEquivalentCostUsd" if priced.estimated else "cost"] = priced.cost
+            if cost is not None:
+                finish_event["cost"] = cost
             events.append(finish_event)
 
         if is_subtask:
@@ -914,7 +925,67 @@ class OpenCodePromptStream:
     async def _fetch_final_message_state(
         self, state: _PromptState
     ) -> AsyncIterator[dict[str, Any]]:
-        async for event in recover_final_message_state(
-            state, self._client, self._log, self._handle_part
-        ):
-            yield event
+        """Fetch final message state from API to ensure complete text.
+
+        This is called after session.idle (and on the timeout/disconnect
+        paths) to capture any text that may have been missed due to SSE event
+        ordering. It fetches the latest message state and emits any text
+        that's longer than what ``state.cumulative_text`` says we already
+        sent.
+
+        Accepts an assistant message when its parentID matches one of the
+        prompt's user message IDs, when it was already authorized during SSE
+        streaming, or after compaction, which rewrites the message chain.
+        The compaction fallback is limited to messages created after this
+        prompt's user message: the API returns the whole session history, and
+        re-emitting prior turns' text here would overwrite this prompt's
+        final output with stale messages. The compaction summary itself is
+        never accepted: its text is internal context, and its parentID (the
+        compaction user message) matches.
+        """
+        if not state.opencode_session_id:
+            return
+
+        try:
+            messages = await self._client.get_messages(state.opencode_session_id)
+            if messages is None:
+                return
+
+            for msg in messages:
+                info = msg.get("info", {})
+                role = info.get("role", "")
+                msg_id = info.get("id", "")
+                parent_id = info.get("parentID", "")
+
+                if role != "assistant":
+                    continue
+
+                is_compaction_summary = info.get("summary") is True
+                disposition = state.attribution.assistant_disposition(
+                    msg_id,
+                    parent_id,
+                    is_summary=is_compaction_summary,
+                    created_epoch_ms=_message_created_epoch_ms(info),
+                )
+                if disposition is not AssistantMessageDisposition.OUTPUT:
+                    continue
+
+                parts = msg.get("parts", [])
+                for part in parts:
+                    part_type = part.get("type", "")
+                    part_id = part.get("id", "")
+
+                    if part_type == "text":
+                        text = part.get("text", "")
+                        previously_sent = state.cumulative_text.get(part_id, "")
+                        if len(text) > len(previously_sent):
+                            self._log.debug(
+                                "bridge.final_text_update",
+                                prev_len=len(previously_sent),
+                                new_len=len(text),
+                            )
+                            for event in self._handle_part(state, part, None):
+                                yield event
+
+        except Exception as e:
+            self._log.error("bridge.final_state_error", exc=e)

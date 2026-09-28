@@ -668,8 +668,6 @@ class AgentBridge:
         start_time = time.time()
         outcome = "success"
         message_cost_usd: float | None = None
-        message_api_equivalent_cost_usd: float | None = None
-        message_api_equivalent_cost_revision: int | None = None
         had_error = False
         error_message = None
 
@@ -696,8 +694,7 @@ class AgentBridge:
             emitted_output = False
 
             async def emit(event: dict[str, Any]) -> None:
-                nonlocal emitted_output, message_cost_usd, message_api_equivalent_cost_usd
-                nonlocal message_api_equivalent_cost_revision
+                nonlocal emitted_output, message_cost_usd
                 if event.get("type") == "execution_complete":
                     raise RuntimeError("harness must not emit execution_complete")
                 if event.get("type") in ("token", "tool_call", "step_finish"):
@@ -707,11 +704,6 @@ class AgentBridge:
                 # When an outcome does arrive it is authoritative (below).
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
                     message_cost_usd = event["messageCostUsd"]
-                if event.get("type") == "step_finish" and "messageApiEquivalentCostUsd" in event:
-                    message_api_equivalent_cost_usd = event["messageApiEquivalentCostUsd"]
-                    message_api_equivalent_cost_revision = event.get(
-                        "messageApiEquivalentCostRevision"
-                    )
                 await self._send_event(event)
 
             turn: TurnOutcome = await harness.run_prompt(
@@ -733,9 +725,6 @@ class AgentBridge:
             # exists; the bridge adds only the no-output guard below.
             if turn.message_cost_usd is not None:
                 message_cost_usd = turn.message_cost_usd
-            if turn.message_api_equivalent_cost_usd is not None:
-                message_api_equivalent_cost_usd = turn.message_api_equivalent_cost_usd
-                message_api_equivalent_cost_revision = turn.message_api_equivalent_cost_revision
             if not turn.success:
                 had_error = True
                 error_message = turn.error or "Unknown error"
@@ -784,16 +773,6 @@ class AgentBridge:
             "success": not had_error,
             **({"error": error_message} if error_message else {}),
             **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
-            **(
-                {"messageApiEquivalentCostUsd": message_api_equivalent_cost_usd}
-                if message_api_equivalent_cost_usd is not None
-                else {}
-            ),
-            **(
-                {"messageApiEquivalentCostRevision": message_api_equivalent_cost_revision}
-                if message_api_equivalent_cost_revision is not None
-                else {}
-            ),
         }
 
     async def _prepare_turn(

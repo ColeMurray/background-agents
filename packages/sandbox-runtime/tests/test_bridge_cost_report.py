@@ -87,27 +87,6 @@ class TestExecutionCompleteCostReport:
         assert completion["messageCostUsd"] == 0.75
 
     @pytest.mark.asyncio
-    async def test_carries_estimate_through_completion_without_budget_cost(
-        self, bridge: AgentBridge
-    ):
-        async def stream(*_args, **_kwargs):
-            yield {
-                "type": "step_finish",
-                "messageId": "msg-1",
-                "apiEquivalentCostUsd": 0.25,
-                "messageApiEquivalentCostUsd": 0.25,
-                "messageApiEquivalentCostRevision": 1,
-                "messageCostUsd": 0,
-            }
-
-        bridge.boot_attach.harness = ScriptedHarness(stream)
-        completion = await bridge._handle_prompt(_prompt_command())
-
-        assert completion["messageCostUsd"] == 0
-        assert completion["messageApiEquivalentCostUsd"] == 0.25
-        assert completion["messageApiEquivalentCostRevision"] == 1
-
-    @pytest.mark.asyncio
     async def test_carries_the_report_on_failure(self, bridge: AgentBridge):
         async def stream(*_args, **_kwargs):
             yield {"type": "step_finish", "messageId": "msg-1", "cost": 0.5, "messageCostUsd": 0.5}

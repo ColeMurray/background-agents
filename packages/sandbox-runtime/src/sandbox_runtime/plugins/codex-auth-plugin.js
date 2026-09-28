@@ -198,9 +198,7 @@ export const CodexAuthProxy = async (input) => {
       methods: [],
       async loader(getAuth) {
         const auth = await getAuth();
-        if (auth.type !== "oauth") {
-          throw new Error("Managed OpenAI authentication changed away from OAuth");
-        }
+        if (auth.type !== "oauth") return {};
 
         const setAuth = async (body) => {
           await input.client.auth.set({ path: { id: "openai" }, body });
@@ -212,9 +210,7 @@ export const CodexAuthProxy = async (input) => {
             const request = new Request(requestInput, init);
 
             const currentAuth = await getAuth();
-            if (currentAuth.type !== "oauth") {
-              throw new Error("Managed OpenAI authentication changed away from OAuth");
-            }
+            if (currentAuth.type !== "oauth") return fetch(request);
 
             request.headers.delete("authorization");
 

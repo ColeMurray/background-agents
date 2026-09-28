@@ -179,29 +179,15 @@ class ScriptedHarness:
             return TurnOutcome.ok()
         error: str | None = None
         cost: float | None = None
-        estimate: float | None = None
-        estimate_revision: int | None = None
         async for event in self.stream(prompt.message_id, prompt.text):
             if event.get("type") == "error":
                 error = str(event.get("error"))
             if event.get("type") == "step_finish" and "messageCostUsd" in event:
                 cost = event["messageCostUsd"]
-            if event.get("type") == "step_finish" and "messageApiEquivalentCostUsd" in event:
-                estimate = event["messageApiEquivalentCostUsd"]
-                estimate_revision = event.get("messageApiEquivalentCostRevision")
             await emit(event)
         if error is not None:
-            return TurnOutcome.failed(
-                error,
-                message_cost_usd=cost,
-                message_api_equivalent_cost_usd=estimate,
-                message_api_equivalent_cost_revision=estimate_revision,
-            )
-        return TurnOutcome.ok(
-            message_cost_usd=cost,
-            message_api_equivalent_cost_usd=estimate,
-            message_api_equivalent_cost_revision=estimate_revision,
-        )
+            return TurnOutcome.failed(error, message_cost_usd=cost)
+        return TurnOutcome.ok(message_cost_usd=cost)
 
     async def abort(self) -> bool:
         self.abort_calls += 1

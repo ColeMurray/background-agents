@@ -308,36 +308,6 @@ describe("applyMigrations", () => {
     }
   });
 
-  it("adds API-equivalent estimate columns to existing sessions and messages", () => {
-    const migration = MIGRATIONS.find(({ id }) => id === 57);
-    if (typeof migration?.run !== "function") throw new Error("Expected migration 57");
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
-      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)");
-      db.exec("INSERT INTO session (id) VALUES ('s')");
-      db.exec("INSERT INTO messages (id) VALUES ('m')");
-      migration.run(createDatabaseSql(db));
-      migration.run(createDatabaseSql(db));
-      expect(db.prepare("SELECT api_equivalent_cost_usd FROM session").get()).toEqual({
-        api_equivalent_cost_usd: 0,
-      });
-      expect(
-        db
-          .prepare(
-            "SELECT reported_api_equivalent_cost_usd, reported_api_equivalent_cost_revision, reported_api_equivalent_final FROM messages"
-          )
-          .get()
-      ).toEqual({
-        reported_api_equivalent_cost_usd: 0,
-        reported_api_equivalent_cost_revision: 0,
-        reported_api_equivalent_final: 0,
-      });
-    } finally {
-      db.close();
-    }
-  });
-
   it("adds WebSocket authorization lease state for fresh and migrated DOs", () => {
     expect(SCHEMA_SQL).toContain("authorization_expires_at INTEGER NOT NULL");
     expect(SCHEMA_SQL).not.toContain("authorization_version");

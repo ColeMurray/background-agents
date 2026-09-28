@@ -108,7 +108,6 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
       ...snapshot.session,
       isProcessing: snapshot.session.isProcessing ?? false,
       totalCost: snapshot.session.totalCost ?? 0,
-      apiEquivalentCostUsd: snapshot.session.apiEquivalentCostUsd ?? 0,
     },
     artifacts: snapshot.artifacts.map(toUiArtifact),
     events: renderTimelineEvents(timelineEvents),
@@ -201,7 +200,6 @@ function reduceServerMessage(
           // Normalize optional snapshot fields for the view.
           isProcessing: message.session.isProcessing ?? false,
           totalCost: message.session.totalCost ?? 0,
-          apiEquivalentCostUsd: message.session.apiEquivalentCostUsd ?? 0,
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
@@ -332,7 +330,6 @@ function reduceServerMessage(
       return updateSessionState(state, (prev) => ({
         ...prev,
         totalCost: message.totalCost,
-        apiEquivalentCostUsd: message.apiEquivalentCostUsd ?? prev.apiEquivalentCostUsd,
         maxSessionCostUsd: message.maxSessionCostUsd,
         budgetExhausted: message.budgetExhausted,
       }));

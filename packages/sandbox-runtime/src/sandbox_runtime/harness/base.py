@@ -87,8 +87,6 @@ class TurnOutcome:
     error: str | None = None
     cancelled: bool = False
     message_cost_usd: float | None = None
-    message_api_equivalent_cost_usd: float | None = None
-    message_api_equivalent_cost_revision: int | None = None
 
     def __post_init__(self) -> None:
         if self.cancelled and self.success:
@@ -97,36 +95,12 @@ class TurnOutcome:
             raise ValueError("a failed turn must carry an error message")
 
     @classmethod
-    def ok(
-        cls,
-        *,
-        message_cost_usd: float | None = None,
-        message_api_equivalent_cost_usd: float | None = None,
-        message_api_equivalent_cost_revision: int | None = None,
-    ) -> TurnOutcome:
-        return cls(
-            success=True,
-            message_cost_usd=message_cost_usd,
-            message_api_equivalent_cost_usd=message_api_equivalent_cost_usd,
-            message_api_equivalent_cost_revision=message_api_equivalent_cost_revision,
-        )
+    def ok(cls, *, message_cost_usd: float | None = None) -> TurnOutcome:
+        return cls(success=True, message_cost_usd=message_cost_usd)
 
     @classmethod
-    def failed(
-        cls,
-        error: str,
-        *,
-        message_cost_usd: float | None = None,
-        message_api_equivalent_cost_usd: float | None = None,
-        message_api_equivalent_cost_revision: int | None = None,
-    ) -> TurnOutcome:
-        return cls(
-            success=False,
-            error=error,
-            message_cost_usd=message_cost_usd,
-            message_api_equivalent_cost_usd=message_api_equivalent_cost_usd,
-            message_api_equivalent_cost_revision=message_api_equivalent_cost_revision,
-        )
+    def failed(cls, error: str, *, message_cost_usd: float | None = None) -> TurnOutcome:
+        return cls(success=False, error=error, message_cost_usd=message_cost_usd)
 
 
 class HarnessStartError(RuntimeError):

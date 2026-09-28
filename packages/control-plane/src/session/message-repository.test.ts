@@ -31,9 +31,6 @@ function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
     error_message: null,
     stop_confirmation_deadline: null,
     reported_cost_usd: 0,
-    reported_api_equivalent_cost_usd: 0,
-    reported_api_equivalent_cost_revision: 0,
-    reported_api_equivalent_final: 0,
     created_at: 1000,
     started_at: null,
     completed_at: null,
@@ -735,37 +732,5 @@ describe("MessageRepository", () => {
       expect(repository.raiseReportedCost("missing", 2.5)).toBe(0);
       expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
     });
-  });
-
-  it("accepts a newer lower estimate revision and finalizes it", () => {
-    mock.setMatchingData(/SELECT reported_api_equivalent_cost_usd,/, [
-      {
-        reported_api_equivalent_cost_usd: 0.75,
-        reported_api_equivalent_cost_revision: 1,
-        reported_api_equivalent_final: 0,
-      },
-    ]);
-    expect(repository.reconcileReportedApiEquivalentCost("msg-1", 0.5, 2, false)).toBe(-0.25);
-    expect(repository.reconcileReportedApiEquivalentCost("msg-1", 0.9, 1, false)).toBe(0);
-    const writes = mock.calls.filter((c) =>
-      c.query.includes("SET reported_api_equivalent_cost_usd")
-    );
-    expect(writes).toHaveLength(1);
-    expect(writes[0].params).toEqual([0.5, 2, 0, "msg-1"]);
-  });
-
-  it("rejects estimate reports after authoritative completion", () => {
-    mock.setMatchingData(/SELECT reported_api_equivalent_cost_usd/, [
-      {
-        reported_api_equivalent_cost_usd: 0.5,
-        reported_api_equivalent_cost_revision: 2,
-        reported_api_equivalent_final: 1,
-      },
-    ]);
-    expect(repository.reconcileReportedApiEquivalentCost("msg-1", 0.9, 3, false)).toBe(0);
-    expect(repository.reconcileReportedApiEquivalentCost("msg-1", 0.5, 2, true)).toBe(0);
-    expect(mock.calls.some((c) => c.query.includes("SET reported_api_equivalent_cost_usd"))).toBe(
-      false
-    );
   });
 });
