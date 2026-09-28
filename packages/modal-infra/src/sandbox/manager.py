@@ -717,6 +717,13 @@ class SandboxManager:
             ttyd_proxy_port,
             write_env_file=False,
         )
+        if (
+            (code_server_enabled and not code_server_url)
+            or (vnc_enabled and not vnc_url)
+            or (terminal_enabled and not ttyd_url)
+            or any(not (tunnel_urls or {}).get(port) for port in tunnel_ports)
+        ):
+            raise VMAllocationOutcome("race_pending", "VM allocation tunnels are not yet visible")
         return SandboxHandle(
             sandbox_id=sandbox_id,
             modal_sandbox=sandbox,

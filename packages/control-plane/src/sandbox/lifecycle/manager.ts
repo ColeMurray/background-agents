@@ -527,8 +527,9 @@ export class SandboxLifecycleManager
   private isSpawningSandbox = false;
   private isTerminatingSandbox = false;
   private providerStartupPending = false;
-  private bridgeResolution: Promise<void> | null = null;
-  private bridgeReadyRetry = false;
+  private bridgeResolution: SandboxGeneration | null = null;
+  private bridgeRetryGeneration: SandboxGeneration | null = null;
+  private bridgeStartupClaim: SandboxGeneration | null = null;
   private vmStartupAuth: {
     generation: SandboxGeneration;
     sessionId: string;
@@ -875,14 +876,9 @@ export class SandboxLifecycleManager
       let result: CreateSandboxResult;
       try {
         await this.recordPendingProviderReference(generation, createConfig);
-        try {
-          result = await this.provider.createSandbox(createConfig);
-        } catch (error) {
-          if (!this.provider.isUnknownStartupError?.(error)) throw error;
-          const recovered = await this.resolveUnknownVmStartup(generation, createConfig);
-          if (!recovered) return;
-          result = { ...recovered, createdAt: generation.createdAt };
-        }
+        const created = await this.createWithVmRecovery(createConfig, generation);
+        if (!created) return;
+        result = created;
       } catch (error) {
         if (!selectedImage) throw error;
         if (!(error instanceof PrebuiltImageUnavailableError)) {
@@ -920,19 +916,18 @@ export class SandboxLifecycleManager
         }));
         if (this.provider.name === "modal-vm")
           this.vmStartupAuth = { generation, sessionId, token: sandboxAuthToken };
-        await this.recordPendingProviderReference(generation, {
-          ...createConfig,
-          sandboxId: expectedSandboxId,
-          generationCreatedAtMs: retry.createdAt,
-        });
-        result = await this.provider.createSandbox({
+        const retryConfig: CreateSandboxConfig = {
           ...createConfig,
           sandboxId: expectedSandboxId,
           generationCreatedAtMs: retry.createdAt,
           sandboxAuthToken,
           prebuiltImageId: null,
           prebuiltImageSha: null,
-        });
+        };
+        await this.recordPendingProviderReference(generation, retryConfig);
+        const created = await this.createWithVmRecovery(retryConfig, generation);
+        if (!created) return;
+        result = created;
       }
 
       if (!(await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime)))
@@ -1007,7 +1002,8 @@ export class SandboxLifecycleManager
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
-      if (this.vmStartupAuth?.generation === generation) this.vmStartupAuth = null;
+      if (this.vmStartupAuth?.generation === generation && this.bridgeStartupClaim !== generation)
+        this.vmStartupAuth = null;
     }
   }
 
@@ -1402,7 +1398,8 @@ export class SandboxLifecycleManager
     } finally {
       this.isSpawningSandbox = false;
       this.providerStartupPending = false;
-      if (this.vmStartupAuth?.generation === generation) this.vmStartupAuth = null;
+      if (this.vmStartupAuth?.generation === generation && this.bridgeStartupClaim !== generation)
+        this.vmStartupAuth = null;
     }
   }
 
@@ -2212,7 +2209,7 @@ export class SandboxLifecycleManager
     if (!row) return false;
     const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
     if (!this.storage.markSandboxReady(generation)) return false;
-    this.resolvePendingBridge(generation, true);
+    this.resolvePendingBridge(generation);
     this.log.info("sandbox.ready", { event: "sandbox.ready", harness: harness ?? null });
     this.updateLastActivity(timestamp);
     this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
@@ -2492,6 +2489,19 @@ export class SandboxLifecycleManager
     }
   }
 
+  private async createWithVmRecovery(
+    config: CreateSandboxConfig,
+    generation: SandboxGeneration
+  ): Promise<CreateSandboxResult | null> {
+    try {
+      return await this.provider.createSandbox(config);
+    } catch (error) {
+      if (!this.provider.isUnknownStartupError?.(error)) throw error;
+      const recovered = await this.resolveUnknownVmStartup(generation, config);
+      return recovered ? { ...recovered, createdAt: generation.createdAt } : null;
+    }
+  }
+
   private async resolveUnknownVmStartup(
     generation: SandboxGeneration,
     config: Pick<
@@ -2526,25 +2536,52 @@ export class SandboxLifecycleManager
             ? error.cause.detail
             : null;
         if (detail === "other_generation") throw error;
-        if (
-          detail === "not_visible" &&
-          Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS
-        )
-          throw new SandboxProviderError(
-            "The VM allocation did not appear for this attempt. Please retry.",
-            "transient",
-            error instanceof Error ? error : undefined
-          );
         if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error)) throw error;
+        if (Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) {
+          const current = this.storage.getSandbox();
+          if (
+            current?.modal_sandbox_id === generation.sandboxId &&
+            current.created_at === generation.createdAt &&
+            !current.fenced &&
+            current.modal_object_id &&
+            parsePendingVmReference(current.modal_object_id) === null
+          ) {
+            const lifetime = this.provider.pendingSandboxAllocation?.(config)?.lifetime;
+            if (lifetime)
+              return {
+                sandboxId: config.sandboxId,
+                providerObjectId: current.modal_object_id,
+                lifetime,
+              };
+          }
+          if (detail === "not_visible")
+            throw new SandboxProviderError(
+              "The VM allocation did not appear for this attempt. Please retry.",
+              "transient",
+              error instanceof Error ? error : undefined
+            );
+          if (
+            current?.modal_sandbox_id === generation.sandboxId &&
+            current.created_at === generation.createdAt &&
+            !current.fenced &&
+            current.modal_object_id === reference
+          )
+            this.bridgeStartupClaim = generation;
+          return null;
+        }
       }
       await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
     }
   }
 
   /** Bridge-triggered reconciliation is lookup-only and never holds readiness. */
-  private resolvePendingBridge(generation: SandboxGeneration, retryIfBusy = false): void {
+  private resolvePendingBridge(generation: SandboxGeneration): void {
     if (this.bridgeResolution) {
-      if (retryIfBusy) this.bridgeReadyRetry = true;
+      if (
+        this.bridgeResolution.sandboxId !== generation.sandboxId ||
+        this.bridgeResolution.createdAt !== generation.createdAt
+      )
+        this.bridgeRetryGeneration = generation;
       return;
     }
     if (!this.provider.resolveSandbox) return;
@@ -2571,8 +2608,40 @@ export class SandboxLifecycleManager
       generationCreatedAtMs: generation.createdAt,
       timeoutSeconds: this.resolveSandboxTimeoutSeconds(this.parseSandboxSettings(session)),
     };
-    this.bridgeResolution = (async () => {
-      const result = await this.provider.resolveSandbox!(config);
+    const retryDeadlineAtMs = Date.now() + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS;
+    this.bridgeResolution = generation;
+    void (async () => {
+      let result: ResolveSandboxResult;
+      while (true) {
+        const current = this.storage.getSandbox();
+        if (
+          current?.modal_sandbox_id !== generation.sandboxId ||
+          current.created_at !== generation.createdAt ||
+          current.fenced ||
+          !["spawning", "connecting", "ready"].includes(current.status) ||
+          current.modal_object_id !== reference
+        )
+          return;
+        try {
+          result = await this.provider.resolveSandbox!(config);
+          break;
+        } catch (error) {
+          const detail =
+            error instanceof SandboxProviderError && error.cause instanceof ModalApiError
+              ? error.cause.detail
+              : null;
+          if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error))
+            throw error;
+          if (
+            Date.now() >= retryDeadlineAtMs ||
+            (detail === "not_visible" &&
+              Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) ||
+            this.bridgeRetryGeneration
+          )
+            return;
+          await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
+        }
+      }
       if (!result.providerObjectId) return;
       const auth = this.vmStartupAuth;
       const terminalToken =
@@ -2598,7 +2667,27 @@ export class SandboxLifecycleManager
         reference
       );
       if (!committed) return;
-      this.shutdown.recordResolvedProviderHandle?.(generation, reference, result.providerObjectId);
+      if (
+        this.bridgeStartupClaim?.sandboxId === generation.sandboxId &&
+        this.bridgeStartupClaim.createdAt === generation.createdAt
+      ) {
+        this.bridgeStartupClaim = null;
+        try {
+          await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime);
+        } finally {
+          if (
+            this.vmStartupAuth?.generation.sandboxId === generation.sandboxId &&
+            this.vmStartupAuth.generation.createdAt === generation.createdAt
+          )
+            this.vmStartupAuth = null;
+        }
+      } else {
+        this.shutdown.recordResolvedProviderHandle?.(
+          generation,
+          reference,
+          result.providerObjectId
+        );
+      }
       this.broadcastProviderAccessIfConnected();
     })()
       .catch((error) => {
@@ -2609,10 +2698,9 @@ export class SandboxLifecycleManager
       })
       .finally(() => {
         this.bridgeResolution = null;
-        if (this.bridgeReadyRetry) {
-          this.bridgeReadyRetry = false;
-          this.resolvePendingBridge(generation);
-        }
+        const queued = this.bridgeRetryGeneration;
+        this.bridgeRetryGeneration = null;
+        if (queued) this.resolvePendingBridge(queued);
       });
   }
 

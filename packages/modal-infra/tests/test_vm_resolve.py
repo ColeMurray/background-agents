@@ -74,7 +74,7 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
             "https://code.example",
             "https://vnc.example",
             "https://terminal.example",
-            {3000: "https://app.example"},
+            {3000: "https://app.example", 3001: "https://other.example"},
         )
     )
     monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
@@ -91,7 +91,7 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
             "vnc_url": "https://vnc.example",
             "vnc_password": "original-vnc-password",
             "ttyd_url": "https://terminal.example",
-            "tunnel_urls": {3000: "https://app.example"},
+            "tunnel_urls": {3000: "https://app.example", 3001: "https://other.example"},
             "sandbox_backend": "modal-vm",
         },
     }
@@ -103,6 +103,52 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
     tunnels.assert_awaited_once_with(
         sandbox, GENERATION, True, True, True, [3000, 3001], 9000, 9001, 9002, write_env_file=False
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_port", [9000, 9001, 9002, 3001])
+async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missing_port):
+    monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
+    sandbox = _sandbox(
+        docker_allocation_tags(SESSION, GENERATION),
+        {
+            "CODE_SERVER_PASSWORD": "original-code-password",
+            VNC_PASSWORD_ENV_VAR: "original-vnc-password",
+            CODE_SERVER_PORT_ENV_VAR: "9000",
+            NOVNC_PORT_ENV_VAR: "9001",
+            TTYD_PROXY_PORT_ENV_VAR: "9002",
+            EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000,3001",
+            "TERMINAL_ENABLED": "true",
+        },
+    )
+    monkeypatch.setattr(
+        manager_module.modal.Sandbox,
+        "from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+    create = AsyncMock(side_effect=AssertionError("resolve must not create"))
+    monkeypatch.setattr(manager_module.modal.Sandbox, "create", SimpleNamespace(aio=create))
+    monkeypatch.setattr(
+        manager_module.SandboxManager,
+        "_resolve_tunnels",
+        AsyncMock(
+            return_value={
+                port: f"https://port-{port}.example"
+                for port in [9000, 9001, 9002, 3000, 3001]
+                if port != missing_port
+            }
+        ),
+    )
+    write_env = AsyncMock(side_effect=AssertionError("resolve must not write"))
+    monkeypatch.setattr(manager_module.SandboxManager, "_write_tunnel_env_file", write_env)
+
+    with pytest.raises(HTTPException) as exc:
+        await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
+
+    assert (exc.value.status_code, exc.value.detail) == (409, "race_pending")
+    create.assert_not_awaited()
+    sandbox.terminate.aio.assert_not_awaited()
+    write_env.assert_not_awaited()
 
 
 @pytest.mark.asyncio
