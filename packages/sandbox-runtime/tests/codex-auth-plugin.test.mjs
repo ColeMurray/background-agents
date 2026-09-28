@@ -163,25 +163,32 @@ test("converts catalog context pricing without hardcoding the tier rates", async
 test("fetches OpenCode's catalog when its cache is absent", async () => {
   const directory = await mkdtemp(join(tmpdir(), "missing-opencode-models-"));
   const previous = process.env.OPENCODE_MODELS_PATH;
+  const previousFetch = globalThis.fetch;
   process.env.OPENCODE_MODELS_PATH = join(directory, "models.json");
-  let requested;
+  const requests = [];
   globalThis.fetch = async (url) => {
-    requested = url;
+    requests.push(url);
     return Response.json({
       openai: { models: { "gpt-6-sol": { cost: { input: 4, output: 12 } } } },
     });
   };
   try {
     const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
-    const models = await plugin.provider.models(
-      { models: { "gpt-6-sol": { cost: { input: 0, output: 0 } } } },
-      { auth: { type: "oauth" } }
-    );
-    assert.equal(requested, "https://models.opencode.ai/api.json");
-    assert.equal(models["gpt-6-sol"].cost.input, 4);
+    const provider = { models: { "gpt-6-sol": { cost: { input: 0, output: 0 } } } };
+    const context = { auth: { type: "oauth" } };
+    const [first, concurrent] = await Promise.all([
+      plugin.provider.models(provider, context),
+      plugin.provider.models(provider, context),
+    ]);
+    const later = await plugin.provider.models(provider, context);
+    assert.deepEqual(requests, ["https://models.opencode.ai/api.json"]);
+    for (const models of [first, concurrent, later]) {
+      assert.equal(models["gpt-6-sol"].cost.input, 4);
+    }
   } finally {
     if (previous === undefined) delete process.env.OPENCODE_MODELS_PATH;
     else process.env.OPENCODE_MODELS_PATH = previous;
+    globalThis.fetch = previousFetch;
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -192,18 +199,23 @@ test("keeps OAuth models available at zero cost when neither catalog source is a
   const previousFetch = globalThis.fetch;
   const previousWarn = console.warn;
   process.env.OPENCODE_MODELS_PATH = join(directory, "models.json");
+  let requests = 0;
+  let warnings = 0;
   globalThis.fetch = async () => {
+    requests++;
     throw new Error("catalog offline");
   };
-  console.warn = () => undefined;
+  console.warn = () => warnings++;
   try {
     const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
-    const models = await plugin.provider.models(
-      { models: { "gpt-6-sol": { cost: { input: 0, output: 0 } } } },
-      { auth: { type: "oauth" } }
-    );
-    assert.equal(models["gpt-6-sol"].cost.input, 0);
-    assert.equal(models["gpt-5.3-codex"].cost.input, 0);
+    const provider = { models: { "gpt-6-sol": { cost: { input: 0, output: 0 } } } };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const models = await plugin.provider.models(provider, { auth: { type: "oauth" } });
+      assert.equal(models["gpt-6-sol"].cost.input, 0);
+      assert.equal(models["gpt-5.3-codex"].cost.input, 0);
+    }
+    assert.equal(requests, 1);
+    assert.equal(warnings, 1);
   } finally {
     if (previousPath === undefined) delete process.env.OPENCODE_MODELS_PATH;
     else process.env.OPENCODE_MODELS_PATH = previousPath;

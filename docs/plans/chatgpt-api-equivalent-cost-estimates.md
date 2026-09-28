@@ -22,9 +22,11 @@ loader does not affect the accounting catalog.
 Add an OAuth-only `provider.models` hook to the existing proxy. After the built-in hook, restore
 supported Codex models it filtered out and apply prices from the same models.dev catalog OpenCode
 uses, including cache, over-200k, and long-context tier rates. Read OpenCode's cached catalog first;
-if it is unavailable, request OpenCode's catalog endpoint. Leave API-key models unchanged and
-unknown models unpriced. If neither catalog source is available, keep OpenCode's zero OAuth prices
-and log a warning instead of blocking the session. No prices are coded into the plugin.
+if it is unavailable, request OpenCode's catalog endpoint once per plugin process, sharing the
+lookup across catalog rebuilds. An unavailable catalog stays unpriced until that process restarts.
+Leave API-key models unchanged and unknown models unpriced. If neither catalog source is available,
+keep OpenCode's zero OAuth prices and log a warning instead of blocking the session. No prices are
+coded into the plugin.
 
 Because these prices use the existing cost path, they also count toward `max_cost_usd`, exactly as
 Claude subscription-reported costs do. This is a usage guardrail, not evidence of a charge.

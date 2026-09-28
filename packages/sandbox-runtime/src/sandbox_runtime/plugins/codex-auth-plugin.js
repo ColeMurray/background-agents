@@ -166,12 +166,14 @@ async function ensureAccessToken(getAuth, setAuth) {
 }
 
 export const CodexAuthProxy = async (input) => {
+  // Share the in-flight lookup and its result across provider catalog rebuilds.
+  let catalogPromise;
   return {
     provider: {
       id: "openai",
       async models(provider, context) {
         if (context.auth?.type !== "oauth") return provider.models;
-        const catalog = await openAiCatalogModels();
+        const catalog = await (catalogPromise ??= openAiCatalogModels());
         // The built-in hook filters models and zeroes OAuth prices first.
         const models = Object.fromEntries(
           Object.entries(provider.models)
