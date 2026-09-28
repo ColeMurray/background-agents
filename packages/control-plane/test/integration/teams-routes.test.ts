@@ -4,8 +4,9 @@ import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import type { Team } from "@open-inspect/shared/types/teams";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
+import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
-import { seedActiveUser, serviceFetch } from "./helpers";
+import { seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
 
 const BASE = "https://test.local";
 const OWNER = "11111111111111111111111111111111";
@@ -77,16 +78,25 @@ describe("team routes", () => {
   });
 
   it("rolls back team creation if its audit write fails", async () => {
-    const store = new TeamStore(env.DB);
+    const db = sqlDatabase(env.DB);
+    const failAudit: SqlDatabase = {
+      prepare(sql) {
+        return sql.includes("INSERT INTO authorization_audit_events")
+          ? db.prepare("INSERT INTO authorization_audit_events (id) VALUES (?)").bind("bad-audit")
+          : db.prepare(sql);
+      },
+      batch<T>(statements: SqlStatement[]) {
+        return db.batch<T>(statements);
+      },
+    };
     await expect(
-      store.createWithLead(
+      new TeamStore(failAudit).createWithLead(
         { slug: "rollback", name: "Rollback", joinPolicy: "invite_only" },
         OWNER,
-        () =>
-          env.DB.prepare("INSERT INTO authorization_audit_events (id) VALUES (?)").bind("bad-audit")
+        "audit-failure"
       )
     ).rejects.toThrow();
-    expect(await store.getBySlug("rollback")).toBeNull();
+    expect(await new TeamStore(env.DB).getBySlug("rollback")).toBeNull();
     expect(
       (
         await env.DB.prepare("SELECT COUNT(*) AS count FROM team_memberships").first<{

@@ -6,6 +6,7 @@ import {
 } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
 import { isUniqueConstraintError } from "./errors";
+import { TeamAuditStore } from "./team-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export class TeamSlugConflictError extends Error {
@@ -118,7 +119,7 @@ export class TeamStore {
   async createWithLead(
     input: { slug: string; name: string; description?: string | null; joinPolicy: TeamJoinPolicy },
     leadUserId: string,
-    auditStatement: (teamId: string) => SqlStatement
+    requestId: string
   ): Promise<Team> {
     const id = `team_${generateId()}`;
     const now = Date.now();
@@ -130,7 +131,14 @@ export class TeamStore {
             "INSERT INTO team_memberships (team_id, user_id, role, source, created_at) VALUES (?, ?, 'lead', 'manual', ?)"
           )
           .bind(id, leadUserId, now),
-        auditStatement(id),
+        new TeamAuditStore(this.db).bind({
+          requestId,
+          actorUserId: leadUserId,
+          teamId: id,
+          action: "team.created",
+          before: {},
+          after: { ...input, teamId: id, leadUserId },
+        }),
       ]);
     } catch (cause) {
       rethrowTeamWriteError(cause);

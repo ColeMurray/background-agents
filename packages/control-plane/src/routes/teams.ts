@@ -141,17 +141,7 @@ async function createTeam(request: Request, _env: Env, _params: object, ctx: Req
   if (body instanceof Response) return body;
   try {
     const leadUserId = viewer(ctx).userId;
-    const audit = new TeamAuditStore(ctx.db);
-    const team = await new TeamStore(ctx.db).createWithLead(body, leadUserId, (teamId) =>
-      audit.bind({
-        requestId: ctx.request_id,
-        actorUserId: leadUserId,
-        teamId,
-        action: "team.created",
-        before: {},
-        after: { ...body, teamId, leadUserId },
-      })
-    );
+    const team = await new TeamStore(ctx.db).createWithLead(body, leadUserId, ctx.request_id);
     return json(await responseTeam(ctx, team), 201);
   } catch (cause) {
     return mutationError(cause);
