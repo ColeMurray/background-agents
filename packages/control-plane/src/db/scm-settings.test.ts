@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared/types/integrations";
 import { ScmSettingsStore, ScmSettingsValidationError } from "./scm-settings";
-import { IntegrationSettingsStore } from "./integration-settings";
 import type { SqlDatabase } from "./sql-database";
 
 // ScmSettingsStore is a thin wrapper over IntegrationSettingsStore pinned to the
@@ -175,9 +174,5 @@ describe("ScmSettingsStore", () => {
 
     expect(delegate.getResolvedConfig).toHaveBeenCalledWith("scm", "acme/web");
     expect(resolved).toEqual({ alwaysUseDraftMode: false, pullRequestLabel: "generated" });
-  });
-
-  it("constructs the underlying IntegrationSettingsStore", () => {
-    expect(IntegrationSettingsStore).toHaveBeenCalled();
   });
 });

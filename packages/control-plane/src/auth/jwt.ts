@@ -30,3 +30,22 @@ export async function mintJwt(payload: Record<string, unknown>, secret: string):
 
   return `${signingInput}.${base64url(signature)}`;
 }
+
+/** Whether a JWT has a numeric expiration strictly after `nowSeconds`. */
+export function isJwtUnexpired(
+  token: string | null,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): boolean {
+  if (!token) return false;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return false;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, "="))) as {
+      exp?: unknown;
+    };
+    return typeof decoded.exp === "number" && decoded.exp > nowSeconds;
+  } catch {
+    return false;
+  }
+}

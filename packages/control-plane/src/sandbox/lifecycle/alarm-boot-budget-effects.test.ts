@@ -109,6 +109,7 @@ describe("boot budget alarm effects", () => {
         reason: "boot_budget_exceeded",
         intent: "destroy",
         signal: undefined,
+        generationCreatedAtMs: sandbox.created_at,
       });
       expect(h.wsManager.sendToSandbox).toHaveBeenCalledExactlyOnceWith({ type: "shutdown" });
       expect(h.wsManager.detachSandboxWebSocket).toHaveBeenCalledOnce();

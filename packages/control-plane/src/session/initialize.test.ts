@@ -12,6 +12,8 @@ vi.mock("../db/session-index", () => ({
 describe("initializeSession", () => {
   const baseInput: SessionInitInput = {
     sessionId: "session-123",
+    ownerTeamId: null,
+    visibility: "workspace",
     harness: "opencode",
     repoOwner: "acme",
     repoName: "web-app",

@@ -26,6 +26,7 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/dist/**",
       "**/.next/**",
+      "**/.source/**",
       "**/build/**",
       "**/.wrangler/**",
       "**/coverage/**",
@@ -352,9 +353,9 @@ export default tseslint.config(
     rules: { "no-restricted-imports": ["error", { patterns: sandboxImplementationImports }] },
   },
 
-  // React-specific configuration for web package
+  // React-specific configuration for browser packages
   {
-    files: ["packages/web/**/*.{ts,tsx}"],
+    files: ["packages/{docs,web}/**/*.{ts,tsx}"],
     plugins: {
       react: reactPlugin,
       "react-hooks": reactHooksPlugin,

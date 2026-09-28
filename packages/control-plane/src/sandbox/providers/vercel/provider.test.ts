@@ -173,7 +173,7 @@ describe("VercelSandboxProvider", () => {
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
-      snapshotStopsSandbox: true,
+      snapshotRequiresShutdown: true,
     });
   });
 
@@ -605,6 +605,23 @@ describe("VercelSandboxProvider", () => {
         EXPECTED_TUNNEL_PORTS: "8080",
       })
     );
+  });
+
+  it("rejects collisions with an enabled service's default port", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({
+        ...baseCreateConfig,
+        codeServerEnabled: true,
+        sandboxSettings: { terminalEnabled: true, terminalPort: 8080 },
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("assigned to more than one enabled service"),
+      errorType: "permanent",
+    });
+    expect(client.createSandbox).not.toHaveBeenCalled();
   });
 
   it("requires a base snapshot when no repo image snapshot is available", async () => {

@@ -20,7 +20,7 @@ PLAN = {
     "target": {
         "os": "debian",
         "base": "test-base",
-        "node": "22",
+        "node": "24",
         "user": "test-user",
         "home": "/home/test-user",
     },

@@ -13,6 +13,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: null,
     name: "Slack triage",
     instructions: "Investigate and fix",
     trigger_type: "slack_event",

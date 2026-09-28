@@ -77,6 +77,13 @@ export class SessionNotPromptableError extends Error {
   }
 }
 
+export class SandboxPromptBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxPromptBlockedError";
+  }
+}
+
 export class BudgetExhaustedError extends Error {
   constructor() {
     super(
@@ -164,13 +171,15 @@ export class SessionMessageQueue {
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
-    private readonly mayDispatch: () => boolean = () => true
+    private readonly mayDispatch: () => boolean,
+    private readonly getSandboxPromptBlockReason: () => string | null
   ) {}
 
   async enqueueAutofix(
     command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
   ): Promise<EnqueueAutofixResponse> {
     const session = this.repository.getSession();
+    const sandboxRecoveryRequired = this.getSandboxPromptBlockReason() !== null;
     const userId = `github:${command.author.id}`;
     const now = Date.now();
     const admission = this.messageRepository.admitAutofixMessage({
@@ -199,6 +208,7 @@ export class SessionMessageQueue {
       attemptLimit: command.attemptLimit,
       windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
       sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
+      sandboxRecoveryRequired,
     });
     if (admission.kind === "rejected") return admission;
 
@@ -229,6 +239,7 @@ export class SessionMessageQueue {
 
     const session = this.repository.getSession();
     if (!session || session.status === "archived" || session.status === "cancelled") return;
+    if (this.getSandboxPromptBlockReason()) return;
 
     await this.sessionStatus.transition("active");
     await this.processMessageQueue();
@@ -242,6 +253,7 @@ export class SessionMessageQueue {
     let enqueued: EnqueuedPrompt;
     try {
       this.assertPromptableSession();
+      this.assertSandboxAcceptingPrompts();
       let participant = this.participantRepository.getParticipantById(client.participantId);
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
@@ -273,6 +285,15 @@ export class SessionMessageQueue {
         this.wsManager.send(ws, {
           type: "error",
           code: "SESSION_NOT_PROMPTABLE",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      if (error instanceof SandboxPromptBlockedError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "SANDBOX_RECOVERY_REQUIRED",
           message: error.message,
           clientRequestId: data.clientRequestId,
         });
@@ -679,6 +700,7 @@ export class SessionMessageQueue {
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
     this.assertPromptableSession();
+    this.assertSandboxAcceptingPrompts();
     this.assertBudgetAvailable();
     this.assertQueueCapacity();
     let participant = this.participantService.getByUserId(data.authorId);
@@ -738,6 +760,7 @@ export class SessionMessageQueue {
     // cancel or archive can land while this request is suspended, so the
     // session is read after it, not before.
     this.assertPromptableSession();
+    this.assertSandboxAcceptingPrompts();
     const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
     if (data.clientRequestId) {
       const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
@@ -876,6 +899,11 @@ export class SessionMessageQueue {
     if (session && !isSessionPromptable(session.status)) {
       throw new SessionNotPromptableError(session.status);
     }
+  }
+
+  private assertSandboxAcceptingPrompts(): void {
+    const reason = this.getSandboxPromptBlockReason();
+    if (reason) throw new SandboxPromptBlockedError(reason);
   }
 
   private assertQueueCapacity(

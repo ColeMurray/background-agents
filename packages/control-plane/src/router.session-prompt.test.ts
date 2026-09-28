@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 
 import { UserStore } from "./db/user-store";
 import { resolveGitHubEnrichmentForRequest } from "./session/identity";
@@ -205,6 +206,32 @@ describe("session prompt identity enrichment", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Field 'authorId' is not accepted from verified callers",
     });
+    expect(sessionFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "oversized content",
+      { content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1) },
+      {
+        error: `content exceeds ${MAX_WEB_PROMPT_CHARS} characters (got ${MAX_WEB_PROMPT_CHARS + 1})`,
+        code: "prompt_too_long",
+      },
+    ],
+    ["blank content", { content: "  \n" }, { error: "content is required" }],
+    ["invalid source", { content: "hello", source: "unknown" }, null],
+  ])("reports %s without dispatching", async (_case, body, expected) => {
+    const sessionFetch = vi.fn(async () => Response.json({ status: "queued" }));
+    const response = await handleRequest(
+      await userPromptRequest(body),
+      createEnv(sessionFetch) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(400);
+    const result = (await response.json()) as { error: string };
+    if (expected) expect(result).toEqual(expected);
+    else expect(result.error).toContain("source");
     expect(sessionFetch).not.toHaveBeenCalled();
   });
 });

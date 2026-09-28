@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mintJwt } from "./jwt";
+import { isJwtUnexpired, mintJwt } from "./jwt";
 
 function decodeBase64url(value: string): string {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -59,4 +59,18 @@ describe("mintJwt", () => {
     const token2 = await mintJwt(payload, "secret-2");
     expect(token1).not.toBe(token2);
   });
+
+  it("recognizes unexpired tokens", async () => {
+    const token = await mintJwt({ exp: 2000 }, "secret");
+
+    expect(isJwtUnexpired(token, 1999)).toBe(true);
+    expect(isJwtUnexpired(token, 2000)).toBe(false);
+  });
+
+  it.each([null, "malformed", "e30.e30.signature"])(
+    "rejects missing, malformed, or expiration-less tokens",
+    (token) => {
+      expect(isJwtUnexpired(token, 1000)).toBe(false);
+    }
+  );
 });

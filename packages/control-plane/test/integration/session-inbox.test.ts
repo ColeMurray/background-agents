@@ -10,6 +10,8 @@ const VIEWER_ID = "11111111111111111111111111111111";
 function session(id: string, overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     id,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: id,
     repoOwner: "open-inspect",
     repoName: "open-inspect",

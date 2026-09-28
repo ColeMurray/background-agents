@@ -14,6 +14,12 @@ it("leaves the dedicated PR funnel as the only top-level PR-created metric", () 
       days={30}
       loading={false}
       summary={{
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cacheHitRatio: null,
         totalSessions: 10,
         activeUsers: 2,
         totalCost: 5,

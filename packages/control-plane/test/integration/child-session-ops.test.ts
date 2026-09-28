@@ -35,6 +35,8 @@ describe("Child session operations (list, get, cancel)", () => {
     const now = Date.now();
     await store.create({
       id: pName,
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Parent Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -49,6 +51,8 @@ describe("Child session operations (list, get, cancel)", () => {
     });
     await store.create({
       id: childName,
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Child Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -115,6 +119,8 @@ describe("Child session operations (list, get, cancel)", () => {
     const now = Date.now();
     await store.create({
       id,
+      ownerTeamId: null,
+      visibility: "workspace",
       title: "Nested Session",
       repoOwner: "acme",
       repoName: "web-app",
@@ -261,6 +267,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: fakeName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Fake Parent",
         repoOwner: "acme",
         repoName: "web-app",
@@ -473,6 +481,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: fakeName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Fake Parent",
         repoOwner: "acme",
         repoName: "web-app",
@@ -733,6 +743,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: fakeName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Fake Parent",
         repoOwner: "acme",
         repoName: "web-app",
@@ -776,6 +788,8 @@ describe("Child session operations (list, get, cancel)", () => {
       const now = Date.now();
       await store.create({
         id: pName,
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Parent",
         repoOwner: "acme",
         repoName: "web-app",

@@ -20,6 +20,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
   return {
     id: `auto-${Math.random().toString(36).slice(2, 8)}`,
+    owner_team_id: null,
     name: "Test Automation",
     instructions: "Run tests",
     trigger_type: "schedule",
@@ -592,6 +593,8 @@ describe("AutomationStore (D1 integration)", () => {
       // Create a session
       await sessionStore.create({
         id: "sess-enriched",
+        ownerTeamId: null,
+        visibility: "workspace",
         title: "Auto Session Title",
         repoOwner: "acme",
         repoName: "web-app",

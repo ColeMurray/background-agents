@@ -6,7 +6,7 @@ The control plane does not consume build hashes or dependency inventories.
 
 ## Update dependencies
 
-From the repository root, with Python 3.12+, uv 0.9.7, Node 22+, and npm installed:
+From the repository root, with Python 3.12+, uv 0.9.7, Node 24+, and npm installed:
 
 ```bash
 # Edit toolchain.json, or sandbox-runtime/pyproject.toml for runtime dependencies.

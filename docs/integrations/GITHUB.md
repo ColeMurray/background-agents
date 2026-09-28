@@ -7,7 +7,7 @@ threads.
 This guide is for people using the GitHub integration day to day. If you are installing the GitHub
 App or deploying the bot worker, start with
 [Create GitHub App](../GETTING_STARTED.md#step-3-create-github-app) and
-[Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
+[Complete GitHub Bot Setup](../GETTING_STARTED.md#github-bot-optional).
 
 ---
 
@@ -263,7 +263,7 @@ Important limitations:
 
 Check that the GitHub App is installed on the repository and that the GitHub Bot worker is enabled.
 Then confirm the webhook URL, webhook secret, subscribed events, and `github_bot_username` in
-[Complete GitHub Bot Setup](../GETTING_STARTED.md#step-7c-complete-github-bot-setup-if-using-github-bot).
+[Complete GitHub Bot Setup](../GETTING_STARTED.md#github-bot-optional).
 
 Also check **Settings > Integrations > GitHub**. For direct GitHub Bot workflows, the repository may
 be outside the selected repository scope, or the triggering user may be outside the allowed user

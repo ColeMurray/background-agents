@@ -1,6 +1,6 @@
 locals {
   name_suffix              = var.deployment_name
-  use_modal_backend        = var.sandbox_provider == "modal"
+  use_modal_backend        = contains(["modal", "modal-vm"], var.sandbox_provider)
   use_daytona_backend      = var.sandbox_provider == "daytona"
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
@@ -52,10 +52,17 @@ locals {
     startswith(var.classification_model, "gpt-")
   )
 
+  # The dedicated classifier key keeps the bots' credential out of sandboxes;
+  # existing deployments that only set anthropic_api_key keep using it.
+  classifier_anthropic_api_key = (trimspace(var.classification_anthropic_api_key) != ""
+    ? var.classification_anthropic_api_key
+    : var.anthropic_api_key
+  )
+
   # Exactly one provider binding for the classifier bots.
   classifier_secret_bindings = (local.classifier_uses_openai
     ? { OPENAI_API_KEY = { value = var.classification_openai_api_key } }
-    : { ANTHROPIC_API_KEY = { value = var.anthropic_api_key } }
+    : { ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key } }
   )
 
   # Deployment-wide LLM keys injected into Modal session sandboxes. Every key stays
@@ -86,6 +93,9 @@ locals {
   effective_web_app_url = (
     var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
   )
+
+  # Documentation site URL, when it serves a hostname of its own
+  docs_custom_domain_url = var.docs_custom_domain != null ? "https://${var.docs_custom_domain}" : null
 
   # Worker script paths (deterministic output locations)
   control_plane_script_path = "${var.project_root}/packages/control-plane/dist/index.js"

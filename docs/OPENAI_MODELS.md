@@ -13,6 +13,10 @@ can use the installation default, select a specific account, or explicitly use A
 See [Available Models — OpenAI](AVAILABLE_MODELS.md#openai) for supported model IDs, reasoning
 effort options, and defaults.
 
+Existing sessions and saved bot settings selecting `gpt-5.3-codex` or `gpt-5.3-codex-spark` resolve
+to `openai/gpt-6-sol` when used. The retired models are no longer offered in the picker; update
+saved defaults and automations to a model available to your account.
+
 ---
 
 ## Setup

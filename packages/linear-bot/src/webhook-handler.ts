@@ -7,6 +7,7 @@ import {
   createSessionResponseSchema,
   type LinearCallbackContext,
 } from "@open-inspect/shared/types/session-api";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
 import type {
   Env,
@@ -591,6 +592,29 @@ async function handleNewSession(
     return;
   }
 
+  // Prefer Linear's promptContext (includes issue, comments, guidance)
+  let prompt = webhook.promptContext
+    ? buildPromptContextPrompt(webhook.promptContext)
+    : buildPrompt(issue, issueDetails, instructionComment, clarificationReply);
+
+  if (integrationConfig.issueSessionInstructions) {
+    prompt += `\n\n## Additional Instructions\n\n${integrationConfig.issueSessionInstructions}`;
+  }
+
+  if (prompt.length > MAX_WEB_PROMPT_CHARS) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: `The prompt for this issue is ${prompt.length.toLocaleString("en-US")} characters, exceeding the ${MAX_WEB_PROMPT_CHARS.toLocaleString("en-US")}-character limit. Linear may include the parent issue's description; shorten this issue, its parent, or the configured instructions, then delegate again.`,
+    });
+    log.warn("agent_session.prompt_too_long", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      prompt_length: prompt.length,
+      prompt_limit: MAX_WEB_PROMPT_CHARS,
+    });
+    return;
+  }
+
   // ─── Resolve user preferences and identity ────────────────────────────
 
   let userModel: string | undefined;
@@ -692,16 +716,7 @@ async function handleNewSession(
     plan: makePlan("session_created"),
   });
 
-  // ─── Build and send prompt ────────────────────────────────────────────
-
-  // Prefer Linear's promptContext (includes issue, comments, guidance)
-  let prompt = webhook.promptContext
-    ? buildPromptContextPrompt(webhook.promptContext)
-    : buildPrompt(issue, issueDetails, instructionComment, clarificationReply);
-
-  if (integrationConfig.issueSessionInstructions) {
-    prompt += `\n\n## Additional Instructions\n\n${integrationConfig.issueSessionInstructions}`;
-  }
+  // ─── Send prompt ──────────────────────────────────────────────────────
 
   const promptUrl = `https://internal/sessions/${session.sessionId}/prompt`;
   const promptBody = JSON.stringify({
@@ -732,6 +747,7 @@ async function handleNewSession(
       trace_id: traceId,
       session_id: session.sessionId,
       issue_identifier: issue.identifier,
+      prompt_length: prompt.length,
       http_status: promptRes.status,
       response_body: promptErrBody.slice(0, 500),
       duration_ms: Date.now() - startTime,

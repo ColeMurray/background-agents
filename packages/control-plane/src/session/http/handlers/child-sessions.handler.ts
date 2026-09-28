@@ -5,7 +5,11 @@ import { z } from "zod";
 import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
-import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
+import {
+  PromptQueueFullError,
+  SandboxPromptBlockedError,
+  SessionNotPromptableError,
+} from "../../message-queue";
 import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
@@ -164,6 +168,12 @@ export class ChildSessionsHandler {
     } catch (error) {
       if (error instanceof SessionNotPromptableError) {
         return Response.json({ error: error.message }, { status: 409 });
+      }
+      if (error instanceof SandboxPromptBlockedError) {
+        return Response.json(
+          { error: error.message, code: "SANDBOX_RECOVERY_REQUIRED" },
+          { status: 409 }
+        );
       }
       if (error instanceof PromptQueueFullError) {
         return Response.json({ error: "Child prompt queue is full" }, { status: 429 });

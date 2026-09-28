@@ -9,7 +9,7 @@ import {
   type RestoreConfig,
   type SessionRepositoryInfo,
 } from "./provider";
-import { resolveServicePorts } from "./providers/port-resolution";
+import { resolveSandboxPortPlan, type SandboxPortPlan } from "./providers/port-resolution";
 
 /**
  * Shared assembly for the sandbox environment contract.
@@ -289,6 +289,10 @@ export interface SandboxEnvVarsOptions {
   codeServerPassword?: string;
   /** Precomputed VNC password, present only when VNC is enabled. */
   vncPassword?: string;
+  /** Reuse the provider's validated plan when it also exposes service ports. */
+  portPlan?: SandboxPortPlan;
+  /** Override terminal state inherited from a captured provider image when disabled. */
+  emitDisabledTerminalEnv?: boolean;
   /**
    * Overrides `config.userEnvVars` as the user layer when a provider composes
    * it differently (OpenComputer layers provider LLM credentials underneath
@@ -312,8 +316,12 @@ export function buildSandboxEnvVars(
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
   const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
+  delete envVars.CODE_SERVER_PORT;
+  delete envVars.CODE_SERVER_PASSWORD;
   delete envVars.VNC_PASSWORD;
   delete envVars.NOVNC_PORT;
+  delete envVars.TERMINAL_ENABLED;
+  delete envVars.TTYD_PROXY_PORT;
   // Boot mode is the control plane's to decide. These are applied by the caller
   // after this returns (only when the corresponding mode is real), so unlike the
   // system keys below they are not overlaid and a repo secret of the same name
@@ -322,6 +330,16 @@ export function buildSandboxEnvVars(
   for (const marker of BOOT_MODE_ENV_KEYS) delete envVars[marker];
 
   const sessionConfig = buildSessionConfig(config);
+  const portPlan =
+    options.portPlan ??
+    resolveSandboxPortPlan(
+      {
+        codeServer: config.codeServerEnabled === true,
+        terminal: config.sandboxSettings?.terminalEnabled === true,
+        vnc: config.vncEnabled === true,
+      },
+      config.sandboxSettings
+    );
 
   Object.assign(envVars, {
     PYTHONUNBUFFERED: "1",
@@ -334,17 +352,24 @@ export function buildSandboxEnvVars(
     [SESSION_CONFIG_ENV_VAR]: JSON.stringify(sessionConfig),
   });
 
-  if (config.codeServerEnabled) {
-    envVars.CODE_SERVER_PORT = String(resolveServicePorts(config.sandboxSettings).codeServerPort);
+  if (portPlan.codeServerPort !== undefined) {
+    envVars.CODE_SERVER_PORT = String(portPlan.codeServerPort);
   }
 
   if (options.codeServerPassword) {
     envVars.CODE_SERVER_PASSWORD = options.codeServerPassword;
   }
 
-  if (config.vncEnabled && options.vncPassword) {
+  if (portPlan.vncPort !== undefined && options.vncPassword) {
     envVars.VNC_PASSWORD = options.vncPassword;
-    envVars.NOVNC_PORT = String(resolveServicePorts(config.sandboxSettings).vncPort);
+    envVars.NOVNC_PORT = String(portPlan.vncPort);
+  }
+
+  if (portPlan.terminalPort !== undefined) {
+    envVars.TERMINAL_ENABLED = "true";
+    envVars.TTYD_PROXY_PORT = String(portPlan.terminalPort);
+  } else if (options.emitDisabledTerminalEnv) {
+    envVars.TERMINAL_ENABLED = "";
   }
 
   if (config.agentSlackNotifyEnabled) {

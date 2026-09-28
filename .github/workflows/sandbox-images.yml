@@ -9,6 +9,7 @@ on:
       - "terraform/modules/*/scripts/**"
       - "package-lock.json"
       - ".github/workflows/sandbox-images.yml"
+      - ".nvmrc"
   workflow_dispatch:
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.9.7"

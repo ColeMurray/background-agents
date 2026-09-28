@@ -14,6 +14,9 @@ import type {
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
 import { AutomationStore } from "../db/automation-store";
+import { TeamStore } from "../db/teams";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import { UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
 import { error, json } from "../http/responses";
@@ -581,6 +584,68 @@ async function enforceAutomationRequirement(
   }
 }
 
+async function enforceTeamRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "team" }>,
+  params: RouteParams,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  if (ctx.principal?.kind !== "user") {
+    return authorizationDenial(
+      json({ error: "Forbidden", code: "service_capability_required" }, 403),
+      evidence,
+      requirement,
+      "service_capability_required",
+      "Forbidden"
+    );
+  }
+  const teamId = params[requirement.teamIdParam];
+  if (!teamId) return { response: json({ error: "Invalid team route" }, 400) };
+  try {
+    const authorization = ctx.authorization;
+    if (!authorization) throw new Error("Missing request authorization");
+    const team = await new TeamStore(ctx.db).getById(teamId);
+    if (!team) return { response: error("Team not found", 404) };
+    const memberships = new TeamMembershipStore(ctx.db);
+    const viewerMemberships = await memberships.listForUser(ctx.principal.userId);
+    const access = resolveTeamAccess(
+      {
+        userId: ctx.principal.userId,
+        roleKey: authorization.role.key,
+        memberships: viewerMemberships,
+      },
+      { ...team, leadCount: await memberships.countLeads(teamId) }
+    );
+    const isAdmin =
+      authorization.role.key === "owner" || authorization.role.key === "administrator";
+    const visible = isAdmin || viewerMemberships.has(teamId);
+    if (!visible && requirement.need !== "canJoin")
+      return { response: error("Team not found", 404) };
+    if (requirement.need !== "read" && !access[requirement.need]) {
+      const reasonCode =
+        requirement.need === "canJoin"
+          ? team.archivedAt !== null
+            ? "team_archived"
+            : team.joinPolicy === "invite_only"
+              ? "invite_only"
+              : "already_member"
+          : "team_capability_required";
+      return authorizationDenial(
+        json({ error: "Forbidden", code: reasonCode, reason_code: reasonCode }, 403),
+        evidence,
+        requirement,
+        reasonCode,
+        "Forbidden"
+      );
+    }
+    evidence.requirements.push(requirement);
+    ctx.teamAdmission = { team, access };
+    return null;
+  } catch {
+    return authorizationUnavailable();
+  }
+}
+
 function allowed(
   policy: RouteAdmissionPolicy,
   admission: AllowedAuthorizationDecision["admission"],
@@ -652,6 +717,9 @@ async function enforceRouteAuthorization(
           break;
         case "automation":
           failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
+          break;
+        case "team":
+          failure = await enforceTeamRequirement(requirement, params, ctx, evidence);
           break;
       }
       if (failure) return resultForFailure(failure);

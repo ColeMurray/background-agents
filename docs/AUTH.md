@@ -195,8 +195,7 @@ active Owner cannot be suspended or demoted.
 The first person who signs in receives the default Member role and is not promoted to Owner
 automatically. On a new deployment, the intended Owner must sign in once, after which a deployment
 operator runs the Owner bootstrap command using that person's Open-Inspect user ID. See
-[Getting Started](GETTING_STARTED.md#step-7a-bootstrap-the-workspace-owner) for the deployment
-steps.
+[Getting Started](GETTING_STARTED.md#step-9-bootstrap-the-workspace-owner) for the deployment steps.
 
 ## Related Guides
 

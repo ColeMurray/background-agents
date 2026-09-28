@@ -155,6 +155,18 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       return reject("Unauthorized: Invalid auth token", 401);
     }
 
+    // A refused bridge exits and its sandbox shuts itself down. While a save
+    // still needs this sandbox, the bridge is told to retry instead; the save
+    // stops the sandbox once it is done with it.
+    const refusedReconnect = (): "retry" | "exit" => {
+      const current = sandboxRepository.getSandbox();
+      return current !== null &&
+        current.modal_sandbox_id === expectedSandboxId &&
+        current.created_at === sandbox.created_at
+        ? this.deps.lifecycleManager.onRefusedReconnect()
+        : "exit";
+    };
+
     // Reject connection if the session itself is closed for good. Narrower
     // than "not active": `completed` and `failed` sessions are idle, not
     // over — warm-on-typing spawns a sandbox for one before the follow-up
@@ -165,30 +177,37 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     // request is suspended. Admission needs a fresh, synchronous read.
     const currentSession = sessionCoreRepository.getSession();
     if (currentSession && !isSessionPromptable(currentSession.status)) {
+      // An archived session's sandbox is being saved; a cancelled one is destroyed.
+      const instruction = currentSession.status === "archived" ? refusedReconnect() : "exit";
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
         outcome: "rejected",
-        reject_reason: "session_terminal",
+        reject_reason: instruction === "retry" ? "sandbox_preserving" : "session_terminal",
         session_status: currentSession.status,
         duration_ms: Date.now() - wsStartTime,
       });
-      return reject("Session is terminal", 410);
+      return instruction === "retry"
+        ? reject("Sandbox is being saved", 503)
+        : reject("Session is terminal", 410);
     }
 
     const currentSandbox = sandboxRepository.getSandbox();
     // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
     // still connect after a slow boot and self-heal by becoming ready.
     if (currentSandbox && isSandboxReconnectBlockedStatus(currentSandbox.status)) {
+      const instruction = refusedReconnect();
       log.warn("ws.connect", {
         event: "ws.connect",
         ws_type: "sandbox",
         outcome: "rejected",
-        reject_reason: "sandbox_stopped",
+        reject_reason: instruction === "retry" ? "sandbox_preserving" : "sandbox_stopped",
         sandbox_status: currentSandbox.status,
         duration_ms: Date.now() - wsStartTime,
       });
-      return reject("Sandbox is stopped", 410);
+      return instruction === "retry"
+        ? reject("Sandbox is being saved", 503)
+        : reject("Sandbox is stopped", 410);
     }
     if (
       !currentSandbox ||

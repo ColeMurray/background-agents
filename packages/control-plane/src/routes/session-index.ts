@@ -86,8 +86,19 @@ export async function handleListSessions(
   const parsedQuery = parseSessionListQuery(url.searchParams);
   if (!parsedQuery.success) return error(`Invalid ${parsedQuery.invalidParam}`, 400);
 
-  const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
-    parsedQuery.data;
+  const {
+    createdBy,
+    status,
+    excludeStatus,
+    excludeAutomationLineage,
+    q,
+    repoOwner,
+    repoName,
+    environmentId,
+    origin,
+    limit,
+    offset,
+  } = parsedQuery.data;
   const viewerUserId =
     ctx.principal?.kind === "user"
       ? ctx.principal.userId
@@ -107,6 +118,10 @@ export async function handleListSessions(
     excludeStatus,
     excludeAutomationLineage,
     createdByUserIds,
+    ...(q ? { search: q } : {}),
+    ...(repoOwner && repoName ? { repository: { repoOwner, repoName } } : {}),
+    ...(environmentId ? { environmentId } : {}),
+    ...(origin ? { spawnSource: origin } : {}),
     limit,
     offset,
     ...(viewerUserId ? { viewerUserId } : {}),

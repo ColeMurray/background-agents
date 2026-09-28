@@ -19,6 +19,7 @@ function makeEnv(overrides?: Partial<EnvironmentRow>): EnvironmentRow {
   const now = Date.now();
   return {
     id: `env_${Math.random().toString(36).slice(2, 10)}`,
+    owner_team_id: null,
     name: "Full Stack",
     description: null,
     prebuild_enabled: 0,

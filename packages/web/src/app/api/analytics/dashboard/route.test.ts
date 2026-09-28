@@ -16,11 +16,13 @@ describe("analytics dashboard API route", () => {
     );
 
     const response = await GET(
-      new Request("http://localhost/api/analytics/dashboard?debug=true&days=14") as never
+      new Request(
+        "http://localhost/api/analytics/dashboard?debug=true&days=14&scope=agent"
+      ) as never
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(1);
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/dashboard?days=14");
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/dashboard?days=14&scope=agent");
     await expect(response.json()).resolves.toEqual({
       generatedAt: 123,
       window: { days: 14, startAt: 1, endAt: 2 },

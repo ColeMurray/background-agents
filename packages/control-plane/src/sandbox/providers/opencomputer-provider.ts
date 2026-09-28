@@ -603,6 +603,15 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     envVars[IMAGE_BUILD_MODE_ENV_VAR] = "false";
     for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
 
+    // The inherited env can also carry a deployment LLM key that has since been
+    // unset. Blank any key neither the deployment nor the repository supplies
+    // now, so a checkpoint taken before the key was removed cannot restore it.
+    if (mode.restoredFromSnapshot || mode.fromPrebuiltImage) {
+      for (const key of Object.keys(this.providerConfig.llmEnvVars ?? {})) {
+        envVars[key] ??= "";
+      }
+    }
+
     return { envVars, secretEnvVars };
   }
 

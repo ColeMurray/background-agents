@@ -275,6 +275,7 @@ async function handleCreateAutomation(
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
   const row: AutomationRow = {
+    owner_team_id: null,
     id,
     name: body.name.trim(),
     instructions: body.instructions,

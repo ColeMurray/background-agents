@@ -42,6 +42,14 @@ describe("buildModalWorkspaceSlug", () => {
 });
 
 describe("buildModalSandboxDashboardUrl", () => {
+  it("returns null for a pending VM reference", () => {
+    expect(
+      buildModalSandboxDashboardUrl({
+        workspace: "acme",
+        providerObjectId: 'modal-vm-session:["session","sandbox"]',
+      })
+    ).toBeNull();
+  });
   it("builds a Modal dashboard URL for a sandbox object", () => {
     expect(
       buildModalSandboxDashboardUrl({
@@ -222,6 +230,20 @@ describe("ModalClient", () => {
       name: "ModalApiError",
       status: 503,
       message: 'Modal API error: 503 {"success":false,"error":"provider unavailable"}',
+    });
+  });
+
+  it("extracts FastAPI error detail without matching message text", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ detail: "pending_reference_not_visible" }, { status: 409 })
+    );
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.stopSandbox({ providerObjectId: "sb-1", sessionId: "session-1" })
+    ).rejects.toMatchObject({
+      name: "ModalApiError",
+      status: 409,
+      detail: "pending_reference_not_visible",
     });
   });
 
@@ -418,6 +440,41 @@ describe("ModalClient", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body.repositories).toBeNull();
+  });
+
+  it("passes the VM launch deadline to both create and restore endpoints", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ success: true, data: { sandbox_id: "sb-1", created_at: 1 } })
+      )
+      .mockResolvedValueOnce(Response.json({ success: true, data: { sandbox_id: "sb-2" } }));
+    const client = createModalClient("secret", "acme", "prod-web");
+    await client.createSandbox({
+      sessionId: "session-1",
+      repoOwner: null,
+      repoName: null,
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "token",
+      harness: "opencode",
+      launchDeadlineAtMs: 123456,
+    });
+    await client.restoreSandbox({
+      snapshotImageId: "im-1",
+      sessionId: "session-1",
+      sandboxId: "sandbox-1",
+      sandboxAuthToken: "token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: null,
+      repoName: null,
+      harness: "opencode",
+      provider: "anthropic",
+      model: "model",
+      launchDeadlineAtMs: 123456,
+    });
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(JSON.parse(init!.body as string).launch_deadline_at_ms).toBe(123456);
+    }
   });
 
   it("parses optional create response fields without rejecting valid Modal data", async () => {

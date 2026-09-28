@@ -28,14 +28,19 @@ async function seedSession(input: {
   spawnSource: SpawnSource;
   totalCost: number;
   createdAt: number;
+  model?: string;
+  harness?: "opencode" | "claude";
 }): Promise<void> {
   const store = new SessionIndexStore(env.DB);
   await store.create({
     id: input.id,
+    ownerTeamId: null,
+    visibility: "workspace",
     title: input.id,
     repoOwner: "acme",
     repoName: "web",
-    model: "anthropic/claude-haiku-4-5",
+    model: input.model ?? "anthropic/claude-haiku-4-5",
+    harness: input.harness,
     reasoningEffort: null,
     baseBranch: "main",
     status: "completed",
@@ -49,6 +54,11 @@ async function seedSession(input: {
     activeDurationMs: 0,
     messageCount: 0,
     prCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   });
 }
 
@@ -90,12 +100,16 @@ describe("GET /analytics/pull-requests", () => {
       spawnSource: "user",
       totalCost: 1,
       createdAt: sessionCreatedAt,
+      model: "openai/gpt-5",
+      harness: "opencode",
     });
     await seedSession({
       id: "s-auto",
       spawnSource: "automation",
       totalCost: 2,
       createdAt: sessionCreatedAt,
+      model: "anthropic/claude-haiku-4-5",
+      harness: "claude",
     });
     // Sessions without PRs never appear anywhere in the PR analytics — not
     // as denominators and not in the cost basis.
@@ -179,6 +193,20 @@ describe("GET /analytics/pull-requests", () => {
     // Cost basis: sessions with cohort PRs only (s-user + s-auto). The
     // PR-less session and the out-of-cohort session's costs are excluded.
     expect(body.prSessionCost).toBe(3);
+    expect(body.models).toEqual([
+      {
+        key: "anthropic/claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        created: 2,
+        merged: 0,
+        sessionCost: 2,
+      },
+      { key: "openai/gpt-5", displayName: "openai/gpt-5", created: 3, merged: 2, sessionCost: 1 },
+    ]);
+    expect(body.harnesses).toEqual([
+      { key: "claude", displayName: "Claude Agent", created: 2, merged: 0, sessionCost: 2 },
+      { key: "opencode", displayName: "OpenCode", created: 3, merged: 2, sessionCost: 1 },
+    ]);
 
     // Merged-in-window: p1 (1d cycle) + p-old (9d cycle); p-legacy has no
     // merged_at yet and is absent until read-through repairs it.
@@ -236,7 +264,78 @@ describe("GET /analytics/pull-requests", () => {
     );
   });
 
-  it("returns zeroed aggregates when no PRs exist", async () => {
+  it("merges PR-producing sessions with bare and prefixed model ids", async () => {
+    const now = Date.now();
+    const prs = new SessionPullRequestStore(env.DB);
+    await seedSession({
+      id: "canonical-model",
+      spawnSource: "user",
+      totalCost: 1.25,
+      createdAt: now - 2 * DAY_MS,
+      model: "anthropic/claude-haiku-4-5",
+    });
+    await seedSession({
+      id: "legacy-model",
+      spawnSource: "user",
+      totalCost: 2.75,
+      createdAt: now - 2 * DAY_MS,
+      model: "anthropic/claude-haiku-4-5",
+    });
+    await env.DB.prepare("UPDATE sessions SET model = 'claude-haiku-4-5' WHERE id = ?")
+      .bind("legacy-model")
+      .run();
+    await prs.upsert(
+      makePrRecord({
+        artifactId: "canonical-pr",
+        sessionId: "canonical-model",
+        prNumber: 10,
+        lifecycleState: "merged",
+        providerCreatedAt: now - DAY_MS,
+        mergedAt: now - DAY_MS / 2,
+      })
+    );
+    await prs.upsert(
+      makePrRecord({
+        artifactId: "legacy-pr",
+        sessionId: "legacy-model",
+        prNumber: 11,
+        providerCreatedAt: now - DAY_MS,
+      })
+    );
+
+    const response = await serviceFetch("https://test.local/analytics/pull-requests?days=7");
+    expect(response.status).toBe(200);
+    const body = await response.json<AnalyticsPullRequestsResponse>();
+    expect(body.models).toEqual([
+      {
+        key: "anthropic/claude-haiku-4-5",
+        displayName: "Claude Haiku 4.5",
+        created: 2,
+        merged: 1,
+        sessionCost: 4,
+      },
+    ]);
+  });
+
+  it("returns empty model and harness dimensions when no cohort PRs exist", async () => {
+    const now = Date.now();
+    await seedSession({
+      id: "old-session",
+      spawnSource: "automation",
+      totalCost: 5,
+      createdAt: now - 45 * DAY_MS,
+    });
+    await new SessionPullRequestStore(env.DB).upsert(
+      makePrRecord({
+        artifactId: "old-pr",
+        sessionId: "old-session",
+        prNumber: 99,
+        lifecycleState: "merged",
+        providerCreatedAt: now - 44 * DAY_MS,
+        mergedAt: now - 43 * DAY_MS,
+        closedAt: now - 43 * DAY_MS,
+      })
+    );
     const response = await serviceFetch("https://test.local/analytics/pull-requests?days=30");
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsPullRequestsResponse>();
@@ -250,6 +349,8 @@ describe("GET /analytics/pull-requests", () => {
       timeseries: [],
       repos: [],
       sources: [],
+      models: [],
+      harnesses: [],
     });
   });
 

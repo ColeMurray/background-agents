@@ -4,6 +4,7 @@ import type { MessageRepository } from "../message-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
+import type { UsageRepository } from "../usage-repository";
 import { MessageService } from "./message.service";
 
 function createService() {
@@ -17,6 +18,9 @@ function createService() {
     listArtifacts: vi.fn(),
     getArtifactById: vi.fn(),
   } as unknown as ArtifactRepository;
+  const usageRepository = {
+    listStepUsage: vi.fn(),
+  } as unknown as UsageRepository;
 
   const messageQueue = {
     enqueuePromptFromApi: vi.fn(),
@@ -30,13 +34,16 @@ function createService() {
       repository,
       eventRepository,
       artifactRepository,
+      usageRepository,
       messageQueue,
       stopExecution,
       parseArtifactMetadata,
+      transaction: (closure) => closure(),
     }),
     repository,
     eventRepository,
     artifactRepository,
+    usageRepository,
     messageQueue,
     stopExecution,
     parseArtifactMetadata,

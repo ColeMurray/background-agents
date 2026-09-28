@@ -118,4 +118,24 @@ describe("GET /audit-events", () => {
       requiredPermission: "workspace.audit.read",
     });
   });
+
+  it("records a successful session export as an allowed authorization event", async () => {
+    const response = await serviceFetch("https://cp.test/sessions/export");
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+
+    const event = await env.DB.prepare(
+      `SELECT action, operation_result, metadata_json FROM authorization_audit_events
+       WHERE action = 'authorization.request_allowed' AND resource_id = '/sessions/export'`
+    ).first<{ action: string; operation_result: string; metadata_json: string }>();
+    expect(event).toMatchObject({
+      action: "authorization.request_allowed",
+      operation_result: "applied",
+    });
+    expect(JSON.parse(event!.metadata_json)).toMatchObject({
+      httpMethod: "GET",
+      httpPath: "/sessions/export",
+      requiredPermission: "sessions.export",
+    });
+  });
 });

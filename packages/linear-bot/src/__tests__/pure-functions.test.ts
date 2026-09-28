@@ -191,6 +191,18 @@ describe("resolveStaticTarget", () => {
 });
 
 describe("resolveSessionModelSettings", () => {
+  it("keeps persisted retired Codex defaults on OpenAI", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-sonnet-4-6",
+      configModel: "openai/gpt-5.3-codex-spark",
+      configReasoningEffort: "high",
+      allowUserPreferenceOverride: false,
+      allowLabelModelOverride: false,
+    });
+
+    expect(result).toEqual({ model: "openai/gpt-6-sol", reasoningEffort: "high" });
+  });
+
   it("uses integration model when overrides are disabled", () => {
     const result = resolveSessionModelSettings({
       envDefaultModel: "anthropic/claude-haiku-4-5",
@@ -198,7 +210,7 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: "high",
       allowUserPreferenceOverride: false,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       labelModel: "anthropic/claude-opus-4-6",
     });
 
@@ -213,11 +225,11 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: null,
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       userReasoningEffort: "xhigh",
     });
 
-    expect(result.model).toBe("openai/gpt-5.3-codex");
+    expect(result.model).toBe("openai/gpt-6-sol");
     expect(result.reasoningEffort).toBe("xhigh");
   });
 
@@ -228,11 +240,11 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: "low",
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       userReasoningEffort: "xhigh",
     });
 
-    expect(result.model).toBe("openai/gpt-5.3-codex");
+    expect(result.model).toBe("openai/gpt-6-sol");
     expect(result.reasoningEffort).toBe("xhigh");
   });
 
@@ -243,7 +255,7 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: null,
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: true,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       labelModel: "anthropic/claude-opus-4-6",
       userReasoningEffort: "xhigh",
     });

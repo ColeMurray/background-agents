@@ -6,6 +6,7 @@ import {
   sendPromptRequestSchema,
   type CallbackContext,
 } from "@open-inspect/shared/types/session-api";
+import { promptValidationError } from "@open-inspect/shared/types/prompts";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   sessionAttachmentReferencesSchema,
@@ -27,7 +28,7 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, json, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
 import { parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
@@ -64,7 +65,7 @@ export async function handleSessionPrompt(
 
   const bodyResult = sendPromptRequestSchema.safeParse(rawBody);
   if (!bodyResult.success) {
-    return error("content is required");
+    return json(promptValidationError(bodyResult.error, rawBody), 400);
   }
   const body = bodyResult.data;
 

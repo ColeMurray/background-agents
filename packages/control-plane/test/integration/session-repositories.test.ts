@@ -95,6 +95,8 @@ describe("D1 session index repositories", () => {
     const now = Date.now();
     return {
       id,
+      ownerTeamId: null,
+      visibility: "workspace" as const,
       title: null,
       repoOwner: repositories?.[0]?.repoOwner ?? "acme",
       repoName: repositories?.[0]?.repoName ?? "web-app",

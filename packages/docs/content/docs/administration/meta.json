@@ -1,0 +1,5 @@
+{
+  "title": "Administration",
+  "defaultOpen": false,
+  "pages": ["workspace-access", "audit-log", "analytics", "data-controls", "security", "deployment"]
+}

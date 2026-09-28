@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 import { SessionClientCommandFacade } from "./client-command-facade";
 
-function createFacade(recover?: (action: "retry" | "restore_saved") => Promise<void>) {
+function createFacade(recover?: (action: ShutdownRecoveryAction) => Promise<void>) {
   return new SessionClientCommandFacade(
     {} as never,
     {} as never,
