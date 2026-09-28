@@ -9,7 +9,8 @@ export async function GET(_request: NextRequest) {
     return relayJsonResponse(
       response.status === 403 ? await controlPlaneUserFetch("/me/teams") : response
     );
-  } catch {
+  } catch (error) {
+    console.error("Failed to fetch teams:", error);
     return NextResponse.json(
       { error: "Failed to fetch teams" },
       { status: 500, headers: PRIVATE_NO_STORE_HEADERS }

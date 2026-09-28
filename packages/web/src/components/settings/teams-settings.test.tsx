@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   setMember: vi.fn(),
   hasPermission: false,
+  candidates: [] as Array<{
+    userId: string;
+    displayName: string | null;
+    email: string | null;
+    suspendedAt: number | null;
+  }>,
   teams: [] as Array<{
     id: string;
     slug: string;
@@ -41,7 +47,7 @@ vi.mock("@/hooks/use-teams", () => ({
     setMember: mocks.setMember,
     removeMember: mocks.remove,
   }),
-  useTeamMemberCandidates: () => ({ candidates: [], loading: false, error: null }),
+  useTeamMemberCandidates: () => ({ candidates: mocks.candidates, loading: false, error: null }),
 }));
 
 const team = {
@@ -83,6 +89,7 @@ const member: TeamMember = {
 
 beforeEach(() => {
   mocks.hasPermission = true;
+  mocks.candidates = [];
   mocks.teams = [];
 });
 afterEach(() => {
@@ -174,7 +181,21 @@ describe("Teams settings", () => {
   });
 
   it("surfaces last_lead and disables member changes without capabilities", async () => {
-    const { rerender } = render(<TeamMembersTable team={team} members={[member]} />);
+    mocks.candidates = [
+      {
+        userId: "user_two",
+        displayName: "Grace",
+        email: "grace@example.com",
+        suspendedAt: null,
+      },
+    ];
+    const { rerender } = render(
+      <TeamMembersTable team={{ ...team, capabilities }} members={[member]} />
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Add member" }), {
+      target: { value: "user_two" },
+    });
+    rerender(<TeamMembersTable team={team} members={[member]} />);
     expect(screen.getByRole("combobox", { name: "Role for Ada" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
@@ -182,5 +203,37 @@ describe("Teams settings", () => {
     rerender(<TeamMembersTable team={{ ...team, capabilities }} members={[member]} />);
     fireEvent.click(screen.getByRole("button", { name: "Remove Ada" }));
     await waitFor(() => expect(screen.getByText(/last_lead/)).toBeInTheDocument());
+  });
+
+  it("promotes a member to lead from the role select", async () => {
+    mocks.setMember.mockResolvedValue(undefined);
+    render(
+      <TeamMembersTable
+        team={{ ...team, capabilities }}
+        members={[{ ...member, role: "member" }]}
+      />
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Role for Ada" }), {
+      target: { value: "lead" },
+    });
+    await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_one", "lead"));
+  });
+
+  it("adds a selected workspace member with the member role", async () => {
+    mocks.candidates = [
+      {
+        userId: "user_two",
+        displayName: "Grace",
+        email: "grace@example.com",
+        suspendedAt: null,
+      },
+    ];
+    mocks.setMember.mockResolvedValue(undefined);
+    render(<TeamMembersTable team={{ ...team, capabilities }} members={[member]} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Add member" }), {
+      target: { value: "user_two" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_two", "member"));
   });
 });
