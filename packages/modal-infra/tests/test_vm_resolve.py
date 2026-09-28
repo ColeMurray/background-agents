@@ -202,7 +202,7 @@ async def test_resolve_extra_tunnels_does_not_write_into_vm(monkeypatch):
 @pytest.mark.parametrize(
     ("allocation", "status", "detail"),
     [
-        (None, 404, "not_visible"),
+        (None, 409, "not_visible"),
         ("foreign", 409, "other_generation"),
     ],
 )

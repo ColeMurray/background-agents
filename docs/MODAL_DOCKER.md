@@ -95,12 +95,16 @@ Resolve neither creates nor retires an allocation or writes tunnel configuration
 not discoverable by name. Resolve does not return a terminal access token; the control plane mints
 that token only when it still holds the generation's sandbox auth token in memory.
 
-Create, restore, and resolve report typed HTTP error `detail` values: `not_visible` (404, resolve
-only; no named allocation), `other_generation` (409, wrong ownership tags), `window_closed` (409,
-create/restore after the launch deadline with no owned allocation), and `race_pending` (409,
-create/restore saw `AlreadyExistsError` but cannot yet look up the winner, or resolve found a VM
-whose enabled tunnel URLs are not all visible yet). Unexpected provider errors remain 500. The
-pending-reference stop endpoint retains its separate `pending_reference_not_visible` response.
+Create, restore, and resolve report typed HTTP 409 error `detail` values:
+
+- `not_visible`: resolve found no named allocation.
+- `other_generation`: the ownership tags do not match.
+- `window_closed`: create/restore missed the launch deadline with no owned allocation.
+- `race_pending`: create/restore cannot yet see the winner after `AlreadyExistsError`, or resolve
+  found a VM whose enabled tunnel URLs are not all visible yet.
+
+Unexpected provider errors remain 500. The pending-reference stop endpoint retains its separate
+`pending_reference_not_visible` response.
 
 ## Switching backends
 

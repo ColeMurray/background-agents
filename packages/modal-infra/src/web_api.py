@@ -241,7 +241,7 @@ async def _execute_endpoint(
         execution.outcome = "error"
         raise HTTPException(status_code=501, detail="docker_not_available") from e
     except VMAllocationOutcome as e:
-        execution.http_status = 404 if e.detail == "not_visible" else 409
+        execution.http_status = 409
         execution.outcome = "error"
         raise HTTPException(status_code=execution.http_status, detail=e.detail) from e
     except Exception as e:

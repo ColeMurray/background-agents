@@ -152,7 +152,7 @@ describe("ModalClient", () => {
           },
         })
       )
-      .mockResolvedValueOnce(Response.json({ detail: "not_visible" }, { status: 404 }));
+      .mockResolvedValueOnce(Response.json({ detail: "not_visible" }, { status: 409 }));
     const client = createModalClient("secret", "acme");
     expect(
       await client.resolveVmSandbox({ sessionId: "session", sandboxId: "generation" })
@@ -171,7 +171,7 @@ describe("ModalClient", () => {
     await expect(
       client.resolveVmSandbox({ sessionId: "session", sandboxId: "generation" })
     ).rejects.toMatchObject({
-      status: 404,
+      status: 409,
       detail: "not_visible",
     });
   });

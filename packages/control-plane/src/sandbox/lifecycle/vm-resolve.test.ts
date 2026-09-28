@@ -167,7 +167,7 @@ describe("modal-vm startup resolution", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     const f = fixture();
-    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("invisible", 404, "not_visible"));
+    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("invisible", 409, "not_visible"));
     const manager = f.makeManager();
     const spawning = manager.spawnSandbox();
     await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce());
@@ -319,7 +319,7 @@ describe("modal-vm startup resolution", () => {
     f.sandbox.modal_object_id = "sb-real";
     f.store.write({ ...f.store.read()!, providerObjectId: "sb-real" });
     vi.setSystemTime(generation.createdAt + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS);
-    rejectLookup(new ModalApiError("invisible", 404, "not_visible"));
+    rejectLookup(new ModalApiError("invisible", 409, "not_visible"));
     await restoring;
     expect(f.sandbox.modal_object_id).toBe("sb-real");
     expect(f.store.read()?.phase).toBe("running");
@@ -330,7 +330,7 @@ describe("modal-vm startup resolution", () => {
   it("stops resolving when the row is fenced mid-loop", async () => {
     vi.useFakeTimers();
     const f = fixture();
-    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("invisible", 404, "not_visible"));
+    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("invisible", 409, "not_visible"));
     const spawning = f.makeManager().spawnSandbox();
     await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce());
     f.sandbox.status = "failed";
@@ -471,7 +471,7 @@ describe("modal-vm startup resolution", () => {
     void f.makeManager().spawnSandbox();
     await vi.waitFor(() => expect(f.client.createSandbox).toHaveBeenCalledOnce());
     f.client.resolveVmSandbox
-      .mockRejectedValueOnce(new ModalApiError("invisible", 404, "not_visible"))
+      .mockRejectedValueOnce(new ModalApiError("invisible", 409, "not_visible"))
       .mockRejectedValueOnce(new ModalApiError("unavailable", 503));
     const restarted = f.makeManager();
     const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
@@ -547,7 +547,7 @@ describe("modal-vm startup resolution", () => {
     f.sandbox.status = "connecting";
     restarted.onSandboxSocketAttached(newer);
     restarted.onRuntimeReady(Date.now(), undefined, 1);
-    rejectFirst(new ModalApiError("invisible", 404, "not_visible"));
+    rejectFirst(new ModalApiError("invisible", 409, "not_visible"));
     await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledTimes(2));
     expect(f.client.resolveVmSandbox.mock.calls[1][0]).toMatchObject({
       sandboxId: newer.sandboxId,
