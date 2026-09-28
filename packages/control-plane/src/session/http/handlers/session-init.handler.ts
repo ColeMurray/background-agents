@@ -94,7 +94,13 @@ export class SessionInitHandler {
     private readonly scheduleWarmSandbox: () => void,
     private readonly encryptScmToken: (token: string) => Promise<string>,
     private readonly generateId: (bytes?: number) => string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    /**
+     * Opt-in repository access gate (ENFORCE_REPO_ACL): when supplied, every
+     * requested repository must pass before any session state is written.
+     * Undefined (flag unset) keeps the pre-gate behavior untouched.
+     */
+    private readonly isRepoAllowed?: (repoOwner: string, repoName: string) => boolean
   ) {}
 
   async init(request: Request, log: Logger): Promise<Response> {
@@ -186,6 +192,27 @@ export class SessionInitHandler {
         { error: "repositories must include the scalar repository" },
         { status: 400 }
       );
+    }
+
+    // Repository access gate: deny before any session/sandbox state exists, so
+    // a rejected request leaves nothing to clean up. Runs after shape
+    // validation so malformed requests keep their 400s.
+    if (this.isRepoAllowed) {
+      const requested =
+        repositories.length > 0
+          ? repositories
+          : hasRepoOwner && repoName !== null
+            ? [{ repoOwner, repoName }]
+            : [];
+      const denied = requested.find(
+        (repo) => !this.isRepoAllowed!(repo.repoOwner, repo.repoName)
+      );
+      if (denied) {
+        return Response.json(
+          { error: `Repository not permitted by the deployment's repository access policy: ${denied.repoOwner}/${denied.repoName}` },
+          { status: 403 }
+        );
+      }
     }
 
     const normalizedSandboxSettings = body.sandboxSettings

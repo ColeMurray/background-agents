@@ -6,7 +6,7 @@ import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
-function createHandler() {
+function createHandler(isRepoAllowed?: (repoOwner: string, repoName: string) => boolean) {
   const repository = {
     getSession: vi.fn(() => null),
     upsertSession: vi.fn(),
@@ -37,7 +37,8 @@ function createHandler() {
     scheduleWarmSandbox,
     encryptScmToken,
     generateId,
-    now
+    now,
+    isRepoAllowed
   );
 
   // Bind the request-scoped log so call sites exercise the threading without
@@ -535,6 +536,116 @@ describe("SessionInitHandler", () => {
     expect(log.warn).toHaveBeenCalledWith("Invalid model name, using default", {
       requested_model: "invalid/model-name",
       default_model: getValidModelOrDefault("invalid/model-name"),
+    });
+  });
+
+  describe("repository access gate", () => {
+    const initBody = {
+      sessionName: "session-public-id",
+      repoOwner: "acme",
+      repoName: "frontend",
+      repoId: 1,
+      defaultBranch: "main",
+      userId: "user-1",
+    };
+
+    function post(body: unknown) {
+      return {
+        method: "POST" as const,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      };
+    }
+
+    it("behaves identically when no gate is configured (flag unset)", async () => {
+      const { handler, repository, scheduleWarmSandbox } = createHandler(undefined);
+
+      const response = await handler.init(
+        new Request("http://internal/internal/init", post({ ...initBody, repoOwner: "denied-org" }))
+      );
+
+      expect(response.status).toBe(200);
+      expect(repository.upsertSession).toHaveBeenCalled();
+      expect(scheduleWarmSandbox).toHaveBeenCalled();
+    });
+
+    it("proceeds when every requested repository is allowed", async () => {
+      const { handler, repository, generateId, scheduleWarmSandbox } = createHandler(
+        (owner) => owner === "acme"
+      );
+      generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+      const response = await handler.init(
+        new Request(
+          "http://internal/internal/init",
+          post({
+            ...initBody,
+            repositories: [
+              { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+              { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
+            ],
+          })
+        )
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ sessionId: "session-do-id", status: "created" });
+      expect(repository.upsertSession).toHaveBeenCalled();
+      expect(scheduleWarmSandbox).toHaveBeenCalled();
+    });
+
+    it("returns 403 before any state is written when a repository is denied", async () => {
+      const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler(
+        (owner, name) => owner === "acme" && name === "frontend"
+      );
+
+      const response = await handler.init(
+        new Request(
+          "http://internal/internal/init",
+          post({
+            ...initBody,
+            repositories: [
+              { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+              { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
+            ],
+          })
+        )
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error:
+          "Repository not permitted by the deployment's repository access policy: acme/backend",
+      });
+      expect(repository.upsertSession).not.toHaveBeenCalled();
+      expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
+      expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
+      expect(repository.createParticipant).not.toHaveBeenCalled();
+      expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+    });
+
+    it("denies a scalar repository context without a repositories list", async () => {
+      const { handler, repository } = createHandler(() => false);
+
+      const response = await handler.init(new Request("http://internal/internal/init", post(initBody)));
+
+      expect(response.status).toBe(403);
+      expect(repository.upsertSession).not.toHaveBeenCalled();
+    });
+
+    it("does not consult the gate for repo-less sessions", async () => {
+      const { handler, repository, generateId } = createHandler(() => false);
+      generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+      const response = await handler.init(
+        new Request(
+          "http://internal/internal/init",
+          post({ sessionName: "session-public-id", repoOwner: null, repoName: null, userId: "user-1" })
+        )
+      );
+
+      expect(response.status).toBe(200);
+      expect(repository.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ repoOwner: null }));
     });
   });
 });
