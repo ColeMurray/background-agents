@@ -1,4 +1,9 @@
-import { hasScopedPermission, type BuiltInRoleKey, type PermissionId } from "../rbac";
+import {
+  hasScopedPermission,
+  resolveScopedPermission,
+  type BuiltInRoleKey,
+  type PermissionId,
+} from "../rbac";
 import type { SessionVisibility, TeamRole } from "./teams";
 
 export const SESSION_ACTIONS = [
@@ -12,6 +17,24 @@ export const SESSION_ACTIONS = [
   "changeVisibility",
 ] as const;
 export type SessionAction = (typeof SESSION_ACTIONS)[number];
+
+export const AUTOMATION_ACTIONS = ["read", "manage", "trigger", "move"] as const;
+export type AutomationAction = (typeof AUTOMATION_ACTIONS)[number];
+
+export const ENVIRONMENT_ACTIONS = ["read", "manage", "use", "move"] as const;
+export type EnvironmentAction = (typeof ENVIRONMENT_ACTIONS)[number];
+
+export type AccessDenialReason =
+  | "suspended"
+  | "not_member"
+  | "private"
+  | "missing_permission"
+  | "not_owner_or_lead"
+  | "not_collaborator";
+export type AuditObligation = "session.private_break_glass";
+export type AccessDecision =
+  | { allowed: true; audit?: AuditObligation }
+  | { allowed: false; reason: AccessDenialReason };
 
 export type SessionViewer =
   | {
@@ -33,27 +56,6 @@ export interface SessionAccessRow {
   collaboratorIds: readonly string[];
 }
 
-export type SessionDenialReason =
-  | "not_member"
-  | "private"
-  | "suspended"
-  | "missing_permission"
-  | "not_owner_or_lead";
-
-export interface SessionAccess {
-  read: boolean;
-  collaborate: boolean;
-  lifecycle: boolean;
-  delete: boolean;
-  sandbox: boolean;
-  move: boolean;
-  manageCollaborators: boolean;
-  changeVisibility: boolean;
-  reason?: SessionDenialReason;
-  deniedReasons: Partial<Record<SessionAction, SessionDenialReason>>;
-  auditedBreakGlass: boolean;
-}
-
 export interface SessionCapabilities {
   canRead: boolean;
   canCollaborate: boolean;
@@ -65,54 +67,21 @@ export interface SessionCapabilities {
   canChangeVisibility: boolean;
 }
 
-function deniedSessionAccess(reason: SessionDenialReason): SessionAccess {
-  const deniedReasons: SessionAccess["deniedReasons"] = {};
-  for (const action of SESSION_ACTIONS) deniedReasons[action] = reason;
-  return {
-    read: false,
-    collaborate: false,
-    lifecycle: false,
-    delete: false,
-    sandbox: false,
-    move: false,
-    manageCollaborators: false,
-    changeVisibility: false,
-    reason,
-    deniedReasons,
-    auditedBreakGlass: false,
-  };
-}
-
-/** Resolves access from the persisted session row, never from session participants. */
-export function resolveSessionAccess(viewer: SessionViewer, row: SessionAccessRow): SessionAccess {
+/** Checks one session action using the persisted row, never session participants. */
+export function checkSessionAccess(
+  viewer: SessionViewer,
+  row: SessionAccessRow,
+  action: SessionAction
+): AccessDecision {
   if (viewer.kind === "service") {
-    if (row.visibility === "private") return deniedSessionAccess("private");
+    if (row.visibility === "private") return { allowed: false, reason: "private" };
     if (row.visibility === "team" && viewer.teamId !== null && viewer.teamId !== row.ownerTeamId) {
-      return deniedSessionAccess("not_member");
+      return { allowed: false, reason: "not_member" };
     }
-    return {
-      read: true,
-      collaborate: false,
-      lifecycle: false,
-      delete: false,
-      sandbox: false,
-      move: false,
-      manageCollaborators: false,
-      changeVisibility: false,
-      deniedReasons: {
-        collaborate: "missing_permission",
-        lifecycle: "missing_permission",
-        delete: "missing_permission",
-        sandbox: "missing_permission",
-        move: "missing_permission",
-        manageCollaborators: "missing_permission",
-        changeVisibility: "missing_permission",
-      },
-      auditedBreakGlass: false,
-    };
+    return action === "read" ? { allowed: true } : { allowed: false, reason: "missing_permission" };
   }
 
-  if (viewer.suspended) return deniedSessionAccess("suspended");
+  if (viewer.suspended) return { allowed: false, reason: "suspended" };
 
   const isOwner = row.ownerUserId !== null && row.ownerUserId === viewer.userId;
   const isCollaborator = row.collaboratorIds.includes(viewer.userId);
@@ -123,129 +92,153 @@ export function resolveSessionAccess(viewer: SessionViewer, row: SessionAccessRo
     row.visibility === "workspace" ||
     (row.visibility === "team" && (teamRole !== undefined || isAdmin)) ||
     (row.visibility === "private" && (isOwner || isCollaborator || isWsOwner));
-  if (!visible) return deniedSessionAccess(row.visibility === "private" ? "private" : "not_member");
+  if (!visible) {
+    return { allowed: false, reason: row.visibility === "private" ? "private" : "not_member" };
+  }
 
   const has = (permission: PermissionId) => viewer.permissions.includes(permission);
-  if (!has("sessions.read")) return deniedSessionAccess("missing_permission");
+  if (!has("sessions.read")) return { allowed: false, reason: "missing_permission" };
 
-  const privateActor = row.visibility !== "private" || isOwner || isCollaborator;
-  const privileged = isOwner || teamRole === "lead" || isAdmin;
-  const collaborate = has("sessions.collaborate") && privateActor;
-  const lifecycle = has("sessions.lifecycle");
-  const sandbox = has("sessions.sandbox_access") && privateActor;
-  const canDelete = has("sessions.delete") && privileged;
-  const move = lifecycle && privileged;
-  const manageCollaborators = isOwner || isWsOwner;
-  const changeVisibility = row.visibility === "private" ? manageCollaborators : privileged;
-  const deniedReasons: SessionAccess["deniedReasons"] = {};
-  if (!collaborate) {
-    deniedReasons.collaborate = has("sessions.collaborate")
-      ? "not_owner_or_lead"
-      : "missing_permission";
+  if (action === "read") {
+    return row.visibility === "private" && isWsOwner && !isOwner && !isCollaborator
+      ? { allowed: true, audit: "session.private_break_glass" }
+      : { allowed: true };
   }
-  if (!lifecycle) deniedReasons.lifecycle = "missing_permission";
-  if (!sandbox) {
-    deniedReasons.sandbox = has("sessions.sandbox_access")
-      ? "not_owner_or_lead"
-      : "missing_permission";
+  if (action === "collaborate" || action === "sandbox") {
+    if (!has(action === "collaborate" ? "sessions.collaborate" : "sessions.sandbox_access")) {
+      return { allowed: false, reason: "missing_permission" };
+    }
+    if (row.visibility === "private" && !isOwner && !isCollaborator) {
+      return { allowed: false, reason: "not_collaborator" };
+    }
+    return { allowed: true };
   }
-  if (!canDelete) {
-    deniedReasons.delete = has("sessions.delete") ? "not_owner_or_lead" : "missing_permission";
+  if (action === "lifecycle" || action === "delete" || action === "move") {
+    if (!has(action === "delete" ? "sessions.delete" : "sessions.lifecycle")) {
+      return { allowed: false, reason: "missing_permission" };
+    }
+    if (action !== "lifecycle" && !isOwner && teamRole !== "lead" && !isAdmin) {
+      return { allowed: false, reason: "not_owner_or_lead" };
+    }
+    return { allowed: true };
   }
-  if (!move) deniedReasons.move = lifecycle ? "not_owner_or_lead" : "missing_permission";
-  if (!manageCollaborators) deniedReasons.manageCollaborators = "not_owner_or_lead";
-  if (!changeVisibility) deniedReasons.changeVisibility = "not_owner_or_lead";
+  if (action === "manageCollaborators") {
+    return isOwner || isWsOwner
+      ? { allowed: true }
+      : { allowed: false, reason: "not_owner_or_lead" };
+  }
+  const canChange =
+    row.visibility === "private" ? isOwner || isWsOwner : isOwner || teamRole === "lead" || isAdmin;
+  return canChange ? { allowed: true } : { allowed: false, reason: "not_owner_or_lead" };
+}
 
+export function sessionCapabilities(
+  viewer: SessionViewer,
+  row: SessionAccessRow
+): SessionCapabilities {
   return {
-    read: true,
-    collaborate,
-    lifecycle,
-    delete: canDelete,
-    sandbox,
-    move,
-    manageCollaborators,
-    changeVisibility,
-    deniedReasons,
-    auditedBreakGlass: row.visibility === "private" && isWsOwner && !isOwner && !isCollaborator,
+    canRead: checkSessionAccess(viewer, row, "read").allowed,
+    canCollaborate: checkSessionAccess(viewer, row, "collaborate").allowed,
+    canManageLifecycle: checkSessionAccess(viewer, row, "lifecycle").allowed,
+    canDelete: checkSessionAccess(viewer, row, "delete").allowed,
+    canMove: checkSessionAccess(viewer, row, "move").allowed,
+    canSandbox: checkSessionAccess(viewer, row, "sandbox").allowed,
+    canManageCollaborators: checkSessionAccess(viewer, row, "manageCollaborators").allowed,
+    canChangeVisibility: checkSessionAccess(viewer, row, "changeVisibility").allowed,
   };
 }
 
-export function sessionCapabilities(access: SessionAccess): SessionCapabilities {
+export function checkAutomationAccess(
+  viewer: SessionViewer,
+  row: { ownerTeamId: string | null; executorUserId: string | null },
+  action: AutomationAction
+): AccessDecision {
+  if (viewer.kind === "service") {
+    const eligible =
+      row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId;
+    if (!eligible) return { allowed: false, reason: "not_member" };
+    return action === "read" ? { allowed: true } : { allowed: false, reason: "missing_permission" };
+  }
+  if (viewer.suspended) return { allowed: false, reason: "suspended" };
+
+  const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
+  const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+  if (row.ownerTeamId !== null && teamRole === undefined && !isAdmin) {
+    return { allowed: false, reason: "not_member" };
+  }
+  if (action === "read") {
+    return viewer.permissions.includes("automations.read")
+      ? { allowed: true }
+      : { allowed: false, reason: "missing_permission" };
+  }
+
+  const stem = action === "trigger" ? "automations.trigger" : "automations.manage";
+  const own = row.executorUserId === viewer.userId || teamRole === "lead";
+  if (hasScopedPermission(stem, viewer.permissions, own)) return { allowed: true };
   return {
-    canRead: access.read,
-    canCollaborate: access.collaborate,
-    canManageLifecycle: access.lifecycle,
-    canDelete: access.delete,
-    canMove: access.move,
-    canSandbox: access.sandbox,
-    canManageCollaborators: access.manageCollaborators,
-    canChangeVisibility: access.changeVisibility,
+    allowed: false,
+    reason:
+      resolveScopedPermission(stem, viewer.permissions) === "own"
+        ? "not_owner_or_lead"
+        : "missing_permission",
   };
 }
 
-export interface AutomationAccess {
-  read: boolean;
-  manage: boolean;
-  trigger: boolean;
-  move: boolean;
-}
-
-export function resolveAutomationAccess(
+export function automationCapabilities(
   viewer: SessionViewer,
   row: { ownerTeamId: string | null; executorUserId: string | null }
-): AutomationAccess {
-  if (viewer.kind === "service") {
-    return {
-      read: row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId,
-      manage: false,
-      trigger: false,
-      move: false,
-    };
-  }
-  if (viewer.suspended) {
-    return { read: false, manage: false, trigger: false, move: false };
-  }
-  const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
-  const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-  const eligible = row.ownerTeamId === null || teamRole !== undefined || isAdmin;
-  const own = row.executorUserId === viewer.userId || teamRole === "lead";
-  const manage = eligible && hasScopedPermission("automations.manage", viewer.permissions, own);
-  const trigger = eligible && hasScopedPermission("automations.trigger", viewer.permissions, own);
+) {
   return {
-    read: eligible && viewer.permissions.includes("automations.read"),
-    manage,
-    trigger,
-    move: manage,
+    canRead: checkAutomationAccess(viewer, row, "read").allowed,
+    canManage: checkAutomationAccess(viewer, row, "manage").allowed,
+    canTrigger: checkAutomationAccess(viewer, row, "trigger").allowed,
+    canMove: checkAutomationAccess(viewer, row, "move").allowed,
   };
 }
 
-export interface EnvironmentAccess {
-  read: boolean;
-  manage: boolean;
-  use: boolean;
-}
-
-export function resolveEnvironmentAccess(
+export function checkEnvironmentAccess(
   viewer: SessionViewer,
-  row: { ownerTeamId: string | null }
-): EnvironmentAccess {
+  row: { ownerTeamId: string | null },
+  action: EnvironmentAction
+): AccessDecision {
   if (viewer.kind === "service") {
-    const allowed =
+    const eligible =
       row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId;
-    return { read: allowed, manage: false, use: allowed };
+    if (!eligible) return { allowed: false, reason: "not_member" };
+    return action === "read" || action === "use"
+      ? { allowed: true }
+      : { allowed: false, reason: "missing_permission" };
   }
-  if (viewer.suspended) {
-    return { read: false, manage: false, use: false };
-  }
+  if (viewer.suspended) return { allowed: false, reason: "suspended" };
+
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
   const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-  const eligible = row.ownerTeamId === null || teamRole !== undefined || isAdmin;
+  if (row.ownerTeamId !== null && teamRole === undefined && !isAdmin) {
+    return { allowed: false, reason: "not_member" };
+  }
+  const permission =
+    action === "read"
+      ? "environments.read"
+      : action === "use"
+        ? "environments.use"
+        : "environments.manage";
+  if (!viewer.permissions.includes(permission)) {
+    return { allowed: false, reason: "missing_permission" };
+  }
+  if ((action === "manage" || action === "move") && teamRole !== "lead" && !isAdmin) {
+    return { allowed: false, reason: "not_owner_or_lead" };
+  }
+  return { allowed: true };
+}
+
+export function environmentCapabilities(
+  viewer: SessionViewer,
+  row: { ownerTeamId: string | null }
+) {
   return {
-    read: eligible && viewer.permissions.includes("environments.read"),
-    manage:
-      eligible &&
-      (teamRole === "lead" || isAdmin) &&
-      viewer.permissions.includes("environments.manage"),
-    use: eligible && viewer.permissions.includes("environments.use"),
+    canRead: checkEnvironmentAccess(viewer, row, "read").allowed,
+    canManage: checkEnvironmentAccess(viewer, row, "manage").allowed,
+    canUse: checkEnvironmentAccess(viewer, row, "use").allowed,
+    canMove: checkEnvironmentAccess(viewer, row, "move").allowed,
   };
 }

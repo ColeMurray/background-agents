@@ -107,20 +107,25 @@ export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership 
 
 export {
   SESSION_ACTIONS,
-  resolveSessionAccess,
+  AUTOMATION_ACTIONS,
+  ENVIRONMENT_ACTIONS,
+  checkSessionAccess,
   sessionCapabilities,
-  resolveAutomationAccess,
-  resolveEnvironmentAccess,
+  checkAutomationAccess,
+  automationCapabilities,
+  checkEnvironmentAccess,
+  environmentCapabilities,
 } from "./session-access";
 export type {
   SessionAction,
+  AutomationAction,
+  EnvironmentAction,
   SessionViewer,
   SessionAccessRow,
-  SessionAccess,
   SessionCapabilities,
-  SessionDenialReason,
-  AutomationAccess,
-  EnvironmentAccess,
+  AccessDenialReason,
+  AuditObligation,
+  AccessDecision,
 } from "./session-access";
 
 export {

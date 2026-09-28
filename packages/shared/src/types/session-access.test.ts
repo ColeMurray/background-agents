@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { permissionsForBuiltInRole, type BuiltInRoleKey, type PermissionId } from "../rbac";
 import {
+  AUTOMATION_ACTIONS,
+  ENVIRONMENT_ACTIONS,
   SESSION_ACTIONS,
-  resolveAutomationAccess,
-  resolveEnvironmentAccess,
-  resolveSessionAccess,
+  automationCapabilities,
+  checkAutomationAccess,
+  checkEnvironmentAccess,
+  checkSessionAccess,
+  environmentCapabilities,
   sessionCapabilities,
-  type SessionAction,
+  type AccessDenialReason,
   type SessionAccessRow,
-  type SessionDenialReason,
   type SessionViewer,
 } from "./session-access";
 import type { TeamRole } from "./teams";
@@ -67,14 +70,14 @@ function viewer(
   };
 }
 
-describe("resolveSessionAccess", () => {
-  it("resolves every visibility, relation, role key, and suspension combination", () => {
+describe("checkSessionAccess", () => {
+  it("decides every action across visibility, relation, role key, and suspension", () => {
     for (const visibility of visibilities) {
       for (const relation of relations) {
         for (const roleKey of roles) {
           for (const suspended of [false, true]) {
             const actor = viewer(relation, roleKey, suspended);
-            const result = resolveSessionAccess(actor, { ...row, visibility });
+            const target = { ...row, visibility };
             const isOwner = relation === "owner";
             const isCollaborator = relation === "collaborator";
             const teamRole = actor.memberships.get("team_one");
@@ -87,65 +90,66 @@ describe("resolveSessionAccess", () => {
             const read = !suspended && visible && has("sessions.read");
             const privileged = isOwner || teamRole === "lead" || isAdmin;
             const privateActor = visibility !== "private" || isOwner || isCollaborator;
-            const manageCollaborators = read && (isOwner || roleKey === "owner");
-            const expected = {
+            const canManageCollaborators = read && (isOwner || roleKey === "owner");
+            const permits = {
               read,
               collaborate: read && has("sessions.collaborate") && privateActor,
               lifecycle: read && has("sessions.lifecycle"),
               delete: read && has("sessions.delete") && privileged,
               sandbox: read && has("sessions.sandbox_access") && privateActor,
               move: read && has("sessions.lifecycle") && privileged,
-              manageCollaborators,
-              changeVisibility: visibility === "private" ? manageCollaborators : read && privileged,
-              auditedBreakGlass:
-                read &&
-                visibility === "private" &&
-                roleKey === "owner" &&
-                !isOwner &&
-                !isCollaborator,
+              manageCollaborators: canManageCollaborators,
+              changeVisibility:
+                visibility === "private" ? canManageCollaborators : read && privileged,
             };
-            const readReason: SessionDenialReason | undefined = suspended
+            const readReason: AccessDenialReason = suspended
               ? "suspended"
               : !visible
                 ? visibility === "private"
                   ? "private"
                   : "not_member"
-                : !has("sessions.read")
-                  ? "missing_permission"
-                  : undefined;
-            const deniedReasons: Partial<Record<SessionAction, SessionDenialReason>> = {};
+                : "missing_permission";
             for (const action of SESSION_ACTIONS) {
-              if (expected[action]) continue;
-              if (!read) {
-                deniedReasons[action] = readReason;
-              } else if (action === "collaborate" || action === "sandbox") {
-                const grant =
-                  action === "collaborate" ? "sessions.collaborate" : "sessions.sandbox_access";
-                deniedReasons[action] = !has(grant) ? "missing_permission" : "not_owner_or_lead";
-              } else if (action === "lifecycle" || action === "move" || action === "delete") {
-                const grant = action === "delete" ? "sessions.delete" : "sessions.lifecycle";
-                deniedReasons[action] = !has(grant) ? "missing_permission" : "not_owner_or_lead";
-              } else {
-                deniedReasons[action] = "not_owner_or_lead";
+              const decision = checkSessionAccess(actor, target, action);
+              const context = `${visibility}, ${relation}, ${roleKey}, suspended=${suspended}, ${action}`;
+              if (permits[action]) {
+                const breakGlass =
+                  action === "read" &&
+                  visibility === "private" &&
+                  roleKey === "owner" &&
+                  !isOwner &&
+                  !isCollaborator;
+                expect(decision, context).toEqual({
+                  allowed: true,
+                  ...(breakGlass ? { audit: "session.private_break_glass" } : {}),
+                });
+                continue;
               }
+
+              let reason: AccessDenialReason = readReason;
+              if (read) {
+                if (action === "collaborate" || action === "sandbox") {
+                  const grant =
+                    action === "collaborate" ? "sessions.collaborate" : "sessions.sandbox_access";
+                  reason = has(grant) ? "not_collaborator" : "missing_permission";
+                } else if (action === "lifecycle" || action === "delete" || action === "move") {
+                  const grant = action === "delete" ? "sessions.delete" : "sessions.lifecycle";
+                  reason = has(grant) ? "not_owner_or_lead" : "missing_permission";
+                } else {
+                  reason = "not_owner_or_lead";
+                }
+              }
+              expect(decision, context).toEqual({ allowed: false, reason });
             }
-            expect(
-              result,
-              `${visibility}, ${relation}, ${roleKey}, suspended=${suspended}`
-            ).toEqual({
-              ...expected,
-              ...(readReason ? { reason: readReason } : {}),
-              deniedReasons,
-            });
-            expect(sessionCapabilities(result)).toEqual({
-              canRead: expected.read,
-              canCollaborate: expected.collaborate,
-              canManageLifecycle: expected.lifecycle,
-              canDelete: expected.delete,
-              canMove: expected.move,
-              canSandbox: expected.sandbox,
-              canManageCollaborators: expected.manageCollaborators,
-              canChangeVisibility: expected.changeVisibility,
+            expect(sessionCapabilities(actor, target)).toEqual({
+              canRead: permits.read,
+              canCollaborate: permits.collaborate,
+              canManageLifecycle: permits.lifecycle,
+              canDelete: permits.delete,
+              canMove: permits.move,
+              canSandbox: permits.sandbox,
+              canManageCollaborators: permits.manageCollaborators,
+              canChangeVisibility: permits.changeVisibility,
             });
           }
         }
@@ -153,270 +157,187 @@ describe("resolveSessionAccess", () => {
     }
   });
 
-  it("uses role keys, not built-in role IDs, and reports a non-owner member's delete denial", () => {
-    const member = viewer("team member", "member");
-    expect(resolveSessionAccess(member, row).deniedReasons.delete).toBe("not_owner_or_lead");
-    const admin = viewer("non-member", "administrator");
-    expect(resolveSessionAccess(admin, row).delete).toBe(true);
-    expect(resolveSessionAccess({ ...admin, roleKey: null }, row).reason).toBe("not_member");
+  it("uses role keys and reports a non-owner member delete denial", () => {
+    expect(checkSessionAccess(viewer("team member", "member"), row, "delete")).toEqual({
+      allowed: false,
+      reason: "not_owner_or_lead",
+    });
+    expect(checkSessionAccess(viewer("non-member", "administrator"), row, "delete")).toEqual({
+      allowed: true,
+    });
+    expect(
+      checkSessionAccess(viewer("non-member", null, false, ["sessions.read"]), row, "read")
+    ).toEqual({
+      allowed: false,
+      reason: "not_member",
+    });
   });
 
-  it("checks each grant before ownership, including custom grants and private write restrictions", () => {
-    const member = viewer("team member", null, false, ["sessions.read"]);
-    const result = resolveSessionAccess(member, row);
-    expect(result.deniedReasons).toEqual({
-      collaborate: "missing_permission",
-      lifecycle: "missing_permission",
-      delete: "missing_permission",
-      sandbox: "missing_permission",
-      move: "missing_permission",
-      manageCollaborators: "not_owner_or_lead",
-      changeVisibility: "not_owner_or_lead",
+  it("checks the grant before ownership and distinguishes private participation", () => {
+    const actor = viewer("team member", null, false, ["sessions.read"]);
+    expect(checkSessionAccess(actor, row, "delete")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
     });
-    const owner = viewer("owner", null, false, ["sessions.read", "sessions.delete"]);
-    expect(resolveSessionAccess(owner, row).delete).toBe(true);
     const breakGlass = viewer("non-member", "owner");
-    expect(resolveSessionAccess(breakGlass, { ...row, visibility: "private" })).toMatchObject({
-      read: true,
-      collaborate: false,
-      sandbox: false,
-      manageCollaborators: true,
-      changeVisibility: true,
-      deniedReasons: { collaborate: "not_owner_or_lead", sandbox: "not_owner_or_lead" },
+    const privateRow = { ...row, visibility: "private" } satisfies SessionAccessRow;
+    expect(checkSessionAccess(breakGlass, privateRow, "read")).toEqual({
+      allowed: true,
+      audit: "session.private_break_glass",
+    });
+    for (const action of ["collaborate", "sandbox"] as const) {
+      expect(checkSessionAccess(breakGlass, privateRow, action)).toEqual({
+        allowed: false,
+        reason: "not_collaborator",
+      });
+    }
+    expect(checkSessionAccess(breakGlass, privateRow, "lifecycle")).toEqual({ allowed: true });
+    expect(checkSessionAccess(breakGlass, privateRow, "changeVisibility")).toEqual({
+      allowed: true,
     });
   });
 
-  it("treats a null team as workspace ownership, without granting team-lead rights", () => {
+  it("does not give workspace rows team-lead rights or use ownership as team membership", () => {
+    const actor = viewer("team lead", "member");
     const workspaceRow = {
       ...row,
       ownerTeamId: null,
       visibility: "workspace",
     } satisfies SessionAccessRow;
-    expect(resolveSessionAccess(viewer("team lead", "member"), workspaceRow)).toMatchObject({
-      read: true,
-      delete: false,
-      move: false,
-      deniedReasons: { delete: "not_owner_or_lead", move: "not_owner_or_lead" },
+    expect(checkSessionAccess(actor, workspaceRow, "move")).toEqual({
+      allowed: false,
+      reason: "not_owner_or_lead",
     });
-  });
-
-  it("does not use session ownership as a substitute for team membership", () => {
     const ownerWithoutMembership = { ...viewer("owner", "member"), memberships: new Map() };
-    expect(resolveSessionAccess(ownerWithoutMembership, row).reason).toBe("not_member");
+    expect(checkSessionAccess(ownerWithoutMembership, row, "read")).toEqual({
+      allowed: false,
+      reason: "not_member",
+    });
     expect(
-      resolveSessionAccess(ownerWithoutMembership, { ...row, visibility: "private" })
-    ).toMatchObject({
-      read: true,
-      collaborate: true,
-      sandbox: true,
-      auditedBreakGlass: false,
-    });
+      checkSessionAccess(ownerWithoutMembership, { ...row, visibility: "private" }, "read")
+    ).toEqual({ allowed: true });
   });
 
-  it("does not treat a missing session owner as the viewer or grant break-glass without read", () => {
+  it("denies every action to a suspended owner before checking visibility or grants", () => {
+    const actor = viewer("owner", "owner", true);
+    for (const action of SESSION_ACTIONS) {
+      expect(checkSessionAccess(actor, { ...row, visibility: "private" }, action)).toEqual({
+        allowed: false,
+        reason: "suspended",
+      });
+    }
+  });
+
+  it("does not mistake a null session owner for a viewer or audit a denied read", () => {
     const orphan = { ...row, ownerUserId: null, visibility: "private" } satisfies SessionAccessRow;
-    expect(resolveSessionAccess(viewer("owner", "member"), orphan).reason).toBe("private");
-    const ownerWithoutRead = viewer("non-member", "owner", false, []);
-    expect(resolveSessionAccess(ownerWithoutRead, orphan)).toMatchObject({
-      read: false,
+    expect(checkSessionAccess(viewer("owner", "member"), orphan, "read")).toEqual({
+      allowed: false,
+      reason: "private",
+    });
+    expect(checkSessionAccess(viewer("non-member", "owner", false, []), orphan, "read")).toEqual({
+      allowed: false,
       reason: "missing_permission",
-      auditedBreakGlass: false,
-    });
-  });
-
-  it("denies every action to a suspended owner, including private reads", () => {
-    const access = resolveSessionAccess(viewer("owner", "owner", true), {
-      ...row,
-      visibility: "private",
-    });
-    expect(access.reason).toBe("suspended");
-    expect(access.auditedBreakGlass).toBe(false);
-    expect(access.deniedReasons).toEqual(
-      Object.fromEntries(SESSION_ACTIONS.map((action) => [action, "suspended"]))
-    );
-    expect(sessionCapabilities(access)).toEqual({
-      canRead: false,
-      canCollaborate: false,
-      canManageLifecycle: false,
-      canDelete: false,
-      canMove: false,
-      canSandbox: false,
-      canManageCollaborators: false,
-      canChangeVisibility: false,
     });
   });
 
   it.each([null, "team_one", "team_other"])(
     "limits service reads for team binding %s",
     (teamId) => {
+      const actor: SessionViewer = { kind: "service", teamId };
       for (const visibility of visibilities) {
-        const result = resolveSessionAccess({ kind: "service", teamId }, { ...row, visibility });
-        const read =
+        const target = { ...row, visibility };
+        const canRead =
           visibility === "workspace" || (visibility === "team" && teamId !== "team_other");
-        expect(result).toEqual({
-          read,
-          collaborate: false,
-          lifecycle: false,
-          delete: false,
-          sandbox: false,
-          move: false,
-          manageCollaborators: false,
-          changeVisibility: false,
-          auditedBreakGlass: false,
-          ...(read ? {} : { reason: visibility === "private" ? "private" : "not_member" }),
-          deniedReasons: Object.fromEntries(
-            SESSION_ACTIONS.filter((action) => !read || action !== "read").map((action) => [
-              action,
-              read ? "missing_permission" : visibility === "private" ? "private" : "not_member",
-            ])
-          ),
-        });
+        expect(checkSessionAccess(actor, target, "read")).toEqual(
+          canRead
+            ? { allowed: true }
+            : { allowed: false, reason: visibility === "private" ? "private" : "not_member" }
+        );
+        for (const action of SESSION_ACTIONS) {
+          if (action === "read") continue;
+          expect(checkSessionAccess(actor, target, action)).toEqual({
+            allowed: false,
+            reason: canRead
+              ? "missing_permission"
+              : visibility === "private"
+                ? "private"
+                : "not_member",
+          });
+        }
       }
     }
   );
 });
 
-describe("resolveAutomationAccess", () => {
-  it("uses team membership and read grants independently of executor and lead own grants", () => {
-    const permissions: PermissionId[] = ["automations.manage.own", "automations.trigger.own"];
-    for (const relation of relations) {
-      for (const roleKey of roles) {
-        for (const suspended of [false, true]) {
-          const actor = viewer(relation, roleKey, suspended, permissions);
-          const member = actor.memberships.has("team_one");
-          const owner = roleKey === "owner" || roleKey === "administrator";
-          const executor = relation === "owner";
-          const lead = relation === "team lead";
-          expect(
-            resolveAutomationAccess(actor, {
-              ownerTeamId: "team_one",
-              executorUserId: "user_owner",
-            })
-          ).toEqual({
-            read: false,
-            manage: !suspended && (member || owner) && (executor || lead),
-            trigger: !suspended && (member || owner) && (executor || lead),
-            move: !suspended && (member || owner) && (executor || lead),
-          });
-        }
-      }
-    }
-  });
+describe("checkAutomationAccess", () => {
+  const target = { ownerTeamId: "team_one", executorUserId: "user_owner" };
 
-  it("requires each scoped permission and lets an admin with the any grant act across teams", () => {
-    const admin = viewer("non-member", "administrator", false, [
-      "automations.manage.any",
-      "automations.trigger.any",
-    ]);
-    expect(
-      resolveAutomationAccess(admin, { ownerTeamId: "team_one", executorUserId: "user_owner" })
-    ).toEqual({
-      read: false,
-      manage: true,
-      trigger: true,
-      move: true,
-    });
-    expect(
-      resolveAutomationAccess(viewer("team lead", "member", false, ["automations.trigger.own"]), {
-        ownerTeamId: "team_one",
-        executorUserId: "user_owner",
-      })
-    ).toEqual({ read: false, manage: false, trigger: true, move: false });
-    expect(
-      resolveAutomationAccess(viewer("team member", "member"), {
-        ownerTeamId: "team_one",
-        executorUserId: "user_owner",
-      })
-    ).toEqual({ read: true, manage: false, trigger: false, move: false });
-  });
-
-  it("preserves workspace-level automation access for users and services", () => {
-    const workspaceRow = { ownerTeamId: null, executorUserId: "user_none" };
-    expect(resolveAutomationAccess(viewer("non-member", "member"), workspaceRow)).toEqual({
-      read: true,
-      manage: true,
-      trigger: true,
-      move: true,
-    });
-    expect(resolveAutomationAccess({ kind: "service", teamId: null }, workspaceRow)).toEqual({
-      read: true,
-      manage: false,
-      trigger: false,
-      move: false,
-    });
-  });
-
-  it("does not treat a workspace automation as owned by another executor or grant cross-team own access", () => {
-    const actor = viewer("team member", null, false, [
+  it("keeps scoped own grants independent of read and honors a team lead", () => {
+    const actor = viewer("team lead", "member", false, [
       "automations.manage.own",
       "automations.trigger.own",
     ]);
-    expect(
-      resolveAutomationAccess(actor, { ownerTeamId: null, executorUserId: "user_other" })
-    ).toEqual({
-      read: false,
-      manage: false,
-      trigger: false,
-      move: false,
+    expect(checkAutomationAccess(actor, target, "read")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
     });
-    expect(
-      resolveAutomationAccess(actor, { ownerTeamId: "team_other", executorUserId: "user_other" })
-    ).toEqual({
-      read: false,
-      manage: false,
-      trigger: false,
-      move: false,
+    expect(checkAutomationAccess(actor, target, "manage")).toEqual({ allowed: true });
+    expect(checkAutomationAccess(actor, target, "trigger")).toEqual({ allowed: true });
+    expect(checkAutomationAccess(actor, target, "move")).toEqual({ allowed: true });
+    expect(automationCapabilities(actor, target)).toEqual({
+      canRead: false,
+      canManage: true,
+      canTrigger: true,
+      canMove: true,
     });
   });
 
-  it("requires automations.read for a member without blocking separate scoped grants", () => {
+  it("requires automations.read while an executor can manage without it", () => {
     const actor = viewer("owner", "member", false, ["automations.manage.own"]);
-    expect(
-      resolveAutomationAccess(actor, { ownerTeamId: "team_one", executorUserId: "user_owner" })
-    ).toEqual({
-      read: false,
-      manage: true,
-      trigger: false,
-      move: true,
+    expect(checkAutomationAccess(actor, target, "read")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
+    });
+    expect(checkAutomationAccess(actor, target, "manage")).toEqual({ allowed: true });
+    expect(checkAutomationAccess(actor, target, "trigger")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
     });
   });
 
-  it("honors custom-role any grants only within the team eligibility boundary", () => {
+  it("honors custom-role any inside its team and refuses it outside", () => {
     const actor = viewer("team member", null, false, [
       "automations.read",
       "automations.manage.any",
       "automations.trigger.any",
     ]);
-    expect(
-      resolveAutomationAccess(actor, { ownerTeamId: "team_one", executorUserId: "user_other" })
-    ).toEqual({
-      read: true,
-      manage: true,
-      trigger: true,
-      move: true,
-    });
-    expect(
-      resolveAutomationAccess(actor, { ownerTeamId: "team_other", executorUserId: "user_other" })
-    ).toEqual({
-      read: false,
-      manage: false,
-      trigger: false,
-      move: false,
+    const other = { ownerTeamId: "team_other", executorUserId: "user_other" };
+    for (const action of AUTOMATION_ACTIONS) {
+      expect(checkAutomationAccess(actor, target, action)).toEqual({ allowed: true });
+      expect(checkAutomationAccess(actor, other, action)).toEqual({
+        allowed: false,
+        reason: "not_member",
+      });
+    }
+    expect(automationCapabilities(actor, other)).toEqual({
+      canRead: false,
+      canManage: false,
+      canTrigger: false,
+      canMove: false,
     });
   });
 
-  it("allows a lead with own grants to manage another executor's automation", () => {
-    const actor = viewer("team lead", "member", false, [
-      "automations.manage.own",
-      "automations.trigger.own",
-    ]);
-    expect(
-      resolveAutomationAccess(actor, { ownerTeamId: "team_one", executorUserId: "user_other" })
-    ).toEqual({
-      read: false,
-      manage: true,
-      trigger: true,
-      move: true,
+  it("requires ownership for own grants on workspace rows and grants admins any", () => {
+    const workspace = { ownerTeamId: null, executorUserId: "user_other" };
+    expect(checkAutomationAccess(viewer("team member", "member"), workspace, "manage")).toEqual({
+      allowed: false,
+      reason: "not_owner_or_lead",
+    });
+    const admin = viewer("non-member", "administrator", false, ["automations.manage.any"]);
+    expect(checkAutomationAccess(admin, target, "move")).toEqual({ allowed: true });
+    expect(checkAutomationAccess(admin, target, "read")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
     });
   });
 
@@ -430,57 +351,80 @@ describe("resolveAutomationAccess", () => {
   ] as const)(
     "limits service automation reads for row team %s and binding %s",
     (ownerTeamId, teamId, read) => {
-      expect(
-        resolveAutomationAccess({ kind: "service", teamId }, { ownerTeamId, executorUserId: null })
-      ).toEqual({
-        read,
-        manage: false,
-        trigger: false,
-        move: false,
-      });
+      const actor: SessionViewer = { kind: "service", teamId };
+      const resource = { ownerTeamId, executorUserId: null };
+      expect(checkAutomationAccess(actor, resource, "read")).toEqual(
+        read ? { allowed: true } : { allowed: false, reason: "not_member" }
+      );
+      for (const action of AUTOMATION_ACTIONS) {
+        if (action === "read") continue;
+        expect(checkAutomationAccess(actor, resource, action)).toEqual({
+          allowed: false,
+          reason: read ? "missing_permission" : "not_member",
+        });
+      }
     }
   );
 });
 
-describe("resolveEnvironmentAccess", () => {
-  it("requires membership or admin status and the appropriate read, use, and manage grants", () => {
-    for (const relation of relations) {
-      for (const roleKey of roles) {
-        for (const suspended of [false, true]) {
-          const actor = viewer(relation, roleKey, suspended);
-          const member = actor.memberships.has("team_one");
-          const admin = roleKey === "owner" || roleKey === "administrator";
-          const eligible = !suspended && (member || admin);
-          expect(resolveEnvironmentAccess(actor, { ownerTeamId: "team_one" })).toEqual({
-            read: eligible && actor.permissions.includes("environments.read"),
-            use: eligible && actor.permissions.includes("environments.use"),
-            manage:
-              eligible &&
-              (relation === "team lead" || admin) &&
-              actor.permissions.includes("environments.manage"),
-          });
-        }
-      }
-    }
-  });
+describe("checkEnvironmentAccess", () => {
+  const target = { ownerTeamId: "team_one" };
 
-  it("does not infer grants from team leadership or role keys", () => {
-    const lead = viewer("team lead", null, false, ["environments.use"]);
-    expect(resolveEnvironmentAccess(lead, { ownerTeamId: "team_one" })).toEqual({
-      read: false,
-      use: true,
-      manage: false,
+  it("checks distinct read, use, manage, and move decisions", () => {
+    const actor = viewer("team lead", "member", false, ["environments.use", "environments.manage"]);
+    expect(checkEnvironmentAccess(actor, target, "read")).toEqual({
+      allowed: false,
+      reason: "missing_permission",
+    });
+    expect(checkEnvironmentAccess(actor, target, "use")).toEqual({ allowed: true });
+    expect(checkEnvironmentAccess(actor, target, "manage")).toEqual({ allowed: true });
+    expect(checkEnvironmentAccess(actor, target, "move")).toEqual({ allowed: true });
+    expect(environmentCapabilities(actor, target)).toEqual({
+      canRead: false,
+      canManage: true,
+      canUse: true,
+      canMove: true,
     });
   });
 
-  it("preserves workspace-level environment access", () => {
-    expect(resolveEnvironmentAccess(viewer("non-member", "member"), { ownerTeamId: null })).toEqual(
-      {
-        read: true,
-        use: true,
-        manage: false,
-      }
-    );
+  it("requires the manage grant and lead/admin role independently", () => {
+    expect(
+      checkEnvironmentAccess(
+        viewer("team lead", null, false, ["environments.use"]),
+        target,
+        "manage"
+      )
+    ).toEqual({ allowed: false, reason: "missing_permission" });
+    expect(
+      checkEnvironmentAccess(
+        viewer("team member", null, false, ["environments.manage"]),
+        target,
+        "manage"
+      )
+    ).toEqual({ allowed: false, reason: "not_owner_or_lead" });
+    expect(checkEnvironmentAccess(viewer("non-member", "administrator"), target, "move")).toEqual({
+      allowed: true,
+    });
+    expect(
+      checkEnvironmentAccess(
+        viewer("team lead", "member", false, ["environments.manage"]),
+        { ownerTeamId: null },
+        "move"
+      )
+    ).toEqual({ allowed: false, reason: "not_owner_or_lead" });
+  });
+
+  it("denies suspended and outside-team users for every action", () => {
+    for (const action of ENVIRONMENT_ACTIONS) {
+      expect(checkEnvironmentAccess(viewer("team lead", "owner", true), target, action)).toEqual({
+        allowed: false,
+        reason: "suspended",
+      });
+      expect(checkEnvironmentAccess(viewer("non-member", "member"), target, action)).toEqual({
+        allowed: false,
+        reason: "not_member",
+      });
+    }
   });
 
   it.each([
@@ -492,11 +436,16 @@ describe("resolveEnvironmentAccess", () => {
   ] as const)(
     "limits service environment use for row team %s and binding %s",
     (ownerTeamId, teamId, allowed) => {
-      expect(resolveEnvironmentAccess({ kind: "service", teamId }, { ownerTeamId })).toEqual({
-        read: allowed,
-        use: allowed,
-        manage: false,
-      });
+      const actor: SessionViewer = { kind: "service", teamId };
+      for (const action of ENVIRONMENT_ACTIONS) {
+        expect(checkEnvironmentAccess(actor, { ownerTeamId }, action)).toEqual(
+          action === "read" || action === "use"
+            ? allowed
+              ? { allowed: true }
+              : { allowed: false, reason: "not_member" }
+            : { allowed: false, reason: allowed ? "missing_permission" : "not_member" }
+        );
+      }
     }
   );
 });
