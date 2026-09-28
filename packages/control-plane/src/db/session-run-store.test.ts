@@ -66,7 +66,6 @@ it("prepares root-windowed scoped runs and decodes a nullable title", () => {
   );
   store.prepareList({ startAt: 10, endAt: 20, limit: 2, orderBy: "cost", scope: "human" });
   expect(query).toContain("root.created_at >= ? AND root.created_at < ?");
-  expect(query).toContain("root.spawn_source IN (?, ?, ?, ?)");
   expect(query).toContain("root.title");
   expect(binds).toEqual([10, 20, "user", "slack-bot", "linear-bot", "github-bot", 2]);
   const row = {

@@ -15,6 +15,10 @@ export interface ListSessionRunsOptions {
   endAt: number;
   limit: number;
   orderBy: AnalyticsRunOrderBy;
+  /**
+   * Filters each member session by its own spawn source, as the summary does;
+   * a run is listed when any member matches.
+   */
   scope: AnalyticsScope;
 }
 
@@ -103,7 +107,7 @@ export class SessionRunStore {
 
   prepareList({ startAt, endAt, limit, orderBy, scope }: ListSessionRunsOptions): SqlStatement {
     const order = orderBy === "cost" ? "total_cost" : "created_at";
-    const { sql, binds } = scopePredicate(scope, "root.spawn_source");
+    const { sql, binds } = scopePredicate(scope, "s.spawn_source");
     const rootVisible = this.visible("root");
     const childVisible = this.visible("s");
     return this.db

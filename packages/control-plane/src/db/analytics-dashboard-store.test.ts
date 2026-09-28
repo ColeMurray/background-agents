@@ -9,7 +9,6 @@ function emptyResult(): SqlResult {
 describe("AnalyticsDashboardStore", () => {
   it("reads every dashboard resource in one database batch", async () => {
     const statements: SqlStatement[] = [];
-    const queries: string[] = [];
     let batchedStatements: SqlStatement[] = [];
     const batch = vi.fn(async (batched: SqlStatement[]) => {
       batchedStatements = batched;
@@ -74,8 +73,7 @@ describe("AnalyticsDashboardStore", () => {
       });
     });
     const db = {
-      prepare: vi.fn((query: string) => {
-        queries.push(query);
+      prepare: vi.fn(() => {
         const statement: SqlStatement = {
           bind: vi.fn(() => statement),
           first: vi.fn(),
@@ -104,7 +102,6 @@ describe("AnalyticsDashboardStore", () => {
     expect(statements).toHaveLength(19);
     expect(batchedStatements).toHaveLength(19);
     expect(batchedStatements.every((statement) => statements.includes(statement))).toBe(true);
-    expect(queries[18]).toContain("root.spawn_source IN (?)");
     expect(statements[18].bind).toHaveBeenCalledWith(
       1_699_395_200_000,
       1_700_000_000_000,

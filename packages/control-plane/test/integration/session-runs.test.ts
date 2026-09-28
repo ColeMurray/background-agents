@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createExecutionContext, env } from "cloudflare:test";
-import type { AnalyticsRunsResponse } from "@open-inspect/shared/types/analytics";
+import type {
+  AnalyticsDashboardResponse,
+  AnalyticsRunsResponse,
+  AnalyticsScope,
+  SessionRun,
+} from "@open-inspect/shared/types/analytics";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
 import { SessionRunStore } from "../../src/db/session-run-store";
 import { cleanD1Tables } from "./cleanup";
@@ -322,6 +327,64 @@ describe("session runs", () => {
     expect(
       (await runs.list({ ...window, orderBy: "created" })).map((run) => run.rootSessionId)
     ).toEqual(["newer-cheap"]);
+  });
+
+  it("scopes run totals to member sessions, as the scoped summary does", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const createdAt = Date.now() - DAY_MS;
+    await seedSession(
+      store,
+      { id: "human-root", spawnSource: "user", createdAt, updatedAt: createdAt + 10 },
+      1,
+      0,
+      1
+    );
+    await seedSession(
+      store,
+      {
+        id: "agent-child",
+        parentSessionId: "human-root",
+        spawnDepth: 1,
+        spawnSource: "agent",
+        createdAt: createdAt + 100,
+        updatedAt: createdAt + 110,
+      },
+      2,
+      1,
+      2
+    );
+
+    const expectedRuns: Record<AnalyticsScope, Partial<SessionRun>[]> = {
+      human: [{ sessionCount: 1, maxSpawnDepth: 0, totalCost: 1, totalPrs: 0, inputTokens: 1 }],
+      agent: [{ sessionCount: 1, maxSpawnDepth: 1, totalCost: 2, totalPrs: 1, inputTokens: 2 }],
+      automation: [],
+      all: [{ sessionCount: 2, maxSpawnDepth: 1, totalCost: 3, totalPrs: 1, inputTokens: 3 }],
+    };
+    for (const [scope, runs] of Object.entries(expectedRuns)) {
+      const dashboard = await (
+        await serviceFetch(`https://test.local/analytics/dashboard?days=7&scope=${scope}`)
+      ).json<AnalyticsDashboardResponse>();
+      expect(dashboard.runs, scope).toEqual(
+        runs.map((run) =>
+          expect.objectContaining({ rootSessionId: "human-root", spawnSource: "user", ...run })
+        )
+      );
+      const runTotals = dashboard.runs.reduce(
+        (totals, run) => ({
+          sessions: totals.sessions + run.sessionCount,
+          cost: totals.cost + run.totalCost,
+          prs: totals.prs + run.totalPrs,
+          inputTokens: totals.inputTokens + run.inputTokens,
+        }),
+        { sessions: 0, cost: 0, prs: 0, inputTokens: 0 }
+      );
+      expect(runTotals, scope).toEqual({
+        sessions: dashboard.summary.totalSessions,
+        cost: dashboard.summary.totalCost,
+        prs: dashboard.summary.totalPrs,
+        inputTokens: dashboard.summary.inputTokens,
+      });
+    }
   });
 
   it("keeps runs unfiltered by default but scopes explicit human roots and preserves null titles", async () => {
