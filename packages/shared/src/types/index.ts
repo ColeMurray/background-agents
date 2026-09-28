@@ -106,6 +106,23 @@ export {
 export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership } from "./teams";
 
 export {
+  resolveSessionAccess,
+  sessionCapabilities,
+  resolveAutomationAccess,
+  resolveEnvironmentAccess,
+} from "./session-access";
+export type {
+  SessionAction,
+  SessionViewer,
+  SessionAccessRow,
+  SessionAccess,
+  SessionCapabilities,
+  SessionDenialReason,
+  AutomationAccess,
+  EnvironmentAccess,
+} from "./session-access";
+
+export {
   SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
   sessionInboxSessionSchema,
