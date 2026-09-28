@@ -233,6 +233,28 @@ describe("resolveSessionAccess", () => {
     });
   });
 
+  it("denies every action to a suspended owner, including private reads", () => {
+    const access = resolveSessionAccess(viewer("owner", "owner", true), {
+      ...row,
+      visibility: "private",
+    });
+    expect(access.reason).toBe("suspended");
+    expect(access.auditedBreakGlass).toBe(false);
+    expect(access.deniedReasons).toEqual(
+      Object.fromEntries(actions.map((action) => [action, "suspended"]))
+    );
+    expect(sessionCapabilities(access)).toEqual({
+      canRead: false,
+      canCollaborate: false,
+      canManageLifecycle: false,
+      canDelete: false,
+      canMove: false,
+      canSandbox: false,
+      canManageCollaborators: false,
+      canChangeVisibility: false,
+    });
+  });
+
   it.each([null, "team_one", "team_other"])(
     "limits service reads for team binding %s",
     (teamId) => {
@@ -328,6 +350,29 @@ describe("resolveAutomationAccess", () => {
       move: true,
     });
     expect(resolveAutomationAccess({ kind: "service", teamId: null }, workspaceRow)).toEqual({
+      read: false,
+      manage: false,
+      trigger: false,
+      move: false,
+    });
+  });
+
+  it("does not treat a workspace automation as owned by another executor or grant cross-team own access", () => {
+    const actor = viewer("team member", null, false, [
+      "automations.manage.own",
+      "automations.trigger.own",
+    ]);
+    expect(
+      resolveAutomationAccess(actor, { ownerTeamId: null, executorUserId: "user_other" })
+    ).toEqual({
+      read: true,
+      manage: false,
+      trigger: false,
+      move: false,
+    });
+    expect(
+      resolveAutomationAccess(actor, { ownerTeamId: "team_other", executorUserId: "user_other" })
+    ).toEqual({
       read: false,
       manage: false,
       trigger: false,
