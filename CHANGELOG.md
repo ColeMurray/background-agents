@@ -6,6 +6,11 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Added
 
+OpenCode sessions using a connected ChatGPT subscription now report estimated model costs through
+the existing session cost display and spending limit. These are API-price equivalents, not
+additional subscription charges or an OpenAI invoice; estimates remain zero if catalog pricing is
+unavailable.
+
 Workspace settings now includes Teams. Administrators can create teams, manage members and leads,
 edit team defaults, and archive or restore teams. Team leads can manage their own teams where
 permitted.
@@ -20,6 +25,11 @@ the requested session; `scope` on that route now returns 400. Whole runs remain 
 the paginated bulk export.
 
 ### Added
+
+Operators can select `modal-vm` deployment-wide for Docker-capable Modal sandboxes, with separate
+prepared images and filesystem snapshot recovery. The existing `modal` backend remains the default;
+switching backends does not migrate existing sessions or images. See
+[Modal VM setup](docs/MODAL_DOCKER.md).
 
 The analytics dashboard now shows harness metrics, automation performance in automation and all
 scopes, complete runs, and pull-request cost per merged PR by model and harness.
@@ -72,6 +82,10 @@ automation-origin filters compose on the server and live in the URL, so a filter
 shared or reloaded. The command menu now labels its results as recent sessions and offers **Search
 all sessions**, carrying typed text to the page; the sidebar's Archived shortcut opens the archived
 view, with archive management still under Settings → Data Controls. The Inbox is unchanged.
+
+**Open changed files from agent output.** Repository file links in a session's agent output now open
+matching files in the Changes panel, including renamed files and line references. Links to files
+outside the session diff remain inert; external links retain their existing behavior.
 
 **Clearer audit log outcomes.** Authorization decisions in the workspace audit log now show
 **Allowed** or **Denied** with the recorded HTTP response (for example, HTTP 409 Conflict) instead
