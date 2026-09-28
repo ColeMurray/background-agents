@@ -21,7 +21,13 @@ from src.sandbox.manager import (
 async def test_pending_vm_reference_recovers_owned_allocation(monkeypatch):
     sandbox = SimpleNamespace(
         object_id="sb-owned",
-        get_tags=_async_method(docker_allocation_tags("session", "generation")),
+        get_tags=_async_method(
+            {
+                **docker_allocation_tags("session", "generation"),
+                "openinspect_vm_launch": "1-000-8080-6080-7680",
+                "openinspect_vm_ports": "none",
+            }
+        ),
     )
     lookup = _async_method(sandbox)
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", lookup)
@@ -34,7 +40,13 @@ async def test_pending_vm_reference_recovers_owned_allocation(monkeypatch):
 async def test_pending_vm_reference_stops_only_its_owned_allocation(monkeypatch):
     sandbox = SimpleNamespace(
         object_id="sb-owned",
-        get_tags=_async_method(docker_allocation_tags("session", "generation")),
+        get_tags=_async_method(
+            {
+                **docker_allocation_tags("session", "generation"),
+                "openinspect_vm_launch": "1-000-8080-6080-7680",
+                "openinspect_vm_ports": "none",
+            }
+        ),
         terminate=_async_method(),
     )
     from_name = _async_method(sandbox)

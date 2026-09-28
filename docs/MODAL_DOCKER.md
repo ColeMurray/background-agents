@@ -90,10 +90,15 @@ running allocation by session name, checks the generation's ownership tags, and 
 }
 ```
 
-Enabled services return their actual URLs/passwords, and extra tunnels use port-to-URL mappings.
-Resolve neither creates nor retires an allocation or writes tunnel configuration. A stopped VM is
-not discoverable by name. Resolve does not return a terminal access token; the control plane mints
-that token only when it still holds the generation's sandbox auth token in memory.
+New VM allocations record versioned service flags and effective ports in provider-owned launch tags.
+Only services enabled by these tags return URLs/passwords; extra tunnels use port-to-URL mappings.
+Legacy allocations without these tags (or with unknown/incomplete metadata) resolve only the real
+`modal_object_id`, not access credentials or tunnels. Resolve never infers enabled services from
+environment variables, which may have contained user secrets on older allocations. Such VMs need a
+new launch to recover interactive access. Resolve neither creates nor retires an allocation or
+writes tunnel configuration. A stopped VM is not discoverable by name. Resolve does not return a
+terminal access token; the control plane mints that token only when it still holds the generation's
+sandbox auth token in memory.
 
 Create, restore, and resolve report typed HTTP 409 error `detail` values:
 

@@ -176,6 +176,48 @@ describe("ModalClient", () => {
     });
   });
 
+  it.each([
+    ["server error", Response.json({ detail: "Internal server error" }, { status: 500 })],
+    ["invalid success", Response.json({ success: true, data: {} })],
+    ["truncated success", new Response("{", { status: 200 })],
+  ])("types a VM startup %s as an unknown outcome after dispatch", async (_case, response) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const client = createModalClient("secret", "acme");
+    await expect(
+      client.createSandbox({
+        sessionId: "session",
+        sandboxId: "generation",
+        sandboxBackend: "modal-vm",
+        repoOwner: null,
+        repoName: null,
+        controlPlaneUrl: "https://control.test",
+        sandboxAuthToken: "token",
+        harness: "opencode",
+      })
+    ).rejects.toMatchObject({ name: "ModalVmStartupError", outcome: "unknown" });
+  });
+
+  it("types a VM launch-window rejection without treating it as unknown", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ detail: "window_closed" }, { status: 409 })
+    );
+    await expect(
+      createModalClient("secret", "acme").restoreSandbox({
+        snapshotImageId: "image",
+        sessionId: "session",
+        sandboxId: "generation",
+        sandboxBackend: "modal-vm",
+        sandboxAuthToken: "token",
+        controlPlaneUrl: "https://control.test",
+        repoOwner: null,
+        repoName: null,
+        harness: "opencode",
+        provider: "anthropic",
+        model: "test",
+      })
+    ).rejects.toMatchObject({ name: "ModalVmStartupError", outcome: "window_closed" });
+  });
+
   it("times out image-build creation when response headers stall", async () => {
     vi.useFakeTimers();
     let markFetchStarted!: () => void;

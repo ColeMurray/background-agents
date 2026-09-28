@@ -76,6 +76,7 @@ function fixture(action: "create" | "restore" = "create", imageBuildLookup?: Ima
     stopSandbox: vi.fn(async () => {}),
   };
   const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm");
+  const backgroundTasks = { submit: vi.fn((task: () => Promise<unknown>) => void task()) };
   let state: ShutdownRecord | null = null;
   const store = {
     read: () => (state ? structuredClone(state) : null),
@@ -130,9 +131,10 @@ function fixture(action: "create" | "restore" = "create", imageBuildLookup?: Ima
       createMockIdGenerator(),
       new SandboxShutdownCoordinator(deps as never),
       createTestConfig(),
-      imageBuildLookup
+      imageBuildLookup,
+      backgroundTasks
     );
-  return { sandbox, storage, broadcaster, client, store, makeManager, wsManager };
+  return { sandbox, storage, broadcaster, client, store, makeManager, wsManager, backgroundTasks };
 }
 
 describe("modal-vm startup resolution", () => {
@@ -278,7 +280,7 @@ describe("modal-vm startup resolution", () => {
     expect(manager.pushAdmissionDecision()).toBe("ready");
   });
 
-  it("claims a bridge-resolved restore when its follow-up lookup stays transient", async () => {
+  it("claims a bridge-resolved restore without a second network lookup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     const f = fixture("restore");
@@ -292,11 +294,9 @@ describe("modal-vm startup resolution", () => {
     const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
     manager.onSandboxSocketAttached(generation);
     await vi.waitFor(() => expect(f.sandbox.modal_object_id).toBe("sb-real"));
-    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("unavailable", 503));
     rejectRestore(new ModalApiError("pending race", 409, "race_pending"));
-    await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledTimes(2));
-    await vi.advanceTimersByTimeAsync(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS + 10_000);
     await restoring;
+    expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce();
     expect(f.store.read()).toMatchObject({ phase: "running", providerObjectId: "sb-real" });
     expect(f.store.read()?.restoreInvoked).toBeUndefined();
     expect(f.sandbox.ttyd_token).toBeTruthy();
@@ -376,6 +376,9 @@ describe("modal-vm startup resolution", () => {
     f.client.resolveVmSandbox.mockImplementationOnce(() => new Promise((done) => (resolve = done)));
     const restarted = f.makeManager();
     restarted.onSandboxSocketAttached(generation);
+    expect(f.backgroundTasks.submit).toHaveBeenCalledWith(expect.any(Function), {
+      name: "sandbox.vm_resolve",
+    });
     expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
     await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce());
     expect(f.sandbox.modal_object_id).not.toBe("sb-real");
@@ -433,7 +436,7 @@ describe("modal-vm startup resolution", () => {
     rejectRestore(new ModalApiError("pending race", 409, "race_pending"));
     await restoring;
 
-    expect(f.client.resolveVmSandbox).toHaveBeenCalledTimes(2);
+    expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce();
     expect(f.store.read()).toMatchObject({ phase: "running", providerObjectId: "sb-real" });
     expect(f.store.read()?.restoreInvoked).toBeUndefined();
     expect(manager.pushAdmissionDecision()).toBe("ready");

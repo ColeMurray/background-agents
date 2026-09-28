@@ -59,6 +59,7 @@ import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../e
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
+import type { BackgroundTasks } from "../platform-ports";
 import type { SessionPlatform } from "./platform";
 import { SessionCoreRepository } from "./session-core-repository";
 // The composition root grants each consumer only its declared sandbox port.
@@ -469,6 +470,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    backgroundTasks,
     recordWarning: (message, eventId) =>
       recordSessionWarning(eventRepository, messenger, message, eventId),
   });
@@ -1011,6 +1013,7 @@ interface LifecycleManagerDeps {
   wsManager: SessionWebSocketManager;
   alarmScheduler: RehydratableAlarmScheduler;
   sandboxDashboardSettings: SandboxDashboardSettings;
+  backgroundTasks: BackgroundTasks;
 }
 
 /** Create the lifecycle manager with all required adapters. */
@@ -1028,6 +1031,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     wsManager,
     alarmScheduler,
     sandboxDashboardSettings,
+    backgroundTasks,
   } = deps;
   // Both throw on a misconfigured deployment — deliberately at graph
   // construction, so every session request fails at initialization instead of
@@ -1131,6 +1135,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     idGenerator,
     shutdown,
     config,
-    imageBuildLookup
+    imageBuildLookup,
+    backgroundTasks
   );
 }

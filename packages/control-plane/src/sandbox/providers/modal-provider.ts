@@ -5,7 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import { ModalApiError } from "../client";
+import { ModalApiError, ModalVmStartupError } from "../client";
 import { formatPendingVmReference, parsePendingVmReference } from "./pending-vm-reference";
 import {
   PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
@@ -120,13 +120,10 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   isUnknownStartupError(error: unknown): boolean {
     if (this.name !== "modal-vm") return false;
     const cause = error instanceof SandboxProviderError ? error.cause : error;
+    if (cause instanceof ModalVmStartupError)
+      return cause.outcome === "unknown" || cause.outcome === "race_pending";
     if (cause instanceof ModalApiError)
-      return (
-        cause.detail === "race_pending" ||
-        cause.status === 502 ||
-        cause.status === 503 ||
-        cause.status === 504
-      );
+      return cause.detail === "race_pending" || cause.status >= 500;
     return cause instanceof TypeError || SandboxProviderError.isTransientNetworkError(cause);
   }
 
@@ -555,12 +552,30 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
-    if (error instanceof ModalApiError)
-      return this.classifyErrorWithStatus(
-        `${message} with HTTP ${error.status}`,
-        error.detail === "race_pending" ? 503 : error.status,
+    if (error instanceof ModalVmStartupError)
+      return new SandboxProviderError(
+        `${message}: ${error.message}`,
+        error.outcome === "other_generation" ? "permanent" : "transient",
         error
       );
+    if (error instanceof ModalApiError) {
+      const context = `${message} with HTTP ${error.status}`;
+      if (this.name === "modal-vm") {
+        if (
+          error.detail === "not_visible" ||
+          error.detail === "window_closed" ||
+          error.detail === "race_pending" ||
+          error.detail === "other_generation"
+        )
+          return new SandboxProviderError(
+            context,
+            error.detail === "other_generation" ? "permanent" : "transient",
+            error
+          );
+        if (error.status >= 500) return new SandboxProviderError(context, "transient", error);
+      }
+      return this.classifyErrorWithStatus(context, error.status, error);
+    }
     if (SandboxProviderError.isTransientNetworkError(error)) {
       return new SandboxProviderError(
         `${message}: ${error instanceof Error ? error.message : String(error)}`,

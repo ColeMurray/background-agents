@@ -72,7 +72,7 @@ import {
   type ImageBuildLookup,
   type SelectedImageBuild,
 } from "./image-selection";
-import type { AlarmScheduler, SessionWebSocket } from "../../platform-ports";
+import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 import type {
   SandboxGeneration,
@@ -88,7 +88,7 @@ import type {
 } from "./ports";
 import { shutdownPolicyForLaunch, type ShutdownLifecyclePolicy } from "./shutdown-policy";
 import { parsePendingVmReference } from "../providers/pending-vm-reference";
-import { ModalApiError } from "../client";
+import { ModalApiError, ModalVmStartupError } from "../client";
 import type { ResolveSandboxResult } from "../provider";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
@@ -102,6 +102,13 @@ const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 const REJECTED_ALLOCATION_CLEANUP_RETRY_MS = 30_000;
 const VM_RESOLVE_RETRY_MS = 10_000;
+
+function vmAllocationDetail(error: unknown): string | undefined {
+  const cause = error instanceof SandboxProviderError ? error.cause : error;
+  if (cause instanceof ModalVmStartupError) return cause.outcome;
+  if (cause instanceof ModalApiError) return cause.detail;
+  return undefined;
+}
 
 // ==================== Dependency Interfaces ====================
 
@@ -530,6 +537,10 @@ export class SandboxLifecycleManager
   private bridgeResolution: SandboxGeneration | null = null;
   private bridgeRetryGeneration: SandboxGeneration | null = null;
   private bridgeStartupClaim: SandboxGeneration | null = null;
+  private bridgeResolvedStartup: {
+    generation: SandboxGeneration;
+    result: ResolveSandboxResult;
+  } | null = null;
   private vmStartupAuth: {
     generation: SandboxGeneration;
     sessionId: string;
@@ -571,7 +582,8 @@ export class SandboxLifecycleManager
     private readonly idGenerator: IdGenerator,
     private readonly shutdown: SandboxShutdownLifecycle,
     private readonly config: SandboxLifecycleConfig,
-    private readonly imageBuildLookup?: ImageBuildLookup
+    private readonly imageBuildLookup?: ImageBuildLookup,
+    private readonly backgroundTasks?: BackgroundTasks
   ) {}
 
   /**
@@ -2502,6 +2514,25 @@ export class SandboxLifecycleManager
     }
   }
 
+  private knownBridgeStartup(
+    generation: SandboxGeneration,
+    row: SandboxRow | null
+  ): ResolveSandboxResult | null {
+    const known = this.bridgeResolvedStartup;
+    if (
+      !known ||
+      row?.modal_sandbox_id !== generation.sandboxId ||
+      row.created_at !== generation.createdAt ||
+      row.fenced ||
+      !["spawning", "connecting", "ready"].includes(row.status) ||
+      row.modal_object_id !== known.result.providerObjectId ||
+      known.generation.sandboxId !== generation.sandboxId ||
+      known.generation.createdAt !== generation.createdAt
+    )
+      return null;
+    return known.result;
+  }
+
   private async resolveUnknownVmStartup(
     generation: SandboxGeneration,
     config: Pick<
@@ -2513,6 +2544,8 @@ export class SandboxLifecycleManager
     const reference = this.provider.pendingSandboxAllocation?.(config)?.reference;
     while (true) {
       const row = this.storage.getSandbox();
+      const bridged = this.knownBridgeStartup(generation, row);
+      if (bridged) return bridged;
       const resolvedByBridge =
         !!row?.modal_object_id &&
         row.modal_object_id !== reference &&
@@ -2531,14 +2564,13 @@ export class SandboxLifecycleManager
           generationCreatedAtMs: generation.createdAt,
         });
       } catch (error) {
-        const detail =
-          error instanceof SandboxProviderError && error.cause instanceof ModalApiError
-            ? error.cause.detail
-            : null;
+        const detail = vmAllocationDetail(error);
         if (detail === "other_generation") throw error;
         if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error)) throw error;
         if (Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) {
           const current = this.storage.getSandbox();
+          const bridgedAfterLookup = this.knownBridgeStartup(generation, current);
+          if (bridgedAfterLookup) return bridgedAfterLookup;
           if (
             current?.modal_sandbox_id === generation.sandboxId &&
             current.created_at === generation.createdAt &&
@@ -2610,98 +2642,108 @@ export class SandboxLifecycleManager
     };
     const retryDeadlineAtMs = Date.now() + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS;
     this.bridgeResolution = generation;
-    void (async () => {
-      let result: ResolveSandboxResult;
-      while (true) {
-        const current = this.storage.getSandbox();
-        if (
-          current?.modal_sandbox_id !== generation.sandboxId ||
-          current.created_at !== generation.createdAt ||
-          current.fenced ||
-          !["spawning", "connecting", "ready"].includes(current.status) ||
-          current.modal_object_id !== reference
-        )
-          return;
-        try {
-          result = await this.provider.resolveSandbox!(config);
-          break;
-        } catch (error) {
-          const detail =
-            error instanceof SandboxProviderError && error.cause instanceof ModalApiError
-              ? error.cause.detail
-              : null;
-          if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error))
-            throw error;
+    const work = () =>
+      (async () => {
+        let result: ResolveSandboxResult;
+        while (true) {
+          const current = this.storage.getSandbox();
           if (
-            Date.now() >= retryDeadlineAtMs ||
-            (detail === "not_visible" &&
-              Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) ||
-            this.bridgeRetryGeneration
+            current?.modal_sandbox_id !== generation.sandboxId ||
+            current.created_at !== generation.createdAt ||
+            current.fenced ||
+            !["spawning", "connecting", "ready"].includes(current.status) ||
+            current.modal_object_id !== reference
           )
             return;
-          await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
+          try {
+            result = await this.provider.resolveSandbox!(config);
+            break;
+          } catch (error) {
+            const detail = vmAllocationDetail(error);
+            if (detail !== "not_visible" && !this.provider.isUnknownStartupError?.(error))
+              throw error;
+            if (
+              Date.now() >= retryDeadlineAtMs ||
+              (detail === "not_visible" &&
+                Date.now() - generation.createdAt >= PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS) ||
+              this.bridgeRetryGeneration
+            )
+              return;
+            await new Promise<void>((resolve) => setTimeout(resolve, VM_RESOLVE_RETRY_MS));
+          }
         }
-      }
-      if (!result.providerObjectId) return;
-      const auth = this.vmStartupAuth;
-      const terminalToken =
-        result.ttydUrl &&
-        auth &&
-        auth.generation.sandboxId === generation.sandboxId &&
-        auth.generation.createdAt === generation.createdAt
-          ? await this.mintTtydToken(auth.token, auth.sessionId, generation.sandboxId!)
-          : null;
-      const committed = await this.storage.completeProviderResume(
-        generation,
-        {
-          providerObjectId: result.providerObjectId,
-          codeServer:
-            result.codeServerUrl && result.codeServerPassword
-              ? { url: result.codeServerUrl, password: result.codeServerPassword }
-              : null,
-          vnc: result.vncAccess ?? null,
-          ttyd:
-            result.ttydUrl && terminalToken ? { url: result.ttydUrl, token: terminalToken } : null,
-          tunnelUrls: result.tunnelUrls ?? null,
-        },
-        reference
-      );
-      if (!committed) return;
-      if (
-        this.bridgeStartupClaim?.sandboxId === generation.sandboxId &&
-        this.bridgeStartupClaim.createdAt === generation.createdAt
-      ) {
-        this.bridgeStartupClaim = null;
-        try {
-          await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime);
-        } finally {
-          if (
-            this.vmStartupAuth?.generation.sandboxId === generation.sandboxId &&
-            this.vmStartupAuth.generation.createdAt === generation.createdAt
-          )
-            this.vmStartupAuth = null;
-        }
-      } else {
-        this.shutdown.recordResolvedProviderHandle?.(
+        if (!result.providerObjectId) return;
+        const auth = this.vmStartupAuth;
+        const terminalToken =
+          result.ttydUrl &&
+          auth &&
+          auth.generation.sandboxId === generation.sandboxId &&
+          auth.generation.createdAt === generation.createdAt
+            ? await this.mintTtydToken(auth.token, auth.sessionId, generation.sandboxId!)
+            : null;
+        const committed = await this.storage.completeProviderResume(
           generation,
-          reference,
-          result.providerObjectId
+          {
+            providerObjectId: result.providerObjectId,
+            codeServer:
+              result.codeServerUrl && result.codeServerPassword
+                ? { url: result.codeServerUrl, password: result.codeServerPassword }
+                : null,
+            vnc: result.vncAccess ?? null,
+            ttyd:
+              result.ttydUrl && terminalToken
+                ? { url: result.ttydUrl, token: terminalToken }
+                : null,
+            tunnelUrls: result.tunnelUrls ?? null,
+          },
+          reference
         );
-      }
-      this.broadcastProviderAccessIfConnected();
-    })()
-      .catch((error) => {
-        this.log.warn("Bridge VM resolution failed", {
-          event: "sandbox.vm_resolve_failed",
-          error: error instanceof Error ? error.message : String(error),
+        if (!committed) return;
+        this.bridgeResolvedStartup = {
+          generation,
+          result: {
+            sandboxId: result.sandboxId,
+            providerObjectId: result.providerObjectId,
+            lifetime: result.lifetime,
+          },
+        };
+        if (
+          this.bridgeStartupClaim?.sandboxId === generation.sandboxId &&
+          this.bridgeStartupClaim.createdAt === generation.createdAt
+        ) {
+          this.bridgeStartupClaim = null;
+          try {
+            await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime);
+          } finally {
+            if (
+              this.vmStartupAuth?.generation.sandboxId === generation.sandboxId &&
+              this.vmStartupAuth.generation.createdAt === generation.createdAt
+            )
+              this.vmStartupAuth = null;
+          }
+        } else {
+          this.shutdown.recordResolvedProviderHandle?.(
+            generation,
+            reference,
+            result.providerObjectId
+          );
+        }
+        this.broadcastProviderAccessIfConnected();
+      })()
+        .catch((error) => {
+          this.log.warn("Bridge VM resolution failed", {
+            event: "sandbox.vm_resolve_failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          this.bridgeResolution = null;
+          const queued = this.bridgeRetryGeneration;
+          this.bridgeRetryGeneration = null;
+          if (queued) this.resolvePendingBridge(queued);
         });
-      })
-      .finally(() => {
-        this.bridgeResolution = null;
-        const queued = this.bridgeRetryGeneration;
-        this.bridgeRetryGeneration = null;
-        if (queued) this.resolvePendingBridge(queued);
-      });
+    if (this.backgroundTasks) this.backgroundTasks.submit(work, { name: "sandbox.vm_resolve" });
+    else void work();
   }
 
   private async handleRejectedStartupAllocation(

@@ -24,6 +24,14 @@ GENERATION = "generation-1"
 RESOLVE_REQUEST = {"session_id": SESSION, "sandbox_id": GENERATION}
 
 
+def _tags(launch="1-111-9000-9001-9002", ports="3000-3001"):
+    return {
+        **docker_allocation_tags(SESSION, GENERATION),
+        "openinspect_vm_launch": launch,
+        "openinspect_vm_ports": ports,
+    }
+
+
 async def _call(endpoint, request, authorization="Bearer test"):
     return await endpoint.get_raw_f()(
         request,
@@ -64,7 +72,7 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
         EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000,3001",
         "TERMINAL_ENABLED": "true",
     }
-    sandbox = _sandbox(docker_allocation_tags(SESSION, GENERATION), env)
+    sandbox = _sandbox(_tags(), env)
     from_name = AsyncMock(return_value=sandbox)
     create = AsyncMock(side_effect=AssertionError("resolve must not create"))
     monkeypatch.setattr(manager_module.modal.Sandbox, "from_name", SimpleNamespace(aio=from_name))
@@ -110,7 +118,7 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
 async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missing_port):
     monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
     sandbox = _sandbox(
-        docker_allocation_tags(SESSION, GENERATION),
+        _tags(),
         {
             "CODE_SERVER_PASSWORD": "original-code-password",
             VNC_PASSWORD_ENV_VAR: "original-vnc-password",
@@ -154,7 +162,7 @@ async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missi
 @pytest.mark.asyncio
 async def test_resolve_disabled_access_does_not_return_credentials(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
-    sandbox = _sandbox(docker_allocation_tags(SESSION, GENERATION))
+    sandbox = _sandbox(_tags("1-000-8080-6080-7680", "none"))
     monkeypatch.setattr(
         manager_module.modal.Sandbox,
         "from_name",
@@ -176,8 +184,8 @@ async def test_resolve_disabled_access_does_not_return_credentials(monkeypatch):
 async def test_resolve_extra_tunnels_does_not_write_into_vm(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
     sandbox = _sandbox(
-        docker_allocation_tags(SESSION, GENERATION),
-        {EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000"},
+        _tags("1-000-8080-6080-7680", "3000"),
+        {EXPECTED_TUNNEL_PORTS_ENV_VAR: "9999"},
     )
     monkeypatch.setattr(
         manager_module.modal.Sandbox,
@@ -196,6 +204,107 @@ async def test_resolve_extra_tunnels_does_not_write_into_vm(monkeypatch):
 
     assert result["data"]["tunnel_urls"] == {3000: "https://app.example"}
     write_env.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_legacy_user_password_does_not_enable_access(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
+    sandbox = _sandbox(
+        docker_allocation_tags(SESSION, GENERATION),
+        {
+            "CODE_SERVER_PASSWORD": "user-repo-secret",
+            VNC_PASSWORD_ENV_VAR: "user-vnc-secret",
+            CODE_SERVER_PORT_ENV_VAR: "9000",
+            EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000",
+            "TERMINAL_ENABLED": "true",
+        },
+    )
+    monkeypatch.setattr(
+        manager_module.modal.Sandbox,
+        "from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+    tunnels = AsyncMock(side_effect=AssertionError("legacy resolve must not inspect tunnels"))
+    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+
+    result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
+
+    assert result["data"] == {
+        "sandbox_id": GENERATION,
+        "modal_object_id": "sb-real-id",
+        "code_server_url": None,
+        "code_server_password": None,
+        "vnc_url": None,
+        "vnc_password": None,
+        "ttyd_url": None,
+        "tunnel_urls": None,
+        "sandbox_backend": "modal-vm",
+    }
+    sandbox.exec.aio.assert_not_awaited()
+    sandbox.terminate.aio.assert_not_awaited()
+    tunnels.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_versioned_flags_ignore_user_password_when_service_disabled(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
+    sandbox = _sandbox(
+        _tags("1-010-9000-9001-9002", "none"),
+        {"CODE_SERVER_PASSWORD": "user-repo-secret", VNC_PASSWORD_ENV_VAR: "vnc-password"},
+    )
+    monkeypatch.setattr(
+        manager_module.modal.Sandbox,
+        "from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+    tunnels = AsyncMock(return_value=(None, "https://vnc.example", None, None))
+    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+
+    result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
+
+    assert result["data"]["code_server_password"] is None
+    assert result["data"]["code_server_url"] is None
+    assert result["data"]["vnc_password"] == "vnc-password"
+    assert sandbox.exec.aio.call_args.args[-1:] == (VNC_PASSWORD_ENV_VAR,)
+    tunnels.assert_awaited_once_with(
+        sandbox, GENERATION, False, True, False, [], 9000, 9001, 9002, write_env_file=False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "launch,ports",
+    [
+        ("2-111-9000-9001-9002", "3000"),
+        ("1-111-9000-9001-9002", None),
+        ("1-111-0-9001-9002", "3000"),
+        ("1-11x-9000-9001-9002", "3000"),
+        ("1-111-9000-9001-9002", "65536"),
+    ],
+)
+async def test_resolve_unknown_or_incomplete_metadata_never_falls_back_to_env(
+    monkeypatch, launch, ports
+):
+    monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
+    tags = _tags(launch, ports)
+    if ports is None:
+        del tags["openinspect_vm_ports"]
+    sandbox = _sandbox(tags, {"CODE_SERVER_PASSWORD": "user-repo-secret"})
+    monkeypatch.setattr(
+        manager_module.modal.Sandbox,
+        "from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+    tunnels = AsyncMock(side_effect=AssertionError("invalid metadata must not inspect tunnels"))
+    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+
+    result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
+
+    assert result["data"]["modal_object_id"] == "sb-real-id"
+    assert result["data"]["code_server_password"] is None
+    assert result["data"]["tunnel_urls"] is None
+    sandbox.exec.aio.assert_not_awaited()
+    tunnels.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -224,6 +333,23 @@ async def test_resolve_reports_typed_absence_or_foreign_generation(
 
     assert (exc.value.status_code, exc.value.detail) == (status, detail)
     create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_rejects_unexpected_allocation_tags(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
+    sandbox = _sandbox({**_tags(), "unexpected": "tag"})
+    monkeypatch.setattr(
+        manager_module.modal.Sandbox,
+        "from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
+
+    assert (exc.value.status_code, exc.value.detail) == (409, "other_generation")
+    sandbox.exec.aio.assert_not_awaited()
 
 
 @pytest.mark.asyncio

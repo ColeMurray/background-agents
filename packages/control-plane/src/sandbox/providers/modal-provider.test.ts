@@ -99,7 +99,7 @@ describe("ModalSandboxProvider", () => {
     [409, "other_generation", false],
     [409, "window_closed", false],
     [502, undefined, true],
-    [500, undefined, false],
+    [500, undefined, true],
   ] as const)(
     "classifies VM launch HTTP %s / %s without matching messages",
     async (status, detail, unknown) => {
@@ -121,6 +121,9 @@ describe("ModalSandboxProvider", () => {
       expect(caught).toBeInstanceOf(SandboxProviderError);
       expect((caught as SandboxProviderError).cause).toBe(error);
       expect(provider.isUnknownStartupError(caught)).toBe(unknown);
+      expect((caught as SandboxProviderError).errorType).toBe(
+        detail === "other_generation" ? "permanent" : "transient"
+      );
     }
   );
 
