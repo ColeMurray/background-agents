@@ -41,15 +41,20 @@ export function normalizeWebhookEvent(
 
 /**
  * Resolve a dot-notation JSONPath against an object.
- * Supports only `$.dot.path.notation` (no array indexing, no recursive descent).
+ * Supports dot notation and array properties (no recursive descent).
  */
 export function resolveJsonPath(path: string, obj: unknown): unknown {
   if (!path.startsWith("$.")) return undefined;
   const keys = path.slice(2).split(".");
   let current: unknown = obj;
   for (const key of keys) {
+    if (Array.isArray(current)) {
+      if (!Object.hasOwn(current, key)) return undefined;
+      current = Reflect.get(current, key);
+      continue;
+    }
     const parsedCurrent = webhookObjectSchema.safeParse(current);
-    if (!parsedCurrent.success) return undefined;
+    if (!parsedCurrent.success || !Object.hasOwn(parsedCurrent.data, key)) return undefined;
     current = parsedCurrent.data[key];
   }
   return current;

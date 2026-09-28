@@ -54,8 +54,16 @@ describe("resolveJsonPath", () => {
     expect(resolveJsonPath("$.a.b", { a: null })).toBeUndefined();
   });
 
-  it("rejects malformed non-object path segments", () => {
-    expect(resolveJsonPath("$.0.id", [{ id: "evt-1" }])).toBeUndefined();
+  it("preserves numeric array segments in existing dot paths", () => {
+    expect(resolveJsonPath("$.items.0.id", { items: [{ id: "evt-1" }] })).toBe("evt-1");
+    expect(resolveJsonPath("$.0.id", [{ id: "evt-1" }])).toBe("evt-1");
+    expect(resolveJsonPath("$.items.length", { items: [{ id: "evt-1" }] })).toBe(1);
+    expect(resolveJsonPath("$.items.map", { items: [{ id: "evt-1" }] })).toBeUndefined();
+  });
+
+  it("does not resolve inherited properties", () => {
+    expect(resolveJsonPath("$.toString", {})).toBeUndefined();
+    expect(resolveJsonPath("$.items.constructor", { items: {} })).toBeUndefined();
   });
 });
 
@@ -145,6 +153,16 @@ describe("evaluateJsonPathFilter", () => {
     expect(evaluateJsonPathFilter({ path: "$.event.missing", comparison: "exists" }, body)).toBe(
       false
     );
+  });
+
+  it("matches saved array-indexed filters but not inherited properties", () => {
+    expect(
+      evaluateJsonPathFilter(
+        { path: "$.items.0.id", comparison: "eq", value: "evt-1" },
+        { items: [{ id: "evt-1" }] }
+      )
+    ).toBe(true);
+    expect(evaluateJsonPathFilter({ path: "$.toString", comparison: "exists" }, {})).toBe(false);
   });
 
   it("returns false for undefined values (non-exists comparisons)", () => {
