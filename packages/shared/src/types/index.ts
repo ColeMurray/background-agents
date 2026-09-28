@@ -106,6 +106,7 @@ export {
 export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership } from "./teams";
 
 export {
+  SESSION_ACTIONS,
   resolveSessionAccess,
   sessionCapabilities,
   resolveAutomationAccess,

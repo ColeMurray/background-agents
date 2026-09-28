@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { permissionsForBuiltInRole, type BuiltInRoleKey, type PermissionId } from "../rbac";
 import {
+  SESSION_ACTIONS,
   resolveAutomationAccess,
   resolveEnvironmentAccess,
   resolveSessionAccess,
@@ -12,16 +13,6 @@ import {
 } from "./session-access";
 import type { TeamRole } from "./teams";
 
-const actions: SessionAction[] = [
-  "read",
-  "collaborate",
-  "lifecycle",
-  "delete",
-  "sandbox",
-  "move",
-  "manageCollaborators",
-  "changeVisibility",
-];
 const relations = [
   "owner",
   "collaborator",
@@ -123,7 +114,7 @@ describe("resolveSessionAccess", () => {
                   ? "missing_permission"
                   : undefined;
             const deniedReasons: Partial<Record<SessionAction, SessionDenialReason>> = {};
-            for (const action of actions) {
+            for (const action of SESSION_ACTIONS) {
               if (expected[action]) continue;
               if (!read) {
                 deniedReasons[action] = readReason;
@@ -241,7 +232,7 @@ describe("resolveSessionAccess", () => {
     expect(access.reason).toBe("suspended");
     expect(access.auditedBreakGlass).toBe(false);
     expect(access.deniedReasons).toEqual(
-      Object.fromEntries(actions.map((action) => [action, "suspended"]))
+      Object.fromEntries(SESSION_ACTIONS.map((action) => [action, "suspended"]))
     );
     expect(sessionCapabilities(access)).toEqual({
       canRead: false,
@@ -274,12 +265,10 @@ describe("resolveSessionAccess", () => {
           auditedBreakGlass: false,
           ...(read ? {} : { reason: visibility === "private" ? "private" : "not_member" }),
           deniedReasons: Object.fromEntries(
-            actions
-              .filter((action) => !read || action !== "read")
-              .map((action) => [
-                action,
-                read ? "missing_permission" : visibility === "private" ? "private" : "not_member",
-              ])
+            SESSION_ACTIONS.filter((action) => !read || action !== "read").map((action) => [
+              action,
+              read ? "missing_permission" : visibility === "private" ? "private" : "not_member",
+            ])
           ),
         });
       }

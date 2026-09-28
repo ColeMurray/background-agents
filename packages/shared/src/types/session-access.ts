@@ -1,15 +1,17 @@
 import { hasScopedPermission, type BuiltInRoleKey, type PermissionId } from "../rbac";
 import type { SessionVisibility, TeamRole } from "./teams";
 
-export type SessionAction =
-  | "read"
-  | "collaborate"
-  | "lifecycle"
-  | "delete"
-  | "sandbox"
-  | "move"
-  | "manageCollaborators"
-  | "changeVisibility";
+export const SESSION_ACTIONS = [
+  "read",
+  "collaborate",
+  "lifecycle",
+  "delete",
+  "sandbox",
+  "move",
+  "manageCollaborators",
+  "changeVisibility",
+] as const;
+export type SessionAction = (typeof SESSION_ACTIONS)[number];
 
 export type SessionViewer =
   | {
@@ -62,17 +64,6 @@ export interface SessionCapabilities {
   canManageCollaborators: boolean;
   canChangeVisibility: boolean;
 }
-
-const SESSION_ACTIONS: readonly SessionAction[] = [
-  "read",
-  "collaborate",
-  "lifecycle",
-  "delete",
-  "sandbox",
-  "move",
-  "manageCollaborators",
-  "changeVisibility",
-];
 
 function deniedSessionAccess(reason: SessionDenialReason): SessionAccess {
   const deniedReasons: SessionAccess["deniedReasons"] = {};
