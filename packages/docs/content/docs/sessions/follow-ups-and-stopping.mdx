@@ -99,18 +99,18 @@ Archiving files a session away; it does not delete anything. The composer's send
 
 A follow-up keeps the agent's context, the branch, and the sandbox state. That is usually what you want, but not always.
 
-| Situation                                                                                               | Action                                                                                |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| The agent is still on task and you have a correction or new detail.                                     | Send a follow-up.                                                                     |
-| The agent is going the wrong way right now.                                                             | Stop the current prompt, then send a corrected follow-up.                             |
-| You want the session to go idle.                                                                        | Remove queued prompts, then stop the current prompt.                                  |
-| The session is completed or failed and the work should continue.                                        | Send a follow-up; the sandbox restores from its snapshot.                             |
-| The session is archived.                                                                                | Unarchive it (session page or Settings › Data Controls), then prompt.                 |
-| The session is cancelled.                                                                               | Start a new session. Cancelled is terminal.                                           |
-| The target changed (different feature, different repository, different base branch).                    | Start a new session. Follow-ups cannot change the repository set or the base branch.  |
-| The sandbox environment is corrupted (broken dependencies, half-applied migration, wrong global state). | Start a new session so the agent gets a clean workspace.                              |
-| The conversation contains misleading context (a wrong assumption the agent keeps building on).          | Start a new session with a corrected prompt rather than arguing it out in follow-ups. |
-| You want the newest managed skills.                                                                     | Start a new session; skills are pinned when a session is created.                     |
+| Situation                                                                                               | Action                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The agent is still on task and you have a correction or new detail.                                     | Send a follow-up.                                                                                                                                                                 |
+| The agent is going the wrong way right now.                                                             | Stop the current prompt, then send a corrected follow-up.                                                                                                                         |
+| You want the session to go idle.                                                                        | Remove queued prompts, then stop the current prompt.                                                                                                                              |
+| The session is completed or failed and the work should continue.                                        | Send a follow-up. The sandbox restores saved state or resumes in place; after a boot failure with no saved snapshot it can start fresh. Incompatible or unknown recovery is held. |
+| The session is archived.                                                                                | Unarchive it (session page or Settings › Data Controls), then prompt.                                                                                                             |
+| The session is cancelled.                                                                               | Start a new session. Cancelled is terminal.                                                                                                                                       |
+| The target changed (different feature, different repository, different base branch).                    | Start a new session. Follow-ups cannot change the repository set or the base branch.                                                                                              |
+| The sandbox environment is corrupted (broken dependencies, half-applied migration, wrong global state). | Start a new session so the agent gets a clean workspace.                                                                                                                          |
+| The conversation contains misleading context (a wrong assumption the agent keeps building on).          | Start a new session with a corrected prompt rather than arguing it out in follow-ups.                                                                                             |
+| You want the newest managed skills.                                                                     | Start a new session; skills are pinned when a session is created.                                                                                                                 |
 
 ## Troubleshooting
 
