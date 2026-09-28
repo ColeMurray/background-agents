@@ -2,6 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useLayoutEffect, useRef, type ComponentProps } from "react";
 import type {
   SandboxShutdownState,
   ShutdownRecoveryAction,
@@ -405,7 +406,7 @@ describe("SandboxShutdownBanner", () => {
       const onRecover = unconfirmed();
       const { rerender } = render(<Banner shutdown={failed} onRecover={onRecover} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+      fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
       expect(await screen.findByText(/Recovery was not confirmed/)).toBeInTheDocument();
 
       rerender(<Banner shutdown={{ ...failed, phase: "unknown" }} onRecover={onRecover} />);
@@ -414,17 +415,45 @@ describe("SandboxShutdownBanner", () => {
       expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
     });
 
+    it("never commits the stale message beside the newer phase", async () => {
+      // A parent layout effect runs after the banner's DOM commit and before its passive
+      // effects, so it sees exactly what the browser would paint for that render.
+      const committed: string[] = [];
+      function Probe(props: ComponentProps<typeof Banner>) {
+        const ref = useRef<HTMLDivElement>(null);
+        useLayoutEffect(() => {
+          committed.push(ref.current?.textContent ?? "");
+        });
+        return (
+          <div ref={ref}>
+            <Banner {...props} />
+          </div>
+        );
+      }
+      const onRecover = unconfirmed();
+      const { rerender } = render(<Probe shutdown={failed} onRecover={onRecover} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+      expect(await screen.findByText(/Recovery was not confirmed/)).toBeInTheDocument();
+
+      committed.length = 0;
+      rerender(<Probe shutdown={{ ...failed, phase: "unknown" }} onRecover={onRecover} />);
+
+      expect(committed[0]).toContain("could not be confirmed");
+      expect(committed.some((text) => text.includes("Recovery was not confirmed"))).toBe(false);
+    });
+
     it("does not resurface a stale message after a routine phase in between", async () => {
       const onRecover = unconfirmed();
       const { rerender } = render(<Banner shutdown={failed} onRecover={onRecover} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
+      fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
       expect(await screen.findByText(/Recovery was not confirmed/)).toBeInTheDocument();
 
       rerender(<Banner shutdown={{ ...failed, phase: "restoring" }} onRecover={onRecover} />);
       rerender(<Banner shutdown={failed} onRecover={onRecover} />);
 
-      expect(screen.getByRole("button", { name: "Retry shutdown" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled();
       expect(screen.queryByText(/Recovery was not confirmed/)).not.toBeInTheDocument();
     });
 
@@ -438,8 +467,8 @@ describe("SandboxShutdownBanner", () => {
       );
       const { rerender } = render(<Banner shutdown={failed} onRecover={onRecover} />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Retry shutdown" }));
-      expect(screen.getByRole("button", { name: "Retrying shutdown…" })).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+      expect(screen.getByRole("button", { name: "Retrying save…" })).toBeDisabled();
 
       rerender(<Banner shutdown={{ ...failed, phase: "unknown" }} onRecover={onRecover} />);
       await act(async () => settle({ ok: false, reason: "timeout" }));

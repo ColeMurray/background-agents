@@ -28,11 +28,14 @@ interface SandboxShutdownBannerProps {
 
 export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBannerProps) {
   const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
-  const [recoveryError, setRecoveryError] = useState<string | null>(null);
-
-  // A recovery message reports the outcome of a request against one shutdown phase. A newer
-  // authoritative phase supersedes it, so the stale message must not outlive that phase, and a
-  // request still in flight when the phase changes must not report against the newer phase.
+  // A recovery message reports the outcome of a request against one shutdown phase, so it is
+  // stored with that phase and rendered only while the phase is current: a newer authoritative
+  // phase hides it in the same render. A request still in flight when the phase changes must not
+  // report against the newer phase, and a stale message must not resurface if the phase returns.
+  const [recoveryError, setRecoveryError] = useState<{
+    phase: SandboxShutdownState["phase"];
+    message: string;
+  } | null>(null);
   const phaseGeneration = useRef(0);
   useEffect(() => {
     phaseGeneration.current += 1;
@@ -65,7 +68,7 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
     setRecoveryError(null);
     const generation = phaseGeneration.current;
     const reportFailure = (message: string) => {
-      if (generation === phaseGeneration.current) setRecoveryError(message);
+      if (generation === phaseGeneration.current) setRecoveryError({ phase, message });
     };
     try {
       const result = await onRecover(action);
@@ -154,9 +157,9 @@ export function SandboxShutdownBanner({ shutdown, onRecover }: SandboxShutdownBa
           {pendingAction === "restore_saved" ? "Resuming queued work…" : "Resume queued work"}
         </button>
       )}
-      {recoveryError && (
+      {recoveryError?.phase === phase && (
         <span aria-live="polite" className="ml-3">
-          {recoveryError}
+          {recoveryError.message}
         </span>
       )}
     </div>
