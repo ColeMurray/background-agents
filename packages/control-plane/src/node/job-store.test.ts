@@ -7,6 +7,9 @@ import {
   JOB_STORE_FILE,
   openJobStore,
   parseClaimedJobRow,
+  parseJobIdRows,
+  parseNullableRunAtRow,
+  parseStatusCountRows,
   type ClaimedJob,
   type JobStore,
 } from "./job-store";
@@ -56,6 +59,50 @@ describe("openJobStore", () => {
       expect(() =>
         parseClaimedJobRow({ id: "job-1", kind: "image_build.finalize", attempts: 1 }, "token-1")
       ).toThrow("Malformed claimed job row");
+    });
+  });
+
+  describe("job row parsers", () => {
+    it("parses job id rows returned by claim recovery statements", () => {
+      expect(parseJobIdRows([{ id: "job-1" }, { id: "job-2" }])).toEqual(["job-1", "job-2"]);
+    });
+
+    it("rejects malformed job id rows", () => {
+      expect(() => parseJobIdRows([{ id: 123 }])).toThrow("Malformed job id rows");
+    });
+
+    it("parses nullable run_at rows returned by aggregate statements", () => {
+      expect(parseNullableRunAtRow({ run_at: 1_000 }, "earliest job row")).toBe(1_000);
+      expect(parseNullableRunAtRow({ run_at: null }, "earliest job row")).toBeNull();
+    });
+
+    it("rejects malformed nullable run_at rows", () => {
+      expect(() => parseNullableRunAtRow({ run_at: "soon" }, "earliest job row")).toThrow(
+        "Malformed earliest job row"
+      );
+    });
+
+    it("parses job status count rows returned by stats statements", () => {
+      expect(
+        parseStatusCountRows([
+          { status: "pending", count: 2 },
+          { status: "running", count: 1 },
+          { status: "dead", count: 0 },
+        ])
+      ).toEqual([
+        { status: "pending", count: 2 },
+        { status: "running", count: 1 },
+        { status: "dead", count: 0 },
+      ]);
+    });
+
+    it("rejects malformed job status count rows", () => {
+      expect(() => parseStatusCountRows([{ status: "pending", count: -1 }])).toThrow(
+        "Malformed job status count rows"
+      );
+      expect(() => parseStatusCountRows([{ status: "stalled", count: 1 }])).toThrow(
+        "Malformed job status count rows"
+      );
     });
   });
 
