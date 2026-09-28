@@ -61,26 +61,24 @@ async function openAiCatalogModels() {
     (source === DEFAULT_MODELS_URL
       ? join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "opencode", "models.json")
       : null);
-  if (cachePath) {
-    try {
-      const catalog = JSON.parse(await readFile(cachePath, "utf8"));
-      const models = catalog?.openai?.models;
-      if (models && typeof models === "object" && !Array.isArray(models)) return models;
-    } catch {
-      // OpenCode can use its bundled catalog when its disk cache is missing.
-    }
+  if (!cachePath) {
+    console.warn(
+      "OpenCode model prices unavailable; set OPENCODE_MODELS_PATH for a custom catalog"
+    );
+    return null;
   }
   try {
-    const response = await fetch(`${source}/api.json`, { signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const catalog = await response.json();
+    const catalog = JSON.parse(await readFile(cachePath, "utf8"));
     const models = catalog?.openai?.models;
     if (!models || typeof models !== "object" || Array.isArray(models)) {
-      throw new Error("OpenAI models missing from catalog");
+      throw new Error("OpenAI models missing from cached catalog");
     }
     return models;
   } catch (error) {
-    console.warn("OpenCode model prices unavailable; leaving OAuth model costs at zero", error);
+    console.warn(
+      "OpenCode model prices unavailable in cache; leaving OAuth model costs at zero",
+      error
+    );
     return null;
   }
 }
@@ -166,14 +164,12 @@ async function ensureAccessToken(getAuth, setAuth) {
 }
 
 export const CodexAuthProxy = async (input) => {
-  // Share the in-flight lookup and its result across provider catalog rebuilds.
-  let catalogPromise;
   return {
     provider: {
       id: "openai",
       async models(provider, context) {
         if (context.auth?.type !== "oauth") return provider.models;
-        const catalog = await (catalogPromise ??= openAiCatalogModels());
+        const catalog = await openAiCatalogModels();
         // The built-in hook filters models and zeroes OAuth prices first.
         const models = Object.fromEntries(
           Object.entries(provider.models)

@@ -160,40 +160,7 @@ test("converts catalog context pricing without hardcoding the tier rates", async
   );
 });
 
-test("fetches OpenCode's catalog when its cache is absent", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "missing-opencode-models-"));
-  const previous = process.env.OPENCODE_MODELS_PATH;
-  const previousFetch = globalThis.fetch;
-  process.env.OPENCODE_MODELS_PATH = join(directory, "models.json");
-  const requests = [];
-  globalThis.fetch = async (url) => {
-    requests.push(url);
-    return Response.json({
-      openai: { models: { "gpt-6-sol": { cost: { input: 4, output: 12 } } } },
-    });
-  };
-  try {
-    const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
-    const provider = { models: { "gpt-6-sol": { cost: { input: 0, output: 0 } } } };
-    const context = { auth: { type: "oauth" } };
-    const [first, concurrent] = await Promise.all([
-      plugin.provider.models(provider, context),
-      plugin.provider.models(provider, context),
-    ]);
-    const later = await plugin.provider.models(provider, context);
-    assert.deepEqual(requests, ["https://models.opencode.ai/api.json"]);
-    for (const models of [first, concurrent, later]) {
-      assert.equal(models["gpt-6-sol"].cost.input, 4);
-    }
-  } finally {
-    if (previous === undefined) delete process.env.OPENCODE_MODELS_PATH;
-    else process.env.OPENCODE_MODELS_PATH = previous;
-    globalThis.fetch = previousFetch;
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("keeps OAuth models available at zero cost when neither catalog source is available", async () => {
+test("uses only OpenCode's cache and picks up prices when it appears", async () => {
   const directory = await mkdtemp(join(tmpdir(), "missing-opencode-models-"));
   const previousPath = process.env.OPENCODE_MODELS_PATH;
   const previousFetch = globalThis.fetch;
@@ -203,19 +170,25 @@ test("keeps OAuth models available at zero cost when neither catalog source is a
   let warnings = 0;
   globalThis.fetch = async () => {
     requests++;
-    throw new Error("catalog offline");
+    throw new Error("unexpected catalog request");
   };
   console.warn = () => warnings++;
   try {
     const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
     const provider = { models: { "gpt-6-sol": { cost: { input: 0, output: 0 } } } };
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const models = await plugin.provider.models(provider, { auth: { type: "oauth" } });
-      assert.equal(models["gpt-6-sol"].cost.input, 0);
-      assert.equal(models["gpt-5.3-codex"].cost.input, 0);
-    }
-    assert.equal(requests, 1);
+    const context = { auth: { type: "oauth" } };
+    const missing = await plugin.provider.models(provider, context);
+    assert.equal(missing["gpt-6-sol"].cost.input, 0);
+    assert.equal(missing["gpt-5.3-codex"].cost.input, 0);
     assert.equal(warnings, 1);
+
+    await writeFile(
+      process.env.OPENCODE_MODELS_PATH,
+      JSON.stringify({ openai: { models: { "gpt-6-sol": { cost: { input: 4, output: 12 } } } } })
+    );
+    const priced = await plugin.provider.models(provider, context);
+    assert.equal(priced["gpt-6-sol"].cost.input, 4);
+    assert.equal(requests, 0);
   } finally {
     if (previousPath === undefined) delete process.env.OPENCODE_MODELS_PATH;
     else process.env.OPENCODE_MODELS_PATH = previousPath;
