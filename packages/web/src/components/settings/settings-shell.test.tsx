@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   permissions: [] as string[],
   replace: vi.fn(),
   canEditTeam: false,
+  teamsError: false,
 }));
 const SHELL_FIXTURE_DEFAULTS = {
   isMobile: false,
@@ -46,6 +47,7 @@ vi.mock("@/hooks/use-teams", () => ({
   useMeTeams: () => ({
     teams: mocks.canEditTeam ? [{ capabilities: { canEditMetadata: true } }] : [],
     loading: false,
+    error: mocks.teamsError ? new Error("Unavailable") : null,
   }),
 }));
 
@@ -53,6 +55,7 @@ beforeEach(() => {
   Object.assign(mocks, SHELL_FIXTURE_DEFAULTS);
   mocks.permissions = [...PERMISSION_IDS];
   mocks.canEditTeam = false;
+  mocks.teamsError = false;
   mocks.replace.mockClear();
   vi.stubGlobal("matchMedia", () => ({
     matches: mocks.isMobile,
@@ -159,6 +162,16 @@ describe("SettingsShell", () => {
     render(<SettingsShell>Team details</SettingsShell>);
     expect(screen.getByText("Team details")).toBeInTheDocument();
     expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("shows an error without redirecting or rendering a team route when memberships fail to load", () => {
+    mocks.pathname = "/settings/teams/team_one";
+    mocks.permissions = [];
+    mocks.teamsError = true;
+    render(<SettingsShell>Team details</SettingsShell>);
+    expect(mocks.replace).not.toHaveBeenCalled();
+    expect(screen.getByText("Failed to load teams.")).toBeInTheDocument();
+    expect(screen.queryByText("Team details")).not.toBeInTheDocument();
   });
 
   it("canonicalizes an unauthorized settings query to the rendered fallback", () => {

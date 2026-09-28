@@ -73,10 +73,12 @@ export function useMeTeams() {
   return { teams: result.data?.teams ?? [], loading: result.isLoading, error: result.error };
 }
 
-export function useTeams() {
+export function useTeams(allTeams: boolean) {
   const { data: session } = useAuthSession();
   const { mutate } = useSWRConfig();
-  const result = useSWR(session?.user ? TEAMS_KEY : null, () => get(TEAMS_KEY, teamsSchema));
+  const result = useSWR(session?.user ? (allTeams ? TEAMS_KEY : ME_TEAMS_KEY) : null, () =>
+    allTeams ? get(TEAMS_KEY, teamsSchema) : get(ME_TEAMS_KEY, meTeamsSchema)
+  );
 
   async function createTeam(input: z.input<typeof createTeamRequestSchema>) {
     const team = await write(TEAMS_KEY, "POST", input, teamSchema);
@@ -116,18 +118,12 @@ export function useTeam(id: string) {
     await refresh();
     return team;
   }
-  async function joinTeam() {
-    const team = await write(`${key}/join`, "POST", undefined, teamSchema);
-    await refresh();
-    return team;
-  }
   return {
     team: result.data,
     loading: result.isLoading,
     error: result.error,
     updateTeam,
     changeArchive,
-    joinTeam,
   };
 }
 

@@ -12,8 +12,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function TeamsSettings() {
-  const { hasPermission } = useCurrentUserAuthorization();
-  const { teams, loading, error, createTeam } = useTeams();
+  const { authorization, hasPermission } = useCurrentUserAuthorization();
+  const allTeams =
+    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
+  const { teams, loading, error, createTeam } = useTeams(allTeams);
   const canCreate = hasPermission("workspace.members.manage");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -80,7 +82,8 @@ export function TeamsSettings() {
                 <span className="block text-sm text-muted-foreground">{team.slug}</span>
               </span>
               <span className="text-sm text-muted-foreground">
-                {team.memberCount} members - {team.archivedAt ? "Archived" : "Active"}
+                {team.memberCount} {team.memberCount === 1 ? "member" : "members"} -{" "}
+                {team.archivedAt ? "Archived" : "Active"}
               </span>
             </Link>
           ))}

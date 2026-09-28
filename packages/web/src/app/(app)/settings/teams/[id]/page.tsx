@@ -23,7 +23,11 @@ export default function TeamDetailPage() {
   if (isMobile) {
     return (
       <div className="flex h-full flex-col bg-background">
-        <SettingsMobileHeader title={team?.name ?? "Team"} backHref="/settings?tab=teams" />
+        <SettingsMobileHeader
+          title={team?.name ?? "Team"}
+          backHref="/settings?tab=teams"
+          backLabel="Back to Teams"
+        />
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
           <div className="mx-auto max-w-3xl">{content}</div>
         </div>

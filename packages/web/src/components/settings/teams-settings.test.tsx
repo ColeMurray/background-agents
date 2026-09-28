@@ -17,13 +17,28 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   setMember: vi.fn(),
   hasPermission: false,
+  roleKey: "member" as string,
+  allTeams: false,
+  teams: [] as Array<{
+    id: string;
+    slug: string;
+    name: string;
+    memberCount: number;
+    archivedAt: number | null;
+  }>,
 }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({ hasPermission: () => mocks.hasPermission }),
+  useCurrentUserAuthorization: () => ({
+    hasPermission: () => mocks.hasPermission,
+    authorization: { role: { key: mocks.roleKey } },
+  }),
 }));
 vi.mock("@/hooks/use-teams", () => ({
-  useTeams: () => ({ teams: [], loading: false, error: null, createTeam: mocks.create }),
+  useTeams: (allTeams: boolean) => {
+    mocks.allTeams = allTeams;
+    return { teams: mocks.teams, loading: false, error: null, createTeam: mocks.create };
+  },
   useTeam: () => ({ team: undefined, loading: false, error: null, updateTeam: mocks.update }),
   useTeamMembers: () => ({
     members: [],
@@ -74,6 +89,8 @@ const member: TeamMember = {
 
 beforeEach(() => {
   mocks.hasPermission = true;
+  mocks.roleKey = "member";
+  mocks.teams = [];
 });
 afterEach(() => {
   cleanup();
@@ -81,6 +98,20 @@ afterEach(() => {
 });
 
 describe("Teams settings", () => {
+  it("shows a lead's membership list with a singular count and reserves the all-teams list for admins", () => {
+    mocks.hasPermission = false;
+    mocks.roleKey = "custom";
+    mocks.teams = [
+      { id: team.id, slug: team.slug, name: team.name, memberCount: 1, archivedAt: null },
+    ];
+    const { rerender } = render(<TeamsSettings />);
+    expect(mocks.allTeams).toBe(false);
+    expect(screen.getByText("1 member - Active")).toBeInTheDocument();
+    mocks.roleKey = "administrator";
+    rerender(<TeamsSettings />);
+    expect(mocks.allTeams).toBe(true);
+  });
+
   it("validates slug and surfaces the slug_taken conflict", async () => {
     mocks.create.mockRejectedValue(new Error("Team slug already exists (slug_taken)"));
     render(<TeamsSettings />);
@@ -111,6 +142,11 @@ describe("Teams settings", () => {
     render(<TeamDetail team={{ ...team, capabilities }} />);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Archive team" })).toBeEnabled();
+  });
+
+  it("does not offer open-team joining from a membership-only settings page", () => {
+    render(<TeamDetail team={{ ...team, capabilities: { ...capabilities, canJoin: true } }} />);
+    expect(screen.queryByRole("button", { name: "Join team" })).not.toBeInTheDocument();
   });
 
   it("surfaces last_lead and disables member changes without capabilities", async () => {

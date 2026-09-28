@@ -12,7 +12,7 @@ import { TeamMembersTable } from "./team-members-table";
 
 export function TeamDetail({ team }: { team: TeamResponse }) {
   const capabilities = useTeamCapabilities(team);
-  const { updateTeam, changeArchive, joinTeam } = useTeam(team.id);
+  const { updateTeam, changeArchive } = useTeam(team.id);
   const { members, loading, error } = useTeamMembers(team.id);
   const [name, setName] = useState(team.name);
   const [slug, setSlug] = useState(team.slug);
@@ -58,11 +58,6 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
           </p>
         </div>
         <div className="flex gap-2">
-          {capabilities.canJoin && (
-            <Button disabled={saving} onClick={() => void run(joinTeam)}>
-              Join team
-            </Button>
-          )}
           <Button
             variant="outline"
             disabled={!capabilities.canArchive || saving}

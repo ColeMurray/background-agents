@@ -9,6 +9,7 @@ import { SettingsNav } from "@/components/settings/settings-nav";
 import { resolveSettingsCategory } from "@/components/settings/settings-registry";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useMeTeams } from "@/hooks/use-teams";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 /**
  * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
@@ -21,7 +22,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const isHydrated = isMobile !== undefined;
   const tab = searchParams.get("tab");
   const { hasPermission, loading } = useCurrentUserAuthorization();
-  const { teams, loading: teamsLoading } = useMeTeams();
+  const { teams, loading: teamsLoading, error: teamsError } = useMeTeams();
   const canEditTeam = teams.some((team) => team.capabilities?.canEditMetadata === true);
   const requestedCategory = pathname.startsWith("/settings/integrations/")
     ? "integrations"
@@ -36,12 +37,30 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   );
   const categoryRedirectRequired =
     requestedCategory !== null && activeCategory !== requestedCategory;
+  const teamLookupFailed =
+    requestedCategory === "teams" && !!teamsError && !hasPermission("workspace.members.manage");
 
   useEffect(() => {
-    if (isHydrated && !loading && !teamsLoading && categoryRedirectRequired) {
+    if (isHydrated && !loading && !teamsLoading && !teamLookupFailed && categoryRedirectRequired) {
       router.replace(`/settings?tab=${activeCategory}`);
     }
-  }, [activeCategory, categoryRedirectRequired, isHydrated, loading, teamsLoading, router]);
+  }, [
+    activeCategory,
+    categoryRedirectRequired,
+    isHydrated,
+    loading,
+    teamLookupFailed,
+    teamsLoading,
+    router,
+  ]);
+
+  if (teamLookupFailed) {
+    return (
+      <main className="h-dvh bg-background p-6">
+        <ErrorBanner>Failed to load teams.</ErrorBanner>
+      </main>
+    );
+  }
 
   if (!isHydrated || loading || teamsLoading || categoryRedirectRequired) {
     return <main className="h-dvh overflow-hidden bg-background" aria-busy="true" />;

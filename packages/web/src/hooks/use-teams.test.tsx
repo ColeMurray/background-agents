@@ -26,7 +26,7 @@ describe("team hooks", () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ error: "Team slug already exists", code: "slug_taken" }, { status: 409 })
     );
-    const { result } = renderHook(useTeams, { wrapper });
+    const { result } = renderHook(() => useTeams(false), { wrapper });
     await expect(
       act(() => result.current.createTeam({ slug: "design", name: "Design" }))
     ).rejects.toThrow("Team slug already exists (slug_taken)");
@@ -77,5 +77,50 @@ describe("team hooks", () => {
       canManageMembers: false,
       canArchive: false,
     });
+  });
+
+  it("loads a lead's memberships without requesting the sessions.read-gated list", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/me/teams"
+        ? Response.json({
+            teams: [
+              {
+                id: "team_design",
+                slug: "design",
+                name: "Design",
+                description: null,
+                joinPolicy: "invite_only",
+                defaultVisibility: "workspace",
+                defaultEnvironmentId: null,
+                grantsVersion: 0,
+                archivedAt: null,
+                createdAt: 1,
+                updatedAt: 1,
+                memberCount: 1,
+                role: "lead",
+                capabilities: {
+                  canJoin: false,
+                  canLeave: false,
+                  canEditMetadata: true,
+                  canManageMembers: true,
+                  canManageRepositories: true,
+                  canManageBindings: true,
+                  canManageAutomations: true,
+                  canManageSecrets: true,
+                  canArchive: true,
+                },
+              },
+            ],
+          })
+        : Response.json({ error: "Forbidden" }, { status: 403 })
+    );
+    const { result } = renderHook(() => useTeams(false), { wrapper });
+    await waitFor(() => expect(result.current.teams[0]?.name).toBe("Design"));
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/me/teams");
+    expect(browserApiFetch).not.toHaveBeenCalledWith("/api/teams");
   });
 });
