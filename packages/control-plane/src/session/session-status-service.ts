@@ -21,11 +21,7 @@ import type { ArtifactRepository } from "./artifact-repository";
 import type { UsageRepository } from "./usage-repository";
 import type { SessionMessenger } from "./messenger";
 import type { BackgroundTasks } from "../platform-ports";
-import {
-  isSessionInactive,
-  isSessionPromptable,
-  isTurnSettled,
-} from "@open-inspect/shared/types/session-activity";
+import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/session-activity";
 
 /** The index projections this service keeps consistent with the session row. */
 type SessionIndexProjections = Pick<SessionIndexStore, "finalizeChildAdmission" | "updateMetrics">;
@@ -180,15 +176,20 @@ export class SessionStatusService {
   }
 
   /**
-   * Re-project metrics for usage recorded after the session stopped being
-   * live work. A stop settles the session before the sandbox has seen the
-   * stop, so a step already in flight lands afterwards, and the sandbox's own
-   * terminal for that turn then settles nothing. A live session is left to
-   * the settle that ends its turn.
+   * Re-project metrics for a step whose turn is no longer processing. A stop
+   * ends the turn before the sandbox has seen the stop, so a step already in
+   * flight lands afterwards, and the sandbox's own terminal for that turn then
+   * settles nothing. The turn decides, not the session: a budget stop leaves a
+   * queued prompt that keeps the session `active` but cannot dispatch, so no
+   * later settle would cover the step. A step of the processing turn waits
+   * for the next settle.
    */
-  refreshInactiveMetrics(): void {
+  refreshMetricsAfterStep(messageId: string | null): void {
+    if (messageId !== null && this.messageRepository.getMessageStatus(messageId) === "processing") {
+      return;
+    }
     const session = this.repository.getSession();
-    if (!session || !isSessionInactive(session.status)) return;
+    if (!session) return;
     this.syncSessionMetrics(this.getPublicSessionId(session));
   }
 

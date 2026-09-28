@@ -63,6 +63,7 @@ function harness(options: { session?: SessionRow | null } = {}) {
     updateSessionStatus: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getLatestTerminalMessage: vi.fn(() => null as MessageRow | null),
+    getMessageStatus: vi.fn((_messageId: string): MessageRow["status"] | null => "failed"),
     getMessageCount: vi.fn(() => 3),
     getActiveDurationMs: vi.fn(() => 4500),
   };
@@ -292,12 +293,19 @@ describe("SessionStatusService.transition", () => {
     expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
   });
 
-  it("leaves a live session's metrics to the settle that ends its turn", () => {
+  it("defers a step of the processing turn but projects one whose turn has ended", () => {
+    // A budget stop leaves a queued prompt that keeps the session active.
     const h = harness({ session: createSession({ status: "active" }) });
+    h.repository.getMessageStatus.mockReturnValueOnce("processing");
 
-    h.service.refreshInactiveMetrics();
-
+    h.service.refreshMetricsAfterStep("msg-running");
     expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
+
+    h.service.refreshMetricsAfterStep("msg-stopped");
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith(
+      "public-session-1",
+      expect.objectContaining({ inputTokens: 1200 })
+    );
   });
 
   it("writes usage that lands during a metrics write after it, never beside it", async () => {
@@ -309,8 +317,8 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("failed")).toBe(false);
     h.usageRepository.getSessionTotals.mockReturnValue(createUsageTotals({ inputTokens: 1500 }));
-    h.service.refreshInactiveMetrics();
-    h.service.refreshInactiveMetrics();
+    h.service.refreshMetricsAfterStep("msg-1");
+    h.service.refreshMetricsAfterStep("msg-1");
 
     expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(1);
     releaseFirstWrite();
@@ -333,7 +341,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("failed")).toBe(false);
     h.usageRepository.getSessionTotals.mockReturnValue(createUsageTotals({ inputTokens: 1500 }));
-    h.service.refreshInactiveMetrics();
+    h.service.refreshMetricsAfterStep("msg-1");
     failFirstWrite();
     await h.backgroundTasks.settle();
 
@@ -356,7 +364,7 @@ describe("SessionStatusService.transition", () => {
     expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(1);
     expect(h.backgroundTasks.failures).toEqual([error]);
 
-    h.service.refreshInactiveMetrics();
+    h.service.refreshMetricsAfterStep("msg-1");
     await h.backgroundTasks.settle();
     expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(2);
   });

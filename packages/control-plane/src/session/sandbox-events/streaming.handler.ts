@@ -13,10 +13,10 @@ import { persistSandboxEvent, type SandboxEventContext } from "./context";
  * execution (tokens, steps, tool activity, compaction). Every event here is
  * broadcast to clients; the ones with a durable representation also record
  * to the timeline (steps renew activity, accumulate cost, and persist usage). Nothing
- * here transitions session state; a step that lands after its session settled
- * refreshes the metrics projection that settle already wrote. Also owns the
- * timeline-observer path (`recordTimelineEvent`) for events that persist and
- * broadcast unchanged.
+ * here transitions session state; a step whose turn has already ended
+ * refreshes the metrics projection itself, as no settle for that turn is still
+ * to come. Also owns the timeline-observer path (`recordTimelineEvent`) for
+ * events that persist and broadcast unchanged.
  */
 export class SandboxStreamingEventHandler {
   constructor(
@@ -27,7 +27,7 @@ export class SandboxStreamingEventHandler {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly budgetService: SessionBudgetService,
     private readonly usageRepository: UsageRepository,
-    private readonly refreshInactiveMetrics: () => void
+    private readonly refreshMetricsAfterStep: (messageId: string | null) => void
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
@@ -74,7 +74,7 @@ export class SandboxStreamingEventHandler {
         }
         if (persistenceFailure) throw persistenceFailure.error;
       } finally {
-        this.refreshInactiveMetrics();
+        this.refreshMetricsAfterStep(context.messageId);
       }
     }
   }

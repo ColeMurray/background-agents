@@ -551,7 +551,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     updateLastActivity,
     budgetService,
     usageRepository,
-    () => statusService.refreshInactiveMetrics()
+    (messageId) => statusService.refreshMetricsAfterStep(messageId)
   );
   const artifactEventHandler = new SandboxArtifactEventHandler(
     artifactRepository,
