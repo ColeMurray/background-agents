@@ -2503,12 +2503,16 @@ export class SandboxLifecycleManager
     const reference = this.provider.pendingSandboxAllocation?.(config)?.reference;
     while (true) {
       const row = this.storage.getSandbox();
+      const resolvedByBridge =
+        !!row?.modal_object_id &&
+        row.modal_object_id !== reference &&
+        parsePendingVmReference(row.modal_object_id) === null;
       if (
         row?.modal_sandbox_id !== generation.sandboxId ||
         row.created_at !== generation.createdAt ||
         row.fenced ||
-        !["spawning", "connecting"].includes(row.status) ||
-        row.modal_object_id !== reference
+        !["spawning", "connecting", "ready"].includes(row.status) ||
+        (row.modal_object_id !== reference && !resolvedByBridge)
       )
         return null;
       try {

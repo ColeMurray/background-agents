@@ -270,6 +270,38 @@ describe("modal-vm startup resolution", () => {
     expect(f.sandbox.ttyd_token).toBeTruthy();
   });
 
+  it("claims a restore when the bridge resolved its handle before the lost response", async () => {
+    const f = fixture("restore");
+    let rejectRestore!: (error: Error) => void;
+    f.client.restoreSandbox.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (rejectRestore = reject))
+    );
+    const manager = f.makeManager();
+    const restoring = manager.spawnSandbox();
+    await vi.waitFor(() => expect(f.client.restoreSandbox).toHaveBeenCalledOnce());
+    const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
+    manager.onSandboxSocketAttached(generation);
+    await vi.waitFor(() => expect(f.sandbox.modal_object_id).toBe("sb-real"));
+    expect(f.store.read()).toMatchObject({ phase: "restoring", restoreInvoked: true });
+
+    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    f.sandbox.status = "ready";
+    manager.onShutdownGenerationReady({
+      type: "sandbox_generation_ready",
+      generation,
+      sandboxId: generation.sandboxId,
+      timestamp: Date.now(),
+    });
+    rejectRestore(new ModalApiError("pending race", 409, "race_pending"));
+    await restoring;
+
+    expect(f.client.resolveVmSandbox).toHaveBeenCalledTimes(2);
+    expect(f.store.read()).toMatchObject({ phase: "running", providerObjectId: "sb-real" });
+    expect(f.store.read()?.restoreInvoked).toBeUndefined();
+    expect(manager.pushAdmissionDecision()).toBe("ready");
+    expect(f.sandbox.modal_object_id).toBe("sb-real");
+  });
+
   it("does not attach bridge access to a newer generation", async () => {
     const f = fixture();
     f.client.createSandbox.mockImplementationOnce(() => new Promise(() => {}));
