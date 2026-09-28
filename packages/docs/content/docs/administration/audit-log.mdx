@@ -15,8 +15,6 @@ relatedCode:
 
 The audit log is a durable, read-only record of workspace operations and authorization decisions, shown newest first under Settings › Audit log.
 
-![Settings, Audit log: a list of authorization events with actor, resource, request id, reason, and a Structured details toggle](/images/administration/audit-log.webp "Settings › Audit log lists events newest first with the actor, resource, and authorization reason.")
-
 ## Prerequisites
 
 - The `workspace.audit.read` permission. Owners and Administrators have it; Members and Viewers do not, and the Settings entry is hidden for them.
@@ -25,18 +23,18 @@ The audit log is a durable, read-only record of workspace operations and authori
 
 Each event is shown as a card with the action as its heading, the local timestamp and relative time beneath it, and an outcome badge on the right. The card lists four fields, plus a **Structured details** expander with the raw event ID, action, principal kind, and metadata.
 
-| Field          | What it contains                                                                                                                                                                                     |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| When           | The time the event occurred, shown in your local time and as a relative time.                                                                                                                        |
-| Request        | The HTTP request ID, or a synthetic ID for an operator action. Use HTTP request IDs to correlate with support reports and logs.                                                                      |
-| Principal kind | `user`, `service`, or `sandbox`: whether a signed-in person, a bot or operator tool, or a session sandbox acted.                                                                                     |
-| Actor          | A snapshot of the acting user ID, the acting service, or both (a service acting on behalf of a user shows both).                                                                                     |
-| Action         | The operation, for example `workspace.member_role_updated`.                                                                                                                                          |
-| Resource       | The resource type and, when there is one, its ID (for example `user / <id>` or `http_route / /sessions`).                                                                                            |
-| Target user    | The user the operation was about, appended to the resource as `Target user <id>` when present.                                                                                                       |
-| Reason         | A short reason code, such as `member_role_updated`, `member_status_unchanged`, or the denial code for a refused request.                                                                             |
-| Outcome        | Operation outcomes: **Applied**, **No change**, **Denied**, or **Rejected**; authorization decisions: **Allowed** or **Denied**. An allowed decision does not establish that an operation succeeded. |
-| Metadata       | Structured details specific to the action, shown as JSON under **Structured details**.                                                                                                               |
+| Field          | What it contains                                                                                                                                                                                         |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| When           | The time the event occurred, shown in your local time and as a relative time.                                                                                                                            |
+| Request        | The HTTP request ID for request-backed events, or a synthetic ID for non-request events such as database triggers and operator actions. Use HTTP request IDs to correlate with support reports and logs. |
+| Principal kind | `user`, `service`, or `sandbox`: whether a signed-in person, a bot or operator tool, or a session sandbox acted.                                                                                         |
+| Actor          | A snapshot of the acting user ID, the acting service, or both (a service acting on behalf of a user shows both).                                                                                         |
+| Action         | The operation, for example `workspace.member_role_updated`.                                                                                                                                              |
+| Resource       | The resource type and, when there is one, its ID (for example `user / <id>` or `http_route / /sessions`).                                                                                                |
+| Target user    | The user the operation was about, appended to the resource as `Target user <id>` when present.                                                                                                           |
+| Reason         | A short reason code, such as `member_role_updated`, `member_status_unchanged`, or the denial code for a refused request.                                                                                 |
+| Outcome        | Operation outcomes: **Applied**, **No change**, **Denied**, or **Rejected**; authorization decisions: **Allowed** or **Denied**. An allowed decision does not establish that an operation succeeded.     |
+| Metadata       | Structured details specific to the action, shown as JSON under **Structured details**.                                                                                                                   |
 
 Actor and target values are snapshots taken when the event was written. They do not change if the user is later renamed or merged.
 
@@ -72,7 +70,7 @@ If a refresh fails while events are already loaded, a banner reads "Unable to re
 
 **Why a request was denied.** Look for **Authorization denied** events. The Reason field carries the denial code; **Structured details** shows the HTTP method and path, plus the required and effective permissions when the denial includes them. Audit writes can fail, so absence of an event does not prove authorization succeeded.
 
-**Correlating with a support request.** Ask the person for the request ID from the error they saw, then match it against the Request field. Operator actions such as Owner bootstrap instead carry a synthetic request ID.
+**Correlating with a support request.** Ask the person for the request ID from the error they saw, then match it against the Request field. Non-request events such as default-role assignment or Owner bootstrap instead carry a synthetic request ID.
 
 **Confirming an Owner bootstrap.** After an operator runs the bootstrap command, a `workspace.owner_bootstrapped` event with actor `operator-cli` appears with the new Owner as the target user.
 
@@ -89,8 +87,8 @@ If a refresh fails while events are already loaded, a banner reads "Unable to re
 
 </Accordion>
   <Accordion title="An allowed request I expected is missing">
-    Allowed decisions are recorded only for routes gated by management permissions. Reads and
-    routine session traffic do not produce **Authorization allowed** events. Authorization
+    Allowed decisions are recorded for management-permission-gated and bot-service-reserved routes.
+    Reads and routine session traffic do not produce **Authorization allowed** events. Authorization
     decisions, including denials, are written best-effort and may be missing if the write fails.
 
 </Accordion>

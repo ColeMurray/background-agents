@@ -142,7 +142,7 @@ When any of these trips:
 
 Two timers end a sandbox that is not failing:
 
-- **Inactivity.** With no client connected, an idle sandbox is stopped after the inactivity timeout (your operator sets `SANDBOX_INACTIVITY_TIMEOUT_MS`; the default is 10 minutes). A connected client extends the timer and receives a warning instead. Snapshot-based backends preserve state at shutdown; persistent backends stop, pause, or hibernate the retained sandbox. The sandbox shows Stopped and resumes on your next prompt.
+- **Inactivity.** With no client connected, an idle sandbox is stopped after the inactivity timeout (your operator sets `SANDBOX_INACTIVITY_TIMEOUT_MS`; the default is 10 minutes). A connected client extends the timer and receives a warning instead. Modal, modal-vm, Vercel, and OpenComputer attempt to save state at confirmed shutdown; Daytona and E2B stop or pause the retained sandbox. The sandbox shows Stopped and can recover on your next prompt.
 - **Lifetime.** Settings › Sandbox has a **Session Timeout (minutes)** field that requests a lifetime for each sandbox. Leave it blank to inherit a parent setting or the provider default. The field appears only for providers that honor it (Modal, modal-vm, Vercel, OpenComputer, E2B; not Daytona).
 - **Final snapshot buffer.** Also under Settings › Sandbox, **Final snapshot buffer (minutes)** reserves time before provider expiry to stop work, preserve the filesystem, and retire the sandbox. Default 10 minutes, minimum 5.
 
@@ -164,10 +164,11 @@ Saved filesystem state includes installed dependencies, built artifacts, and unc
 
 Not every provider restores from a saved filesystem:
 
-| Provider                   | Resume model                                                                                                                                                      |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Modal, modal-vm, Vercel    | A saved filesystem snapshot can be restored into a new sandbox after shutdown. Modal can also snapshot after a turn; modal-vm and Vercel skip those captures.     |
-| Daytona, E2B, OpenComputer | The retained sandbox normally resumes in place after being stopped (Daytona), paused (E2B), or hibernated (OpenComputer). OpenComputer also supports checkpoints. |
+| Provider                | Resume model                                                                                                                                                                                   |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modal, modal-vm, Vercel | A saved filesystem snapshot can be restored into a new sandbox after shutdown. Modal can also snapshot after a turn; modal-vm and Vercel skip those captures.                                  |
+| OpenComputer            | A confirmed shutdown checkpoints state and retires the source; the next prompt restores into a new sandbox. Without a saved shutdown receipt, a retained hibernated sandbox can wake in place. |
+| Daytona, E2B            | The retained sandbox resumes in place after being stopped (Daytona) or paused (E2B).                                                                                                           |
 
 The status labels are the same on both models. See [Sandbox providers](/configure/sandbox-providers).
 

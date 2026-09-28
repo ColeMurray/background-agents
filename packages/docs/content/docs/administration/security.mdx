@@ -87,7 +87,7 @@ Git credentials are brokered on demand. The helper authorizes HTTPS requests for
 | Fresh or prebuilt image | Fetches a short-lived credential from the control plane through a git credential helper. No token is embedded in the environment or the remote URL. |
 | Snapshot restore        | May still receive an environment-token fallback so older snapshots can boot. Modal snapshot restores mint a fresh fallback token on restore.        |
 
-Pull requests use the prompting user's GitHub OAuth token when it is available. If the token is missing, expired and cannot be refreshed, or cannot be decrypted or retrieved, creation falls back to the App identity even for a GitHub-signed-in user. Google-signed-in users without a GitHub token also use the App. Branch pushes use App credentials regardless of who opens the pull request.
+Pull requests use the prompting user's GitHub OAuth token when it is available. A missing token, failed refresh or decryption, or an ordinary retrieval failure falls back to the App identity even for a GitHub-signed-in user. Unexpected token-resolution errors fail PR creation instead. Google-signed-in users without a GitHub token also use the App. Branch pushes use App credentials regardless of who opens the pull request.
 
 ## Secrets and provider accounts
 
@@ -117,9 +117,9 @@ Content that arrives from outside the workspace is treated as data, not instruct
 
 ## Human approval remains authoritative
 
-The built-in pull-request flow opens PRs but does not merge them. The sandbox's `gh` wrapper blocks `gh pr create` (and `gh pr new`), not `gh pr merge`: an agent with usable GitHub credentials could attempt a merge through the CLI if GitHub permissions and repository rules allow it. Configure branch protection, required reviews, and CI as your merge gate. When a pull request is opened as the prompting user, GitHub will not let that user approve their own work.
+The built-in pull-request flow opens PRs but does not merge them. The sandbox's `gh` wrapper blocks `gh pr create` (and `gh pr new`), not `gh pr merge`: unless a user supplies their own token, the CLI uses a brokered GitHub App installation token, not the prompting user's OAuth permissions. An agent could merge through the CLI if the App's permissions and repository rules allow it. Merge outside the sandbox by default; enforce branch protection, required reviews, and CI in GitHub. When a pull request is opened as the prompting user, GitHub will not let that user approve their own work.
 
-Attribution is not authorization. Commits carry the prompting user as author when their Git identity is available; otherwise they use the agent identity. Sessions record their creator and participants, but those labels record who asked for the work. Whether the work is accepted is decided by your review process, not by OpenInspect.
+Attribution is not authorization. Commits carry the prompting user as author when their Git identity is available; otherwise they use the configured Git user or, with signing enabled, the signing account. Sessions record their creator and participants, but those labels record who asked for the work. Whether the work is accepted is decided by your review process, not by OpenInspect.
 
 ## Pre-production checklist
 

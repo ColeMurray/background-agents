@@ -18,8 +18,6 @@ relatedCode:
 
 The Analytics page in the sidebar shows usage across sessions, repositories, and users for a chosen window, plus outcomes for the pull requests those sessions opened.
 
-![The Analytics page with time range buttons, total sessions, active users, total cost, average cost per session, a status mix, and charts](/images/administration/analytics.webp "Analytics: totals, status mix, sessions over time by user, and sessions by repository for the selected range.")
-
 ## Who can view it
 
 Every role can open Analytics; it requires only `analytics.read`, which Viewers have. The page refreshes itself every 30 seconds.
@@ -32,7 +30,7 @@ The window is the last N days ending now. Session metrics count sessions **creat
 
 ## Which sessions are counted
 
-The **Scope** control offers **Human** (the default: sessions started by people, including via Slack, Linear, or GitHub), **Agents** (sessions spawned by other sessions), **Automations** (sessions started by automations), and **All** (every session). It filters session cards, charts, and breakdowns; the automation breakdown appears for Automations and All. The Pull Requests section is different: it counts every pull request created through OpenInspect regardless of session scope, including automation runs, and shows where they came from under **By Source**.
+The **Scope** control offers **Human** (the default: sessions with `user`, `slack-bot`, `linear-bot`, or `github-bot` spawn sources, including bot-triggered sessions), **Agents** (sessions spawned by other sessions), **Automations** (sessions started by automations), and **All** (every session). It filters session cards, charts, and breakdowns; the automation breakdown appears for Automations and All. The Pull Requests section is different: it counts every pull request created through OpenInspect regardless of session scope, including automation runs, and shows where they came from under **By Source**.
 
 The header carries an **Includes legacy sessions** badge. Older sessions recorded before cost, pull request, and duration values were tracked are still counted, and the page notes that they may show zero for those values. PR counts reflect pull requests created through OpenInspect's own pull-request flow.
 

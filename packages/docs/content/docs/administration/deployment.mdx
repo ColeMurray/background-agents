@@ -29,6 +29,8 @@ This page orients an operator: the parts of a deployment, the decisions made onc
 
 Every client sees the same session state because state lives in the control plane, not in the client. A prompt sent from Slack or GitHub shows up on the web in real time.
 
+The AWS control plane can be deployed, but its runbook does not yet provide a supported first-Owner bootstrap. Until that is available, treat AWS as an incomplete deployment path rather than a production-ready alternative.
+
 Terraform creates the infrastructure. The operator creates the accounts, gathers credentials, and supplies the required configuration and secret values for the chosen deployment; the Cloudflare/Vercel and AWS paths use different configuration.
 
 ## Sandbox providers
@@ -63,7 +65,7 @@ Provider differences that users notice (which resource and timeout settings appl
 
 Web branding values are inlined at build time, so a rebrand needs a fresh web build; the bot and control-plane workers read the name at request time.
 
-Changing most of these means updating the relevant deployment configuration or secrets and applying Terraform again. `EXECUTION_TIMEOUT_MS` is set in the control plane's environment.
+For the Cloudflare/Vercel path, update the relevant configuration or secrets and apply Terraform. On AWS, changing an SSM secret requires `systemctl restart open-inspect` to load it into the running service; changing a `config` entry requires `terraform apply` and then that restart. `EXECUTION_TIMEOUT_MS` is set in the control plane's environment.
 
 ## Initial Owner bootstrap
 

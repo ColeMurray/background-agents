@@ -22,7 +22,7 @@ This page walks through the first pull request a session opens for you, from the
 
 - A session targeting at least one repository. Sessions started with **No repository** cannot open pull requests.
 - For a GitHub repository, the deployment's GitHub App is installed on it. The App pushes the branch.
-- To have a GitHub pull request authored as you, sign in with GitHub. If no OAuth token is returned at creation time, the App creates it instead; token retrieval errors or a token rejected by GitHub can cause creation to fail rather than fall back.
+- To have a GitHub pull request authored as you, sign in with GitHub. If no OAuth token is returned at creation time, including an ordinary retrieval failure, the App creates it instead; an unexpected token-resolution error or a token rejected by GitHub can cause creation to fail rather than fall back.
 
 ## Pick a low-risk first task
 

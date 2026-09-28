@@ -36,7 +36,7 @@ Yes. Each session has its own sandbox. Cost limits apply per session. See [Sessi
 
 ### Why did my session start from a snapshot?
 
-On Modal, a snapshot may be taken after a completed turn, even if execution failed. Modal, modal-vm, and Vercel can restore a saved snapshot after shutdown; Vercel and modal-vm skip per-turn snapshots. OpenComputer normally wakes its retained sandbox, and Daytona and E2B resume theirs in place. Saved work includes uncommitted changes. An incompatible or unknown-version old snapshot is held rather than restored or replaced with a fresh checkout. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+On Modal, a snapshot may be taken after a completed turn, even if execution failed. Modal, modal-vm, Vercel, and OpenComputer can restore saved state after confirmed shutdown; Vercel and modal-vm skip per-turn snapshots. OpenComputer can also wake a retained sandbox if no saved shutdown receipt controls recovery. Daytona and E2B resume theirs in place. Saved work includes uncommitted changes. An incompatible or unknown-version old snapshot is held rather than restored or replaced with a fresh checkout. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 ### Why is setup.sh not running?
 
@@ -56,7 +56,7 @@ The boot budget (30 minutes by default), the 4-minute connect watchdog, or the 9
 
 ### Can the agent merge its own PR?
 
-There is no dedicated merge tool; the pull-request tool creates and updates PRs. The agent can still run `gh pr merge` from the sandbox if its GitHub credentials have permission. Repository review requirements and branch protections still apply. Review the PR before asking the agent to merge it. See [Reviewing changes](/sessions/reviewing-changes).
+There is no dedicated merge tool; the pull-request tool creates and updates PRs. The agent can still run `gh pr merge` from the sandbox, normally with the shared GitHub App installation token rather than your OAuth identity. If the App has permission, only GitHub's repository rules prevent that merge. Review and merge outside the sandbox by default, and enforce branch protection and required reviews in GitHub. See [Reviewing changes](/sessions/reviewing-changes).
 
 ## Configuration
 

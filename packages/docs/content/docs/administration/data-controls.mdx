@@ -37,7 +37,7 @@ What archiving does:
 - The session's status becomes `archived`. It disappears from the inbox and from the default sessions list, which exclude archived sessions.
 - The session can no longer be prompted. Archived is not a promptable status, and follow-ups are refused until the session is restored.
 - The session's history, diffs, pull requests, and attribution are kept.
-- Archiving requests a preserve-and-stop shutdown for the sandbox, saving its state for later use rather than leaving it running until its inactivity timeout. Queued or running work must finish or be stopped before archiving.
+- Archiving requests a preserve-and-stop shutdown rather than leaving the sandbox running until its inactivity timeout. State capture and provider shutdown may finish after the archive request returns, and either may fail. Queued or running work must finish or be stopped before archiving.
 
 Two situations are refused:
 

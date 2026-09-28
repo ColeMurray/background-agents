@@ -97,7 +97,7 @@ What a session works on, chosen when it is created: a single repository, an ad-h
 A personal saved subset of shared managed skills, selectable in the new-session skill picker. Entries that are disabled or not assigned to the chosen target are ignored. See [Managed skills](/configure/managed-skills).
 
 **Snapshot**
-A saved copy of sandbox state. Modal may snapshot after a completed turn, including one that failed, and snapshot-based backends attempt to preserve state at shutdown; Vercel and modal-vm skip per-turn snapshots. OpenComputer can checkpoint state but normally resumes its retained sandbox in place. Failed boots never produce a snapshot. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+A saved copy of sandbox state. Modal may snapshot after a completed turn, including one that failed, and snapshot-based backends attempt to preserve state at shutdown; Vercel and modal-vm skip per-turn snapshots. OpenComputer's confirmed shutdown checkpoints state for restore into a new sandbox; it may also wake a retained sandbox when there is no saved shutdown receipt. Failed boots never produce a snapshot. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 **Spend limit**
 The maximum reported cost in USD a session may accumulate, set as the sandbox setting `maxSessionCostUsd` (blank means no limit) or overridden for one session from the Budget sidebar section. See [Spend limits](/sessions/spend-limits).
