@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   canEditTeam: false,
   teamsError: false,
+  teamsLoading: false,
 }));
 const SHELL_FIXTURE_DEFAULTS = {
   isMobile: false,
@@ -46,7 +47,7 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 vi.mock("@/hooks/use-teams", () => ({
   useMeTeams: () => ({
     teams: mocks.canEditTeam ? [{ capabilities: { canEditMetadata: true } }] : [],
-    loading: false,
+    loading: mocks.teamsLoading,
     error: mocks.teamsError ? new Error("Unavailable") : null,
   }),
 }));
@@ -56,6 +57,7 @@ beforeEach(() => {
   mocks.permissions = [...PERMISSION_IDS];
   mocks.canEditTeam = false;
   mocks.teamsError = false;
+  mocks.teamsLoading = false;
   mocks.replace.mockClear();
   vi.stubGlobal("matchMedia", () => ({
     matches: mocks.isMobile,
@@ -131,6 +133,13 @@ describe("SettingsShell", () => {
       "aria-current",
       "page"
     );
+    expect(screen.getByText("Integration settings")).toBeInTheDocument();
+  });
+
+  it("does not block unrelated settings while team memberships load", () => {
+    mocks.pathname = "/settings/integrations/github";
+    mocks.teamsLoading = true;
+    render(<SettingsShell>Integration settings</SettingsShell>);
     expect(screen.getByText("Integration settings")).toBeInTheDocument();
   });
 

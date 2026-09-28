@@ -17,7 +17,7 @@ export default function TeamDetailPage() {
   ) : error || !team ? (
     <ErrorBanner>Team not found.</ErrorBanner>
   ) : (
-    <TeamDetail key={`${team.id}:${team.updatedAt}`} team={team} />
+    <TeamDetail key={team.id} team={team} />
   );
 
   if (isMobile) {

@@ -12,10 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function TeamsSettings() {
-  const { authorization, hasPermission } = useCurrentUserAuthorization();
-  const allTeams =
-    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
-  const { teams, loading, error, createTeam } = useTeams(allTeams);
+  const { hasPermission } = useCurrentUserAuthorization();
+  const { teams, loading, error, createTeam } = useTeams();
   const canCreate = hasPermission("workspace.members.manage");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");

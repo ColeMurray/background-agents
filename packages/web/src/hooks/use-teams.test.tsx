@@ -26,7 +26,7 @@ describe("team hooks", () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ error: "Team slug already exists", code: "slug_taken" }, { status: 409 })
     );
-    const { result } = renderHook(() => useTeams(false), { wrapper });
+    const { result } = renderHook(useTeams, { wrapper });
     await expect(
       act(() => result.current.createTeam({ slug: "design", name: "Design" }))
     ).rejects.toThrow("Team slug already exists (slug_taken)");
@@ -79,13 +79,13 @@ describe("team hooks", () => {
     });
   });
 
-  it("loads a lead's memberships without requesting the sessions.read-gated list", async () => {
+  it("loads a lead through the single settings list endpoint", async () => {
     vi.mocked(useAuthSession).mockReturnValue({
       data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
       status: "authenticated",
     });
     vi.mocked(browserApiFetch).mockImplementation(async (path) =>
-      path === "/api/me/teams"
+      path === "/api/teams"
         ? Response.json({
             teams: [
               {
@@ -118,9 +118,88 @@ describe("team hooks", () => {
           })
         : Response.json({ error: "Forbidden" }, { status: 403 })
     );
-    const { result } = renderHook(() => useTeams(false), { wrapper });
+    const { result } = renderHook(useTeams, { wrapper });
     await waitFor(() => expect(result.current.teams[0]?.name).toBe("Design"));
-    expect(browserApiFetch).toHaveBeenCalledWith("/api/me/teams");
-    expect(browserApiFetch).not.toHaveBeenCalledWith("/api/teams");
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/teams");
+  });
+
+  it("does not report a committed creation as failed when the list refresh fails", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    let loaded = false;
+    const created = {
+      id: "team_design",
+      slug: "design",
+      name: "Design",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "workspace",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      memberCount: 1,
+      capabilities: {
+        canJoin: false,
+        canLeave: false,
+        canEditMetadata: true,
+        canManageMembers: true,
+        canManageRepositories: true,
+        canManageBindings: true,
+        canManageAutomations: true,
+        canManageSecrets: true,
+        canArchive: true,
+      },
+    };
+    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+      if (init?.method === "POST") return Response.json(created, { status: 201 });
+      if (path === "/api/teams" && !loaded) {
+        loaded = true;
+        return Response.json({ teams: [] });
+      }
+      return Response.json({ error: "Unavailable" }, { status: 503 });
+    });
+    const { result } = renderHook(useTeams, { wrapper });
+    await waitFor(() => expect(loaded).toBe(true));
+    await expect(
+      act(() => result.current.createTeam({ slug: "design", name: "Design" }))
+    ).resolves.toMatchObject({ id: created.id });
+    expect(result.current.teams).toEqual([expect.objectContaining({ id: created.id })]);
+  });
+
+  it("does not report a committed removal as failed when access to members disappears", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    let loaded = false;
+    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (path === "/api/teams/team_design/members" && !loaded) {
+        loaded = true;
+        return Response.json({
+          members: [
+            {
+              teamId: "team_design",
+              userId: "user_one",
+              role: "member",
+              source: "manual",
+              createdAt: 1,
+              displayName: "Ada",
+              email: "ada@example.com",
+              avatarUrl: null,
+            },
+          ],
+        });
+      }
+      return Response.json({ error: "Not found" }, { status: 404 });
+    });
+    const { result } = renderHook(() => useTeamMembers("team_design"), { wrapper });
+    await waitFor(() => expect(result.current.members).toHaveLength(1));
+    await expect(act(() => result.current.removeMember("user_one"))).resolves.toBeUndefined();
+    expect(result.current.members).toEqual([]);
   });
 });

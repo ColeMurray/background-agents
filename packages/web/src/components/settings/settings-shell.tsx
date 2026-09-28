@@ -41,7 +41,13 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
     requestedCategory === "teams" && !!teamsError && !hasPermission("workspace.members.manage");
 
   useEffect(() => {
-    if (isHydrated && !loading && !teamsLoading && !teamLookupFailed && categoryRedirectRequired) {
+    if (
+      isHydrated &&
+      !loading &&
+      !(requestedCategory === "teams" && teamsLoading) &&
+      !teamLookupFailed &&
+      categoryRedirectRequired
+    ) {
       router.replace(`/settings?tab=${activeCategory}`);
     }
   }, [
@@ -49,6 +55,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
     categoryRedirectRequired,
     isHydrated,
     loading,
+    requestedCategory,
     teamLookupFailed,
     teamsLoading,
     router,
@@ -62,7 +69,12 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isHydrated || loading || teamsLoading || categoryRedirectRequired) {
+  if (
+    !isHydrated ||
+    loading ||
+    (requestedCategory === "teams" && teamsLoading) ||
+    categoryRedirectRequired
+  ) {
     return <main className="h-dvh overflow-hidden bg-background" aria-busy="true" />;
   }
 

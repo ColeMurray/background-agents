@@ -121,7 +121,7 @@ function SettingsPageContent() {
     setMobileView("list");
   }, [hasPermission, canEditTeam, isMobile, repoImagesEnabled, tabParam]);
 
-  if (loading || teamsLoading) return null;
+  if (loading || (tabParam === "teams" && teamsLoading)) return null;
   const renderedCategory = resolveSettingsCategory(
     activeCategory,
     repoImagesEnabled,

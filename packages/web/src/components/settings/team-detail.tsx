@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { updateTeamRequestSchema } from "@open-inspect/shared/types/teams";
 import type { TeamResponse } from "@/hooks/use-teams";
 import { useTeam, useTeamMembers } from "@/hooks/use-teams";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
@@ -10,17 +11,46 @@ import { Label } from "@/components/ui/label";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { TeamMembersTable } from "./team-members-table";
 
+type TeamDraft = Pick<TeamResponse, "name" | "slug" | "joinPolicy" | "defaultVisibility"> & {
+  description: string;
+};
+
+function toDraft(team: TeamResponse): TeamDraft {
+  return {
+    name: team.name,
+    slug: team.slug,
+    description: team.description ?? "",
+    joinPolicy: team.joinPolicy,
+    defaultVisibility: team.defaultVisibility,
+  };
+}
+
+function sameDraft(a: TeamDraft, b: TeamDraft): boolean {
+  return (
+    a.name === b.name &&
+    a.slug === b.slug &&
+    a.description === b.description &&
+    a.joinPolicy === b.joinPolicy &&
+    a.defaultVisibility === b.defaultVisibility
+  );
+}
+
 export function TeamDetail({ team }: { team: TeamResponse }) {
   const capabilities = useTeamCapabilities(team);
   const { updateTeam, changeArchive } = useTeam(team.id);
   const { members, loading, error } = useTeamMembers(team.id);
-  const [name, setName] = useState(team.name);
-  const [slug, setSlug] = useState(team.slug);
-  const [description, setDescription] = useState(team.description ?? "");
-  const [joinPolicy, setJoinPolicy] = useState(team.joinPolicy);
-  const [visibility, setVisibility] = useState(team.defaultVisibility);
+  const [editor, setEditor] = useState(() => ({ saved: toDraft(team), draft: toDraft(team) }));
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const incoming = toDraft(team);
+    setEditor((current) =>
+      sameDraft(current.saved, current.draft) && !sameDraft(current.saved, incoming)
+        ? { saved: incoming, draft: incoming }
+        : current
+    );
+  }, [team]);
 
   async function run(action: () => Promise<unknown>) {
     setMessage(null);
@@ -37,15 +67,29 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!capabilities.canEditMetadata || saving) return;
-    void run(() =>
-      updateTeam({
-        name: name.trim(),
-        slug: slug.trim(),
-        description: description.trim() || null,
-        joinPolicy,
-        defaultVisibility: visibility,
-      })
-    );
+    const { saved, draft } = editor;
+    const patch = {
+      ...(draft.name !== saved.name ? { name: draft.name.trim() } : {}),
+      ...(draft.slug !== saved.slug ? { slug: draft.slug.trim() } : {}),
+      ...(draft.description !== saved.description
+        ? { description: draft.description.trim() || null }
+        : {}),
+      ...(draft.joinPolicy !== saved.joinPolicy ? { joinPolicy: draft.joinPolicy } : {}),
+      ...(draft.defaultVisibility !== saved.defaultVisibility
+        ? { defaultVisibility: draft.defaultVisibility }
+        : {}),
+    };
+    const parsed = updateTeamRequestSchema.safeParse(patch);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      setMessage(`${issue.path.join(".")}: ${issue.message}`);
+      return;
+    }
+    if (Object.keys(parsed.data).length === 0) return;
+    void run(async () => {
+      const updated = toDraft(await updateTeam(parsed.data));
+      setEditor({ saved: updated, draft: updated });
+    });
   }
 
   return (
@@ -77,18 +121,28 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
             <Label htmlFor="detail-name">Name</Label>
             <Input
               id="detail-name"
-              value={name}
+              value={editor.draft.name}
               disabled={!capabilities.canEditMetadata || saving}
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) =>
+                setEditor((current) => ({
+                  ...current,
+                  draft: { ...current.draft, name: event.target.value },
+                }))
+              }
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="detail-slug">Slug</Label>
             <Input
               id="detail-slug"
-              value={slug}
+              value={editor.draft.slug}
               disabled={!capabilities.canEditMetadata || saving}
-              onChange={(event) => setSlug(event.target.value)}
+              onChange={(event) =>
+                setEditor((current) => ({
+                  ...current,
+                  draft: { ...current.draft, slug: event.target.value },
+                }))
+              }
             />
           </div>
         </div>
@@ -96,9 +150,14 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
           <Label htmlFor="team-description">Description</Label>
           <textarea
             id="team-description"
-            value={description}
+            value={editor.draft.description}
             disabled={!capabilities.canEditMetadata || saving}
-            onChange={(event) => setDescription(event.target.value)}
+            onChange={(event) =>
+              setEditor((current) => ({
+                ...current,
+                draft: { ...current.draft, description: event.target.value },
+              }))
+            }
             className="min-h-20 w-full rounded border border-border bg-background p-2 text-sm disabled:opacity-50"
           />
         </div>
@@ -107,10 +166,16 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
             <Label htmlFor="join-policy">Join policy</Label>
             <select
               id="join-policy"
-              value={joinPolicy}
+              value={editor.draft.joinPolicy}
               disabled={!capabilities.canEditMetadata || saving}
               onChange={(event) =>
-                setJoinPolicy(event.target.value === "open" ? "open" : "invite_only")
+                setEditor((current) => ({
+                  ...current,
+                  draft: {
+                    ...current.draft,
+                    joinPolicy: event.target.value === "open" ? "open" : "invite_only",
+                  },
+                }))
               }
               className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
@@ -122,16 +187,21 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
             <Label htmlFor="default-visibility">Default visibility</Label>
             <select
               id="default-visibility"
-              value={visibility}
+              value={editor.draft.defaultVisibility}
               disabled={!capabilities.canEditMetadata || saving}
               onChange={(event) =>
-                setVisibility(
-                  event.target.value === "team"
-                    ? "team"
-                    : event.target.value === "private"
-                      ? "private"
-                      : "workspace"
-                )
+                setEditor((current) => ({
+                  ...current,
+                  draft: {
+                    ...current.draft,
+                    defaultVisibility:
+                      event.target.value === "team"
+                        ? "team"
+                        : event.target.value === "private"
+                          ? "private"
+                          : "workspace",
+                  },
+                }))
               }
               className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >

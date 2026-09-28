@@ -18,7 +18,10 @@ import { matchesSearchTerms } from "@/lib/search";
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 type SettingsPermissionPredicate = PermissionId | { allOf: readonly PermissionId[] };
-type SettingsVisibility = { public: true } | { anyOf: readonly SettingsPermissionPredicate[] };
+type SettingsVisibilityPredicate =
+  | SettingsPermissionPredicate
+  | { teamCapability: "canEditMetadata" };
+type SettingsVisibility = { public: true } | { anyOf: readonly SettingsVisibilityPredicate[] };
 export type SettingsCapability = "unarchiveSessions";
 
 interface SettingsItemDefinition {
@@ -44,7 +47,7 @@ function allOf(...permissions: PermissionId[]): SettingsPermissionPredicate {
   return { allOf: permissions };
 }
 
-function anyOf(...predicates: SettingsPermissionPredicate[]): SettingsVisibility {
+function anyOf(...predicates: SettingsVisibilityPredicate[]): SettingsVisibility {
   return { anyOf: predicates };
 }
 
@@ -143,7 +146,7 @@ export const SETTINGS_GROUPS = [
         description: "Manage team membership and defaults",
         keywords: "teams members leads visibility",
         icon: DataControlsIcon,
-        visibility: anyOf("workspace.members.manage"),
+        visibility: anyOf("workspace.members.manage", { teamCapability: "canEditMetadata" }),
         panel: lazyPanel(() =>
           import("./teams-settings").then(({ TeamsSettings }) => TeamsSettings)
         ),
@@ -277,12 +280,13 @@ export function canViewSettingsCategory(
 ): boolean {
   const visibility = getSettingsItem(category).visibility;
   return (
-    (category === "teams" && canEditTeam) ||
     "public" in visibility ||
     visibility.anyOf.some((predicate) =>
       typeof predicate === "string"
         ? hasPermission(predicate)
-        : predicate.allOf.every(hasPermission)
+        : "allOf" in predicate
+          ? predicate.allOf.every(hasPermission)
+          : canEditTeam
     )
   );
 }

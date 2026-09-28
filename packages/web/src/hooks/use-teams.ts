@@ -18,7 +18,7 @@ import { useAuthSession } from "@/lib/auth-session";
 
 const TEAMS_KEY = "/api/teams";
 const ME_TEAMS_KEY = "/api/me/teams";
-// Older or incomplete responses remain readable, but cannot authorize controls.
+// Missing capabilities leave the team visible while every team action stays disabled.
 const teamSchema = teamResponseSchema.extend({
   capabilities: teamResponseSchema.shape.capabilities.optional(),
 });
@@ -73,16 +73,23 @@ export function useMeTeams() {
   return { teams: result.data?.teams ?? [], loading: result.isLoading, error: result.error };
 }
 
-export function useTeams(allTeams: boolean) {
+export function useTeams() {
   const { data: session } = useAuthSession();
   const { mutate } = useSWRConfig();
-  const result = useSWR(session?.user ? (allTeams ? TEAMS_KEY : ME_TEAMS_KEY) : null, () =>
-    allTeams ? get(TEAMS_KEY, teamsSchema) : get(ME_TEAMS_KEY, meTeamsSchema)
-  );
+  const result = useSWR(session?.user ? TEAMS_KEY : null, () => get(TEAMS_KEY, teamsSchema));
 
   async function createTeam(input: z.input<typeof createTeamRequestSchema>) {
     const team = await write(TEAMS_KEY, "POST", input, teamSchema);
-    await Promise.all([mutate(TEAMS_KEY), mutate(ME_TEAMS_KEY)]);
+    await Promise.allSettled([
+      mutate(
+        TEAMS_KEY,
+        (current: z.infer<typeof teamsSchema> | undefined) => ({
+          teams: [...(current?.teams ?? []).filter((existing) => existing.id !== team.id), team],
+        }),
+        { revalidate: false }
+      ),
+      mutate(ME_TEAMS_KEY),
+    ]);
     return team;
   }
 
@@ -100,12 +107,13 @@ export function useTeam(id: string) {
   const key = `/api/teams/${encodeURIComponent(id)}` as const;
   const result = useSWR(session?.user ? key : null, () => get(key, teamSchema));
 
-  async function refresh() {
-    await Promise.all([mutate(key), mutate(TEAMS_KEY), mutate(ME_TEAMS_KEY)]);
-  }
   async function updateTeam(input: z.input<typeof updateTeamRequestSchema>) {
     const team = await write(key, "PATCH", input, teamSchema);
-    await refresh();
+    await Promise.allSettled([
+      mutate(key, team, { revalidate: false }),
+      mutate(TEAMS_KEY),
+      mutate(ME_TEAMS_KEY),
+    ]);
     return team;
   }
   async function changeArchive(archive: boolean) {
@@ -115,7 +123,11 @@ export function useTeam(id: string) {
       undefined,
       teamSchema
     );
-    await refresh();
+    await Promise.allSettled([
+      mutate(key, team, { revalidate: false }),
+      mutate(TEAMS_KEY),
+      mutate(ME_TEAMS_KEY),
+    ]);
     return team;
   }
   return {
@@ -133,21 +145,44 @@ export function useTeamMembers(id: string) {
   const key = `/api/teams/${encodeURIComponent(id)}/members` as const;
   const result = useSWR(session?.user ? key : null, () => get(key, membersSchema));
 
-  async function refresh() {
-    await Promise.all([
-      mutate(key),
+  async function setMember(userId: string, role: TeamRole) {
+    const { member } = await write(
+      `${key}/${encodeURIComponent(userId)}`,
+      "PUT",
+      { role },
+      z.object({ member: teamMemberSchema })
+    );
+    await Promise.allSettled([
+      mutate(
+        key,
+        (current: z.infer<typeof membersSchema> | undefined) => ({
+          members: [
+            ...(current?.members ?? []).filter((existing) => existing.userId !== userId),
+            member,
+          ],
+        }),
+        { revalidate: false }
+      ),
       mutate(`/api/teams/${encodeURIComponent(id)}`),
       mutate(TEAMS_KEY),
       mutate(ME_TEAMS_KEY),
     ]);
   }
-  async function setMember(userId: string, role: TeamRole) {
-    await write(`${key}/${encodeURIComponent(userId)}`, "PUT", { role });
-    await refresh();
-  }
   async function removeMember(userId: string) {
     await write(`${key}/${encodeURIComponent(userId)}`, "DELETE");
-    await refresh();
+    await Promise.allSettled([
+      mutate(
+        key,
+        (current: z.infer<typeof membersSchema> | undefined) =>
+          current
+            ? { members: current.members.filter((member) => member.userId !== userId) }
+            : current,
+        { revalidate: false }
+      ),
+      mutate(`/api/teams/${encodeURIComponent(id)}`),
+      mutate(TEAMS_KEY),
+      mutate(ME_TEAMS_KEY),
+    ]);
   }
   return {
     members: result.data?.members ?? [],

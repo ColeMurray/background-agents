@@ -17,8 +17,6 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   setMember: vi.fn(),
   hasPermission: false,
-  roleKey: "member" as string,
-  allTeams: false,
   teams: [] as Array<{
     id: string;
     slug: string;
@@ -31,14 +29,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     hasPermission: () => mocks.hasPermission,
-    authorization: { role: { key: mocks.roleKey } },
   }),
 }));
 vi.mock("@/hooks/use-teams", () => ({
-  useTeams: (allTeams: boolean) => {
-    mocks.allTeams = allTeams;
-    return { teams: mocks.teams, loading: false, error: null, createTeam: mocks.create };
-  },
+  useTeams: () => ({ teams: mocks.teams, loading: false, error: null, createTeam: mocks.create }),
   useTeam: () => ({ team: undefined, loading: false, error: null, updateTeam: mocks.update }),
   useTeamMembers: () => ({
     members: [],
@@ -89,7 +83,6 @@ const member: TeamMember = {
 
 beforeEach(() => {
   mocks.hasPermission = true;
-  mocks.roleKey = "member";
   mocks.teams = [];
 });
 afterEach(() => {
@@ -98,18 +91,13 @@ afterEach(() => {
 });
 
 describe("Teams settings", () => {
-  it("shows a lead's membership list with a singular count and reserves the all-teams list for admins", () => {
+  it("shows a lead's team with a singular member count", () => {
     mocks.hasPermission = false;
-    mocks.roleKey = "custom";
     mocks.teams = [
       { id: team.id, slug: team.slug, name: team.name, memberCount: 1, archivedAt: null },
     ];
-    const { rerender } = render(<TeamsSettings />);
-    expect(mocks.allTeams).toBe(false);
+    render(<TeamsSettings />);
     expect(screen.getByText("1 member - Active")).toBeInTheDocument();
-    mocks.roleKey = "administrator";
-    rerender(<TeamsSettings />);
-    expect(mocks.allTeams).toBe(true);
   });
 
   it("validates slug and surfaces the slug_taken conflict", async () => {
@@ -142,6 +130,42 @@ describe("Teams settings", () => {
     render(<TeamDetail team={{ ...team, capabilities }} />);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Archive team" })).toBeEnabled();
+  });
+
+  it("preserves dirty edits across lifecycle refresh and PATCHes only changed fields", async () => {
+    mocks.update.mockResolvedValue({ ...team, name: "Renamed", capabilities });
+    const { rerender } = render(<TeamDetail team={{ ...team, capabilities }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
+    rerender(
+      <TeamDetail
+        team={{
+          ...team,
+          capabilities,
+          archivedAt: 2,
+          updatedAt: 2,
+          description: "Updated elsewhere",
+        }}
+      />
+    );
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Renamed");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ name: "Renamed" }));
+  });
+
+  it("adopts external updates while clean and validates a changed slug", async () => {
+    const { rerender } = render(<TeamDetail team={{ ...team, capabilities }} />);
+    rerender(<TeamDetail team={{ ...team, name: "New name", updatedAt: 2, capabilities }} />);
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("New name")
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), {
+      target: { value: "Bad Slug" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(screen.getByText(/slug/i, { selector: "div" })).toBeInTheDocument();
   });
 
   it("does not offer open-team joining from a membership-only settings page", () => {
