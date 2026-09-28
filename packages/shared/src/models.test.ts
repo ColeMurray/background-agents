@@ -204,6 +204,13 @@ describe("model utilities", () => {
   it("resolves models using the shared enabled-model fallback policy", () => {
     expect(
       resolveEnabledModel({
+        model: "openai/gpt-5.3-codex-spark",
+        fallbackModel: "anthropic/claude-sonnet-4-6",
+        enabledModels: DEFAULT_ENABLED_MODELS,
+      })
+    ).toBe("openai/gpt-6-sol");
+    expect(
+      resolveEnabledModel({
         model: "claude-opus-4-8",
         fallbackModel: "gpt-5.4",
         enabledModels: ["openai/gpt-5.2", "anthropic/claude-opus-4-8", "openai/gpt-5.4"],
@@ -320,7 +327,14 @@ describe("model utilities", () => {
 
   it("returns canonical valid models or the default fallback", () => {
     expect(getValidModelOrDefault("claude-sonnet-4-6")).toBe("anthropic/claude-sonnet-4-6");
-    expect(getValidModelOrDefault("gpt-5.3-codex")).toBe(DEFAULT_MODEL);
+    for (const model of [
+      "gpt-5.3-codex",
+      "openai/gpt-5.3-codex",
+      "gpt-5.3-codex-spark",
+      "openai/gpt-5.3-codex-spark",
+    ]) {
+      expect(getValidModelOrDefault(model)).toBe("openai/gpt-6-sol");
+    }
     expect(getValidModelOrDefault("gpt-5.2-codex")).toBe(DEFAULT_MODEL);
     expect(getValidModelOrDefault("invalid-model")).toBe(DEFAULT_MODEL);
     expect(getValidModelOrDefault(undefined)).toBe(DEFAULT_MODEL);

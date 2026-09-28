@@ -191,6 +191,18 @@ describe("resolveStaticTarget", () => {
 });
 
 describe("resolveSessionModelSettings", () => {
+  it("keeps persisted retired Codex defaults on OpenAI", () => {
+    const result = resolveSessionModelSettings({
+      envDefaultModel: "anthropic/claude-sonnet-4-6",
+      configModel: "openai/gpt-5.3-codex-spark",
+      configReasoningEffort: "high",
+      allowUserPreferenceOverride: false,
+      allowLabelModelOverride: false,
+    });
+
+    expect(result).toEqual({ model: "openai/gpt-6-sol", reasoningEffort: "high" });
+  });
+
   it("uses integration model when overrides are disabled", () => {
     const result = resolveSessionModelSettings({
       envDefaultModel: "anthropic/claude-haiku-4-5",

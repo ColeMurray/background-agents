@@ -441,6 +441,14 @@ export function isValidModel(model: string): model is ValidModel {
   return VALID_MODELS.includes(normalizeModelId(model) as ValidModel);
 }
 
+function retiredModelReplacement(model: string): ValidModel | undefined {
+  const normalized = normalizeModelId(model);
+  if (normalized === "openai/gpt-5.3-codex" || normalized === "openai/gpt-5.3-codex-spark") {
+    return "openai/gpt-6-sol";
+  }
+  return undefined;
+}
+
 /** Normalize a list to unique, canonical model IDs that exist in the current catalog. */
 export function normalizeValidModels(modelIds: readonly string[]): ValidModel[] {
   const validModels = new Set<ValidModel>();
@@ -482,7 +490,7 @@ export function resolveEnabledModel(options: {
   const desired =
     options.model && isValidModel(options.model)
       ? (normalizeModelId(options.model) as ValidModel)
-      : fallback;
+      : (options.model && retiredModelReplacement(options.model)) || fallback;
   if (!options.enabledModels) return desired;
 
   const enabledModels = normalizeValidModels(options.enabledModels);
@@ -561,12 +569,12 @@ export function getSubscriptionProviderForModel(modelId: string): SubscriptionPr
 }
 
 /**
- * Get a valid model or fall back to default.
+ * Get a valid model, migrate retired Codex selections, or fall back to default.
  * Accepts both prefixed and bare formats; always returns canonical prefixed format.
  */
 export function getValidModelOrDefault(model: string | undefined | null): ValidModel {
   if (model && isValidModel(model)) {
     return normalizeModelId(model) as ValidModel;
   }
-  return DEFAULT_MODEL;
+  return (model && retiredModelReplacement(model)) || DEFAULT_MODEL;
 }

@@ -4682,6 +4682,38 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
+    it.each(["openai/gpt-5.3-codex", "openai/gpt-5.3-codex-spark"])(
+      "restores a session with retired %s on the OpenAI replacement",
+      async (model) => {
+        const session = createMockSession({ model });
+        const sandbox = createMockSandbox({
+          status: "stopped",
+          snapshot_image_id: "img-abc123",
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+        });
+        const storage = createMockStorage(session, sandbox);
+        const provider = createMockProvider();
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createUnmanagedShutdown(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({ provider: "openai", model: "gpt-6-sol" })
+        );
+        expect(session.model).toBe(model);
+      }
+    );
+
     it("restoreFromSnapshot() passes empty settings when sandbox_settings is null", async () => {
       const session = createMockSession({ sandbox_settings: null });
       const sandbox = createMockSandbox({
