@@ -80,12 +80,17 @@ test("preserves API-key requests if OpenAI authentication switches away from OAu
   assert.deepEqual(await plugin.auth.loader(async () => ({ type: "api" })), {});
 });
 
-test("restores known prices and missing Codex models after the built-in OAuth hook", async () => {
+test("restores known prices and filters retired Codex models after the built-in OAuth hook", async () => {
   const gpt6Ids = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
   const gpt6Models = gpt6Ids.map((id) => [id, { name: id, cost: { input: 0, output: 0 } }]);
-  // OpenCode's built-in hook has already filtered gpt-5.3-codex and zeroed the survivors.
+  // OpenCode's built-in hook has zeroed OAuth prices; it may still expose retired models.
   const provider = {
-    models: { ...Object.fromEntries(gpt6Models), "unsupported-model": { cost: { input: 0 } } },
+    models: {
+      ...Object.fromEntries(gpt6Models),
+      "gpt-5.3-codex": { cost: { input: 0 } },
+      "gpt-5.3-codex-spark": { cost: { input: 0 } },
+      "unsupported-model": { cost: { input: 0 } },
+    },
   };
   await withCatalog(
     {
@@ -106,12 +111,10 @@ test("restores known prices and missing Codex models after the built-in OAuth ho
       assert.equal(priced["gpt-6-sol"].cost.cache.read, 0.3);
       assert.equal(priced["gpt-6-luna"].cost.output, 0.6);
       assert.equal(priced["unsupported-model"], undefined);
-      assert.equal(priced["gpt-5.3-codex"].api.id, "gpt-5.3-codex");
-      assert.equal(priced["gpt-5.3-codex"].cost.input, 2);
-      assert.equal(priced["gpt-5.3-codex"].limit.input, 272_000);
-      assert.equal(priced["gpt-5.3-codex-spark"].cost.output, 16);
+      assert.equal(priced["gpt-5.3-codex"], undefined);
+      assert.equal(priced["gpt-5.3-codex-spark"], undefined);
       assert.equal(provider.models["gpt-6-astra"].cost.input, 0);
-      assert.equal(provider.models["gpt-5.3-codex"], undefined);
+      assert.equal(provider.models["gpt-5.3-codex"].cost.input, 0);
       await plugin.auth.loader(async () => ({ type: "oauth", refresh: "managed" }));
     }
   );
@@ -179,7 +182,7 @@ test("uses only OpenCode's cache and picks up prices when it appears", async () 
     const context = { auth: { type: "oauth" } };
     const missing = await plugin.provider.models(provider, context);
     assert.equal(missing["gpt-6-sol"].cost.input, 0);
-    assert.equal(missing["gpt-5.3-codex"].cost.input, 0);
+    assert.equal(missing["gpt-5.3-codex"], undefined);
     assert.equal(warnings, 1);
 
     await writeFile(

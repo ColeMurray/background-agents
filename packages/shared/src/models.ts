@@ -220,18 +220,6 @@ export const MODEL_CATALOG = [
           default: "medium",
         },
       },
-      {
-        id: "openai/gpt-5.3-codex",
-        name: "GPT 5.3 Codex",
-        description: "Latest codex",
-        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-      },
-      {
-        id: "openai/gpt-5.3-codex-spark",
-        name: "GPT 5.3 Codex Spark",
-        description: "Low-latency codex variant",
-        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
-      },
     ],
   },
   {
@@ -544,7 +532,7 @@ export function isValidReasoningEffort(model: string, effort: string): boolean {
  * @example
  * extractProviderAndModel("anthropic/claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
  * extractProviderAndModel("claude-haiku-4-5") // { provider: "anthropic", model: "claude-haiku-4-5" }
- * extractProviderAndModel("openai/gpt-5.3-codex") // { provider: "openai", model: "gpt-5.3-codex" }
+ * extractProviderAndModel("openai/gpt-6-sol") // { provider: "openai", model: "gpt-6-sol" }
  */
 export function extractProviderAndModel(modelId: string): { provider: string; model: string } {
   const normalized = normalizeModelId(modelId);

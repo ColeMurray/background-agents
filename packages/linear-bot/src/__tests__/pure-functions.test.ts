@@ -198,7 +198,7 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: "high",
       allowUserPreferenceOverride: false,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       labelModel: "anthropic/claude-opus-4-6",
     });
 
@@ -213,11 +213,11 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: null,
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       userReasoningEffort: "xhigh",
     });
 
-    expect(result.model).toBe("openai/gpt-5.3-codex");
+    expect(result.model).toBe("openai/gpt-6-sol");
     expect(result.reasoningEffort).toBe("xhigh");
   });
 
@@ -228,11 +228,11 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: "low",
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: false,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       userReasoningEffort: "xhigh",
     });
 
-    expect(result.model).toBe("openai/gpt-5.3-codex");
+    expect(result.model).toBe("openai/gpt-6-sol");
     expect(result.reasoningEffort).toBe("xhigh");
   });
 
@@ -243,7 +243,7 @@ describe("resolveSessionModelSettings", () => {
       configReasoningEffort: null,
       allowUserPreferenceOverride: true,
       allowLabelModelOverride: true,
-      userModel: "openai/gpt-5.3-codex",
+      userModel: "openai/gpt-6-sol",
       labelModel: "anthropic/claude-opus-4-6",
       userReasoningEffort: "xhigh",
     });

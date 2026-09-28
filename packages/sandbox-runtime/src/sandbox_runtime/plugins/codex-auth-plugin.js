@@ -83,46 +83,6 @@ async function openAiCatalogModels() {
   }
 }
 
-const CODEX_53_MODELS = {
-  "gpt-5.3-codex": {
-    name: "GPT-5.3 Codex",
-    family: "gpt-codex",
-    temperature: true,
-    limit: { context: 400_000, input: 272_000, output: 128_000 },
-  },
-  "gpt-5.3-codex-spark": {
-    name: "GPT-5.3 Codex Spark",
-    family: "gpt-codex-spark",
-    temperature: false,
-    limit: { context: 128_000, input: 100_000, output: 32_000 },
-  },
-};
-
-function injectedCodexModel(modelId, details, cost) {
-  return {
-    id: modelId,
-    providerID: "openai",
-    api: { id: modelId, url: "https://api.openai.com/v1", npm: "@ai-sdk/openai" },
-    name: details.name,
-    family: details.family,
-    capabilities: {
-      temperature: details.temperature,
-      reasoning: true,
-      attachment: true,
-      toolcall: true,
-      input: { text: true, audio: false, image: true, video: false, pdf: true },
-      output: { text: true, audio: false, image: false, video: false, pdf: false },
-      interleaved: false,
-    },
-    cost: cost ?? { input: 0, output: 0, cache: { read: 0, write: 0 } },
-    limit: details.limit,
-    status: "active",
-    options: {},
-    headers: {},
-    release_date: "2026-02-05",
-  };
-}
-
 const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex-max",
   "gpt-5.1-codex-mini",
@@ -134,8 +94,6 @@ const ALLOWED_MODELS = new Set([
   "gpt-6-astra",
   "gpt-6-sol",
   "gpt-6-luna",
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-spark",
   "gpt-5.1-codex",
 ]);
 
@@ -179,15 +137,6 @@ export const CodexAuthProxy = async (input) => {
               return [modelId, cost ? { ...model, cost } : model];
             })
         );
-        for (const [modelId, details] of Object.entries(CODEX_53_MODELS)) {
-          if (!models[modelId]) {
-            models[modelId] = injectedCodexModel(
-              modelId,
-              details,
-              catalogCost(catalog?.[modelId]?.cost)
-            );
-          }
-        }
         return models;
       },
     },
