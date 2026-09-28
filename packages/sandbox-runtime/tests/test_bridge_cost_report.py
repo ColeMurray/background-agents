@@ -96,6 +96,7 @@ class TestExecutionCompleteCostReport:
                 "messageId": "msg-1",
                 "apiEquivalentCostUsd": 0.25,
                 "messageApiEquivalentCostUsd": 0.25,
+                "messageApiEquivalentCostRevision": 1,
                 "messageCostUsd": 0,
             }
 
@@ -104,6 +105,7 @@ class TestExecutionCompleteCostReport:
 
         assert completion["messageCostUsd"] == 0
         assert completion["messageApiEquivalentCostUsd"] == 0.25
+        assert completion["messageApiEquivalentCostRevision"] == 1
 
     @pytest.mark.asyncio
     async def test_carries_the_report_on_failure(self, bridge: AgentBridge):

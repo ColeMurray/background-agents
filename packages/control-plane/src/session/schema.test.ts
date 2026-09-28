@@ -322,8 +322,16 @@ describe("applyMigrations", () => {
       expect(db.prepare("SELECT api_equivalent_cost_usd FROM session").get()).toEqual({
         api_equivalent_cost_usd: 0,
       });
-      expect(db.prepare("SELECT reported_api_equivalent_cost_usd FROM messages").get()).toEqual({
+      expect(
+        db
+          .prepare(
+            "SELECT reported_api_equivalent_cost_usd, reported_api_equivalent_cost_revision, reported_api_equivalent_final FROM messages"
+          )
+          .get()
+      ).toEqual({
         reported_api_equivalent_cost_usd: 0,
+        reported_api_equivalent_cost_revision: 0,
+        reported_api_equivalent_final: 0,
       });
     } finally {
       db.close();

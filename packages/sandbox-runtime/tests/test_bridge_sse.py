@@ -935,6 +935,123 @@ class TestFetchFinalMessageState:
         return bridge
 
     @pytest.mark.asyncio
+    async def test_recovers_missed_parent_and_child_step_costs(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        bridge = bridge_with_mock_client
+        stream = bridge.harness.prompt_stream
+        stream._openai_oauth_managed = True
+        state = make_prompt_state("cp-msg-1", "msg_0001aaaaaa")
+        parent = [
+            {
+                "info": {
+                    "id": "parent-msg",
+                    "role": "assistant",
+                    "parentID": "msg_0001aaaaaa",
+                    "providerID": "anthropic",
+                },
+                "parts": [
+                    {
+                        "id": "parent-step",
+                        "type": "step-finish",
+                        "messageID": "parent-msg",
+                        "sessionID": "oc-session-123",
+                        "cost": 0.25,
+                    },
+                    {
+                        "id": "task-part",
+                        "type": "tool",
+                        "tool": "task",
+                        "callID": "task-1",
+                        "state": {"metadata": {"sessionId": "oc-child"}},
+                    },
+                ],
+            }
+        ]
+        child = [
+            {
+                "info": {
+                    "id": "child-msg",
+                    "role": "assistant",
+                    "providerID": "openai",
+                    "time": {"created": 1000},
+                },
+                "parts": [
+                    {
+                        "id": "child-step",
+                        "type": "step-finish",
+                        "messageID": "child-msg",
+                        "sessionID": "oc-child",
+                        "cost": 0.5,
+                    }
+                ],
+            }
+        ]
+        bridge.http_client.get = AsyncMock(
+            side_effect=[
+                MockResponse(200, parent),
+                MockResponse(200, child),
+            ]
+        )
+
+        events = [event async for event in stream._fetch_final_message_state(state)]
+
+        assert [event["stepId"] for event in events] == ["parent-step", "child-step"]
+        assert events[-1]["messageCostUsd"] == 0.25
+        assert events[-1]["messageApiEquivalentCostUsd"] == 0.5
+        assert events[-1]["messageApiEquivalentCostRevision"] == 1
+        assert events[-1]["isSubtask"] is True
+
+    @pytest.mark.asyncio
+    async def test_final_message_replaces_a_streamed_estimate(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        bridge = bridge_with_mock_client
+        stream = bridge.harness.prompt_stream
+        stream._openai_oauth_managed = True
+        state = make_prompt_state("cp-msg-1", "msg_0001aaaaaa")
+        state.costs.note_provider("parent-msg", "openai")
+        live = stream._handle_part(
+            state,
+            {
+                "id": "step-1",
+                "type": "step-finish",
+                "messageID": "parent-msg",
+                "cost": 0.75,
+            },
+            None,
+        )[0]
+        bridge.http_client.get = AsyncMock(
+            return_value=MockResponse(
+                200,
+                [
+                    {
+                        "info": {
+                            "id": "parent-msg",
+                            "role": "assistant",
+                            "parentID": "msg_0001aaaaaa",
+                            "providerID": "openai",
+                        },
+                        "parts": [
+                            {
+                                "id": "step-1",
+                                "type": "step-finish",
+                                "messageID": "parent-msg",
+                                "cost": 0.5,
+                            }
+                        ],
+                    }
+                ],
+            )
+        )
+
+        events = [event async for event in stream._fetch_final_message_state(state)]
+
+        assert live["messageApiEquivalentCostRevision"] == 1
+        assert events[-1]["messageApiEquivalentCostUsd"] == 0.5
+        assert events[-1]["messageApiEquivalentCostRevision"] == 2
+
+    @pytest.mark.asyncio
     async def test_only_fetches_current_prompt_messages(self, bridge_with_mock_client: AgentBridge):
         """Should only emit text from messages whose parentID matches our opencode_message_id."""
         bridge = bridge_with_mock_client

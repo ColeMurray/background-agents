@@ -160,6 +160,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     apiEquivalentCostUsd: z.number().nonnegative().optional(),
     /** Cumulative API-equivalent estimate of the whole turn. */
     messageApiEquivalentCostUsd: z.number().nonnegative().optional(),
+    /** Monotonic turn-local revision; allows downward estimate corrections. */
+    messageApiEquivalentCostRevision: z.number().int().nonnegative().optional(),
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
@@ -191,6 +193,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     /** Final cumulative reported cost of the turn. */
     messageCostUsd: z.number().nonnegative().optional(),
     messageApiEquivalentCostUsd: z.number().nonnegative().optional(),
+    messageApiEquivalentCostRevision: z.number().int().nonnegative().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),

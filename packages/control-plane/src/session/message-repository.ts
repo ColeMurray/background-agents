@@ -167,21 +167,48 @@ export class MessageRepository {
     return reportedCostUsd - previous;
   }
 
-  /** Idempotent turn estimate; never contributes to the spend-limit counter. */
-  raiseReportedApiEquivalentCost(messageId: string, reportedCostUsd: number): number {
-    if (!Number.isFinite(reportedCostUsd) || reportedCostUsd <= 0) return 0;
+  /** Reconcile a revisioned estimate, allowing corrections while fencing stale resends. */
+  reconcileReportedApiEquivalentCost(
+    messageId: string,
+    reportedCostUsd: number,
+    revision: number,
+    final: boolean
+  ): number {
+    if (
+      !Number.isFinite(reportedCostUsd) ||
+      reportedCostUsd < 0 ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    )
+      return 0;
     const rows = this.sql
-      .exec(`SELECT reported_api_equivalent_cost_usd FROM messages WHERE id = ?`, messageId)
-      .toArray() as Array<{ reported_api_equivalent_cost_usd: number }>;
+      .exec(
+        `SELECT reported_api_equivalent_cost_usd, reported_api_equivalent_cost_revision,
+                reported_api_equivalent_final FROM messages WHERE id = ?`,
+        messageId
+      )
+      .toArray() as Array<{
+      reported_api_equivalent_cost_usd: number;
+      reported_api_equivalent_cost_revision: number;
+      reported_api_equivalent_final: number;
+    }>;
     if (rows.length !== 1) return 0;
-    const previous = rows[0].reported_api_equivalent_cost_usd;
-    if (reportedCostUsd <= previous) return 0;
+    const previous = rows[0];
+    if (
+      previous.reported_api_equivalent_final === 1 ||
+      revision < previous.reported_api_equivalent_cost_revision
+    )
+      return 0;
+    if (!final && revision === previous.reported_api_equivalent_cost_revision) return 0;
     this.sql.exec(
-      `UPDATE messages SET reported_api_equivalent_cost_usd = ? WHERE id = ?`,
+      `UPDATE messages SET reported_api_equivalent_cost_usd = ?,
+       reported_api_equivalent_cost_revision = ?, reported_api_equivalent_final = ? WHERE id = ?`,
       reportedCostUsd,
+      revision,
+      final ? 1 : 0,
       messageId
     );
-    return reportedCostUsd - previous;
+    return reportedCostUsd - previous.reported_api_equivalent_cost_usd;
   }
 
   clearMessageAwaitingStopConfirmation(messageId: string): void {

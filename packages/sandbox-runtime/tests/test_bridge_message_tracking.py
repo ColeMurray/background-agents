@@ -334,7 +334,7 @@ class TestHandlePartTranslation:
         stream = bridge.harness.prompt_stream
         stream._openai_oauth_managed = True
         state = make_state("cp-message-123")
-        state.message_providers.update({"openai-msg": "openai", "other-msg": "anthropic"})
+        state.costs.providers.update({"openai-msg": "openai", "other-msg": "anthropic"})
 
         openai = stream._handle_part(
             state,
@@ -355,13 +355,30 @@ class TestHandlePartTranslation:
 
         assert openai["apiEquivalentCostUsd"] == 0.5
         assert openai["messageApiEquivalentCostUsd"] == 0.5
+        assert openai["messageApiEquivalentCostRevision"] == 1
         assert openai["messageCostUsd"] == 0
         assert "cost" not in openai
         assert other["cost"] == 0.25
         assert other["messageCostUsd"] == 0.25
         assert other["messageApiEquivalentCostUsd"] == 0.5
+        assert other["messageApiEquivalentCostRevision"] == 1
         assert corrected["messageApiEquivalentCostUsd"] == 0.75
+        assert corrected["messageApiEquivalentCostRevision"] == 2
         assert corrected["messageCostUsd"] == 0.25
+
+        downward = stream._handle_part(
+            state,
+            {"type": "step-finish", "id": "openai-step", "messageID": "openai-msg", "cost": 0.4},
+            None,
+        )[0]
+        stale_duplicate = stream._handle_part(
+            state,
+            {"type": "step-finish", "id": "openai-step", "messageID": "openai-msg", "cost": 0.4},
+            None,
+        )[0]
+        assert downward["messageApiEquivalentCostUsd"] == 0.4
+        assert downward["messageApiEquivalentCostRevision"] == 3
+        assert stale_duplicate["messageApiEquivalentCostRevision"] == 3
 
 
 class TestBuildPromptRequestBody:

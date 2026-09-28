@@ -308,4 +308,69 @@ describe("session budgets", () => {
       )
     ).toEqual([{ status: "completed", reported_cost_usd: 3.25 }]);
   });
+
+  it("persists a downward estimate correction through completion and reconnect", async () => {
+    const name = `budget-estimate-correction-${Date.now()}`;
+    const { stub } = await initNamedSession(name, {
+      sandboxSettings: { maxSessionCostUsd: 0.1 },
+    });
+    await waitForSandboxStatus(stub, "failed");
+    const [{ id: ownerId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    await seedMessage(stub, {
+      id: "message-estimate",
+      authorId: ownerId,
+      content: "Estimate work",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 100,
+      startedAt: Date.now() - 50,
+    });
+
+    const sendEstimate = (amount: number, revision: number) =>
+      stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "step_finish",
+          messageId: "message-estimate",
+          stepId: "step-1",
+          messageCostUsd: 0,
+          messageApiEquivalentCostUsd: amount,
+          messageApiEquivalentCostRevision: revision,
+          sandboxId: "sandbox-1",
+          timestamp: Date.now(),
+        }),
+      });
+    expect((await sendEstimate(0.75, 1)).status).toBe(200);
+    expect((await sendEstimate(0.5, 2)).status).toBe(200);
+    expect((await sendEstimate(0.75, 1)).status).toBe(200);
+    const completion = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "execution_complete",
+        messageId: "message-estimate",
+        success: true,
+        messageCostUsd: 0,
+        messageApiEquivalentCostUsd: 0.5,
+        messageApiEquivalentCostRevision: 2,
+        sandboxId: "sandbox-1",
+        timestamp: Date.now(),
+      }),
+    });
+    expect(completion.status).toBe(200);
+    expect((await sendEstimate(0.9, 3)).status).toBe(200);
+
+    expect(
+      await queryDO(
+        stub,
+        "SELECT total_cost, api_equivalent_cost_usd, budget_exhausted FROM session"
+      )
+    ).toEqual([{ total_cost: 0, api_equivalent_cost_usd: 0.5, budget_exhausted: 0 }]);
+    const snapshot = await stub.fetch("http://internal/internal/snapshot");
+    expect((await snapshot.json<SessionSnapshot>()).session.apiEquivalentCostUsd).toBe(0.5);
+  });
 });

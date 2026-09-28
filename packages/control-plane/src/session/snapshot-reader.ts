@@ -109,7 +109,7 @@ export class SessionSnapshotReader {
       isProcessing: this.getIsProcessing(),
       parentSessionId: session.parent_session_id,
       totalCost: session.total_cost ?? 0,
-      apiEquivalentCostUsd: session.api_equivalent_cost_usd ?? 0,
+      apiEquivalentCostUsd: session.api_equivalent_cost_usd,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,
       codeServerUrl: sandbox?.code_server_url ?? null,

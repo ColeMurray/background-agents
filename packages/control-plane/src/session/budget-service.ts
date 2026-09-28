@@ -38,7 +38,7 @@ export class SessionBudgetService {
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: Pick<
       MessageRepository,
-      "raiseReportedCost" | "raiseReportedApiEquivalentCost"
+      "raiseReportedCost" | "reconcileReportedApiEquivalentCost"
     >,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
@@ -56,7 +56,7 @@ export class SessionBudgetService {
     this.repository.transaction(() => {
       const delta = this.observeReportedCost(event, messageId);
       const estimateDelta = this.observeReportedEstimate(event, messageId);
-      if (estimateDelta > 0) {
+      if (estimateDelta !== 0) {
         this.repository.addSessionApiEquivalentCost(estimateDelta, now);
         transition = { ...transition, statusChanged: true };
       }
@@ -79,7 +79,7 @@ export class SessionBudgetService {
     let transition = NO_BUDGET_TRANSITION;
     this.repository.transaction(() => {
       const estimateDelta = this.observeReportedEstimate(event, event.messageId);
-      if (estimateDelta > 0) {
+      if (estimateDelta !== 0) {
         this.repository.addSessionApiEquivalentCost(estimateDelta, now);
         transition = { ...transition, statusChanged: true };
       }
@@ -119,7 +119,7 @@ export class SessionBudgetService {
     this.messenger.broadcast({
       type: "budget_status",
       totalCost: session.total_cost,
-      apiEquivalentCostUsd: session.api_equivalent_cost_usd ?? 0,
+      apiEquivalentCostUsd: session.api_equivalent_cost_usd,
       maxSessionCostUsd: session.max_cost_usd,
       budgetExhausted: session.budget_exhausted === 1,
     });
@@ -142,10 +142,13 @@ export class SessionBudgetService {
     messageId: string | null
   ): number {
     const reported = event.messageApiEquivalentCostUsd;
-    if (typeof reported !== "number" || !Number.isFinite(reported)) return 0;
-    return this.messageRepository.raiseReportedApiEquivalentCost(
+    const revision = event.messageApiEquivalentCostRevision;
+    if (typeof reported !== "number" || typeof revision !== "number") return 0;
+    return this.messageRepository.reconcileReportedApiEquivalentCost(
       messageId ?? event.messageId,
-      reported
+      reported,
+      revision,
+      event.type === "execution_complete"
     );
   }
 

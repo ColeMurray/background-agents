@@ -162,6 +162,8 @@ CREATE TABLE IF NOT EXISTS messages (
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
   reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   reported_api_equivalent_cost_usd REAL NOT NULL DEFAULT 0,
+  reported_api_equivalent_cost_revision INTEGER NOT NULL DEFAULT 0,
+  reported_api_equivalent_final INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -772,6 +774,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(
         sql,
         `ALTER TABLE messages ADD COLUMN reported_api_equivalent_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_api_equivalent_cost_revision INTEGER NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_api_equivalent_final INTEGER NOT NULL DEFAULT 0`
       );
     },
   },

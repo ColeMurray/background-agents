@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CodexAuthProxy } from "../src/sandbox_runtime/plugins/codex-auth-plugin.js";
+import {
+  API_EQUIVALENT_PRICES,
+  CodexAuthProxy,
+} from "../src/sandbox_runtime/plugins/codex-auth-plugin.js";
 
 test("preserves a source Request while proxying Codex authentication", async () => {
   process.env.CONTROL_PLANE_URL = "https://control.test";
@@ -41,31 +44,36 @@ test("preserves a source Request while proxying Codex authentication", async () 
   assert.equal(await upstreamRequest.text(), "request-body");
 });
 
-test("preserves caller authorization after switching away from OAuth", async () => {
-  let upstreamRequest;
+test("fails closed if managed OpenAI authentication switches away from OAuth", async () => {
+  let upstreamCalls = 0;
   globalThis.fetch = async (input, init) => {
-    upstreamRequest = input instanceof Request ? input : new Request(input, init);
+    upstreamCalls++;
     return new Response(null, { status: 200 });
   };
   let authReadCount = 0;
   const getAuth = async () =>
     authReadCount++ === 0 ? { type: "oauth", refresh: "managed" } : { type: "api" };
   const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
-  const loaded = await plugin.auth.loader(getAuth, { models: {} });
+  const loaded = await plugin.auth.loader(getAuth);
 
-  await loaded.fetch(
-    new Request("https://api.openai.com/v1/responses", {
-      headers: { Authorization: "Bearer caller-token" },
-    })
+  await assert.rejects(
+    loaded.fetch(new Request("https://api.openai.com/v1/responses")),
+    /changed away from OAuth/
   );
-
-  assert.equal(upstreamRequest.headers.get("authorization"), "Bearer caller-token");
+  await assert.rejects(
+    plugin.auth.loader(async () => ({ type: "api" })),
+    /changed away from OAuth/
+  );
+  assert.equal(upstreamCalls, 0);
 });
 
-test("restores API-equivalent prices only for known OAuth models", async () => {
+test("restores known prices and missing Codex models after the built-in OAuth hook", async () => {
   const gpt6Ids = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
   const gpt6Models = gpt6Ids.map((id) => [id, { name: id, cost: { input: 0, output: 0 } }]);
-  const provider = { models: { ...Object.fromEntries(gpt6Models), "unsupported-model": { cost: { input: 0 } } } };
+  // OpenCode's built-in hook has already filtered gpt-5.3-codex and zeroed the survivors.
+  const provider = {
+    models: { ...Object.fromEntries(gpt6Models), "unsupported-model": { cost: { input: 0 } } },
+  };
   const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
 
   const apiKeyModels = await plugin.provider.models(provider, { auth: { type: "api" } });
@@ -76,13 +84,25 @@ test("restores API-equivalent prices only for known OAuth models", async () => {
   assert.equal(priced["gpt-6-astra"].cost.tiers[0].tier.size, 272_000);
   assert.equal(priced["gpt-6-sol"].cost.cache.read, 0.2);
   assert.equal(priced["gpt-6-luna"].cost.output, 0.5);
-  assert.equal(priced["unsupported-model"], provider.models["unsupported-model"]);
+  assert.equal(priced["unsupported-model"], undefined);
+  assert.equal(priced["gpt-5.3-codex"].api.id, "gpt-5.3-codex");
+  assert.equal(priced["gpt-5.3-codex"].cost.input, 1.75);
+  assert.equal(priced["gpt-5.3-codex"].limit.input, 272_000);
+  assert.equal(priced["gpt-5.3-codex-spark"].cost.output, 14);
   assert.equal(provider.models["gpt-6-astra"].cost.input, 0);
+  assert.equal(provider.models["gpt-5.3-codex"], undefined);
+  await plugin.auth.loader(async () => ({ type: "oauth", refresh: "managed" }));
+});
 
-  await plugin.auth.loader(async () => ({ type: "oauth", refresh: "managed" }), provider);
+test("uses the over-200k price until the 272k context tier takes over", () => {
+  const cost = API_EQUIVALENT_PRICES["gpt-6-astra"];
+  const selected = (tokens) =>
+    cost.tiers?.filter(({ tier }) => tokens > tier.size).at(-1) ??
+    (tokens > 200_000 ? cost.experimentalOver200K : cost);
 
-  for (const [id, model] of gpt6Models) {
-    assert.equal(provider.models[id], model, id);
-  }
-  assert.equal(provider.models["unsupported-model"], undefined);
+  assert.equal(selected(200_000).input, 10);
+  assert.equal(selected(200_001).input, 20);
+  assert.equal(selected(272_000), cost.experimentalOver200K);
+  assert.equal(selected(272_001), cost.tiers[0]);
+  assert.equal(cost.experimentalOver200K.cache.write, 25);
 });
