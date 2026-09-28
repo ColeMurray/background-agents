@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS session (
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
   vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
+  api_equivalent_cost_usd REAL NOT NULL DEFAULT 0, -- ChatGPT OAuth API-price estimate, never budgeted
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
   budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS messages (
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
   reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
+  reported_api_equivalent_cost_usd REAL NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -758,6 +760,20 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Track ChatGPT OAuth API-equivalent estimates separately from spend",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE session ADD COLUMN api_equivalent_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE messages ADD COLUMN reported_api_equivalent_cost_usd REAL NOT NULL DEFAULT 0`
+      );
+    },
   },
 ];
 

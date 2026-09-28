@@ -70,9 +70,10 @@ class _PromptState:
     pending_drop_logged: bool = False
     child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
     emitted_error_messages: set[str] = field(default_factory=set)
-    # Priced step costs keyed by OpenCode part id. Last write wins, so a part
-    # OpenCode re-emits with a corrected cost replaces its earlier value.
-    step_costs: dict[str, float] = field(default_factory=dict)
+    # Last write wins when OpenCode corrects a step part. Keep API-equivalent
+    # estimates separate from spend that can exhaust the session budget.
+    step_costs: dict[str, tuple[float, bool]] = field(default_factory=dict)
+    message_providers: dict[str, str] = field(default_factory=dict)
     step_ids: StepIdTracker = field(default_factory=StepIdTracker)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
@@ -89,7 +90,10 @@ class _PromptState:
 
     def message_cost_usd(self) -> float:
         """Cumulative priced cost of this turn, including subtask steps."""
-        return sum(self.step_costs.values())
+        return sum(cost for cost, estimated in self.step_costs.values() if not estimated)
+
+    def message_api_equivalent_cost_usd(self) -> float:
+        return sum(cost for cost, estimated in self.step_costs.values() if estimated)
 
 
 class _Disposition(Enum):
@@ -156,6 +160,7 @@ class OpenCodePromptStream:
         sse_inactivity_timeout_seconds: float,
         prompt_max_duration_seconds: float,
         prompt_cleanup_timeout_seconds: float,
+        openai_oauth_managed: bool = False,
     ) -> None:
         self._client = client
         self._attachment_processor = attachment_processor
@@ -163,6 +168,7 @@ class OpenCodePromptStream:
         self._sse_inactivity_timeout_seconds = sse_inactivity_timeout_seconds
         self._prompt_max_duration_seconds = prompt_max_duration_seconds
         self._prompt_cleanup_timeout_seconds = prompt_cleanup_timeout_seconds
+        self._openai_oauth_managed = openai_oauth_managed
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
@@ -417,6 +423,8 @@ class OpenCodePromptStream:
 
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
+                if isinstance(info.get("providerID"), str):
+                    state.message_providers[oc_msg_id] = info["providerID"]
                 disposition = state.attribution.assistant_disposition(
                     oc_msg_id,
                     parent_id,
@@ -447,6 +455,8 @@ class OpenCodePromptStream:
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
+                if isinstance(info.get("providerID"), str):
+                    state.message_providers[oc_msg_id] = info["providerID"]
                 child_disposition = state.child_activity.authorize_or_queue_message(
                     msg_session_id, oc_msg_id
                 )
@@ -676,20 +686,34 @@ class OpenCodePromptStream:
                 message_id, part_id if isinstance(part_id, str) else None
             )
             cost = part.get("cost")
-            if isinstance(cost, int | float) and not isinstance(cost, bool):
-                state.step_costs[str(part.get("id", ""))] = float(cost)
+            estimated = (
+                self._openai_oauth_managed
+                and state.message_providers.get(part.get("messageID", "")) == "openai"
+            )
+            priced = (
+                isinstance(cost, int | float)
+                and not isinstance(cost, bool)
+                and math.isfinite(cost)
+                and cost >= 0
+            )
+            if priced:
+                state.step_costs[step_id] = (float(cost), estimated)
             finish_event = {
                 "type": "step_finish",
                 "messageId": state.message_id,
                 "stepId": step_id,
                 "messageCostUsd": state.message_cost_usd(),
             }
+            if self._openai_oauth_managed:
+                finish_event["messageApiEquivalentCostUsd"] = (
+                    state.message_api_equivalent_cost_usd()
+                )
             if part.get("tokens") is not None:
                 finish_event["tokens"] = part["tokens"]
             if part.get("reason") is not None:
                 finish_event["reason"] = part["reason"]
-            if cost is not None:
-                finish_event["cost"] = cost
+            if priced:
+                finish_event["apiEquivalentCostUsd" if estimated else "cost"] = cost
             events.append(finish_event)
 
         if is_subtask:

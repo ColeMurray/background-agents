@@ -63,6 +63,7 @@ def build_agent_harness(
                 attachment_processor=attachment_processor,
                 log=log,
                 limits=limits,
+                openai_oauth_managed=bool(os.environ.get("OPENAI_OAUTH_MANAGED")),
             )
         case HarnessId.CLAUDE:
             handoff = ClaudeHarnessHandoff.read()

@@ -167,6 +167,23 @@ export class MessageRepository {
     return reportedCostUsd - previous;
   }
 
+  /** Idempotent turn estimate; never contributes to the spend-limit counter. */
+  raiseReportedApiEquivalentCost(messageId: string, reportedCostUsd: number): number {
+    if (!Number.isFinite(reportedCostUsd) || reportedCostUsd <= 0) return 0;
+    const rows = this.sql
+      .exec(`SELECT reported_api_equivalent_cost_usd FROM messages WHERE id = ?`, messageId)
+      .toArray() as Array<{ reported_api_equivalent_cost_usd: number }>;
+    if (rows.length !== 1) return 0;
+    const previous = rows[0].reported_api_equivalent_cost_usd;
+    if (reportedCostUsd <= previous) return 0;
+    this.sql.exec(
+      `UPDATE messages SET reported_api_equivalent_cost_usd = ? WHERE id = ?`,
+      reportedCostUsd,
+      messageId
+    );
+    return reportedCostUsd - previous;
+  }
+
   clearMessageAwaitingStopConfirmation(messageId: string): void {
     this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
   }

@@ -156,6 +156,10 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     cost: z.number().nullable().optional(),
     /** Cumulative reported cost of the whole turn so far; idempotent on resend. */
     messageCostUsd: z.number().nonnegative().optional(),
+    /** API-list-price equivalent for a managed ChatGPT OAuth step, not a charge. */
+    apiEquivalentCostUsd: z.number().nonnegative().optional(),
+    /** Cumulative API-equivalent estimate of the whole turn. */
+    messageApiEquivalentCostUsd: z.number().nonnegative().optional(),
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
@@ -186,6 +190,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     error: z.string().optional(),
     /** Final cumulative reported cost of the turn. */
     messageCostUsd: z.number().nonnegative().optional(),
+    messageApiEquivalentCostUsd: z.number().nonnegative().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),

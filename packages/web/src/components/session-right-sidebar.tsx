@@ -168,6 +168,7 @@ export function SessionRightSidebarContent({
         <BudgetSection
           sessionId={sessionId}
           totalCost={sessionState.totalCost ?? 0}
+          apiEquivalentCostUsd={sessionState.apiEquivalentCostUsd ?? 0}
           maxSessionCostUsd={sessionState.maxSessionCostUsd}
           canManageBudget={canManageBudget}
         />

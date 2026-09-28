@@ -7,6 +7,7 @@ import { formatSessionCost } from "@/lib/session-cost";
 interface BudgetSectionProps {
   sessionId: string;
   totalCost: number;
+  apiEquivalentCostUsd?: number;
   maxSessionCostUsd?: number | null;
   canManageBudget: boolean;
 }
@@ -14,6 +15,7 @@ interface BudgetSectionProps {
 export function BudgetSection({
   sessionId,
   totalCost,
+  apiEquivalentCostUsd = 0,
   maxSessionCostUsd,
   canManageBudget,
 }: BudgetSectionProps) {
@@ -22,7 +24,12 @@ export function BudgetSection({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!canManageBudget && maxSessionCostUsd == null && totalCost <= 0) {
+  if (
+    !canManageBudget &&
+    maxSessionCostUsd == null &&
+    totalCost <= 0 &&
+    apiEquivalentCostUsd <= 0
+  ) {
     return null;
   }
 
@@ -85,6 +92,16 @@ export function BudgetSection({
           </button>
         )}
       </div>
+
+      {apiEquivalentCostUsd > 0 && (
+        <div className="space-y-1">
+          <p>API-equivalent estimate: {formatSessionCost(apiEquivalentCostUsd)}</p>
+          <p className="text-xs text-muted-foreground">
+            ChatGPT OAuth tokens at catalog API rates. Not a ChatGPT charge or credit balance;
+            models without a published price may be omitted.
+          </p>
+        </div>
+      )}
 
       {editing && (
         <div className="space-y-2 border-l-2 border-border pl-3">

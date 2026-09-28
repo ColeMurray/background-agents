@@ -62,18 +62,27 @@ test("preserves caller authorization after switching away from OAuth", async () 
   assert.equal(upstreamRequest.headers.get("authorization"), "Bearer caller-token");
 });
 
-test("keeps GPT-6 models available for Codex subscriptions", async () => {
+test("restores API-equivalent prices only for known OAuth models", async () => {
   const gpt6Ids = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
-  const gpt6Models = gpt6Ids.map((id) => [id, { name: id, cost: { input: 1, output: 1 } }]);
-  const provider = { models: { ...Object.fromEntries(gpt6Models), "unsupported-model": {} } };
+  const gpt6Models = gpt6Ids.map((id) => [id, { name: id, cost: { input: 0, output: 0 } }]);
+  const provider = { models: { ...Object.fromEntries(gpt6Models), "unsupported-model": { cost: { input: 0 } } } };
   const plugin = await CodexAuthProxy({ client: { auth: { set: async () => undefined } } });
+
+  const apiKeyModels = await plugin.provider.models(provider, { auth: { type: "api" } });
+  assert.equal(apiKeyModels, provider.models);
+
+  const priced = await plugin.provider.models(provider, { auth: { type: "oauth" } });
+  assert.equal(priced["gpt-6-astra"].cost.input, 10);
+  assert.equal(priced["gpt-6-astra"].cost.tiers[0].tier.size, 272_000);
+  assert.equal(priced["gpt-6-sol"].cost.cache.read, 0.2);
+  assert.equal(priced["gpt-6-luna"].cost.output, 0.5);
+  assert.equal(priced["unsupported-model"], provider.models["unsupported-model"]);
+  assert.equal(provider.models["gpt-6-astra"].cost.input, 0);
 
   await plugin.auth.loader(async () => ({ type: "oauth", refresh: "managed" }), provider);
 
   for (const [id, model] of gpt6Models) {
     assert.equal(provider.models[id], model, id);
-    assert.equal(model.cost.input, 0, id);
-    assert.equal(model.cost.output, 0, id);
   }
   assert.equal(provider.models["unsupported-model"], undefined);
 });

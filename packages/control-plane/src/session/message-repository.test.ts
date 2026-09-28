@@ -733,4 +733,17 @@ describe("MessageRepository", () => {
       expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
     });
   });
+
+  it("raises the reported API-equivalent estimate only beyond the stored value", () => {
+    mock.setMatchingData(/SELECT reported_api_equivalent_cost_usd FROM messages/, [
+      { reported_api_equivalent_cost_usd: 0.25 },
+    ]);
+    expect(repository.raiseReportedApiEquivalentCost("msg-1", 0.5)).toBe(0.25);
+    expect(repository.raiseReportedApiEquivalentCost("msg-1", 0.2)).toBe(0);
+    const writes = mock.calls.filter((c) =>
+      c.query.includes("SET reported_api_equivalent_cost_usd")
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0].params).toEqual([0.5, "msg-1"]);
+  });
 });

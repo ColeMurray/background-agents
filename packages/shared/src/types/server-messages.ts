@@ -37,6 +37,7 @@ const sessionStateSchema = z.object({
   isProcessing: z.boolean().optional(),
   parentSessionId: z.string().nullable().optional(),
   totalCost: z.number().optional(),
+  apiEquivalentCostUsd: z.number().optional(),
   maxSessionCostUsd: z.number().nullable().optional(),
   budgetExhausted: z.boolean().optional(),
   codeServerUrl: z.string().nullable().optional(),
@@ -200,6 +201,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("budget_status"),
     totalCost: z.number(),
+    apiEquivalentCostUsd: z.number().optional(),
     maxSessionCostUsd: z.number().nullable(),
     budgetExhausted: z.boolean(),
   }),

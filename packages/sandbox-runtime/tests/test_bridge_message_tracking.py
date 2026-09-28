@@ -330,6 +330,39 @@ class TestHandlePartTranslation:
         assert corrected[0]["messageCostUsd"] == 1.0
         assert unpriced[0]["messageCostUsd"] == 1.0
 
+    def test_managed_openai_steps_are_estimates_not_budget_costs(self, bridge: AgentBridge):
+        stream = bridge.harness.prompt_stream
+        stream._openai_oauth_managed = True
+        state = make_state("cp-message-123")
+        state.message_providers.update({"openai-msg": "openai", "other-msg": "anthropic"})
+
+        openai = stream._handle_part(
+            state,
+            {"type": "step-finish", "id": "openai-step", "messageID": "openai-msg", "cost": 0.5},
+            None,
+        )[0]
+        other = stream._handle_part(
+            state,
+            {"type": "step-finish", "id": "other-step", "messageID": "other-msg", "cost": 0.25},
+            None,
+            is_subtask=True,
+        )[0]
+        corrected = stream._handle_part(
+            state,
+            {"type": "step-finish", "id": "openai-step", "messageID": "openai-msg", "cost": 0.75},
+            None,
+        )[0]
+
+        assert openai["apiEquivalentCostUsd"] == 0.5
+        assert openai["messageApiEquivalentCostUsd"] == 0.5
+        assert openai["messageCostUsd"] == 0
+        assert "cost" not in openai
+        assert other["cost"] == 0.25
+        assert other["messageCostUsd"] == 0.25
+        assert other["messageApiEquivalentCostUsd"] == 0.5
+        assert corrected["messageApiEquivalentCostUsd"] == 0.75
+        assert corrected["messageCostUsd"] == 0.25
+
 
 class TestBuildPromptRequestBody:
     """Tests for _build_prompt_request_body method."""

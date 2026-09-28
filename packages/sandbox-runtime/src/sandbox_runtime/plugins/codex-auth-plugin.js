@@ -16,6 +16,31 @@ const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
 const tokenBroker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
+// API-list-price equivalents, USD per million tokens. Snapshot of
+// https://models.dev/api.json (openai models, 2026-09-27); these are not
+// ChatGPT subscription charges. Unknown models remain unpriced.
+const price = (input, output, read, write = 0, long = null) => ({
+  input,
+  output,
+  cache: { read, write },
+  ...(long && {
+    tiers: [{ tier: { type: "context", size: 272_000 }, ...price(...long) }],
+  }),
+});
+
+export const API_EQUIVALENT_PRICES = {
+  "gpt-5.3-codex": price(1.75, 14, 0.175),
+  "gpt-5.3-codex-spark": price(1.75, 14, 0.175),
+  "gpt-5.4": price(2.5, 15, 0.25, 0, [5, 22.5, 0.5]),
+  "gpt-5.5": price(5, 30, 0.5, 0, [10, 45, 1]),
+  "gpt-5.6-sol": price(4, 20, 0.4, 5, [8, 30, 0.8, 10]),
+  "gpt-5.6-terra": price(2, 12, 0.2, 2.5, [4, 18, 0.4, 5]),
+  "gpt-5.6-luna": price(0.2, 1.2, 0.02, 0.25, [0.4, 1.8, 0.04, 0.5]),
+  "gpt-6-astra": price(10, 50, 1, 12.5, [20, 75, 2, 25]),
+  "gpt-6-sol": price(2, 10, 0.2, 2.5, [4, 15, 0.4, 5]),
+  "gpt-6-luna": price(0.1, 0.5, 0.01, 0.125, [0.2, 0.75, 0.02, 0.25]),
+};
+
 const ALLOWED_MODELS = new Set([
   "gpt-5.1-codex-max",
   "gpt-5.1-codex-mini",
@@ -58,6 +83,22 @@ async function ensureAccessToken(getAuth, setAuth) {
 
 export const CodexAuthProxy = async (input) => {
   return {
+    provider: {
+      id: "openai",
+      async models(provider, context) {
+        if (context.auth?.type !== "oauth") return provider.models;
+        // OpenCode's built-in provider hook zeroes OAuth prices before this
+        // external hook runs. Return a new catalog with reviewed prices.
+        return Object.fromEntries(
+          Object.entries(provider.models).map(([modelId, model]) => [
+            modelId,
+            API_EQUIVALENT_PRICES[modelId]
+              ? { ...model, cost: API_EQUIVALENT_PRICES[modelId] }
+              : model,
+          ])
+        );
+      },
+    },
     auth: {
       provider: "openai",
       methods: [],
@@ -96,15 +137,6 @@ export const CodexAuthProxy = async (input) => {
             variants: {},
             limit: { context: 1000000, output: 1000000 },
             cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-          };
-        }
-
-        // Zero out costs (Codex is subscription-based)
-        for (const model of Object.values(provider.models)) {
-          model.cost = {
-            input: 0,
-            output: 0,
-            cache: { read: 0, write: 0 },
           };
         }
 

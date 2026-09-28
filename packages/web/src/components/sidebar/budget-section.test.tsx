@@ -52,4 +52,20 @@ describe("BudgetSection", () => {
       body: JSON.stringify({ maxCostUsd: null }),
     });
   });
+
+  it("shows the API-equivalent estimate independently of budgeted spend", () => {
+    render(
+      <BudgetSection
+        sessionId="session-1"
+        totalCost={0}
+        apiEquivalentCostUsd={0.13}
+        maxSessionCostUsd={null}
+        canManageBudget={false}
+      />
+    );
+
+    expect(screen.getByText("API-equivalent estimate: $0.1300")).toBeInTheDocument();
+    expect(screen.getByText(/Not a ChatGPT charge or credit balance/)).toBeInTheDocument();
+    expect(screen.queryByText(/Session cost: \$0.13/)).not.toBeInTheDocument();
+  });
 });

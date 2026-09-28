@@ -198,6 +198,15 @@ export class SessionCoreRepository {
     return row.total_cost;
   }
 
+  addSessionApiEquivalentCost(cost: number, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session SET api_equivalent_cost_usd = api_equivalent_cost_usd + ?, updated_at = ?
+       WHERE id = (SELECT id FROM session LIMIT 1)`,
+      cost,
+      updatedAt
+    );
+  }
+
   setSessionBudget(maxCostUsd: number | null, exhausted: boolean, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session

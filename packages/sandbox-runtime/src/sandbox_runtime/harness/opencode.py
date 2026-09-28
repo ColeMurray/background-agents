@@ -38,6 +38,7 @@ class OpencodeHarness:
         attachment_processor: AttachmentProcessor,
         log: StructuredLogger,
         limits: PromptLimits,
+        openai_oauth_managed: bool = False,
     ) -> None:
         self.client = client
         self.attachment_processor = attachment_processor
@@ -45,6 +46,7 @@ class OpencodeHarness:
         # Read when the prompt stream is first built, so a caller can still
         # adjust budgets between construction and the first prompt.
         self.limits = limits
+        self.openai_oauth_managed = openai_oauth_managed
         self.session_id: str | None = None
         self._prompt_stream: OpenCodePromptStream | None = None
 
@@ -59,6 +61,7 @@ class OpencodeHarness:
                 sse_inactivity_timeout_seconds=self.limits.inactivity_timeout_seconds,
                 prompt_max_duration_seconds=self.limits.prompt_max_duration_seconds,
                 prompt_cleanup_timeout_seconds=self.limits.prompt_cleanup_timeout_seconds,
+                openai_oauth_managed=self.openai_oauth_managed,
             )
         return self._prompt_stream
 
