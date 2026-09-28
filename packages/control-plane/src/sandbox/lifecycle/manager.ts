@@ -134,8 +134,8 @@ export interface SandboxShutdownLifecycle {
   ): Promise<SandboxCheckpointOutcome>;
   /** Decides startup without exposing the coordinator's persisted receipt representation. */
   startupDecision(): SandboxStartupDecision;
-  /** Whether the provider object holds retained saved state, which deleting it would lose. */
-  isRetainedSource(providerObjectId: string): boolean;
+  /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
+  holdFailedRetainedBoot(error: string, generation: SandboxGeneration): boolean;
   /** Converts a failed or interrupted saved-state startup into a durable safety hold. */
   holdFailedRecovery(error: string, generation?: SandboxGeneration): void;
   /** Records runtime protocol support; does not itself grant lifecycle command readiness. */
@@ -1788,14 +1788,10 @@ export class SandboxLifecycleManager
    * again. Resolves false for any other generation.
    */
   private holdFailedRetainedBoot(sandbox: SandboxRow, reason: string): boolean {
-    if (!sandbox.modal_object_id || !this.shutdown.isRetainedSource(sandbox.modal_object_id)) {
-      return false;
-    }
-    this.shutdown.holdFailedRecovery(reason, {
+    return this.shutdown.holdFailedRetainedBoot(reason, {
       sandboxId: sandbox.modal_sandbox_id,
       createdAt: sandbox.created_at,
     });
-    return true;
   }
 
   /**

@@ -410,10 +410,21 @@ export class SandboxShutdownCoordinator {
       : { kind: "normal" };
   }
 
-  /** Whether the provider object is the source a retained recovery point names. */
-  isRetainedSource(providerObjectId: string): boolean {
-    const receipt = this.deps.store.read()?.receipt;
-    return receipt?.kind === "retained" && receipt.artifactId === providerObjectId;
+  /**
+   * Holds a failed boot of the source a retained receipt names, as a failed
+   * retained resume is held, and records that source so recovery can retire
+   * and resume it: an ordinary resume reserves its generation without a
+   * provider handle. Holds nothing and resolves false for any other object.
+   */
+  holdFailedRetainedBoot(error: string, generation: SandboxGeneration): boolean {
+    const state = this.deps.store.read();
+    const source = state?.receipt?.kind === "retained" ? state.receipt.artifactId : null;
+    if (!state || !source || this.deps.sandbox.getSandbox()?.modal_object_id !== source)
+      return false;
+    if (this.current(state) && this.matches(state, generation))
+      this.deps.store.write({ ...state, providerObjectId: source });
+    this.holdFailedRecovery(error, generation);
+    return true;
   }
 
   holdFailedRecovery(error: string, generation?: SandboxGeneration): void {

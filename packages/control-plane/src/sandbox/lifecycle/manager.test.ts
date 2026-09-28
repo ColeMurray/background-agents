@@ -414,6 +414,53 @@ describe("final graceful shutdown lifecycle integration", () => {
     }
   );
 
+  it("keeps restore available after a later ordinary resume of the retained source fails mid-resume", async () => {
+    let finishResume!: (result: ResumeResult) => void;
+    const resumed = {
+      success: true as const,
+      providerObjectId: "retained-source",
+      lifetime: noLifetime(),
+    };
+    const resumeSandbox = vi
+      .fn<NonNullable<SandboxProvider["resumeSandbox"]>>()
+      .mockResolvedValueOnce(resumed)
+      .mockReturnValueOnce(new Promise((resolve) => (finishResume = resolve)))
+      .mockResolvedValue(resumed);
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const f = fixture(
+      createMockProvider({
+        resumeSandbox,
+        stopSandbox,
+        capabilities: { supportsPersistentResume: true, supportsExplicitStop: true },
+      }),
+      createMockSandbox({ status: "stopped", modal_object_id: "retained-source" })
+    );
+    const saved = withSavedState(f, "retained");
+    await f.manager.spawnSandbox();
+    // A heartbeat timeout preserve-stops it; the shutdown record stays running.
+    const row = f.storage.getSandbox()!;
+    row.status = "stopped";
+
+    const ordinaryResume = f.manager.spawnSandbox();
+    await vi.waitFor(() => expect(resumeSandbox).toHaveBeenCalledTimes(2));
+    row.last_heartbeat = Date.now();
+    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+    finishResume(resumed);
+    await ordinaryResume;
+
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(saved.read()).toMatchObject({ phase: "unknown", providerObjectId: "retained-source" });
+    expect(saved.shutdown.snapshot()?.availableRecoveryActions).toContain("restore_saved");
+    await saved.shutdown.recover("restore_saved");
+    expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerObjectId: "retained-source", intent: "preserve" })
+    );
+    await f.manager.spawnSandbox();
+    expect(resumeSandbox).toHaveBeenCalledTimes(3);
+    expect(saved.read().phase).toBe("running");
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
   it("allows only explicit retry of an ambiguous snapshot restore from a retired source", async () => {
     const restoreFromSnapshot = vi
       .fn<NonNullable<SandboxProvider["restoreFromSnapshot"]>>()

@@ -468,7 +468,7 @@ export function createUnmanagedShutdown() {
     startupDecision: vi.fn<SandboxShutdownLifecycle["startupDecision"]>(() => ({
       kind: "normal",
     })),
-    isRetainedSource: vi.fn(() => false),
+    holdFailedRetainedBoot: vi.fn(() => false),
     holdFailedRecovery: vi.fn(),
     runtimeReady: vi.fn(),
     generationReady: vi.fn(),
