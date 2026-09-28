@@ -202,9 +202,10 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
 describe("final graceful shutdown lifecycle integration", () => {
   function fixture(
     provider = createMockProvider(),
-    sandbox = createMockSandbox({ status: "stopped" })
+    sandbox = createMockSandbox({ status: "stopped" }),
+    session = createMockSession()
   ) {
-    const storage = createMockStorage(createMockSession(), sandbox);
+    const storage = createMockStorage(session, sandbox);
     const sockets = createMockWebSocketManager();
     const shutdown = {
       ...createUnmanagedShutdown(),
@@ -335,6 +336,83 @@ describe("final graceful shutdown lifecycle integration", () => {
     expect(saved.read()).toMatchObject({ phase: "running", sourceRetired: false });
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
+
+  it.each(["connect timeout", "fatal runtime error", "boot budget"] as const)(
+    "holds a resumed retained source after a %s instead of deleting it",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const resumeSandbox = vi.fn(async () => ({
+          success: true as const,
+          providerObjectId: "retained-source",
+          lifetime: noLifetime(),
+          ttydUrl: "https://terminal.test/resumed",
+        }));
+        const stopSandbox = vi.fn(async () => ({ success: true }));
+        const f = fixture(
+          createMockProvider({
+            resumeSandbox,
+            stopSandbox,
+            capabilities: { supportsPersistentResume: true, supportsExplicitStop: true },
+          }),
+          createMockSandbox({
+            status: "stopped",
+            modal_object_id: "retained-source",
+            // The repository clears this on resume; the mock does not.
+            last_heartbeat: null,
+            ttyd_token: await mintJwt(
+              { exp: Math.floor(Date.now() / 1000) - 1 },
+              "sandbox-auth-token"
+            ),
+          }),
+          createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) })
+        );
+        const saved = withSavedState(f, "retained");
+
+        await f.manager.spawnSandbox();
+        expect(saved.read().phase).toBe("running");
+        const row = f.storage.getSandbox()!;
+        if (failure === "fatal runtime error") {
+          row.last_heartbeat = Date.now();
+          expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+        } else {
+          vi.advanceTimersByTime(
+            failure === "connect timeout"
+              ? DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1
+              : DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs + 1
+          );
+          if (failure === "boot budget") row.last_heartbeat = Date.now();
+          expect(await f.manager.handleShutdownAlarm()).toBe("continue");
+          await f.manager.handleAlarm();
+        }
+
+        // Neither deleted nor fenced: the source is the only copy of the workspace.
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(row).toMatchObject({
+          status: "failed",
+          modal_object_id: "retained-source",
+          fenced: 0,
+        });
+        expect(saved.read()).toMatchObject({
+          phase: "unknown",
+          receipt: { kind: "retained", artifactId: "retained-source" },
+        });
+        await f.manager.spawnSandbox();
+        expect(f.provider.createSandbox).not.toHaveBeenCalled();
+
+        await saved.shutdown.recover("restore_saved");
+        expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ providerObjectId: "retained-source", intent: "preserve" })
+        );
+        await f.manager.spawnSandbox();
+        expect(resumeSandbox).toHaveBeenCalledTimes(2);
+        expect(saved.read().phase).toBe("running");
+        expect(f.provider.createSandbox).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("allows only explicit retry of an ambiguous snapshot restore from a retired source", async () => {
     const restoreFromSnapshot = vi

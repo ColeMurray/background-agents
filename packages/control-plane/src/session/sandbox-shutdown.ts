@@ -410,6 +410,12 @@ export class SandboxShutdownCoordinator {
       : { kind: "normal" };
   }
 
+  /** Whether the provider object is the source a retained recovery point names. */
+  isRetainedSource(providerObjectId: string): boolean {
+    const receipt = this.deps.store.read()?.receipt;
+    return receipt?.kind === "retained" && receipt.artifactId === providerObjectId;
+  }
+
   holdFailedRecovery(error: string, generation?: SandboxGeneration): void {
     const state = this.deps.store.read();
     const row = this.deps.sandbox.getSandbox();
