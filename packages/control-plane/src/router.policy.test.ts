@@ -31,10 +31,10 @@ describe("route policy table", () => {
     });
   });
 
-  it("gates a single-session export with sessions.export", () => {
+  it("gates a single-session export with session read and sessions.export", () => {
     expect(routeFor("GET", "/sessions/session-1/export")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ permission: "sessions.export" }],
+      allOf: [{ kind: "session", action: "read" }, { permission: "sessions.export" }],
     });
   });
 
@@ -115,6 +115,21 @@ describe("route policy table", () => {
         }
       }
     }
+  });
+
+  it("requires session admission on every active-user session item route", () => {
+    const exceptions: string[] = [];
+    for (const route of routes) {
+      if (!route.path.startsWith("/sessions/:id") || route.authorization.kind !== "active-user")
+        continue;
+      const identity = `${route.method} ${route.path}`;
+      if (exceptions.includes(identity)) continue;
+      expect(
+        route.authorization.allOf.some((requirement) => requirement.kind === "session"),
+        identity
+      ).toBe(true);
+    }
+    expect(exceptions).toEqual([]);
   });
 
   it.each([
@@ -233,7 +248,7 @@ describe("route policy table", () => {
     });
     expect(routeFor("POST", "/sessions/session-1/ws-token")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      allOf: [{ kind: "session", action: "read" }],
     });
     expect(routeFor("POST", "/sessions/session-1/stop")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "linear-bot" }] },
@@ -246,12 +261,12 @@ describe("route policy table", () => {
       kind: "active-user",
       allOf: [
         { kind: "permission", permission: "sessions.create" },
-        { kind: "permission", permission: "sessions.collaborate" },
+        { kind: "session", action: "collaborate" },
       ],
     });
     expect(routeFor("GET", "/sessions/parent/children/child")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      allOf: [{ kind: "session", action: "read" }],
     });
     expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
       kind: "service",

@@ -42,6 +42,12 @@ export type SessionBatchArchiveResult = z.infer<typeof sessionBatchArchiveResult
 
 export const sessionBatchArchiveResponseSchema = z.strictObject({
   results: z.array(sessionBatchArchiveResultSchema),
+  skipped: z.array(
+    z.strictObject({
+      sessionId: z.string(),
+      reason: z.enum(["not_found", "missing_permission"]),
+    })
+  ),
 });
 
 export type SessionBatchArchiveResponse = z.infer<typeof sessionBatchArchiveResponseSchema>;

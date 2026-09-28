@@ -1,10 +1,13 @@
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
 import type { Team } from "@open-inspect/shared/types/teams";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
+import type { SessionAccessRow, SessionViewer } from "@open-inspect/shared";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { AuthenticationRequestServices } from "../auth/request-services";
 import type { UserAuthRuntime } from "../auth/user/runtime";
 import type { AutomationRow } from "../db/automation-store";
+import type { SessionEntry } from "../db/session-index";
 import type { RequestMetrics } from "../db/instrumented-sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 
@@ -27,4 +30,6 @@ export type RequestContext = AuthenticationRequestServices & {
   authorization?: EffectiveAuthorization;
   automationAdmission?: AutomationRouteAdmission;
   teamAdmission?: { team: Team; access: TeamCapabilities };
+  sessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
+  sessionMemberships?: ReadonlyMap<string, TeamRole>;
 };

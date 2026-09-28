@@ -20,12 +20,7 @@ import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integratio
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
-import {
-  GITHUB_SANDBOX_FALLBACK_ROUTE,
-  json,
-  requirePermission,
-  type RequestContext,
-} from "./shared";
+import { GITHUB_SANDBOX_FALLBACK_ROUTE, json, requireSession, type RequestContext } from "./shared";
 
 const logger = createLogger("slack-notify");
 
@@ -317,7 +312,7 @@ slackNotifyRoutes.post(
   "/sessions/:id/slack-notify",
   admit({
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
-    authorization: requirePermission("sessions.collaborate"),
+    authorization: requireSession("collaborate"),
   }),
   (c) => dispatch(c, handleSlackNotify)
 );

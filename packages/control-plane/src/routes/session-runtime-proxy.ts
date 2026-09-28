@@ -15,6 +15,8 @@ import {
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
+import { checkSessionAccess } from "@open-inspect/shared";
+import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -23,7 +25,7 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   NO_AUTHORIZATION,
-  requirePermission,
+  requireSession,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
@@ -174,7 +176,11 @@ async function handleSessionSnapshot(
 
   const parsed = sessionSnapshotSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) return error("Invalid session snapshot", 502);
-  const snapshot = ctx.authorization?.permissions.includes("sessions.sandbox_access")
+  const snapshot = (
+    ctx.sessionAdmission && parseTeamsEnforcementMode(_env.TEAMS_ENFORCEMENT) === "on"
+      ? checkSessionAccess(ctx.sessionAdmission.viewer, ctx.sessionAdmission.row, "sandbox").allowed
+      : ctx.authorization?.permissions.includes("sessions.sandbox_access")
+  )
     ? parsed.data
     : redactSessionSnapshotSandboxAccess(parsed.data);
   const headers = new Headers(response.headers);
@@ -305,7 +311,7 @@ async function handleBudgetUpdate(
 /** Every proxied session operation, by the name its route is known by. */
 const LIFECYCLE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("sessions.lifecycle"),
+  authorization: requireSession("lifecycle"),
 });
 
 export const sessionRuntimeProxyRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -314,20 +320,20 @@ sessionRuntimeProxyRoutes.get(
   "/sessions/:id/sandbox-access",
   admit({
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-    authorization: requirePermission("sessions.sandbox_access"),
+    authorization: requireSession("sandbox"),
   }),
   (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.sandboxAccess }))
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id",
-  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
   (c) => dispatchSession(c, handleSessionSnapshot)
 );
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/stop",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.lifecycle", {
+    authorization: requireSession("lifecycle", {
       actorlessGrants: [{ service: "linear-bot" }],
     }),
   }),
@@ -346,7 +352,7 @@ sessionRuntimeProxyRoutes.get(
   "/sessions/:id/events",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.read", {
+    authorization: requireSession("read", {
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
   }),
@@ -360,7 +366,7 @@ sessionRuntimeProxyRoutes.get(
   "/sessions/:id/artifacts",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.read", {
+    authorization: requireSession("read", {
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
   }),
@@ -368,20 +374,20 @@ sessionRuntimeProxyRoutes.get(
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/participants",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireSession("read") }),
   (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.participants }))
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/participant-profiles",
   admit({
     ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.read"),
+    authorization: requireSession("read"),
   }),
   (c) => dispatchSession(c, handleParticipantProfiles)
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/messages",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireSession("read") }),
   (c) =>
     dispatchSession(
       c,
@@ -392,7 +398,7 @@ sessionRuntimeProxyRoutes.post(
   "/sessions/:id/pr",
   admit({
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
-    authorization: requirePermission("sessions.collaborate"),
+    authorization: requireSession("collaborate"),
   }),
   (c) => dispatchSession(c, handleCreatePR)
 );
@@ -419,7 +425,7 @@ sessionRuntimeProxyRoutes.get(
   "/sessions/:id/tunnel-urls",
   admit({
     ...SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
-    authorization: requirePermission("sessions.sandbox_access"),
+    authorization: requireSession("sandbox"),
   }),
   (c) =>
     dispatchSession(
@@ -440,7 +446,7 @@ sessionRuntimeProxyRoutes.patch(
   "/sessions/:id/budget",
   admit({
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-    authorization: requirePermission("sessions.lifecycle"),
+    authorization: requireSession("lifecycle"),
   }),
   (c) => dispatchSession(c, handleBudgetUpdate)
 );

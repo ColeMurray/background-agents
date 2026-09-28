@@ -10,6 +10,7 @@ import type { Logger } from "../logger";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
+import type { SessionAction } from "@open-inspect/shared";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -45,7 +46,8 @@ export type RouteAuthorizationRequirement =
       operation: "manage" | "trigger";
       automationIdParam: string;
     }
-  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" };
+  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" }
+  | { kind: "session"; sessionIdParam: string; action: SessionAction };
 
 type BotServiceName = Exclude<ServiceName, "web">;
 const DEFAULT_AUDIT_ALLOWED = false;
@@ -141,6 +143,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
 ]);
 
 function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): boolean {
+  if (requirement.kind === "session") return requirement.action !== "read";
   if (requirement.kind === "permission") {
     return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
   }
@@ -190,6 +193,25 @@ export function requireTeam(
     allOf: [{ kind: "team", teamIdParam, need }],
     service: { kind: "deny" },
     auditAllowed: true,
+  };
+}
+
+export function sessionRequirement(
+  action: SessionAction,
+  sessionIdParam = "id"
+): RouteAuthorizationRequirement {
+  return { kind: "session", sessionIdParam, action };
+}
+
+export function requireSession(
+  action: SessionAction,
+  options?: { sessionIdParam?: string; actorlessGrants?: readonly ActorlessServiceGrant[] }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [sessionRequirement(action, options?.sessionIdParam)],
+    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
+    auditAllowed: action !== "read",
   };
 }
 

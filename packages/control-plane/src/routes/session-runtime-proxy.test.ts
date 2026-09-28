@@ -11,6 +11,7 @@ import {
   TEST_SERVICE_SECRETS,
   createTestRequestHandler,
   fakeSessionRuntimeDispatch,
+  TEST_SESSION_ROW,
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
@@ -50,9 +51,12 @@ function createDatabase(options: DatabaseOptions = {}): SqlDatabase {
     if (sql.includes("FROM role_permissions")) {
       return (options.permissions ?? []).map((permission_id) => ({ permission_id }));
     }
+    if (sql.includes("FROM team_memberships") || sql.includes("FROM session_collaborators"))
+      return [];
     return null;
   };
   const row = (sql: string): unknown => {
+    if (sql.includes("SELECT * FROM sessions")) return TEST_SESSION_ROW;
     if (sql.includes("FROM users u")) return { user_id: "user-1", suspended_at: null, ...role };
     if (sql.includes("FROM session_model_provider_auth")) {
       return {
@@ -729,7 +733,12 @@ describe("session runtime proxy routes", () => {
     });
 
     it("rejects a malformed budget body before reading the session", async () => {
-      const get = vi.spyOn(SessionIndexStore.prototype, "get");
+      const get = vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+        id: "session-1",
+        userId: "user-1",
+        ownerTeamId: null,
+        visibility: "workspace",
+      } as Awaited<ReturnType<SessionIndexStore["get"]>>);
       const fetch = vi.fn(async () => Response.json({ maxSessionCostUsd: 20 }));
 
       const response = await dispatch(
@@ -743,7 +752,7 @@ describe("session runtime proxy routes", () => {
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "Invalid budget request" });
-      expect(get).not.toHaveBeenCalled();
+      expect(get).toHaveBeenCalledOnce();
       expect(fetch).not.toHaveBeenCalled();
     });
   });

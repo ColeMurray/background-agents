@@ -37,6 +37,7 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
   permissionRequirement,
+  sessionRequirement,
   requireAll,
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
@@ -381,7 +382,7 @@ sessionChildSpawnRoutes.post(
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requireAll(
       permissionRequirement("sessions.create"),
-      permissionRequirement("sessions.collaborate")
+      sessionRequirement("collaborate")
     ),
   }),
   (c) => dispatchSession(c, handleSpawnChild)

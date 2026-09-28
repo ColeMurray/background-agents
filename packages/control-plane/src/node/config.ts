@@ -91,6 +91,7 @@ const ENV_CONFIG_KEYS = {
   SANDBOX_BOOT_TIMEOUT_MS: true,
   EXECUTION_TIMEOUT_MS: true,
   SECRETS_CAP_ENFORCEMENT: true,
+  TEAMS_ENFORCEMENT: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 

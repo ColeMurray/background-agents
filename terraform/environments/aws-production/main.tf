@@ -44,6 +44,7 @@ module "control_plane" {
     LOG_LEVEL              = "info"
     SANDBOX_PROVIDER       = "modal"
     UNSAFE_ALLOW_ALL_USERS = "false"
+    TEAMS_ENFORCEMENT       = "shadow"
   }, var.config)
 
   tags = { Environment = local.environment }

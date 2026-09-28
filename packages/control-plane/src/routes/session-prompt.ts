@@ -28,7 +28,7 @@ import {
   type GitHubEnrichment,
 } from "../session/identity";
 import type { Env } from "../types";
-import { error, json, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, json, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
@@ -175,7 +175,7 @@ sessionPromptRoutes.post(
   "/sessions/:id/prompt",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("sessions.collaborate"),
+    authorization: requireSession("collaborate"),
   }),
   (c) => dispatchSession(c, handleSessionPrompt)
 );

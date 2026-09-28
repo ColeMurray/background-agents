@@ -410,3 +410,101 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /internal/slack-event anonymous=401",
 ]
 `;
+
+exports[`route admission sentinel > admits actorless reads of team and workspace sessions but not private ones 1`] = `
+[
+  "actorless-workspace=200",
+  "actorless-team=200",
+  "actorless-private=404",
+]
+`;
+
+exports[`route admission sentinel > audits one workspace Owner break-glass admission for a private session 1`] = `
+[
+  "owner-role-break-glass=200:1",
+]
+`;
+
+exports[`route admission sentinel > conceals all team item routes from another team before any handler or DO call 1`] = `
+[
+  "PATCH /sessions/:id/read-state other-team=404",
+  "DELETE /sessions/:id other-team=404",
+  "GET /sessions/:id/export other-team=404",
+  "GET /sessions/:id/sandbox-access other-team=404",
+  "GET /sessions/:id other-team=404",
+  "POST /sessions/:id/stop other-team=404",
+  "GET /sessions/:id/events other-team=404",
+  "GET /sessions/:id/artifacts other-team=404",
+  "GET /sessions/:id/participants other-team=404",
+  "GET /sessions/:id/participant-profiles other-team=404",
+  "GET /sessions/:id/messages other-team=404",
+  "POST /sessions/:id/pr other-team=404",
+  "GET /sessions/:id/tunnel-urls other-team=404",
+  "PATCH /sessions/:id/title other-team=404",
+  "POST /sessions/:id/archive other-team=404",
+  "POST /sessions/:id/unarchive other-team=404",
+  "PATCH /sessions/:id/budget other-team=404",
+  "POST /sessions/:id/ws-token other-team=404",
+  "POST /sessions/:id/prompt other-team=404",
+  "POST /sessions/:id/pull-requests/refresh other-team=404",
+  "POST /sessions/:id/media other-team=404",
+  "GET /sessions/:id/media/:artifactId other-team=404",
+  "POST /sessions/:id/attachments other-team=404",
+  "GET /sessions/:id/attachments/:attachmentId other-team=404",
+  "GET /sessions/:id/diff other-team=404",
+  "PUT /sessions/:id/diff other-team=404",
+  "POST /sessions/:id/diff/failure other-team=404",
+  "GET /sessions/:id/diff/:revisionId/files/:fileId other-team=404",
+  "POST /sessions/:id/diff/retry other-team=404",
+  "GET /sessions/:id/skills other-team=404",
+  "POST /sessions/:id/children other-team=404",
+  "GET /sessions/:id/children other-team=404",
+  "GET /sessions/:id/children/:childId other-team=404",
+  "POST /sessions/:id/children/:childId/cancel other-team=404",
+  "POST /sessions/:id/slack-notify other-team=404",
+]
+`;
+
+exports[`route admission sentinel > reports action denials for a same-team Viewer and admits a private collaborator 1`] = `
+[
+  "PATCH /sessions/:id/read-state same-team-viewer=200",
+  "DELETE /sessions/:id same-team-viewer=403",
+  "GET /sessions/:id/sandbox-access same-team-viewer=403",
+  "GET /sessions/:id same-team-viewer=200",
+  "POST /sessions/:id/stop same-team-viewer=403",
+  "GET /sessions/:id/events same-team-viewer=200",
+  "GET /sessions/:id/artifacts same-team-viewer=200",
+  "GET /sessions/:id/participants same-team-viewer=200",
+  "GET /sessions/:id/participant-profiles same-team-viewer=200",
+  "GET /sessions/:id/messages same-team-viewer=200",
+  "POST /sessions/:id/pr same-team-viewer=403",
+  "GET /sessions/:id/tunnel-urls same-team-viewer=403",
+  "PATCH /sessions/:id/title same-team-viewer=403",
+  "POST /sessions/:id/archive same-team-viewer=403",
+  "POST /sessions/:id/unarchive same-team-viewer=403",
+  "PATCH /sessions/:id/budget same-team-viewer=403",
+  "POST /sessions/:id/ws-token same-team-viewer=200",
+  "POST /sessions/:id/prompt same-team-viewer=403",
+  "POST /sessions/:id/pull-requests/refresh same-team-viewer=403",
+  "POST /sessions/:id/media same-team-viewer=403",
+  "GET /sessions/:id/media/:artifactId same-team-viewer=200",
+  "POST /sessions/:id/attachments same-team-viewer=403",
+  "GET /sessions/:id/attachments/:attachmentId same-team-viewer=200",
+  "GET /sessions/:id/diff same-team-viewer=200",
+  "PUT /sessions/:id/diff same-team-viewer=403",
+  "POST /sessions/:id/diff/failure same-team-viewer=403",
+  "GET /sessions/:id/diff/:revisionId/files/:fileId same-team-viewer=200",
+  "POST /sessions/:id/diff/retry same-team-viewer=403",
+  "GET /sessions/:id/skills same-team-viewer=200",
+  "GET /sessions/:id/children same-team-viewer=200",
+  "GET /sessions/:id/children/:childId same-team-viewer=200",
+  "POST /sessions/:id/children/:childId/cancel same-team-viewer=403",
+  "POST /sessions/:id/slack-notify same-team-viewer=403",
+]
+`;
+
+exports[`route admission sentinel > reports action denials for a same-team Viewer and admits a private collaborator 2`] = `
+[
+  "collaborator-on-private=200",
+]
+`;

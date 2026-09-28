@@ -13,7 +13,25 @@ import type {
 } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
+import {
+  auditPrivateSessionBreakGlass,
+  auditShadowSessionDenial,
+} from "../authorization/request-audit";
+import {
+  legacyPermissionForAction,
+  parseTeamsEnforcementMode,
+  type TeamsEnforcementMode,
+} from "../authorization/teams-enforcement";
+import {
+  checkSessionAccess,
+  type AccessDecision,
+  type SessionAction,
+  type SessionViewer,
+} from "@open-inspect/shared";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { AutomationStore } from "../db/automation-store";
+import { SessionIndexStore, type SessionEntry } from "../db/session-index";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { TeamStore } from "../db/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
@@ -343,7 +361,12 @@ function enforceStaticServicePermissionCeiling(
   if (policy.authorization.kind !== "active-user") return null;
 
   for (const requirement of policy.authorization.allOf) {
-    const permission = requirement.kind === "permission" ? requirement.permission : null;
+    const permission =
+      requirement.kind === "permission"
+        ? requirement.permission
+        : requirement.kind === "session"
+          ? legacyPermissionForAction(requirement.action)
+          : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -646,6 +669,156 @@ async function enforceTeamRequirement(
   }
 }
 
+export function viewerFromContext(
+  ctx: RequestContext,
+  memberships: ReadonlyMap<string, TeamRole>
+): SessionViewer {
+  const authorization = ctx.authorization;
+  if (!authorization) {
+    if (ctx.principal?.kind === "service" && !ctx.principal.actor)
+      return { kind: "service", teamId: null };
+    throw new Error("Missing request authorization");
+  }
+  return {
+    kind: "user",
+    userId: authorization.userId,
+    roleKey: authorization.role.key,
+    permissions: authorization.permissions,
+    suspended: authorization.suspendedAt !== null,
+    memberships,
+  };
+}
+
+export interface ResolvedSessionTarget {
+  row: SessionEntry;
+  read: AccessDecision | null;
+  action: AccessDecision | null;
+  privateDenied: boolean;
+}
+
+/** The D1 row is authoritative even when a handler would proxy to the runtime. */
+export async function resolveSessionTarget(
+  ctx: RequestContext,
+  sessionId: string,
+  action: SessionAction,
+  mode: TeamsEnforcementMode
+): Promise<ResolvedSessionTarget | null> {
+  const row = await new SessionIndexStore(ctx.db).get(sessionId);
+  if (!row) return null;
+
+  if (mode === "off" && row.visibility !== "private") {
+    return { row, read: null, action: null, privateDenied: false };
+  }
+
+  const memberships =
+    mode === "off" || !ctx.authorization
+      ? new Map<string, TeamRole>()
+      : (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
+          ctx.authorization.userId
+        ));
+  const viewer = viewerFromContext(ctx, memberships);
+  const collaboratorIds = await new SessionCollaboratorStore(ctx.db).listUserIds(sessionId);
+  const accessRow = {
+    ...row,
+    ownerUserId: row.userId ?? null,
+    ownerTeamId: row.ownerTeamId,
+    visibility: row.visibility,
+    collaboratorIds,
+  };
+  const read = checkSessionAccess(viewer, accessRow, "read");
+  const decision = checkSessionAccess(viewer, accessRow, action);
+  ctx.sessionAdmission = { row: accessRow, viewer };
+  return {
+    row: accessRow,
+    read,
+    action: decision,
+    privateDenied: row.visibility === "private" && !read.allowed && read.reason === "private",
+  };
+}
+
+export function sessionTargetDenial(
+  target: ResolvedSessionTarget | null,
+  mode: TeamsEnforcementMode
+): "not_found" | "missing_permission" | null {
+  if (!target || target.privateDenied) return "not_found";
+  if (mode !== "on") return null;
+  if (target.read && !target.read.allowed) return "not_found";
+  if (target.action && !target.action.allowed) return "missing_permission";
+  return null;
+}
+
+export function shadowSessionDenialReason(target: ResolvedSessionTarget): string | null {
+  if (target.read && !target.read.allowed) return target.read.reason;
+  if (target.action && !target.action.allowed) return target.action.reason;
+  return null;
+}
+
+async function enforceSessionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "session" }>,
+  params: RouteParams,
+  request: Request,
+  pathname: string,
+  env: Env,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  const sessionId = params[requirement.sessionIdParam];
+  if (!sessionId) return { response: json({ error: "Invalid session route" }, 400) };
+  try {
+    const mode = parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT);
+    const target = await resolveSessionTarget(ctx, sessionId, requirement.action, mode);
+    if (sessionTargetDenial(target, mode) === "not_found") {
+      return authorizationDenial(
+        error("Session not found", 404),
+        evidence,
+        requirement,
+        "session_not_visible",
+        "Session not found"
+      );
+    }
+    if (!target) throw new Error("Unreachable session target");
+    if (mode === "on" && target.action && !target.action.allowed) {
+      return authorizationDenial(
+        json(
+          { error: "Forbidden", code: "session_action_denied", reason_code: target.action.reason },
+          403
+        ),
+        evidence,
+        requirement,
+        target.action.reason,
+        "Forbidden"
+      );
+    }
+    if (mode !== "on") {
+      const legacy = await enforcePermissionRequirement(
+        { kind: "permission", permission: legacyPermissionForAction(requirement.action) },
+        ctx,
+        evidence
+      );
+      if (legacy) return legacy;
+      if (mode === "shadow") {
+        const reason = shadowSessionDenialReason(target);
+        if (reason)
+          await auditShadowSessionDenial({
+            ctx,
+            method: request.method,
+            path: pathname,
+            teamId: target.row.ownerTeamId,
+            action: requirement.action,
+            reason,
+          });
+      }
+    }
+    if (target.read?.allowed && target.read.audit === "session.private_break_glass") {
+      await auditPrivateSessionBreakGlass(ctx, sessionId, target.row.ownerTeamId);
+    }
+    evidence.requirements.push(requirement);
+    return null;
+  } catch {
+    return authorizationUnavailable();
+  }
+}
+
 function allowed(
   policy: RouteAdmissionPolicy,
   admission: AllowedAuthorizationDecision["admission"],
@@ -720,6 +893,17 @@ async function enforceRouteAuthorization(
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);
+          break;
+        case "session":
+          failure = await enforceSessionRequirement(
+            requirement,
+            params,
+            request,
+            pathname,
+            env,
+            ctx,
+            evidence
+          );
           break;
       }
       if (failure) return resultForFailure(failure);

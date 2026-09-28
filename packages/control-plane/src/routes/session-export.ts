@@ -52,7 +52,14 @@ import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { parseQuery } from "./query";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
-import { error, SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import {
+  error,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  requirePermission,
+  requireAll,
+  permissionRequirement,
+  sessionRequirement,
+} from "./shared";
 
 export const EXPORT_SCHEMA_VERSION = TRACE_EXPORT_SCHEMA_VERSION;
 const MAX_EXPORT_LIMIT = 500;
@@ -350,6 +357,12 @@ const EXPORT_READ = admit({
 export const sessionExportRoutes = new Hono<ControlPlaneHonoEnv>();
 
 sessionExportRoutes.get("/sessions/export", EXPORT_READ, (c) => dispatchSession(c, handleExport));
-sessionExportRoutes.get("/sessions/:id/export", EXPORT_READ, (c) =>
-  dispatchSession(c, handleSingleExport)
+sessionExportRoutes.get(
+  "/sessions/:id/export",
+  admit({
+    ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+    authorization: requireAll(sessionRequirement("read"), permissionRequirement("sessions.export")),
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatchSession(c, handleSingleExport)
 );
