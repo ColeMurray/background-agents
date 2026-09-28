@@ -8,7 +8,7 @@ import {
   type Team,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
-import { auditTeamEvent, bindTeamEvent } from "../authorization/request-audit";
+import { TeamAuditStore, type TeamAuditInput } from "../db/team-audit";
 import {
   LastLeadError,
   TeamMembershipNotFoundError,
@@ -70,6 +70,21 @@ function admittedTeam(ctx: RequestContext): Team {
   return ctx.teamAdmission.team;
 }
 
+async function auditTeamEvent(
+  input: Omit<TeamAuditInput, "requestId" | "actorUserId" | "teamId"> & {
+    ctx: RequestContext;
+    team: Team;
+  }
+): Promise<void> {
+  const { ctx, team, ...event } = input;
+  await new TeamAuditStore(ctx.db).write({
+    ...event,
+    requestId: ctx.request_id,
+    actorUserId: viewer(ctx).userId,
+    teamId: team.id,
+  });
+}
+
 function mutationError(cause: unknown): Response {
   if (cause instanceof LastLeadError) return json({ error: cause.message, code: "last_lead" }, 409);
   if (cause instanceof TeamMembershipNotFoundError) return error("Team membership not found", 404);
@@ -126,9 +141,11 @@ async function createTeam(request: Request, _env: Env, _params: object, ctx: Req
   if (body instanceof Response) return body;
   try {
     const leadUserId = viewer(ctx).userId;
+    const audit = new TeamAuditStore(ctx.db);
     const team = await new TeamStore(ctx.db).createWithLead(body, leadUserId, (teamId) =>
-      bindTeamEvent({
-        ctx,
+      audit.bind({
+        requestId: ctx.request_id,
+        actorUserId: leadUserId,
         teamId,
         action: "team.created",
         before: {},
