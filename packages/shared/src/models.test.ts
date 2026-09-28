@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ENABLED_MODELS,
@@ -92,6 +93,37 @@ const GO_MODELS = [
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
 const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5.3"] as const;
+
+it.each([
+  "../../../docs/AVAILABLE_MODELS.md",
+  "../../../packages/docs/content/docs/models/choosing-a-model.mdx",
+])("keeps the model inventory in %s aligned with the catalog", (file) => {
+  const rows = readFileSync(new URL(file, import.meta.url), "utf8")
+    .split("\n")
+    .filter((line) => /^\| `[^`]+`/.test(line))
+    .map((line) =>
+      line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.trim())
+    );
+  const models = MODEL_CATALOG.flatMap((group) => group.models);
+
+  expect(rows.map(([id]) => id).sort()).toEqual(models.map(({ id }) => `\`${id}\``).sort());
+  for (const model of models) {
+    const row = rows.find(([id]) => id === `\`${model.id}\``);
+    expect(row?.[1]).toBe(model.name);
+    if (file.endsWith("AVAILABLE_MODELS.md")) {
+      expect(row?.[2]).toBe(model.description);
+    }
+    if ("reasoning" in model) {
+      expect(row?.at(-2)).toBe(model.reasoning.efforts.join(", "));
+      expect(row?.at(-1)).toBe(model.reasoning.default ?? "Not set");
+    } else {
+      expect(row?.at(-1)).toBe("N/A");
+    }
+  }
+});
 
 describe("model utilities", () => {
   it("derives every public model view from the authoritative catalog", () => {
