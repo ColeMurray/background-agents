@@ -111,12 +111,15 @@ export function parseClaimedJobRow(row: unknown, token: string): ClaimedJob {
   return { ...parsed.data, token };
 }
 
-export function parseJobIdRows(rows: unknown): string[] {
-  const parsed = z.array(jobIdRowSchema).safeParse(rows);
-  if (!parsed.success) {
-    throw new Error("Malformed job id rows", { cause: parsed.error });
-  }
-  return parsed.data.map((row) => row.id);
+export function parseJobIdRows(rows: unknown[]): string[] {
+  return rows.flatMap((row) => {
+    const parsed = jobIdRowSchema.safeParse(row);
+    if (parsed.success) return [parsed.data.id];
+    // Recovery has already released the batch. The claim path will bury this
+    // row; don't prevent healthy jobs from recovering in the meantime.
+    console.error("Malformed recovered job id row", parsed.error);
+    return [];
+  });
 }
 
 export function parseNullableRunAtRow(row: unknown, description: string): number | null {
