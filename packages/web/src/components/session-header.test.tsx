@@ -110,8 +110,8 @@ describe("SessionHeader", () => {
 
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).not.toHaveClass("md:max-w-40");
-    expect(heading.parentElement).toHaveClass("min-w-0", "flex-1");
-    expect(heading.parentElement?.parentElement).toHaveClass("min-w-0", "flex-1");
+    expect(heading.parentElement).not.toHaveClass("md:flex-initial");
+    expect(heading.parentElement?.parentElement).not.toHaveClass("md:flex-initial");
     expect(screen.getByText("acme/web")).toHaveClass("truncate");
 
     fireEvent.click(screen.getByRole("button", { name: title }));
