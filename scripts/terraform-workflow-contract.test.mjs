@@ -38,3 +38,30 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
     "classifier Anthropic key"
   );
 });
+
+test("Boat deployment inputs reach Terraform plan and apply", () => {
+  const assignments = [
+    "TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}",
+    "TF_VAR_boat_build_api_key: ${{ secrets.BOAT_BUILD_API_KEY }}",
+    "TF_VAR_boat_sandbox_access_secret: ${{ secrets.BOAT_SANDBOX_ACCESS_SECRET }}",
+  ];
+  const planStart = workflow.indexOf("\n  plan:\n");
+  const applyStart = workflow.indexOf("\n  apply:\n");
+  const jobs = {
+    plan: workflow.slice(planStart, applyStart),
+    apply: workflow.slice(applyStart),
+  };
+  for (const [name, job] of Object.entries(jobs)) {
+    for (const assignment of assignments) {
+      assert.equal(
+        job.split(assignment).length - 1,
+        1,
+        `expected one ${assignment} in the ${name} job`
+      );
+    }
+  }
+  assert.match(workflow, /packages\/boat-infra\/\*\*/);
+  assert.match(jobs.apply, /Protect current Boat snapshot during rollout/);
+  assert.match(jobs.plan, /Protect current Boat snapshot during plan/);
+  assert.match(jobs.apply, /timeout-minutes: 90/);
+});

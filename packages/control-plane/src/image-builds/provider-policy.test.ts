@@ -19,12 +19,22 @@ describe("resolveImageBuildProvider", () => {
     expect(resolveImageBuildProvider(provider)).toBe(provider);
   });
 
-  it("reports no unsupported provider: every sandbox backend now builds images", () => {
-    // The 501 path stays for a backend that lands without image support; as
-    // of Daytona there is none, so no configured deployment can reach it.
+  it("reports no unsupported provider for every image-capable backend", () => {
     for (const provider of SANDBOX_BACKENDS) {
       expect(getImageBuildsUnsupportedMessage(env({ SANDBOX_PROVIDER: provider }))).toBeNull();
     }
+  });
+
+  it("keeps Boat repo and environment image builds unsupported", () => {
+    expect(resolveImageBuildProvider("boat")).toBeNull();
+    expect(getImageBuildsUnsupportedMessage(env({ SANDBOX_PROVIDER: "boat" }))).toContain(
+      "Image builds are only available"
+    );
+    expect(resolveImageBuildAdmission(env({ SANDBOX_PROVIDER: "boat" }))).toEqual({
+      provider: null,
+      admitted: false,
+      reason: "provider_unsupported",
+    });
   });
 });
 

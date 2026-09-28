@@ -126,6 +126,13 @@ def test_each_caller_gets_a_fresh_context_without_reusing_extra_files(tmp_path):
     assert not (second.directory / ".env").exists()
 
 
+def test_boat_bundle_includes_the_resume_launcher(tmp_path):
+    packed = pack_bundle(REPO_ROOT, "boat", tmp_path)
+    launcher = packed.directory / "packages/boat-infra/runtime-launcher.sh"
+    assert launcher.is_file()
+    assert launcher.stat().st_mode & 0o111
+
+
 def test_missing_payload_fails_closed(checkout):
     (checkout / "packages/sandbox-runtime/uv.lock").unlink()
     with pytest.raises(FileNotFoundError):

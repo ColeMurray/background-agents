@@ -56,9 +56,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Python environment (optional — for modal-infra development)
+# 5. Python environments (optional — for provider-infra development)
 # ---------------------------------------------------------------------------
 MODAL_DIR="$REPO_ROOT/packages/modal-infra"
+BOAT_DIR="$REPO_ROOT/packages/boat-infra"
 
 setup_python() {
   info "Setting up Python environment for modal-infra…"
@@ -110,6 +111,32 @@ if [ -d "$MODAL_DIR" ]; then
   else
     info "python3 not found — skipping optional modal-infra Python setup."
   fi
+fi
+
+setup_boat_python() {
+  info "Setting up Python environment for boat-infra…"
+  if ! command -v python3 &>/dev/null; then
+    return
+  fi
+  if command -v uv &>/dev/null; then
+    (
+      cd "$BOAT_DIR"
+      uv sync --frozen --extra dev
+    )
+  else
+    if [ ! -d "$BOAT_DIR/.venv" ]; then
+      python3 -m venv "$BOAT_DIR/.venv"
+    fi
+    # shellcheck disable=SC1091
+    source "$BOAT_DIR/.venv/bin/activate"
+    pip install -q -e "$BOAT_DIR[dev]"
+    deactivate
+  fi
+  info "Boat Python environment ready (activate with: source packages/boat-infra/.venv/bin/activate)"
+}
+
+if [ -d "$BOAT_DIR" ] && command -v python3 &>/dev/null; then
+  setup_boat_python
 fi
 
 # ---------------------------------------------------------------------------

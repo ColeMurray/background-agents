@@ -8,6 +8,7 @@ on:
       - ".nvmrc"
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
+      - "packages/boat-infra/**"
       - "packages/e2b-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
@@ -27,6 +28,7 @@ on:
       - ".nvmrc"
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
+      - "packages/boat-infra/**"
       - "packages/e2b-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
@@ -99,12 +101,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e packages/sandbox-runtime
           pip install -e "packages/modal-infra[dev]"
+          pip install -e "packages/boat-infra[dev]"
 
       - name: Run Ruff linter
-        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
+        run: ruff check packages/modal-infra/ packages/boat-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
 
       - name: Run Ruff formatter check
-        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
+        run: ruff format --check packages/modal-infra/ packages/boat-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
 
   typecheck-python:
     name: TypeCheck (Python)
@@ -229,6 +232,34 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ../sandbox-runtime
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  test-python-boat-infra:
+    name: Test (Python - boat-infra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-python]
+    defaults:
+      run:
+        working-directory: packages/boat-infra
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: Run tests

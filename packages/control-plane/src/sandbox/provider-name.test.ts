@@ -34,6 +34,10 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("opencomputer")).toBe("opencomputer");
   });
 
+  it('returns "boat" for "boat"', () => {
+    expect(resolveSandboxBackendName("boat")).toBe("boat");
+  });
+
   it("is case-insensitive", () => {
     expect(resolveSandboxBackendName("MODAL")).toBe("modal");
     expect(resolveSandboxBackendName("Daytona")).toBe("daytona");
@@ -41,6 +45,7 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("DAYTONA")).toBe("daytona");
     expect(resolveSandboxBackendName("VERCEL")).toBe("vercel");
     expect(resolveSandboxBackendName("OPENCOMPUTER")).toBe("opencomputer");
+    expect(resolveSandboxBackendName("BOAT")).toBe("boat");
   });
 
   it("trims whitespace", () => {
@@ -49,6 +54,7 @@ describe("resolveSandboxBackendName", () => {
     expect(resolveSandboxBackendName("  vercel  ")).toBe("vercel");
     expect(resolveSandboxBackendName("  opencomputer  ")).toBe("opencomputer");
     expect(resolveSandboxBackendName("  e2b  ")).toBe("e2b");
+    expect(resolveSandboxBackendName("  boat  ")).toBe("boat");
   });
 
   it("throws for unsupported provider", () => {

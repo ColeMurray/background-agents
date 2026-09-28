@@ -667,6 +667,116 @@ variable "e2b_template_memory_mb" {
   default     = 4096
 }
 
+# -----------------------------------------------------------------------------
+# Boat (only required when sandbox_provider = "boat")
+# -----------------------------------------------------------------------------
+
+variable "boat_api_key" {
+  description = "Boat runtime API key"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "boat" || length(trimspace(var.boat_api_key)) > 0
+    error_message = "boat_api_key must be set when sandbox_provider = 'boat'."
+  }
+}
+
+variable "boat_build_api_key" {
+  description = "Optional separate Boat template-build key; defaults to boat_api_key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "boat_api_url" {
+  description = "Boat v1 REST API base URL"
+  type        = string
+  default     = "https://boat.dev/api/v1"
+
+  validation {
+    condition = (
+      can(regex("^https://", var.boat_api_url)) ||
+      can(regex("^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:/|$)", var.boat_api_url))
+    )
+    error_message = "boat_api_url must use HTTPS except for loopback development URLs."
+  }
+}
+
+variable "boat_org" {
+  description = "Optional Boat organization billing scope"
+  type        = string
+  default     = ""
+}
+
+variable "boat_base_snapshot" {
+  description = "Optional verified Boat named snapshot pin; empty builds a managed snapshot"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.boat_base_snapshot == "" || can(regex("^[a-z0-9][a-z0-9-]{0,62}$", var.boat_base_snapshot))
+    error_message = "boat_base_snapshot must use Boat's lowercase named-snapshot format."
+  }
+}
+
+variable "boat_previous_base_snapshot" {
+  description = "Currently deployed managed snapshot protected during build and retained for rollback"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.boat_previous_base_snapshot == "" || can(regex("^[a-z0-9][a-z0-9-]{0,62}$", var.boat_previous_base_snapshot))
+    error_message = "boat_previous_base_snapshot must use Boat's lowercase named-snapshot format."
+  }
+}
+
+variable "boat_template_prefix" {
+  description = "Prefix for Terraform-managed Boat named snapshots"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.boat_template_prefix == "" || can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.boat_template_prefix))
+    error_message = "boat_template_prefix must be empty or 1-46 lowercase letters, digits, or dashes."
+  }
+}
+
+variable "boat_sandbox_type" {
+  description = "Default Boat session machine type"
+  type        = string
+  default     = "default"
+
+  validation {
+    condition     = contains(["small", "default", "large"], var.boat_sandbox_type)
+    error_message = "boat_sandbox_type must be 'small', 'default', or 'large'."
+  }
+}
+
+variable "boat_template_sandbox_type" {
+  description = "Boat machine type used for template construction and verification"
+  type        = string
+  default     = "default"
+
+  validation {
+    condition     = contains(["small", "default", "large"], var.boat_template_sandbox_type)
+    error_message = "boat_template_sandbox_type must be 'small', 'default', or 'large'."
+  }
+}
+
+variable "boat_sandbox_access_secret" {
+  description = "Stable secret for Boat code-server and VNC password derivation"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "boat" || length(trimspace(var.boat_sandbox_access_secret)) >= 32
+    error_message = "boat_sandbox_access_secret must contain at least 32 characters when sandbox_provider = 'boat'."
+  }
+}
+
 variable "nextauth_secret" {
   description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string
@@ -683,13 +793,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', 'e2b', or 'boat'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
+    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "opencomputer", "e2b", "boat"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', 'e2b', or 'boat'."
   }
 }
 

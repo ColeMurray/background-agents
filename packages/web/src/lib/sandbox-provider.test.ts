@@ -93,6 +93,22 @@ describe("sandbox-provider", () => {
     expect(supportsRepoImages()).toBe(true);
   });
 
+  it("supports Boat settings without advertising repo images", async () => {
+    process.env.NEXT_PUBLIC_SANDBOX_PROVIDER = "boat";
+
+    const {
+      getPublicSandboxProvider,
+      supportsConfigurableSandboxResources,
+      supportsConfigurableSandboxTimeout,
+      supportsRepoImages,
+    } = await loadProvider();
+
+    expect(getPublicSandboxProvider()).toBe("boat");
+    expect(supportsRepoImages()).toBe(false);
+    expect(supportsConfigurableSandboxResources()).toBe(true);
+    expect(supportsConfigurableSandboxTimeout()).toBe(true);
+  });
+
   it("derives the unsupported-provider message from the image-build provider list", async () => {
     const { REPO_IMAGES_UNSUPPORTED_MESSAGE, getRepoImageProviders } = await loadProvider();
 

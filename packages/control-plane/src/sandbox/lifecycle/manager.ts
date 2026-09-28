@@ -1436,11 +1436,7 @@ export class SandboxLifecycleManager
         ? await this.storage.getSandboxAccessSecret("ttyd")
         : null;
       const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
-      const replaceForTerminalCredential = Boolean(result.ttydUrl && !validTtydToken);
-      if (replaceForTerminalCredential && restoringSavedState) {
-        this.shutdown.holdFailedRecovery("Terminal credential is missing or expired", generation);
-        return;
-      }
+      const terminalCredentialUnavailable = Boolean(result.ttydUrl && !validTtydToken);
       let completed: boolean;
       try {
         completed = await this.storage.completeProviderResume(generation, {
@@ -1452,7 +1448,7 @@ export class SandboxLifecycleManager
           vnc: result.vncAccess ?? null,
           ttyd: validTtydToken
             ? {
-                url: replaceForTerminalCredential ? null : (result.ttydUrl ?? null),
+                url: result.ttydUrl ?? null,
                 token: validTtydToken,
               }
             : null,
@@ -1479,14 +1475,17 @@ export class SandboxLifecycleManager
       await this.shutdown.recordProviderStartup(generation, result.lifetime);
       startupClaimed = true;
 
-      if (replaceForTerminalCredential) {
-        this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
+      if (terminalCredentialUnavailable) {
+        this.log.warn("Terminal credential unavailable; preserving resumed sandbox", {
           event: "sandbox.resume_terminal_credential_unavailable",
           provider_object_id: finalProviderObjectId,
           reason: ttydToken ? "invalid_or_expired" : "missing",
         });
-        await this.doSpawn(previousGeneration);
-        return;
+        this.broadcaster.broadcast({
+          type: "sandbox_warning",
+          message:
+            "Terminal access is unavailable because its credential expired; sandbox state was preserved",
+        });
       }
 
       if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
@@ -2323,12 +2322,12 @@ export class SandboxLifecycleManager
   }
 
   private async storeCodeServer(url: string, password: string): Promise<void> {
-    this.log.info("Storing code-server info", { url });
+    this.log.info("Storing code-server info");
     await this.storage.updateSandboxAccess("codeServer", url, password);
   }
 
   private async storeVnc(url: string, password: string): Promise<void> {
-    this.log.info("Storing VNC info", { url });
+    this.log.info("Storing VNC info");
     await this.storage.updateSandboxAccess("vnc", url, password);
   }
 
@@ -2390,7 +2389,7 @@ export class SandboxLifecycleManager
       sandboxAuthToken
     );
 
-    this.log.info("Storing ttyd info", { url });
+    this.log.info("Storing ttyd info");
     await this.storage.updateSandboxAccess("ttyd", url, token);
   }
 

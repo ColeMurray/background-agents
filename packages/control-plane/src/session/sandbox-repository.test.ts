@@ -384,13 +384,14 @@ describe("SandboxRepository", () => {
   });
 
   describe("access artifacts", () => {
-    it("stores encrypted credentials and clears them", async () => {
+    it("stores encrypted URLs and credentials and clears them", async () => {
       await repository.updateSandboxAccess("vnc", "https://vnc.test", "vnc-secret");
       repository.clearSandboxAccess("vnc");
 
       expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
       const [url, stored] = mock.calls[0].params as [string, string];
-      expect(url).toBe("https://vnc.test");
+      expect(url).not.toBe("https://vnc.test");
+      await expect(decryptToken(url, TEST_ENCRYPTION_KEY)).resolves.toBe("https://vnc.test");
       expect(stored).not.toBe("vnc-secret");
       await expect(decryptToken(stored, TEST_ENCRYPTION_KEY)).resolves.toBe("vnc-secret");
       expect(mock.calls[1].query).toContain("SET vnc_url = NULL, vnc_password = NULL");
@@ -645,13 +646,19 @@ describe("SandboxRepository boot state (SQLite)", () => {
         await expect(repository.completeProviderResume(generation, access)).resolves.toBe(true);
 
         const row = repository.getSandbox();
-        expect(row).toMatchObject({
-          modal_object_id: "provider-2",
-          code_server_url: "https://code.test",
-          vnc_url: "https://vnc.test",
-          ttyd_url: "https://terminal.test",
-          tunnel_urls: JSON.stringify(access.tunnelUrls),
-        });
+        expect(row?.modal_object_id).toBe("provider-2");
+        await expect(decryptToken(row!.code_server_url!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+          "https://code.test"
+        );
+        await expect(decryptToken(row!.vnc_url!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+          "https://vnc.test"
+        );
+        await expect(decryptToken(row!.ttyd_url!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+          "https://terminal.test"
+        );
+        await expect(decryptToken(row!.tunnel_urls!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+          JSON.stringify(access.tunnelUrls)
+        );
         await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("code-secret");
         await expect(repository.getSandboxAccessSecret("vnc")).resolves.toBe("vnc-secret");
         await expect(repository.getSandboxAccessSecret("ttyd")).resolves.toBe("terminal-token");

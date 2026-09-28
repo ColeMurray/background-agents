@@ -62,6 +62,17 @@ Bulk session export now requires `sessions.export` instead of `sessions.read`. O
 Administrators, and users granted the permission through a custom role may export; Viewers, Members,
 and bot services cannot.
 
+## September 24, 2026
+
+**Boat sandbox provider.** Boat joins the selectable sandbox backends with direct REST lifecycle
+management, finite provider deadlines, preset resource mapping, private hosted editor/terminal/VNC
+access, and durable same-ID stop/resume. Terraform builds and fresh-restore-verifies an immutable
+shared Boat named snapshot before Worker rollout, retaining one rollback artifact under Boat's
+ten-template cap. Boat intentionally does not expose repository/environment prebuilds. Persistent
+workspace data lives under Boat's captured `/home/user` tree, with `/workspace` recreated on every
+boot. An expired terminal credential now disables only terminal access instead of replacing any
+persistent-provider sandbox.
+
 ## September 23, 2026
 
 **Sessions discovery across full history.** A new **Sessions** destination in the sidebar (above

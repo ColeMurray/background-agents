@@ -12,6 +12,7 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
+      - "packages/boat-infra/**"
       - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
       - "packages/sandbox-runtime/**"
@@ -32,6 +33,7 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
+      - "packages/boat-infra/**"
       - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
       - "packages/sandbox-runtime/**"
@@ -223,6 +225,13 @@ jobs:
           fi
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Protect current Boat snapshot during plan
+        run: |
+          set -euo pipefail
+          previous="$(terraform output -raw boat_base_snapshot 2>/dev/null || true)"
+          jq -n --arg previous "$previous" '{boat_previous_base_snapshot: $previous}' > boat-rollback.auto.tfvars.json
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform Plan
         id: plan
         run: |
@@ -319,6 +328,15 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_build_api_key: ${{ secrets.BOAT_BUILD_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_template_prefix: "${{ vars.BOAT_TEMPLATE_PREFIX || secrets.BOAT_TEMPLATE_PREFIX || '' }}"
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
+          TF_VAR_boat_template_sandbox_type: "${{ vars.BOAT_TEMPLATE_SANDBOX_TYPE || secrets.BOAT_TEMPLATE_SANDBOX_TYPE || 'default' }}"
+          TF_VAR_boat_sandbox_access_secret: ${{ secrets.BOAT_SANDBOX_ACCESS_SECRET }}
 
       - name: Post Plan Results
         uses: actions/github-script@v8
@@ -359,7 +377,7 @@ jobs:
   apply:
     name: Apply
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     needs: [validate, check-secrets]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.check-secrets.outputs.has-secrets == 'true'
     environment: production
@@ -418,6 +436,13 @@ jobs:
           if [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Protect current Boat snapshot during rollout
+        run: |
+          set -euo pipefail
+          previous="$(terraform output -raw boat_base_snapshot 2>/dev/null || true)"
+          jq -n --arg previous "$previous" '{boat_previous_base_snapshot: $previous}' > boat-rollback.auto.tfvars.json
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Apply
@@ -510,6 +535,15 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_build_api_key: ${{ secrets.BOAT_BUILD_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_template_prefix: "${{ vars.BOAT_TEMPLATE_PREFIX || secrets.BOAT_TEMPLATE_PREFIX || '' }}"
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
+          TF_VAR_boat_template_sandbox_type: "${{ vars.BOAT_TEMPLATE_SANDBOX_TYPE || secrets.BOAT_TEMPLATE_SANDBOX_TYPE || 'default' }}"
+          TF_VAR_boat_sandbox_access_secret: ${{ secrets.BOAT_SANDBOX_ACCESS_SECRET }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

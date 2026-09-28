@@ -19,7 +19,7 @@ Use TodoWrite to create a checklist tracking these phases:
 
 1. Initial setup questions
 2. Repository setup
-3. Credential collection (Cloudflare, Vercel if selected, Modal, Anthropic)
+3. Credential collection (Cloudflare, Vercel if selected, sandbox provider, Anthropic)
 4. GitHub App creation (+ Google OAuth if enabled)
 5. Slack App creation (if enabled)
 6. Security secrets generation
@@ -58,8 +58,10 @@ Use AskUserQuestion to gather:
    email domains, and/or GitHub orgs) or explicitly open to any authenticated user (no allowlists).
    Validate the chosen providers and admission mode against the compatibility table and allowlist
    rules in Step 5 of `docs/GETTING_STARTED.md` before proceeding.
-9. **Prerequisites confirmation** - Confirm they have Cloudflare, Modal, Anthropic, and GitHub
-   accounts, plus Vercel only if selected above.
+9. **Sandbox provider** - Ask which supported provider they are deploying. Use
+   `docs/GETTING_STARTED.md` for its credential requirements.
+10. **Prerequisites confirmation** - Confirm they have Cloudflare, the selected sandbox provider,
+    Anthropic, and GitHub accounts, plus Vercel only if selected above.
 
 ## Phase 2: Repository Setup
 
@@ -122,6 +124,12 @@ Then set the token:
 modal token set --token-id {token_id} --token-secret {token_secret}
 modal profile current
 ```
+
+### Boat (Only If Selected In Phase 1)
+
+- **Runtime API key**: scoped key for sandbox operations
+- **Build API key**: optional separate key with snapshot write access; otherwise reuse the runtime key
+- **Sandbox access secret**: generate a stable 32+ character value in Phase 6
 
 ### Anthropic
 
@@ -211,6 +219,7 @@ echo "token_encryption_key: $(openssl rand -base64 32)"
 echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 echo "nextauth_secret: $(openssl rand -base64 32)"
 echo "modal_api_secret: $(openssl rand -hex 32)"
+echo "boat_sandbox_access_secret: $(openssl rand -base64 32)"
 echo "github_webhook_secret: $(openssl rand -hex 32)"  # Only if GitHub bot enabled
 ```
 
@@ -247,6 +256,10 @@ Write the restricted-mode comma-separated Phase 1 answers to `allowed_users`,
 `allowed_email_domains`, `allowed_emails`, and `allowed_github_orgs`; leave unused inputs empty and
 set `unsafe_allow_all_users = false`. For explicitly open mode, leave all four lists empty and set
 `unsafe_allow_all_users = true`. Use Step 5 of `docs/GETTING_STARTED.md` for the admission contract.
+
+Set `sandbox_provider` and only the selected provider's variables. For Boat, set `boat_api_key`,
+optional `boat_build_api_key`, and `boat_sandbox_access_secret`; keep `boat_base_snapshot` empty for
+the managed verified template.
 
 If GitHub bot is enabled, also set:
 
@@ -374,6 +387,10 @@ curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.de
 curl "$(terraform -chdir=terraform/environments/production output -raw modal_health_url)"
 curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
+
+Run the Modal health command only for Modal or Modal VM. For Boat, confirm
+`terraform -chdir=terraform/environments/production output -raw boat_base_snapshot`, then run the
+release canaries in `docs/BOAT_SANDBOX_PROVIDER.md`.
 
 Present a deployment summary table. Instruct the user to test: visit the web app, sign in with each
 configured provider, create a session, and send a prompt.

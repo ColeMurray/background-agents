@@ -177,6 +177,12 @@ Where `msg` is prose (`"Boot budget exceeded"`, `"Heartbeat stale"`), the stable
 | `modal.request`          | info  | `endpoint`, `session_id`, `sandbox_id`, `http_status`, `duration_ms`, `outcome` | One per control-plane -> Modal call       |
 | `vercel_sandbox.request` | info  | `endpoint`, `session_id`, `http_status`, `duration_ms`, `outcome`               | One per control-plane -> Vercel API call  |
 | `daytona.create_sandbox` | info  | `sandbox_id`, `target`, `duration_ms`, `outcome`                                | Daytona sandbox create/restore API result |
+| `boat.request`           | info  | `endpoint`, `http_status`, `duration_ms`, `outcome`                             | One direct control-plane -> Boat API call |
+
+For Boat, query `component="boat-rest-client" msg="boat.request"` for API timing and
+`component="boat-provider"` for private-host/tunnel preparation failures. Use
+`boat info <id> --json` to inspect `state`, `archiveAfter`, and snapshot health. Complete private
+host URLs are bearer credentials and are intentionally absent from logs.
 
 ---
 

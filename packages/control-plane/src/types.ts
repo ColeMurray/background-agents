@@ -30,6 +30,8 @@ export interface EnvConfig {
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   OPENCOMPUTER_API_KEY?: string; // OpenComputer REST API key (X-API-Key auth + HMAC derivation)
   VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
+  BOAT_API_KEY?: string; // Boat REST API bearer token
+  BOAT_SANDBOX_ACCESS_SECRET?: string; // Stable HMAC secret for sandbox access passwords
   // Pepper for image-build callback token hashes.
   IMAGE_CALLBACK_TOKEN_PEPPER?: string;
   // Per-service sig1 verification keys. Absent ⇒ that service cannot
@@ -62,7 +64,7 @@ export interface EnvConfig {
   ALLOWED_GITHUB_ORGS?: string;
   UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", "e2b", or "boat"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -92,6 +94,11 @@ export interface EnvConfig {
   E2B_TEMPLATE_ID?: string; // Pre-built E2B template ID
   E2B_SANDBOX_TIMEOUT_SECONDS?: string; // Sandbox TTL in seconds; Hobby plans must set 3300
   E2B_AUTO_PAUSE?: string; // "true" (default) pauses on TTL expiry (resumable, auto-resumes) instead of killing
+
+  BOAT_API_URL?: string; // Boat REST API base URL (default https://boat.dev/api/v1)
+  BOAT_ORG?: string; // Optional organization billing scope
+  BOAT_BASE_SNAPSHOT?: string; // Verified named snapshot used for fresh sandboxes
+  BOAT_SANDBOX_TYPE?: string; // Default machine type: small, default, or large
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

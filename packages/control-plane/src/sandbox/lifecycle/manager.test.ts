@@ -1981,7 +1981,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it.each(["missing", "expired"] as const)(
-      "replaces a resumable sandbox when its terminal token is %s",
+      "preserves a resumable sandbox and disables terminal access when its token is %s",
       async (credentialState) => {
         const ttydToken =
           credentialState === "expired"
@@ -2033,21 +2033,15 @@ describe("SandboxLifecycleManager", () => {
         await manager.spawnSandbox();
 
         expect(resumeSandbox).toHaveBeenCalled();
-        expect(stopSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({
-            providerObjectId: "old-provider-obj",
-            reason: "respawn",
-          })
-        );
-        expect(createSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({ sandboxSettings: { terminalEnabled: true } })
-        );
-        expect(sandbox.ttyd_token).not.toBeNull();
-        expect(sandbox.ttyd_token).not.toBe(ttydToken);
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(createSandbox).not.toHaveBeenCalled();
+        expect(sandbox.modal_object_id).toBe("old-provider-obj");
+        expect(sandbox.ttyd_url).toBeNull();
+        expect(sandbox.ttyd_token).toBeNull();
       }
     );
 
-    it("replaces a resumed sandbox after its initial terminal preview could not be issued", async () => {
+    it("preserves a resumed sandbox after its initial terminal preview could not be issued", async () => {
       const sandbox = createMockSandbox({
         status: "pending",
         created_at: Date.now() - 60_000,
@@ -2100,9 +2094,10 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(resumeSandbox).toHaveBeenCalledOnce();
-      expect(createSandbox).toHaveBeenCalledTimes(2);
-      expect(sandbox.ttyd_url).toBe("https://terminal.test/replacement");
-      expect(sandbox.ttyd_token).not.toBeNull();
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(sandbox.modal_object_id).toBe("initial-provider-obj");
+      expect(sandbox.ttyd_url).toBeNull();
+      expect(sandbox.ttyd_token).toBeNull();
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {

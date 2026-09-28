@@ -163,6 +163,14 @@ module "control_plane_worker" {
       E2B_TEMPLATE_ID             = { value = module.e2b_infra[0].template_id }
       E2B_SANDBOX_TIMEOUT_SECONDS = { value = tostring(var.e2b_sandbox_timeout_seconds) }
       E2B_AUTO_PAUSE              = { value = tostring(var.e2b_auto_pause) }
+    } : {},
+    local.use_boat_backend ? {
+      BOAT_API_URL       = { value = var.boat_api_url }
+      BOAT_BASE_SNAPSHOT = { value = local.effective_boat_base_snapshot }
+      BOAT_SANDBOX_TYPE  = { value = var.boat_sandbox_type }
+    } : {},
+    local.use_boat_backend && trimspace(var.boat_org) != "" ? {
+      BOAT_ORG = { value = var.boat_org }
     } : {}
   )
 
@@ -214,6 +222,12 @@ module "control_plane_worker" {
     local.use_e2b_backend ? {
       E2B_API_KEY = { value = var.e2b_api_key }
     } : {},
+    trimspace(var.boat_api_key) != "" ? {
+      BOAT_API_KEY = { value = var.boat_api_key }
+    } : {},
+    local.use_boat_backend ? {
+      BOAT_SANDBOX_ACCESS_SECRET = { value = var.boat_sandbox_access_secret }
+    } : {},
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same
     # token can authorize chat.postMessage from agent tool calls.
@@ -247,6 +261,7 @@ module "control_plane_worker" {
     module.linear_bot_worker,
     module.daytona_infra,
     module.e2b_infra,
+    module.boat_infra,
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.modal_app,
