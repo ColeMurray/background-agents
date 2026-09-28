@@ -120,6 +120,7 @@ function createProcessor(
     deliverTransition: vi.fn(async () => {}),
   };
   const usageRepository = { recordStepUsage: vi.fn() };
+  const refreshMetricsAfterStep = vi.fn((_messageId: string | null) => {});
 
   // The real family composition, mirroring components.ts, so the suite keeps
   // pinning end-to-end processSandboxEvent behavior across the split.
@@ -136,7 +137,7 @@ function createProcessor(
       updateLastActivity,
       budgetService as unknown as SessionBudgetService,
       persistedUsage ?? (usageRepository as unknown as UsageRepository),
-      () => {}
+      refreshMetricsAfterStep
     ),
     new SandboxArtifactEventHandler(
       artifactRepository,
@@ -204,6 +205,7 @@ function createProcessor(
     log,
     budgetService,
     usageRepository,
+    refreshMetricsAfterStep,
   };
 }
 
@@ -515,6 +517,46 @@ describe("SessionSandboxEventProcessor", () => {
       );
     }
   );
+
+  it("keeps a recorded step's result when refreshing its metrics fails", async () => {
+    const h = createProcessor();
+    const refreshError = new Error("Malformed persisted session row");
+    h.refreshMetricsAfterStep.mockImplementation(() => {
+      throw refreshError;
+    });
+
+    await expect(
+      h.processor.processSandboxEvent({
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        tokens: { input: 10 },
+      })
+    ).resolves.toBeUndefined();
+    expect(h.backgroundTasks.failures).toEqual([refreshError]);
+  });
+
+  it("reports the usage error rather than a failed metrics refresh", async () => {
+    const h = createProcessor();
+    const persistenceError = new Error("usage write failed");
+    h.usageRepository.recordStepUsage.mockImplementationOnce(() => {
+      throw persistenceError;
+    });
+    h.refreshMetricsAfterStep.mockImplementation(() => {
+      throw new Error("Malformed persisted session row");
+    });
+
+    await expect(
+      h.processor.processSandboxEvent({
+        type: "step_finish",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1000,
+        cost: 0.25,
+      })
+    ).rejects.toBe(persistenceError);
+  });
 
   it("records unavailable cost tracking for positive-token steps without cost", async () => {
     const h = createProcessor();

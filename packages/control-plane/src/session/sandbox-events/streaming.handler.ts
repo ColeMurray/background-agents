@@ -74,7 +74,12 @@ export class SandboxStreamingEventHandler {
         }
         if (persistenceFailure) throw persistenceFailure.error;
       } finally {
-        this.refreshMetricsAfterStep(context.messageId);
+        // Submitted so a failed refresh is logged at the task boundary rather
+        // than replacing the step's own outcome.
+        this.backgroundTasks.submit(async () => this.refreshMetricsAfterStep(context.messageId), {
+          name: "session_index.refresh_step_metrics",
+          context: { message_id: context.messageId },
+        });
       }
     }
   }
