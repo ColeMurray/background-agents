@@ -10,85 +10,80 @@
  * first, then this hook; our auth loader brokers the managed credential.
  */
 
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { createProviderTokenBroker } from "./provider-token-broker.js";
 
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
 const tokenBroker = createProviderTokenBroker({ provider: "openai", providerLabel: "OpenAI" });
 
-// API-list-price equivalents, USD per million tokens. Snapshot of
-// https://models.dev/api.json (openai models, 2026-09-27); these are not
-// ChatGPT subscription charges. Supported models without a listed price
-// remain unpriced.
-const price = ({ input, output, cache_read, cache_write = 0, context_over_200k }) => {
-  const base = { input, output, cache: { read: cache_read, write: cache_write } };
-  if (!context_over_200k) return base;
-  const elevated = price(context_over_200k);
-  return {
-    ...base,
-    experimentalOver200K: elevated,
-    tiers: [{ ...elevated, tier: { type: "context", size: 272_000 } }],
-  };
-};
+const DEFAULT_MODELS_URL = "https://models.opencode.ai";
+const validRate = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-export const API_EQUIVALENT_PRICES = {
-  "gpt-5.3-codex": price({ input: 1.75, output: 14, cache_read: 0.175 }),
-  "gpt-5.3-codex-spark": price({ input: 1.75, output: 14, cache_read: 0.175 }),
-  "gpt-5.4": price({
-    input: 2.5,
-    output: 15,
-    cache_read: 0.25,
-    context_over_200k: { input: 5, output: 22.5, cache_read: 0.5 },
-  }),
-  "gpt-5.5": price({
-    input: 5,
-    output: 30,
-    cache_read: 0.5,
-    context_over_200k: { input: 10, output: 45, cache_read: 1 },
-  }),
-  "gpt-5.6-sol": price({
-    input: 4,
-    output: 20,
-    cache_read: 0.4,
-    cache_write: 5,
-    context_over_200k: { input: 8, output: 30, cache_read: 0.8, cache_write: 10 },
-  }),
-  "gpt-5.6-terra": price({
-    input: 2,
-    output: 12,
-    cache_read: 0.2,
-    cache_write: 2.5,
-    context_over_200k: { input: 4, output: 18, cache_read: 0.4, cache_write: 5 },
-  }),
-  "gpt-5.6-luna": price({
-    input: 0.2,
-    output: 1.2,
-    cache_read: 0.02,
-    cache_write: 0.25,
-    context_over_200k: { input: 0.4, output: 1.8, cache_read: 0.04, cache_write: 0.5 },
-  }),
-  "gpt-6-astra": price({
-    input: 10,
-    output: 50,
-    cache_read: 1,
-    cache_write: 12.5,
-    context_over_200k: { input: 20, output: 75, cache_read: 2, cache_write: 25 },
-  }),
-  "gpt-6-sol": price({
-    input: 2,
-    output: 10,
-    cache_read: 0.2,
-    cache_write: 2.5,
-    context_over_200k: { input: 4, output: 15, cache_read: 0.4, cache_write: 5 },
-  }),
-  "gpt-6-luna": price({
-    input: 0.1,
-    output: 0.5,
-    cache_read: 0.01,
-    cache_write: 0.125,
-    context_over_200k: { input: 0.2, output: 0.75, cache_read: 0.02, cache_write: 0.25 },
-  }),
-};
+// Mirror OpenCode's models.dev cost conversion. These are model-price
+// equivalents, not charges incurred by a ChatGPT subscription.
+function catalogCost(raw) {
+  if (!raw || !validRate(raw.input) || !validRate(raw.output)) return null;
+  const convert = (cost) => ({
+    input: cost.input,
+    output: cost.output,
+    cache: {
+      read: validRate(cost.cache_read) ? cost.cache_read : 0,
+      write: validRate(cost.cache_write) ? cost.cache_write : 0,
+    },
+  });
+  const result = convert(raw);
+  if (Array.isArray(raw.tiers)) {
+    result.tiers = raw.tiers
+      .filter(
+        (tier) =>
+          validRate(tier?.input) &&
+          validRate(tier?.output) &&
+          tier.tier?.type === "context" &&
+          validRate(tier.tier.size)
+      )
+      .map((tier) => ({ ...convert(tier), tier: tier.tier }));
+  }
+  if (validRate(raw.context_over_200k?.input) && validRate(raw.context_over_200k?.output)) {
+    result.experimentalOver200K = convert(raw.context_over_200k);
+  }
+  return result;
+}
+
+async function openAiCatalogModels() {
+  const source = process.env.OPENCODE_MODELS_URL || DEFAULT_MODELS_URL;
+  // Matches ModelsDev.Service in pinned OpenCode 1.18.29; our image refreshes this cache.
+  const cachePath =
+    process.env.OPENCODE_MODELS_PATH ||
+    (source === DEFAULT_MODELS_URL
+      ? join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "opencode", "models.json")
+      : null);
+  if (cachePath) {
+    try {
+      const catalog = JSON.parse(await readFile(cachePath, "utf8"));
+      const models = catalog?.openai?.models;
+      if (models && typeof models === "object" && !Array.isArray(models)) return models;
+    } catch {
+      // OpenCode can use its bundled catalog when its disk cache is missing.
+    }
+  }
+  try {
+    const response = await fetch(`${source}/api.json`, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const catalog = await response.json();
+    const models = catalog?.openai?.models;
+    if (!models || typeof models !== "object" || Array.isArray(models)) {
+      throw new Error("OpenAI models missing from catalog");
+    }
+    return models;
+  } catch (error) {
+    console.warn("OpenCode model prices unavailable; leaving OAuth model costs at zero", error);
+    return null;
+  }
+}
 
 const CODEX_53_MODELS = {
   "gpt-5.3-codex": {
@@ -105,7 +100,7 @@ const CODEX_53_MODELS = {
   },
 };
 
-function injectedCodexModel(modelId, details) {
+function injectedCodexModel(modelId, details, cost) {
   return {
     id: modelId,
     providerID: "openai",
@@ -121,7 +116,7 @@ function injectedCodexModel(modelId, details) {
       output: { text: true, audio: false, image: false, video: false, pdf: false },
       interleaved: false,
     },
-    cost: API_EQUIVALENT_PRICES[modelId],
+    cost: cost ?? { input: 0, output: 0, cache: { read: 0, write: 0 } },
     limit: details.limit,
     status: "active",
     options: {},
@@ -176,19 +171,24 @@ export const CodexAuthProxy = async (input) => {
       id: "openai",
       async models(provider, context) {
         if (context.auth?.type !== "oauth") return provider.models;
+        const catalog = await openAiCatalogModels();
         // The built-in hook filters models and zeroes OAuth prices first.
         const models = Object.fromEntries(
           Object.entries(provider.models)
             .filter(([modelId]) => ALLOWED_MODELS.has(modelId))
-            .map(([modelId, model]) => [
-              modelId,
-              API_EQUIVALENT_PRICES[modelId]
-                ? { ...model, cost: API_EQUIVALENT_PRICES[modelId] }
-                : model,
-            ])
+            .map(([modelId, model]) => {
+              const cost = catalogCost(catalog?.[modelId]?.cost);
+              return [modelId, cost ? { ...model, cost } : model];
+            })
         );
         for (const [modelId, details] of Object.entries(CODEX_53_MODELS)) {
-          if (!models[modelId]) models[modelId] = injectedCodexModel(modelId, details);
+          if (!models[modelId]) {
+            models[modelId] = injectedCodexModel(
+              modelId,
+              details,
+              catalogCost(catalog?.[modelId]?.cost)
+            );
+          }
         }
         return models;
       },
