@@ -4,7 +4,7 @@ description: Where to find the session's diff, the screenshots and command outpu
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - packages/web/src/components/session-changes-panel.tsx
   - packages/web/src/components/sidebar/files-changed-section.tsx
@@ -18,7 +18,7 @@ This page shows where a session's changes and evidence live and gives you a chec
 
 ## The Changes section
 
-The right sidebar has a **Changes** section for every session with a repository. It lists the files the agent changed compared with the session's starting commit, grouped by repository in multi-repository sessions.
+The right sidebar has a **Changes** section for every session with a repository. It lists committed changes since the session's starting commit plus uncommitted tracked and non-ignored, non-excluded untracked files in the checkout, grouped by repository in multi-repository sessions.
 
 - A "Filter N changed files" box narrows the list by path.
 - Each row shows a status letter (A added, M modified, D deleted, R renamed, T type changed, U unmerged, S submodule), the file name, and `+added -deleted` line counts. Files without a text diff show "binary", "too large", or "metadata" instead.
@@ -33,13 +33,13 @@ Click any file to open the Changes panel.
 The panel opens next to the timeline (or full-width on phones) with the selected file.
 
 - The header names the repository, the file path, its status, and its line counts. Use the up and down arrows ("Previous changed file" / "Next changed file") to step through files, the sidebar icon to hide or show the file list, and × or Escape to close.
-- "Compared with session start" expands to show the two commit SHAs the diff spans: the session's starting commit and the current head.
+- "Compared with session start" expands to show the session's starting commit and the current head. The diff also includes uncommitted tracked and untracked files, so the head SHA alone does not describe everything shown.
 - The layout toggle switches between Unified and Split. Split is offered only when the panel is wide enough; narrower panels and phones always use Unified. "Wrap lines" wraps long lines.
 - Files that changed without a text diff show a message instead of a patch: "This binary file changed, but it does not have a text diff.", "This patch is too large to display safely.", a file mode change, or a submodule pointer change.
 - "This file is no longer part of the latest changes." means the agent's latest turn reverted or removed that file after you selected it. Pick another file from the list.
 - "Refreshing the latest revision…" appears briefly when a newer diff replaced the one you were viewing. "Unable to load this patch." means the patch request itself failed; use the Retry banner at the top of the panel, or reopen the file.
 
-The diff always compares against the session's starting commit, so it shows the sum of every turn so far, not just the last one.
+The diff uses the session's starting commit as its base and includes the current working tree, so it shows changes across turns, including uncommitted work, not just the last turn.
 
 ## Evidence the agent produced
 
@@ -57,9 +57,9 @@ Calling the tool again from the same branch updates that branch's open PR. A new
 
 ## Commit attribution
 
-Commits made in a session are attributed to the person who sent the prompt: the commit author is your SCM name and email, and the committer is the platform. Each prompt in a multiplayer session carries its own author, so a branch built by two people has two authors in its history.
+When the prompting participant has a resolvable SCM identity, commits use that person's name and email as author. Without one, unsigned commits use the configured git user as both author and committer; signed commits use the deployment's signing account as both. Each prompt in a multiplayer session carries its own attribution, so commits can have different authors.
 
-When the deployment has commit signing enabled, the committer and signer are the deployment's dedicated signing account, while the author remains the prompting user. Because author and committer differ, GitHub shows these commits as **Partially verified**. The signature attests that the commit came from this OpenInspect deployment; it is not a claim that the attributed user signed it personally. See [GitHub integration](/integrations/github).
+When commit signing is enabled and a participant author is available, the committer and signer are the deployment's dedicated signing account. GitHub may show those commits as **Partially verified** because author and committer differ. The signature attests that the commit came from this OpenInspect deployment; it is not a claim that the attributed user signed it personally. See [GitHub integration](/integrations/github).
 
 ## Review checklist
 
@@ -86,10 +86,10 @@ When the deployment has commit signing enabled, the committer and signer are the
 
 </Accordion>
   <Accordion title="No changes are shown">
-    "No file changes in the latest diff." means the checkout matches the session's starting commit.
-    Either the agent did not commit (ask it to commit and push in a follow-up; check the Bash rows
-    for a `git commit`), or it edited files outside the repository clone (for example in `/tmp` or a
-    global config), which the diff does not track.
+    "No file changes in the latest diff." means no changes were captured against the session's
+    starting commit. The agent may have made no changes, reverted them, edited files outside the
+    repository clone (for example in `/tmp`), or created only ignored or runtime-excluded untracked
+    files, which the diff does not track.
 
 </Accordion>
   <Accordion title="The PR badge is stale">

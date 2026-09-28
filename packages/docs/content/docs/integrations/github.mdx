@@ -4,7 +4,7 @@ description: Automatic pull request reviews, @mention actions, PR Feedback Autof
 audience: team-owner
 owner: integrations
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - docs/integrations/GITHUB.md
   - packages/shared/src/types/integrations.ts
@@ -67,7 +67,7 @@ flowchart TB
 
 **When it runs.** With **Auto-review new PRs** enabled, OpenInspect starts a review session for each newly opened, non-draft PR in an in-scope repository. The agent inspects the diff and posts a GitHub review.
 
-**When it skips.** Auto-review does not run when the PR is a draft, the PR was opened by the GitHub App bot itself, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. Converting a draft to ready for review does not trigger it; mention the bot in a comment instead.
+**When it skips.** Auto-review does not run when the PR is a draft, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. A PR opened by the App bot itself can be reviewed if that bot login is explicitly allowed under **Allowed Trigger Users**; in that case the review uses a comment rather than an approval or change request. Converting a draft to ready for review does not trigger it; mention the bot in a comment instead.
 
 **What it posts.** A general review comment, an approval, a request for changes, or inline review comments, depending on what the agent finds.
 
@@ -218,7 +218,7 @@ Setup, rotation, and limitations are covered in [Source control](/configure/sour
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Access boundaries | Repository access is deployment-scoped through the GitHub App installation. Install the App only on intended repositories and use **Repository Scope** as an extra filter. The same App handles OAuth and repository access, and its credentials and webhook secrets stay server-side. |
 | Trigger access    | By default, trigger access requires write, maintain, or admin permission. **Only specific users** replaces that check with the list.                                                                                                                                                   |
-| Bot behavior      | Auto-review skips drafts and PRs opened by the App. The bot ignores bot-authored comments, ordinary issue comments, and comments that do not mention it. If it cannot load its settings, it fails closed and starts nothing.                                                           |
+| Bot behavior      | Auto-review skips drafts; an explicitly allowed App bot login can trigger a comment-only self-review. Mentions ignore the App bot's own comments, ordinary issue comments, and unmentioned comments. Missing settings stop work.                                                       |
 | Prompt safety     | Code-review prompts wrap the PR title, author, branches, and description as untrusted; comment prompts wrap the triggering comment. Review-thread file and diff context, and anything the agent reads from GitHub later, are not separately transformed.                               |
 | Webhooks          | Webhooks are verified, and duplicate deliveries are deduplicated so retries do not create duplicate sessions.                                                                                                                                                                          |
 
@@ -232,9 +232,10 @@ Setup, rotation, and limitations are covered in [Source control](/configure/sour
 
 </Accordion>
   <Accordion title="Auto-review did not run">
-    Auto-review only runs for newly opened, non-draft PRs. Drafts, PRs opened by the App,
-    out-of-scope repositories, and non-allowed users are skipped. For a PR converted from draft,
-    mention the bot in a comment.
+    Auto-review only runs for newly opened, non-draft PRs. Drafts, out-of-scope repositories, and
+    non-allowed users are skipped. A PR opened by the App needs its bot login explicitly allowed as
+    a trigger user; its self-review can only comment. For a PR converted from draft, mention the bot
+    in a comment.
 
 </Accordion>
   <Accordion title="A mention did not start a session">

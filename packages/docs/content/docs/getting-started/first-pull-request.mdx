@@ -4,7 +4,7 @@ description: Ask the agent for a pull request, understand how OpenInspect create
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - packages/shared/src/git.ts
   - packages/control-plane/src/session/pull-request-service.ts
@@ -21,8 +21,8 @@ This page walks through the first pull request a session opens for you, from the
 ## Prerequisites
 
 - A session targeting at least one repository. Sessions started with **No repository** cannot open pull requests.
-- The GitHub App is installed on that repository. The App is what pushes the branch.
-- To have the pull request authored as you, sign in with GitHub. Google sign-ins have no GitHub token, so their pull requests are authored by the App.
+- For a GitHub repository, the deployment's GitHub App is installed on it. The App pushes the branch.
+- To have a GitHub pull request authored as you, sign in with GitHub. If no OAuth token is returned at creation time, the App creates it instead; token retrieval errors or a token rejected by GitHub can cause creation to fail rather than fall back.
 
 ## Pick a low-risk first task
 
@@ -33,7 +33,7 @@ Choose something you could review in five minutes and would be comfortable mergi
 Say explicitly that you want a pull request and what its title should communicate. The agent commits on the session's branch, pushes, and opens the pull request itself.
 
 ```text
-The README's "Local development" section still tells people to run `npm run dev` from the repository root, but that script moved to packages/web. Update the instructions to `npm run dev -w @open-inspect/web`, check the rest of the section for other stale commands, and then open a pull request titled "docs: fix local development commands in README". In the PR body, list each command you changed and why.
+In this repository's root README.md, add a brief troubleshooting note under "Getting Started" for someone who sees "No repositories found" in the new-session picker. Explain that on a GitHub-backed deployment the GitHub App must be installed on the desired repository, and that "No repository" is still an option for scratch work. Check the wording against the quickstart, then open a pull request titled "docs: explain the empty repository picker". In the PR body, say what you verified.
 ```
 
 If you want a draft, say so ("open it as a draft pull request"). Otherwise the pull request is opened ready for review.
@@ -61,11 +61,11 @@ The agent uses a built-in `create-pull-request` tool. The sandbox's `gh` wrapper
 
 1. The tool reads the current branch in the repository and sends the title, body, optional base branch, optional target repository (for multi-repository sessions), and the draft flag to the control plane.
 2. The control plane pushes the branch with the GitHub App's push credentials. If the session has no named branch yet, it generates one from the session ID (`open-inspect/<session id>`), so every session's work lands on its own branch.
-3. The control plane creates the pull request. When the prompting user signed in with GitHub, the pull request is created with that user's OAuth identity, so it appears authored by them and they cannot approve their own work. Otherwise it is created as the GitHub App.
+3. The control plane creates the pull request with the prompting user's GitHub OAuth identity when it resolves a token, falling back to the App if none is resolved. It does not retry with the App if GitHub rejects a resolved token. A PR authored by you cannot be approved by you.
 4. The body gets a footer, "Created with" followed by the deployment's app name, linking back to the session.
 5. The pull request is recorded as a session artifact and appears in the sidebar.
 
-Commits are attributed to the person who sent the prompt, with OpenInspect as the committer.
+Commit author identity is resolved separately from PR creation. When the prompting participant has a usable source-control identity, commits are attributed to them. Otherwise the configured git user supplies both author and committer without signing, or the signing account supplies both when signing is enabled. With signing and a participant author, the signing account is the committer.
 
 ### Draft or ready, and labels
 
@@ -155,9 +155,9 @@ Branch protection, required reviews, and required status checks apply exactly as
 
 </Accordion>
   <Accordion title="The pull request is authored by the GitHub App instead of me">
-    You signed in with a provider other than GitHub, or your GitHub token could not be retrieved.
-    Sign in with GitHub and send the next request that creates a pull request; existing pull
-    requests keep their author.
+    The prompting user had no usable GitHub OAuth token when the PR was created, even if they signed
+    in with GitHub. Check the GitHub connection before requesting another PR; existing pull requests
+    keep their author. Commit attribution is separate from the PR author.
 
 </Accordion>
 </Accordions>

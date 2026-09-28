@@ -4,7 +4,7 @@ description: Sign in to an existing OpenInspect deployment, start a session agai
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - packages/web/src/app/(app)/(sidebar)/page.tsx
   - packages/web/src/components/session-target-picker.tsx
@@ -18,14 +18,14 @@ relatedCode:
 
 This page takes you from signing in to reading the agent's first result in one session.
 
-![The new-session composer with repository and branch pickers above the prompt box](/images/getting-started/home-composer.webp "The composer. Pick a repository and branch, write the prompt, and press Enter.")
+![The new-session composer with repository and branch pickers above the prompt box](/images/getting-started/home-composer.webp "The composer. Pick a repository and branch, write the prompt, and send with the button or Cmd/Ctrl+Enter by default.")
 
 ## Prerequisites
 
 - Your team already runs an OpenInspect deployment and you have its URL.
 - You have been admitted to the workspace. Admission is configured by the operator (allowed GitHub users, email addresses, email domains, or GitHub organization membership).
 - Your role is Member or higher. Viewers can read sessions but cannot create or prompt them.
-- The GitHub App for the deployment is installed on the repository you want to work in. If it is not, the repository does not appear in the picker.
+- For a GitHub-backed deployment, the GitHub App is installed on the repository you want to work in. If it is not, the repository does not appear in the picker. Other source-control providers use their configured repository access.
 - At least one model is enabled under Settings › Models, with its provider credentials configured. An administrator does this once.
 
 <Steps>
@@ -36,7 +36,7 @@ Open the deployment URL. The sign-in page shows only the providers the operator 
 
 Sign-in has two stages. First your identity provider verifies who you are. Then the deployment's admission rules decide whether you may join the workspace. If you land on the **Access Denied** page ("Your account is not authorized to use this application."), your identity was verified but admission failed. Contact an administrator of the deployment; there is nothing to fix on your side.
 
-New users receive the Member role. Signing in with GitHub also lets pull requests be authored as you (see [Your first pull request](/getting-started/first-pull-request)).
+New users receive the Member role. For GitHub pull requests, signing in with GitHub lets them be authored as you when your OAuth token is available at creation time (see [Your first pull request](/getting-started/first-pull-request)).
 
 </Step>
 
@@ -56,7 +56,7 @@ Above the text area, the target picker decides what the sandbox works on. Its se
 
 Below the composer, a note states which secrets the session receives. An environment session uses global secrets plus the environment's secrets. An ad-hoc set uses global secrets plus each selected repository's secrets, and the note offers to save the set as an environment.
 
-If the picker says "No repositories found", the GitHub App has not been installed on any repository yet. You can still start without a repository.
+If the picker says "No repositories found", check the deployment's repository access (for GitHub, the App installation and its repository selection). You can still start without a repository.
 
 </Step>
 
@@ -75,10 +75,11 @@ The model list is filtered to what the chosen harness can run. The harness is fi
 The composer remembers your last model, effort, harness, and provider choices in this browser.
 
 <Callout type="info" title="If your deployment has connected provider accounts">
-  When the selected model belongs to OpenAI, xAI, or Anthropic and the deployment has a provider
-  account configured, a provider authentication menu appears beside the skill selector. "Use
-  default" follows the deployment's policy; you can also pick a specific connected account or "No
-  account" to use the API key.
+  When the selected model belongs to OpenAI, xAI, or Anthropic, a provider authentication menu
+  appears beside the skill selector even if no account is connected. "Use default" follows the
+  deployment's policy; you can select a connected account only if one is available and the harness
+  supports it, or choose "No account" for API-key mode. OpenCode runs Anthropic on an API key, not a
+  connected Claude account.
 </Callout>
 
 </Step>
@@ -114,7 +115,7 @@ A good first prompt names one outcome, the place in the code it concerns, and ho
 In packages/web, the "Copy link" button on the session header does not show any confirmation after copying. Add a brief "Copied" state on the button for two seconds after a successful copy, matching how the branch-name copy button in the sidebar behaves. Add or update the component test, run the web test suite for the files you touched, and report the command you ran and its result. Do not open a pull request yet.
 ```
 
-Send with the send button or Cmd/Ctrl+Enter. Typing in the composer already starts warming a sandbox ("Warming sandbox..." appears beside the send button), so the session is often ready by the time you send. You are taken to the session page at `/session/<id>`.
+Send with the send button or Cmd/Ctrl+Enter (the default keyboard shortcut; it can be customized). Typing in the composer already starts warming a sandbox ("Warming sandbox..." appears beside the send button), so the session is often ready by the time you send. You are taken to the session page at `/session/<id>`.
 
 </Step>
 
@@ -152,14 +153,14 @@ If the result is not what you wanted, send a follow-up in the same session. The 
 
 ## Troubleshooting
 
-| Symptom                                                                 | Cause                                                                                  | Fix                                                                                                                  |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.   | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again. |
-| "You don't have permission to create sessions."                         | Your role is Viewer.                                                                   | Ask a workspace Owner or Administrator to change your role under Settings › Workspace access.                        |
-| "No repositories found."                                                | The GitHub App is not installed on any repository.                                     | Start without a repository, or ask the operator to install the App on the repositories you need.                     |
-| Send button disabled with "Select at least one repository"              | **Multiple repositories** is selected but the set is empty.                            | Choose at least one repository, or switch to a single repository or **No repository**.                               |
-| Model menu is empty or the send fails with a model availability message | No enabled model can run on the selected harness.                                      | Switch the harness to OpenCode, or ask a workspace Owner or Administrator to enable a model under Settings › Models. |
-| Boot stops with a failed phase                                          | `start.sh` in the primary repository exited non-zero, or the boot exceeded its budget. | Read the header's status popover for the phase, fix the script, and send the prompt again to start a new sandbox.    |
+| Symptom                                                                 | Cause                                                                                  | Fix                                                                                                                   |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.   | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again.  |
+| "You don't have permission to create sessions."                         | Your role is Viewer.                                                                   | Ask a workspace Owner or Administrator to change your role under Settings › Workspace access.                         |
+| "No repositories found."                                                | No repositories are accessible through the deployment's source-control integration.    | Start without a repository, or ask the operator to check access (on GitHub, the App installation and repo selection). |
+| Send button disabled with "Select at least one repository"              | **Multiple repositories** is selected but the set is empty.                            | Choose at least one repository, or switch to a single repository or **No repository**.                                |
+| Model menu is empty or the send fails with a model availability message | No enabled model can run on the selected harness.                                      | Switch the harness to OpenCode, or ask a workspace Owner or Administrator to enable a model under Settings › Models.  |
+| Boot stops with a failed phase                                          | `start.sh` in the primary repository exited non-zero, or the boot exceeded its budget. | Read the header's status popover for the phase, fix the script, and send the prompt again to start a new sandbox.     |
 
 ## Next steps
 

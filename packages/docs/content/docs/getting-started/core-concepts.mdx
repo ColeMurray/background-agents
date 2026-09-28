@@ -4,7 +4,7 @@ description: The vocabulary the rest of the documentation uses, one short sectio
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - packages/shared/src/types/sessions.ts
   - packages/shared/src/types/session-activity.ts
@@ -49,7 +49,7 @@ Learn more: [Follow-ups and stopping](/sessions/follow-ups-and-stopping).
 
 ## Harness
 
-The harness is the agent program that runs inside the sandbox. **OpenCode** is the default and runs every enabled model. **Claude Agent** runs Anthropic models only and can use a connected Claude account instead of an API key. Every session runs on exactly one harness, chosen at creation and fixed for its life; child sessions inherit it. Slack, GitHub, Linear, and automation launches run on OpenCode.
+The harness is the agent program that runs inside the sandbox. **OpenCode** is the default and runs every enabled model. **Claude Agent** runs Anthropic models only and can use a connected Claude account instead of an API key. Every session runs on exactly one harness, chosen at creation and fixed for its life; child sessions inherit it. Slack, GitHub, and Linear launches use OpenCode; automations let you choose OpenCode or Claude Agent.
 
 Learn more: [Agent harnesses](/models/agent-harnesses).
 
@@ -85,13 +85,13 @@ Learn more: [Reviewing changes](/sessions/reviewing-changes).
 
 ## Participant and attribution
 
-A participant is anyone who has joined a session. Every prompt is tagged with its author, and the commits the agent makes for that prompt are authored as that person, with OpenInspect as the committer. A pull request is created as the prompting user when they signed in with GitHub, otherwise as the GitHub App. Participation records who contributed; it does not grant or remove access.
+A participant is anyone who has joined a session. Every prompt is tagged with its author. Commits use that person's source-control identity when available; otherwise they use the configured git user, or the signing account if commit signing is enabled. With signing enabled, the signing account is the committer. A GitHub pull request is created as the prompting user when their OAuth token is resolved, or as the App when no token is returned. Participation records who contributed; it does not grant or remove access.
 
 Learn more: [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Workspace and roles
 
-A deployment is one workspace, and the GitHub App installation defines the repositories available to it. Every admitted user has exactly one of four roles: **Owner**, **Administrator**, **Member**, or **Viewer**. Members create and prompt sessions and manage their own automations. Administrators also manage shared settings, integrations, secrets, and members. Owners additionally control who holds the Owner role. Viewers have read-only access. New users start as Members.
+A deployment is one workspace. On a GitHub-backed deployment, the GitHub App installation defines the repositories available to it. Every admitted user has exactly one of four roles: **Owner**, **Administrator**, **Member**, or **Viewer**. Members create and prompt sessions and manage their own automations. Administrators also manage shared settings, integrations, secrets, and members. Owners additionally control who holds the Owner role. Viewers have read-only access. New users start as Members.
 
 Learn more: [Workspace access](/administration/workspace-access).
 

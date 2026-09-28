@@ -4,7 +4,7 @@ description: Short definitions of the terms used across OpenInspect, each linked
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/AUTOMATIONS.md
@@ -67,7 +67,7 @@ A provider image built ahead of time for a repository or environment with the cl
 The first repository in a multi-repository session or environment. It drives which settings apply and wins secret key collisions in ad-hoc sets. See [Environments](/configure/environments).
 
 **Provider account**
-A connected OpenAI, xAI (SuperGrok), or Claude subscription stored installation-wide under Settings › Accounts. Sessions bound to an account receive short-lived access tokens instead of an API key. See [Provider accounts](/models/provider-accounts).
+A connected OpenAI, xAI (SuperGrok), or Claude subscription stored installation-wide under Settings › Accounts. OpenAI and xAI account sessions fetch short-lived access tokens; Claude Agent sessions receive a static Claude setup token in the `claude` process. See [Provider accounts](/models/provider-accounts).
 
 **Reasoning effort**
 A per-session or per-message setting that selects how much reasoning a model applies. Each model lists the efforts it supports and a default. See [Choosing a model](/models/choosing-a-model).
@@ -82,7 +82,7 @@ One session started by an automation firing. A multi-repository firing has one r
 The isolated development container a session's agent works in. A session has many sandboxes over its lifetime; the sandbox status (Ready, Stopped, and so on) is separate from the session status. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 **Sandbox provider**
-The backend that runs sandboxes for a deployment: Modal, Vercel, OpenComputer, E2B, or Daytona. Providers differ in how they resume sessions and which resource settings they honour. See [Sandbox providers](/configure/sandbox-providers).
+The backend that runs sandboxes for a deployment: Modal, modal-vm (Docker-capable Modal), Vercel, OpenComputer, E2B, or Daytona. Providers differ in how they resume sessions and which resource settings they honour. See [Sandbox providers](/configure/sandbox-providers).
 
 **Session**
 The unit of work in OpenInspect: a persistent, multiplayer conversation with an agent, tied to a session target, that holds messages, events, artifacts, participants, and a reference to its current sandbox. See [Core concepts](/getting-started/core-concepts).
@@ -97,7 +97,7 @@ What a session works on, chosen when it is created: a single repository, an ad-h
 A personal saved subset of shared managed skills, selectable in the new-session skill picker. Entries that are disabled or not assigned to the chosen target are ignored. See [Managed skills](/configure/managed-skills).
 
 **Snapshot**
-A saved copy of the sandbox filesystem taken after a successful turn and before an inactivity shutdown. A later prompt restores it, keeping installed dependencies and uncommitted work, so `setup.sh` does not run again. Failed boots never produce one. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+A saved copy of sandbox state. Modal may snapshot after a completed turn, including one that failed, and snapshot-based backends attempt to preserve state at shutdown; Vercel and modal-vm skip per-turn snapshots. OpenComputer can checkpoint state but normally resumes its retained sandbox in place. Failed boots never produce a snapshot. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 **Spend limit**
 The maximum reported cost in USD a session may accumulate, set as the sandbox setting `maxSessionCostUsd` (blank means no limit) or overridden for one session from the Budget sidebar section. See [Spend limits](/sessions/spend-limits).

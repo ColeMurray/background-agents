@@ -4,7 +4,7 @@ description: What each session and sandbox status means, how a sandbox boots, an
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/types/sessions.ts
@@ -68,7 +68,7 @@ The session header and right sidebar show the sandbox status with these labels:
 | `connecting`   | Connecting... | The runtime has connected and the boot is under way.                    |
 | `ready`        | Ready         | The sandbox is available and prompts dispatch.                          |
 | `snapshotting` | Saving...     | A sandbox snapshot is being saved.                                      |
-| `stopped`      | Stopped       | The sandbox stopped after inactivity and restarts with the next prompt. |
+| `stopped`      | Stopped       | The sandbox stopped; the next prompt can restore or resume saved state. |
 | `stale`        | Unresponsive  | The sandbox runtime stopped responding.                                 |
 | `failed`       | Failed        | The sandbox could not start or recover.                                 |
 
@@ -80,8 +80,10 @@ stateDiagram-v2
     pending --> spawning: provider creates or restores
     spawning --> connecting: runtime connects
     connecting --> ready: boot phases finish
-    ready --> snapshotting: idle timeout or lifetime
-    snapshotting --> stopped: snapshot saved
+    ready --> snapshotting: snapshot capture (where supported)
+    snapshotting --> ready: post-turn capture (Modal)
+    snapshotting --> stopped: shutdown capture
+    ready --> stopped: persistent provider stop, pause, or hibernate
     stopped --> spawning: next prompt
     ready --> stale: heartbeats stop
     stale --> failed: no recovery
@@ -96,7 +98,7 @@ Sandbox tools such as the terminal and code server are usable only while the san
 
 A prompt sent during a boot waits and dispatches as soon as the sandbox is ready. The session header names the current phase while it runs: "Starting runtime", "Cloning repository", "Running setup.sh", "Starting services", "Installing skills", "Starting agent". Multi-repository sessions add the repository name, as in "Running setup.sh for acme/api".
 
-There are three boot paths.
+New sandboxes have three boot paths. Persistent providers can instead resume a retained sandbox in place.
 
 | Path             | When it is used                                                                                     | Phases you see                                                                                                        |
 | ---------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -130,40 +132,42 @@ When any of these trips:
 4. Your next prompt starts a new sandbox.
 
 <Callout type="info" title="Older snapshots">
-  A snapshot taken by a runtime from before phase reporting still restores, but it reports no phases
-  and the whole boot has to finish inside the 4-minute connect watchdog.
+  A snapshot from before phase reporting can restore only if its recorded runtime version is
+  compatible. A snapshot with an unknown or incompatible version is retained and recovery is held
+  rather than starting from a clean tree. Older compatible runtimes may report no phases and must
+  connect within the 4-minute watchdog.
 </Callout>
 
 ## Inactivity and lifetime
 
 Two timers end a sandbox that is not failing:
 
-- **Inactivity.** An idle sandbox is snapshotted and stopped after the inactivity timeout (your operator sets `SANDBOX_INACTIVITY_TIMEOUT_MS`; the default is 10 minutes). The sandbox shows Stopped and restarts on your next prompt.
-- **Lifetime.** Settings › Sandbox has a **Session Timeout (minutes)** field that requests a lifetime for each sandbox. Leave it blank to inherit a parent setting or the provider default. The field appears only for providers that honor it (Modal, Vercel, OpenComputer, E2B; not Daytona).
+- **Inactivity.** With no client connected, an idle sandbox is stopped after the inactivity timeout (your operator sets `SANDBOX_INACTIVITY_TIMEOUT_MS`; the default is 10 minutes). A connected client extends the timer and receives a warning instead. Snapshot-based backends preserve state at shutdown; persistent backends stop, pause, or hibernate the retained sandbox. The sandbox shows Stopped and resumes on your next prompt.
+- **Lifetime.** Settings › Sandbox has a **Session Timeout (minutes)** field that requests a lifetime for each sandbox. Leave it blank to inherit a parent setting or the provider default. The field appears only for providers that honor it (Modal, modal-vm, Vercel, OpenComputer, E2B; not Daytona).
 - **Final snapshot buffer.** Also under Settings › Sandbox, **Final snapshot buffer (minutes)** reserves time before provider expiry to stop work, preserve the filesystem, and retire the sandbox. Default 10 minutes, minimum 5.
 
 Settings › Sandbox values can be set globally and overridden per repository and per environment. See [Sandbox settings](/configure/sandbox-settings).
 
 ## When your work is saved
 
-A snapshot is taken:
+A snapshot may be taken:
 
-- after each prompt completes successfully,
-- before the sandbox is stopped for inactivity or reaches its lifetime,
+- after a turn completes (including failed execution) on providers that support per-turn snapshots,
+- during shutdown for inactivity or lifetime on snapshot-based providers,
 - when the control plane explicitly requests one.
 
-A snapshot is never taken on a failed boot, and the runtime refuses a snapshot request while it is still booting.
+A snapshot is never taken on a failed boot, and the runtime refuses a snapshot request while it is still booting. Vercel and modal-vm require shutdown to capture a snapshot, so they skip post-turn snapshots and save state at shutdown instead. Snapshot capture can fail; do not assume every turn has a saved copy.
 
-Snapshots include installed dependencies, built artifacts, and workspace state, which is why follow-up prompts are much faster than the first one.
+Saved filesystem state includes installed dependencies, built artifacts, and uncommitted changes. A snapshot with an incompatible or unknown runtime version is retained but not restored; recovery is held rather than silently discarding that work.
 
-### Providers without snapshots
+### Provider resume models
 
 Not every provider restores from a saved filesystem:
 
-| Provider                    | Resume model                                                                                                                                               |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Modal, Vercel, OpenComputer | Saved filesystem state (snapshot or checkpoint) is restored into a new sandbox.                                                                            |
-| Daytona, E2B                | The sandbox is persistent. It is stopped (Daytona) or paused (E2B) on inactivity or a stale heartbeat, and the same sandbox is resumed on the next prompt. |
+| Provider                   | Resume model                                                                                                                                                      |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modal, modal-vm, Vercel    | A saved filesystem snapshot can be restored into a new sandbox after shutdown. Modal can also snapshot after a turn; modal-vm and Vercel skip those captures.     |
+| Daytona, E2B, OpenComputer | The retained sandbox normally resumes in place after being stopped (Daytona), paused (E2B), or hibernated (OpenComputer). OpenComputer also supports checkpoints. |
 
 The status labels are the same on both models. See [Sandbox providers](/configure/sandbox-providers).
 

@@ -4,7 +4,7 @@ description: What the Analytics page measures, how each card and chart is calcul
 audience: team-owner
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - packages/shared/src/types/analytics.ts
   - packages/web/src/app/(app)/(sidebar)/analytics/page.tsx
@@ -26,13 +26,13 @@ Every role can open Analytics; it requires only `analytics.read`, which Viewers 
 
 ## Time range
 
-The **Time range** control offers **7d**, **14d**, **30d**, and **90d**. The default is 30 days. Changing the range re-filters every card, chart, and table on the page.
+The **Time range** control offers **7d**, **14d**, **30d**, and **90d**. The default is 30 days. Changing the range re-filters windowed metrics on the page.
 
 The window is the last N days ending now. Session metrics count sessions **created** in the window; open-PR inventory is measured as of now regardless of the window.
 
 ## Which sessions are counted
 
-Session metrics include sessions started by a person, whether from the web app, Slack, Linear, or the GitHub bot. Sessions produced by automations are excluded from the session cards, charts, and user table. The Pull Requests section is different: it counts every pull request created through OpenInspect, including ones from automation runs, and shows where they came from under **By Source**.
+The **Scope** control offers **Human** (the default: sessions started by people, including via Slack, Linear, or GitHub), **Agents** (sessions spawned by other sessions), **Automations** (sessions started by automations), and **All** (every session). It filters session cards, charts, and breakdowns; the automation breakdown appears for Automations and All. The Pull Requests section is different: it counts every pull request created through OpenInspect regardless of session scope, including automation runs, and shows where they came from under **By Source**.
 
 The header carries an **Includes legacy sessions** badge. Older sessions recorded before cost, pull request, and duration values were tracked are still counted, and the page notes that they may show zero for those values. PR counts reflect pull requests created through OpenInspect's own pull-request flow.
 

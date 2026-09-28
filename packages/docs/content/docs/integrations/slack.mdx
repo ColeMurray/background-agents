@@ -4,7 +4,7 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - docs/integrations/SLACK.md
   - packages/shared/src/types/integrations.ts
@@ -12,7 +12,7 @@ relatedCode:
   - docs/HOW_IT_WORKS.md
 ---
 
-Mention the OpenInspect bot in a channel or DM it, pick a target if asked, and continue the session by replying in the same Slack thread.
+Mention the OpenInspect bot in a channel or DM it, pick a target if asked, and continue the session in the same Slack thread. Mention the bot again on interactive channel follow-ups; DM follow-ups need no mention.
 
 This page is for people using Slack day to day. Installing the Slack app and deploying the worker is operator work; see [Getting started](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md) in the repository.
 
@@ -44,7 +44,7 @@ If OpenInspect cannot tell which repository you mean, choose a repository, an en
 <Step>
 ### Follow the work
 
-Use **View Session** to open the full web session while the agent works. Reply in the same thread to continue the session.
+Use **View Session** to open the full web session while the agent works. To continue, reply in the same thread and mention the bot if it is a channel thread. In a DM thread, just reply.
 
 </Step>
 </Steps>
@@ -68,7 +68,7 @@ sequenceDiagram
     OI-->>Slack: Working reply with View Session
     Session-->>OI: Final response and artifacts
     OI-->>Slack: Completion reply in the thread
-    You->>Slack: Reply in the thread
+    You->>Slack: Reply in channel thread with @mention, or DM thread without
     Slack->>OI: Follow-up
     OI->>Session: Follow-up prompt on the same session
 ```
@@ -79,7 +79,7 @@ sequenceDiagram
 | ------------------------------ | ------------------------------------------------------------------------- |
 | Start from a channel           | Invite the bot, then `@mention` it with a request                         |
 | Start from a DM                | Send the bot a direct message                                             |
-| Continue a session             | Reply in the same Slack thread                                            |
+| Continue a session             | Reply in the same thread; @mention the bot in channels, not DMs           |
 | Send images to the agent       | Attach PNG, JPEG, WebP, or GIF images to an interactive request           |
 | Forward a message              | Share another Slack message with the bot; text, images, and source travel |
 | Pick the session target        | Use a repository, environment, or empty sandbox                           |
@@ -128,7 +128,7 @@ A running session's defaults cannot be changed. To go back to your defaults for 
 
 Attach PNG, JPEG, WebP, or GIF images to a DM, to a channel request that mentions the bot, or to an interactive thread follow-up, with instructions or on their own (for example a screenshot with "fix the visible error"). Limits: at most six images per message, 10 MiB each. Images on earlier messages in the thread can also be forwarded as context; the current request's images take priority within the six-image limit.
 
-In a channel thread, a follow-up's images reach the agent only when that follow-up mentions the bot. A follow-up without a mention still forwards its text, but not its images. In a DM, no mention is needed.
+In an interactive channel thread, mention the bot on a follow-up for its text, images, or forwarded messages to reach the agent. Without a mention, the interactive bot does not process the follow-up. In a DM, no mention is needed. Watched-channel automations are a separate workflow and can respond to unmentioned text.
 
 - If OpenInspect asks you to choose a target, choose normally; the images are retrieved after you pick and sent with the saved request.
 - If some images cannot be read, the rest still reach the agent and the bot posts a warning in the thread. If an image-only request loses every image, nothing is sent.
@@ -140,7 +140,7 @@ In a channel thread, a follow-up's images reach the agent only when that follow-
 
 ### Forwarded messages
 
-Share (forward) another Slack message to a DM, to a channel request that mentions the bot, or to a thread follow-up. Add a comment such as "deal with this" and the comment becomes the instruction; forward without a comment and the shared message is the whole request.
+Share (forward) another Slack message to a DM, to a channel request that mentions the bot, or to a thread follow-up (with an @mention in channels). Add a comment such as "deal with this" and the comment becomes the instruction; forward without a comment and the shared message is the whole request.
 
 The agent receives the forwarded text with links as written, its images (same six-image, 10 MiB limits), and its author, source channel, permalink, channel id, and timestamp. You can forward up to ten messages per request; each is truncated at 4,000 characters. Link previews are skipped.
 
@@ -152,7 +152,7 @@ In shared channels, only the original requester can choose. If the dropdown has 
 
 ## Threaded conversations
 
-A top-level request starts a thread. Reply in that thread to send follow-ups to the same session, in channels and in DMs alike. Image attachments on channel follow-ups must accompany an `@mention`; in a DM thread no mention is needed.
+A top-level request starts a thread. For interactive sessions, reply in that thread with an `@mention` in channels; in a DM thread, reply without a mention. Text, images, and forwarded messages on unmentioned channel replies are not delivered as interactive follow-ups. Slack message automations handle unmentioned channel text separately.
 
 The thread stays connected to the session for about 7 days. Replying after that, or outside the thread, may start target selection again and create a new session.
 
@@ -268,8 +268,8 @@ An automation can start a session when someone posts a matching message in a wat
 
 </Accordion>
   <Accordion title="A follow-up started a new session">
-    Reply inside the original thread. Mappings last about 7 days, so older threads need a fresh
-    request.
+    Reply inside the original thread and mention the bot if it is a channel thread. Mappings last
+    about 7 days, so older threads need a fresh request.
 
 </Accordion>
   <Accordion title="An attached image did not reach the agent">

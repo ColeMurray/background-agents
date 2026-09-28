@@ -4,7 +4,7 @@ description: Add .openinspect/setup.sh and .openinspect/start.sh to a repository
 audience: team-owner
 owner: sandbox-runtime
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - README.md
   - docs/HOW_IT_WORKS.md
@@ -38,7 +38,7 @@ uv pip install --python python3 -r requirements.txt
 npm run build
 ```
 
-Start services every session:
+Start services every session (Docker Compose requires the `modal-vm` backend; default Modal and the other backends do not provide Docker):
 
 ```bash
 # .openinspect/start.sh
@@ -47,7 +47,7 @@ set -euo pipefail
 docker compose up -d postgres redis
 ```
 
-The sandbox is Debian Linux with Node.js 22, Python 3.12, Bun, git, the GitHub CLI, and build-essential preinstalled, plus npm, pnpm, and uv. There is no `pip` command; install Python packages with `uv pip`. Anything else your scripts need, they must install. See [Sandbox environment](/reference/sandbox-environment) for the full list of tools and variables.
+Sandbox targets use Node.js 24, Python 3.12, Bun, git, the GitHub CLI, and common build tools. Vercel uses Amazon Linux; the other targets use Debian. There is no `pip` command; install Python packages with `uv pip`. Docker is available only with `modal-vm`. See [Sandbox environment](/reference/sandbox-environment) for the full list of tools and variables.
 
 ## When each script runs
 
@@ -116,7 +116,7 @@ Scripts can apply their own command-specific deadlines (for example `timeout 300
 
 ### Boot mode
 
-`OPENINSPECT_BOOT_MODE` is set to `build`, `fresh`, `repo_image`, or `snapshot_restore`. Use it to skip work that only makes sense in one mode:
+`OPENINSPECT_BOOT_MODE` is set to `build`, `fresh`, `repo_image`, or `snapshot_restore`. Use it to skip work that only makes sense in one mode. This Docker Compose example requires `modal-vm`:
 
 ```bash
 # .openinspect/start.sh
@@ -148,7 +148,7 @@ TUNNEL_3000=https://abc123-3000.modal.host
 TUNNEL_5173=https://abc123-5173.modal.host
 ```
 
-The file is plain `KEY=value`, so it works with `node --env-file=/workspace/.tunnels.env`, `bun --env-file=...`, `docker compose --env-file=...`, or a `source` line in the script. `TUNNEL_SANDBOX_ID` names the sandbox the URLs belong to; on a restore, a file left over from a previous sandbox is cleared before new URLs are written.
+The file is plain `KEY=value`, so it works with `node --env-file=/workspace/.tunnels.env`, `bun --env-file=...`, `docker compose --env-file=...` (on `modal-vm` only), or a `source` line in the script. `TUNNEL_SANDBOX_ID` names the sandbox the URLs belong to; on a restore, a file left over from a previous sandbox is cleared before new URLs are written.
 
 The runtime waits up to 30 seconds (`TUNNEL_WAIT_TIMEOUT_SECONDS`) for fresh URLs before running `start.sh`. If they are not resolved in time, `start.sh` runs without a fresh file. The session UI still receives the URLs separately and shows them in the Tunnel URLs sidebar section. The file is not written in build mode or when no tunnel ports are configured.
 
@@ -173,7 +173,7 @@ Local [MCP servers](/configure/mcp-servers) launched with `npx` are installed at
     names which repository's script failed. A setup failure that a fresh session would only warn
     about fails a build outright. Test the script in the sandbox environment (Debian Linux with
     Node.js, Python, and common dev tools) rather than only on your machine, and check the build
-    timeout if the script simply runs long. The scheduler retries on its next run, so transient
+    timeout if the script simply runs long. Docker commands require the `modal-vm` backend. The scheduler retries on its next run, so transient
     network failures resolve on their own.
 
 </Accordion>

@@ -83,7 +83,9 @@ docs_site_enabled  = true
 docs_custom_domain = "docs.backgroundagents.dev"
 ```
 
-Apply, then publish the project id so the workflow can find it:
+Before `terraform apply`, set real `vercel_api_token` and `vercel_team_id` values for the docs
+project, even when `web_platform = "cloudflare"`. The Cloudflare-only defaults are placeholders and
+cannot create a Vercel project. Apply, then publish the project id so the workflow can find it:
 
 ```bash
 gh variable set VERCEL_DOCS_PROJECT_ID --body "$(terraform output -raw docs_site_project_id)"

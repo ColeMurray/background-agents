@@ -4,7 +4,7 @@ description: How archiving a session works, how to restore archived sessions fro
 audience: team-owner
 owner: web
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - packages/web/src/components/archive-session-dialog.tsx
   - packages/web/src/components/settings/data-controls-settings.tsx
@@ -37,7 +37,7 @@ What archiving does:
 - The session's status becomes `archived`. It disappears from the inbox and from the default sessions list, which exclude archived sessions.
 - The session can no longer be prompted. Archived is not a promptable status, and follow-ups are refused until the session is restored.
 - The session's history, diffs, pull requests, and attribution are kept.
-- The sandbox is not stopped by the archive itself. A running sandbox is left to reach its own inactivity or hard timeout under the session's [sandbox settings](/configure/sandbox-settings). To stop work immediately, stop the prompt first, then archive.
+- Archiving requests a preserve-and-stop shutdown for the sandbox, saving its state for later use rather than leaving it running until its inactivity timeout. Queued or running work must finish or be stopped before archiving.
 
 Two situations are refused:
 
@@ -89,7 +89,7 @@ Sessions are archived, not deleted: the web app has no control to delete a sessi
 
 ## Session export
 
-For operators and service integrations, the control plane can export session traces in bulk as newline-delimited JSON, one session per line, with an option to include each session's messages. This is an API capability for backups and offline analysis; it has no page in the web app. See the [self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md) for how operators authenticate service calls.
+For operators and service integrations, the control plane exports paginated session traces as newline-delimited JSON, optionally including messages, events, and usage. Lines have a `type`: `session` for a complete record, `session_error` when an included trace cannot be read, `cursor` for the next page, or `error` if the stream fails. This is a best-effort export, not a consistent snapshot or reliable backup; check for errors and follow cursors before using it for offline analysis. There is no export page in the web app. See the [self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md) for how operators authenticate service calls.
 
 ## Troubleshooting
 

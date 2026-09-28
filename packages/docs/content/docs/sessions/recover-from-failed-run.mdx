@@ -4,7 +4,7 @@ description: Decide whether to follow up, retry, reconnect an account, fix setup
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/SECRETS.md
@@ -25,7 +25,7 @@ Before you retry anything, note:
 - the error text shown in the timeline or the header's status popover, including any boot phase it names,
 - roughly when it happened.
 
-A failed session is not lost. Its status is `failed`, it still accepts prompts, and its last successful snapshot is kept. See [Session lifecycle and statuses](/sessions/lifecycle-and-statuses).
+A failed session is not lost. Its status is `failed` and it still accepts prompts. A post-turn snapshot may be attempted even after failed execution; saved state depends on the provider and whether capture succeeded. Failed boots do not produce snapshots. See [Session lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 ## Decision table
 
@@ -43,7 +43,7 @@ A failed session is not lost. Its status is `failed`, it still accepts prompts, 
 
 ## Follow up with missing context
 
-When the agent asks a question or stops short because something was unclear, reply in the same session. The workspace, installed dependencies, and the conversation so far are all still there, and the follow-up restores from the last snapshot.
+When the agent asks a question or stops short because something was unclear, reply in the same session. The conversation remains; the follow-up uses the live sandbox, resumes a retained one, or restores a compatible saved snapshot, depending on provider and state.
 
 ```text
 The API base URL lives in packages/web/.env.example as NEXT_PUBLIC_API_URL. Use that,
@@ -81,9 +81,9 @@ See [Provider accounts](/models/provider-accounts) and [Secrets](/configure/secr
 A non-zero `setup.sh` exit is reported as a warning and the boot continues, so a session can start with a broken environment and fail later. A failing `start.sh` in the first repository ends the boot.
 
 1. Read the error next to the failed build under Settings › Images (repository scope) or on the environment's row under Settings › Environments. The message names which repository's script failed.
-2. Fix `.openinspect/setup.sh`. Common causes are commands that do not exist in the sandbox (Debian Linux with Node.js, Python, and common dev tools) and builds that exceed the configured build timeout (30 minutes by default; see [Sandbox settings](/configure/sandbox-settings)).
+2. Fix `.openinspect/setup.sh`. Common causes are commands that do not exist in the sandbox (Vercel uses Amazon Linux; other targets use Debian; Docker requires `modal-vm`) and builds that exceed the configured build timeout (30 minutes by default; see [Sandbox settings](/configure/sandbox-settings)).
 3. Trigger a rebuild with the refresh button next to the repository or environment, and wait for **Ready**.
-4. Start a new session. The old session keeps its snapshot of the broken environment.
+4. Start a new session. An old session may retain saved state from the broken environment rather than picking up the rebuilt image.
 
 See [Lifecycle scripts](/configure/lifecycle-scripts) and [Prebuilt images](/configure/prebuilt-images).
 

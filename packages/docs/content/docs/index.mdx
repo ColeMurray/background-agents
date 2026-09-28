@@ -4,7 +4,7 @@ description: What OpenInspect does, how a session runs from prompt to pull reque
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - README.md
   - docs/HOW_IT_WORKS.md
@@ -15,7 +15,7 @@ OpenInspect is a background coding agent. You describe a piece of work, the agen
 
 ![The OpenInspect home screen with the session inbox on the left and the new-session composer in the middle](/images/getting-started/home-composer.webp "The home screen: inbox on the left, composer with repository, branch, model, and skills pickers in the middle.")
 
-The agent does not need you to stay connected. Send a prompt from the web app, Slack, a GitHub pull request, a Linear issue, or an automation, close the tab, and check the session later. Several people can watch and prompt the same session at the same time, and every commit is attributed to the person who asked for it.
+The agent does not need you to stay connected. Send a prompt from the web app, Slack, a GitHub pull request, a Linear issue, or an automation, close the tab, and check the session later. Several people can watch and prompt the same session at the same time. Prompts record who sent them; commits use that person's source-control identity when available, or the agent identity otherwise.
 
 ## Start here
 
@@ -83,4 +83,4 @@ From your side, each session comes down to four actions:
 
 ## Where people stay in control
 
-The agent proposes changes; it does not merge them. Pull requests it opens are ordinary pull requests on your repository, authored as the person who asked for them when that person signed in with GitHub. Branch protection, required reviews, status checks, and your merge policy apply exactly as they do to a pull request a colleague opened. Every session is visible to the workspace, every prompt is attributed to its author, and administrators can read the audit log to see who did what.
+The built-in pull-request tool opens PRs but does not merge them. The agent can also run the GitHub CLI, including merge commands, when its credentials and repository rules permit it. GitHub PRs are authored as the prompting user when a token can be resolved, or as the App otherwise. Enforce branch protection, required reviews, and status checks in your repository. Every session is visible to the workspace, every prompt is attributed to its author, and administrators can read the audit log to see who did what.

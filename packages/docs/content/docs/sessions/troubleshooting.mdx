@@ -4,7 +4,7 @@ description: Symptom-keyed fixes for starting sessions, running them, reviewing 
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-09-28"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/SECRETS.md
@@ -42,19 +42,19 @@ Cause: the GitHub App is not installed on the repositories you expect, or your r
 Check, in order:
 
 1. Creating a session requires permission to use the selected repository or environment; a role may view existing sessions without being able to create new ones. Confirm your role under Settings › Workspace access.
-2. Ask the operator to confirm the GitHub App installation covers the repository. The integration's **Repository Scope** setting can also narrow it to selected repositories.
+2. Ask the operator to confirm the GitHub App installation covers the repository. Settings › Integrations › GitHub › **Repository Scope** controls the GitHub bot, not which repositories appear in the web session picker.
 3. Try picking a saved environment or **No repository** to confirm the picker itself works.
 
 </Accordion>
 
 <Accordion title="A model is missing from the picker">
-Cause: the model catalog inside a prebuilt image is as old as the image, or the model is not available on the session's harness.
+Cause: the model is not enabled in saved model preferences or is not available on the session's harness. The picker reads the shared model catalog, not the prebuilt image.
 
 Check, in order:
 
 1. The Claude Agent harness lists Anthropic models only; OpenCode lists every family. See [Agent harnesses](/models/agent-harnesses).
-2. Prebuilt images are rebuilt every 30 minutes when new commits are detected, so a newly published model reaches a quiet repository only on its next rebuild. Trigger a manual rebuild with the refresh button under Settings › Images or Settings › Environments.
-3. Confirm the provider is configured under Settings › Models and Settings › Accounts.
+2. Enable the model or its opt-in group under Settings › Models if it appears in the shared catalog.
+3. Check account or API-key availability separately under Settings › Accounts and Settings › Secrets; rebuilding the image does not change the picker.
 
 </Accordion>
 
@@ -104,7 +104,7 @@ Check, in order:
 
 1. Look for the prompt in the queue below the composer; it dispatches when the current turn ends.
 2. To act now, stop the current prompt first ("Stop current prompt; queued prompts will continue"), then send the correction.
-3. From Slack, reply inside the original thread; thread mappings last about 7 days, after which a reply starts a new session.
+3. From Slack, reply inside the original thread. In a channel, `@mention` the bot for interactive follow-ups; in a DM no mention is needed. Thread mappings last about 7 days, after which a request may start a new session.
 
 </Accordion>
 
