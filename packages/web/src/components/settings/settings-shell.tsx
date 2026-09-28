@@ -8,6 +8,7 @@ import { SettingsViewportProvider } from "@/components/settings/settings-viewpor
 import { SettingsNav } from "@/components/settings/settings-nav";
 import { resolveSettingsCategory } from "@/components/settings/settings-registry";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useMeTeams } from "@/hooks/use-teams";
 
 /**
  * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
@@ -20,22 +21,29 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   const isHydrated = isMobile !== undefined;
   const tab = searchParams.get("tab");
   const { hasPermission, loading } = useCurrentUserAuthorization();
-  const requestedCategory = pathname.startsWith("/settings/integrations/") ? "integrations" : tab;
+  const { teams, loading: teamsLoading } = useMeTeams();
+  const canEditTeam = teams.some((team) => team.capabilities?.canEditMetadata === true);
+  const requestedCategory = pathname.startsWith("/settings/integrations/")
+    ? "integrations"
+    : pathname.startsWith("/settings/teams/")
+      ? "teams"
+      : tab;
   const activeCategory = resolveSettingsCategory(
     requestedCategory,
     supportsRepoImages(),
-    hasPermission
+    hasPermission,
+    canEditTeam
   );
   const categoryRedirectRequired =
     requestedCategory !== null && activeCategory !== requestedCategory;
 
   useEffect(() => {
-    if (isHydrated && !loading && categoryRedirectRequired) {
+    if (isHydrated && !loading && !teamsLoading && categoryRedirectRequired) {
       router.replace(`/settings?tab=${activeCategory}`);
     }
-  }, [activeCategory, categoryRedirectRequired, isHydrated, loading, router]);
+  }, [activeCategory, categoryRedirectRequired, isHydrated, loading, teamsLoading, router]);
 
-  if (!isHydrated || loading || categoryRedirectRequired) {
+  if (!isHydrated || loading || teamsLoading || categoryRedirectRequired) {
     return <main className="h-dvh overflow-hidden bg-background" aria-busy="true" />;
   }
 

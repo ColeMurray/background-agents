@@ -51,13 +51,15 @@ async function responseTeam(
   ctx: RequestContext,
   team: Team,
   memberships?: ReadonlyMap<string, TeamRole>,
-  leadCount?: number
+  leadCount?: number,
+  memberCount?: number
 ) {
   const subject = viewer(ctx);
   const store = new TeamMembershipStore(ctx.db);
   const roles = memberships ?? (await store.listForUser(subject.userId));
   return {
     ...team,
+    memberCount: memberCount ?? (await store.countMembers(team.id)),
     capabilities: resolveTeamAccess(
       { ...subject, memberships: roles },
       { ...team, leadCount: leadCount ?? (await store.countLeads(team.id)) }
@@ -110,9 +112,18 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
     search: query.search,
   });
   const leadCounts = await membershipStore.listLeadCounts();
+  const memberCounts = await membershipStore.listMemberCounts();
   return json({
     teams: await Promise.all(
-      teams.map((team) => responseTeam(ctx, team, memberships, leadCounts.get(team.id) ?? 0))
+      teams.map((team) =>
+        responseTeam(
+          ctx,
+          team,
+          memberships,
+          leadCounts.get(team.id) ?? 0,
+          memberCounts.get(team.id) ?? 0
+        )
+      )
     ),
   });
 }
@@ -126,10 +137,17 @@ async function meTeams(_request: Request, _env: Env, _params: object, ctx: Reque
     includeArchived: true,
   });
   const leadCounts = await membershipStore.listLeadCounts();
+  const memberCounts = await membershipStore.listMemberCounts();
   return json({
     teams: await Promise.all(
       teams.map(async (team) => ({
-        ...(await responseTeam(ctx, team, memberships, leadCounts.get(team.id) ?? 0)),
+        ...(await responseTeam(
+          ctx,
+          team,
+          memberships,
+          leadCounts.get(team.id) ?? 0,
+          memberCounts.get(team.id) ?? 0
+        )),
         role: memberships.get(team.id),
       }))
     ),

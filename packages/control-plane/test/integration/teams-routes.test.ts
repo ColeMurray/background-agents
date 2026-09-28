@@ -77,6 +77,28 @@ describe("team routes", () => {
     ]);
   });
 
+  it("reports member counts on list, membership and detail responses", async () => {
+    const created = await request("/teams", "POST", { slug: "counted", name: "Counted" });
+    const team = (await created.json()) as Team;
+    await new TeamMembershipStore(env.DB).add(team.id, MEMBER);
+    const other = await request("/teams", "POST", { slug: "second", name: "Second" });
+    const second = (await other.json()) as Team;
+
+    expect(await (await request("/teams?membership=all")).json()).toMatchObject({
+      teams: [
+        { id: team.id, memberCount: 2 },
+        { id: second.id, memberCount: 1 },
+      ],
+    });
+    expect(await (await request("/me/teams")).json()).toMatchObject({
+      teams: [
+        { id: team.id, memberCount: 2 },
+        { id: second.id, memberCount: 1 },
+      ],
+    });
+    expect(await (await request(`/teams/${team.id}`)).json()).toMatchObject({ memberCount: 2 });
+  });
+
   it("rolls back team creation if its audit write fails", async () => {
     const db = sqlDatabase(env.DB);
     const failAudit: SqlDatabase = {

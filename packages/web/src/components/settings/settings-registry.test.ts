@@ -49,6 +49,14 @@ describe("settings registry", () => {
     ).toBe(true);
   });
 
+  it("shows Teams to creators or members who can edit metadata", () => {
+    expect(canViewSettingsCategory("teams", () => false)).toBe(false);
+    expect(canViewSettingsCategory("teams", () => false, true)).toBe(true);
+    expect(
+      canViewSettingsCategory("teams", (permission) => permission === "workspace.members.manage")
+    ).toBe(true);
+  });
+
   it("requires repository visibility alongside image-build read access", () => {
     expect(
       canViewSettingsCategory("images", (permission) => permission === "image_builds.read")

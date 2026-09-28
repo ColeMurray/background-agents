@@ -91,6 +91,7 @@ export const teamResponseSchema = z.object({
   archivedAt: z.number().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
+  memberCount: z.number().int().nonnegative(),
   capabilities: teamCapabilitiesSchema,
 });
 

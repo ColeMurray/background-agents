@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 28, 2026
+
+### Added
+
+Workspace settings now includes Teams. Administrators can create teams, manage members and leads,
+edit team defaults, and archive or restore teams. Team leads can manage their own teams where
+permitted.
+
 ## September 27, 2026
 
 ### Changed

@@ -79,6 +79,26 @@ export class TeamMembershipStore {
     );
   }
 
+  async countMembers(teamId: string): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT COUNT(*) AS count FROM team_memberships WHERE team_id = ?")
+      .bind(teamId)
+      .first();
+    return teamRoleCountSchema.parse(row).count;
+  }
+
+  async listMemberCounts(): Promise<ReadonlyMap<string, number>> {
+    const rows = await this.db
+      .prepare("SELECT team_id, COUNT(*) AS count FROM team_memberships GROUP BY team_id")
+      .all();
+    return new Map(
+      rows.results.map((row) => {
+        const value = teamRoleCountSchema.extend({ team_id: z.string() }).parse(row);
+        return [value.team_id, value.count];
+      })
+    );
+  }
+
   async listMembersWithUsers(teamId: string) {
     const rows = await this.db
       .prepare(

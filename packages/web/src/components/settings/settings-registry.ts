@@ -138,6 +138,17 @@ export const SETTINGS_GROUPS = [
         ),
       },
       {
+        id: "teams",
+        label: "Teams",
+        description: "Manage team membership and defaults",
+        keywords: "teams members leads visibility",
+        icon: DataControlsIcon,
+        visibility: anyOf("workspace.members.manage"),
+        panel: lazyPanel(() =>
+          import("./teams-settings").then(({ TeamsSettings }) => TeamsSettings)
+        ),
+      },
+      {
         id: "audit-log",
         label: "Audit log",
         description: "Review workspace activity and access decisions",
@@ -261,10 +272,12 @@ const DEFAULT_SETTINGS_QUERY = "";
 /** Returns whether the user's effective permissions make a settings category visible. */
 export function canViewSettingsCategory(
   category: SettingsCategory,
-  hasPermission: (permission: PermissionId) => boolean
+  hasPermission: (permission: PermissionId) => boolean,
+  canEditTeam = false
 ): boolean {
   const visibility = getSettingsItem(category).visibility;
   return (
+    (category === "teams" && canEditTeam) ||
     "public" in visibility ||
     visibility.anyOf.some((predicate) =>
       typeof predicate === "string"
@@ -293,22 +306,23 @@ export function canUseSettingsCapability(
 export function resolveSettingsCategory(
   requested: string | null,
   repoImagesEnabled: boolean,
-  hasPermission: (permission: PermissionId) => boolean
+  hasPermission: (permission: PermissionId) => boolean,
+  canEditTeam = false
 ): SettingsCategory {
   if (
     isSettingsCategory(requested, repoImagesEnabled) &&
-    canViewSettingsCategory(requested, hasPermission)
+    canViewSettingsCategory(requested, hasPermission, canEditTeam)
   ) {
     return requested;
   }
-  if (canViewSettingsCategory(DEFAULT_SETTINGS_CATEGORY, hasPermission)) {
+  if (canViewSettingsCategory(DEFAULT_SETTINGS_CATEGORY, hasPermission, canEditTeam)) {
     return DEFAULT_SETTINGS_CATEGORY;
   }
   for (const group of SETTINGS_GROUPS) {
     for (const item of group.items) {
       if (
         isSettingsItemAvailable(item, repoImagesEnabled) &&
-        canViewSettingsCategory(item.id, hasPermission)
+        canViewSettingsCategory(item.id, hasPermission, canEditTeam)
       ) {
         return item.id;
       }
@@ -326,16 +340,18 @@ export function getSettingsGroups({
   query = DEFAULT_SETTINGS_QUERY,
   repoImagesEnabled = supportsRepoImages(),
   hasPermission,
+  canEditTeam = false,
 }: {
   query?: string;
   repoImagesEnabled?: boolean;
   hasPermission: (permission: PermissionId) => boolean;
+  canEditTeam?: boolean;
 }) {
   return SETTINGS_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
       if (!isSettingsItemAvailable(item, repoImagesEnabled)) return false;
-      if (!canViewSettingsCategory(item.id, hasPermission)) return false;
+      if (!canViewSettingsCategory(item.id, hasPermission, canEditTeam)) return false;
       return matchesSearchTerms(`${item.label} ${item.description} ${item.keywords}`, query);
     }),
   })).filter((group) => group.items.length > 0);

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   tab: "",
   permissions: [] as string[],
   replace: vi.fn(),
+  canEditTeam: false,
 }));
 const SHELL_FIXTURE_DEFAULTS = {
   isMobile: false,
@@ -41,10 +42,17 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
     hasPermission: (permission: string) => mocks.permissions.includes(permission),
   }),
 }));
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({
+    teams: mocks.canEditTeam ? [{ capabilities: { canEditMetadata: true } }] : [],
+    loading: false,
+  }),
+}));
 
 beforeEach(() => {
   Object.assign(mocks, SHELL_FIXTURE_DEFAULTS);
   mocks.permissions = [...PERMISSION_IDS];
+  mocks.canEditTeam = false;
   mocks.replace.mockClear();
   vi.stubGlobal("matchMedia", () => ({
     matches: mocks.isMobile,
@@ -142,6 +150,15 @@ describe("SettingsShell", () => {
 
     expect(mocks.replace).toHaveBeenCalledWith("/settings?tab=appearance");
     expect(screen.queryByText("Integration settings")).not.toBeInTheDocument();
+  });
+
+  it("keeps a team lead on the nested team settings route", () => {
+    mocks.pathname = "/settings/teams/team_one";
+    mocks.permissions = [];
+    mocks.canEditTeam = true;
+    render(<SettingsShell>Team details</SettingsShell>);
+    expect(screen.getByText("Team details")).toBeInTheDocument();
+    expect(mocks.replace).not.toHaveBeenCalled();
   });
 
   it("canonicalizes an unauthorized settings query to the rendered fallback", () => {
