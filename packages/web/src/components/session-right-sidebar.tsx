@@ -110,7 +110,16 @@ export function SessionRightSidebarContent({
       );
       if (!response.ok) throw new Error("Trace export failed");
 
-      const url = URL.createObjectURL(await response.blob());
+      const blob = await response.blob();
+      // Trace read and stream failures arrive as NDJSON records inside a 200 response.
+      const failed = (await blob.text()).split("\n").some((line) => {
+        if (!line) return false;
+        const { type } = JSON.parse(line) as { type?: unknown };
+        return type === "session_error" || type === "error";
+      });
+      if (failed) throw new Error("Trace export failed");
+
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       link.download = `session-${sessionId}.ndjson`;

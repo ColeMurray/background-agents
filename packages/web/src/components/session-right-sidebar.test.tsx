@@ -132,6 +132,35 @@ describe("SessionRightSidebar", () => {
     expect(click.mock.instances[0]).toHaveProperty("href", "blob:session-trace");
   });
 
+  it.each(["session_error", "error"])(
+    "reports a %s export record as a failed download",
+    async (type) => {
+      vi.mocked(browserApiFetch).mockResolvedValueOnce(
+        new Response(`{"schemaVersion":1,"type":"${type}"}\n`, {
+          headers: { "Content-Type": "application/x-ndjson" },
+        })
+      );
+      const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      render(
+        <SessionRightSidebar
+          sessionId="session-1"
+          sessionState={sessionState}
+          participants={[]}
+          presenceSynced={false}
+          events={[]}
+          artifacts={[]}
+          onOpenMedia={vi.fn()}
+          capabilities={FULL_CAPABILITIES}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
+      expect(click).not.toHaveBeenCalled();
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
+    }
+  );
+
   it("aborts a trace body that stalls after headers and re-enables the download button", async () => {
     vi.useFakeTimers();
     let fetchSignal: AbortSignal | undefined;
