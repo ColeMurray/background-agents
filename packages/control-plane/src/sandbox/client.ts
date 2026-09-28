@@ -65,6 +65,12 @@ const restoreSandboxModalResponseSchema = z.object({
   }),
 });
 
+const resolveVmSandboxModalResponseSchema = restoreSandboxModalResponseSchema.extend({
+  data: restoreSandboxModalResponseSchema.shape.data.extend({
+    modal_object_id: z.string().min(1),
+  }),
+});
+
 const snapshotSandboxModalResponseSchema = z.object({
   success: z.literal(true),
   data: z.object({
@@ -234,6 +240,13 @@ export interface RestoreSandboxResponse {
   tunnelUrls?: Record<string, string>;
 }
 
+export interface ResolveVmSandboxRequest {
+  sessionId: string;
+  sandboxId: string;
+}
+
+export type ResolveVmSandboxResponse = RestoreSandboxResponse & { modalObjectId: string };
+
 export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
@@ -328,6 +341,7 @@ export class ModalClient {
   private snapshotVmSandboxUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
+  private resolveVmSandboxUrl: string;
   private stopSandboxUrl: string;
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
@@ -393,6 +407,7 @@ export class ModalClient {
     this.snapshotVmSandboxUrl = url("api-snapshot-vm-sandbox");
     this.snapshotBuildSandboxUrl = url("api-snapshot-build-sandbox");
     this.restoreSandboxUrl = url("api-restore-sandbox");
+    this.resolveVmSandboxUrl = url("api-resolve-vm-sandbox");
     this.stopSandboxUrl = url("api-stop-sandbox");
     this.createImageBuildSandboxUrl = url("api-create-build-sandbox");
     this.startImageBuildSandboxUrl = url("api-start-build-sandbox");
@@ -562,6 +577,34 @@ export class ModalClient {
         outcome,
       });
     }
+  }
+
+  /** Lookup-only recovery of a generation's named Modal VM allocation. */
+  async resolveVmSandbox(
+    request: ResolveVmSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<ResolveVmSandboxResponse> {
+    const result = await this.postJson(
+      this.resolveVmSandboxUrl,
+      "resolveVmSandbox",
+      MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
+      { session_id: request.sessionId, sandbox_id: request.sandboxId },
+      resolveVmSandboxModalResponseSchema,
+      correlation,
+      undefined,
+      () => {}
+    );
+    return {
+      sandboxId: result.data.sandbox_id,
+      modalObjectId: result.data.modal_object_id,
+      sandboxBackend: result.data.sandbox_backend,
+      codeServerUrl: result.data.code_server_url ?? undefined,
+      codeServerPassword: result.data.code_server_password ?? undefined,
+      vncUrl: result.data.vnc_url ?? undefined,
+      vncPassword: result.data.vnc_password ?? undefined,
+      ttydUrl: result.data.ttyd_url ?? undefined,
+      tunnelUrls: result.data.tunnel_urls ?? undefined,
+    };
   }
 
   /** Trigger a filesystem snapshot for a sandbox object. */

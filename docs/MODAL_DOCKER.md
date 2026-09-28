@@ -69,6 +69,39 @@ its generation is older than the materialization bound: the launch window plus t
 older launch that materializes later may briefly block a replacement, but the single allocation name
 and fenced credentials prevent overlapping work.
 
+The authenticated `POST /api_resolve_vm_sandbox` endpoint is lookup-only. Its body contains exactly
+`{"session_id":"...","sandbox_id":"..."}`; it accepts no launch settings or secrets. It finds the
+running allocation by session name, checks the generation's ownership tags, and returns:
+
+```json
+{
+  "success": true,
+  "data": {
+    "sandbox_id": "generation-id",
+    "modal_object_id": "sb-real-id",
+    "code_server_url": null,
+    "code_server_password": null,
+    "vnc_url": null,
+    "vnc_password": null,
+    "ttyd_url": null,
+    "tunnel_urls": null,
+    "sandbox_backend": "modal-vm"
+  }
+}
+```
+
+Enabled services return their actual URLs/passwords, and extra tunnels use port-to-URL mappings.
+Resolve neither creates nor retires an allocation or writes tunnel configuration. A stopped VM is
+not discoverable by name. Resolve does not return a terminal access token; the control plane mints
+that token only when it still holds the generation's sandbox auth token in memory.
+
+Create, restore, and resolve report typed HTTP error `detail` values: `not_visible` (404, resolve
+only; no named allocation), `other_generation` (409, wrong ownership tags), `window_closed` (409,
+create/restore after the launch deadline with no owned allocation), and `race_pending` (409,
+create/restore saw `AlreadyExistsError` but cannot yet look up the winner). Unexpected provider
+errors remain 500. The pending-reference stop endpoint retains its separate
+`pending_reference_not_visible` response.
+
 ## Switching backends
 
 Changing `SANDBOX_PROVIDER` is an operator cutover, not session migration. Existing sessions and

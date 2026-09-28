@@ -356,6 +356,33 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_docker_launch_does_not_allow_user_env_to_spoof_resolved_access(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
+    )
+    await manager.create_sandbox(
+        _docker_config(
+            user_env_vars={
+                "CODE_SERVER_PASSWORD": "spoofed",
+                VNC_PASSWORD_ENV_VAR: "spoofed",
+                CODE_SERVER_PORT_ENV_VAR: "9000",
+                EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000",
+            }
+        )
+    )
+
+    for key in (
+        "CODE_SERVER_PASSWORD",
+        VNC_PASSWORD_ENV_VAR,
+        CODE_SERVER_PORT_ENV_VAR,
+        EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    ):
+        assert key not in captured["kwargs"]["env"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "snapshot"])
 async def test_expired_vm_launch_cannot_materialize_after_lookup(monkeypatch, image_source):
     manager, captured, _ = _docker_manager(monkeypatch)
@@ -530,7 +557,7 @@ async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(mon
     with pytest.raises(RuntimeError, match="ownership mismatch") as exc:
         await manager.create_sandbox(_docker_config())
 
-    assert type(exc.value) is RuntimeError
+    assert isinstance(exc.value, RuntimeError)
     assert "kwargs" not in captured
 
 

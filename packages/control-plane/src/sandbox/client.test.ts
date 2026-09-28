@@ -137,6 +137,45 @@ describe("ModalClient", () => {
     });
   });
 
+  it("resolves a VM using only generation identity and preserves typed errors", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          success: true,
+          data: {
+            sandbox_id: "generation",
+            modal_object_id: "sb-real",
+            sandbox_backend: "modal-vm",
+            code_server_url: "https://editor.example",
+            code_server_password: "password",
+          },
+        })
+      )
+      .mockResolvedValueOnce(Response.json({ detail: "not_visible" }, { status: 404 }));
+    const client = createModalClient("secret", "acme");
+    expect(
+      await client.resolveVmSandbox({ sessionId: "session", sandboxId: "generation" })
+    ).toMatchObject({
+      sandboxId: "generation",
+      modalObjectId: "sb-real",
+      codeServerPassword: "password",
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://acme--open-inspect-api-resolve-vm-sandbox.modal.run"
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      session_id: "session",
+      sandbox_id: "generation",
+    });
+    await expect(
+      client.resolveVmSandbox({ sessionId: "session", sandboxId: "generation" })
+    ).rejects.toMatchObject({
+      status: 404,
+      detail: "not_visible",
+    });
+  });
+
   it("times out image-build creation when response headers stall", async () => {
     vi.useFakeTimers();
     let markFetchStarted!: () => void;

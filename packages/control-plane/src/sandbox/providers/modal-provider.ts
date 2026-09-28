@@ -31,6 +31,8 @@ import {
   type CreateSandboxResult,
   type RestoreConfig,
   type RestoreResult,
+  type ResolveSandboxConfig,
+  type ResolveSandboxResult,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
@@ -113,6 +115,48 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       reference: formatPendingVmReference(config.sessionId, config.sandboxId),
       lifetime: this.launchLifetime(config),
     };
+  }
+
+  isUnknownStartupError(error: unknown): boolean {
+    if (this.name !== "modal-vm") return false;
+    const cause = error instanceof SandboxProviderError ? error.cause : error;
+    if (cause instanceof ModalApiError)
+      return (
+        cause.detail === "race_pending" ||
+        cause.status === 502 ||
+        cause.status === 503 ||
+        cause.status === 504
+      );
+    return cause instanceof TypeError || SandboxProviderError.isTransientNetworkError(cause);
+  }
+
+  async resolveSandbox(config: ResolveSandboxConfig): Promise<ResolveSandboxResult> {
+    if (this.name !== "modal-vm")
+      throw new SandboxProviderError("VM resolution requires modal-vm", "permanent");
+    try {
+      const result = await this.client.resolveVmSandbox({
+        sessionId: config.sessionId,
+        sandboxId: config.sandboxId,
+      });
+      this.confirmSessionLaunch(result);
+      if (result.sandboxId !== config.sandboxId || !result.modalObjectId)
+        throw new SandboxProviderError(
+          "Modal VM resolution returned a different generation",
+          "permanent"
+        );
+      return {
+        sandboxId: result.sandboxId,
+        providerObjectId: result.modalObjectId,
+        lifetime: this.launchLifetime(config),
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
+        ttydUrl: result.ttydUrl,
+        tunnelUrls: result.tunnelUrls,
+      };
+    } catch (error) {
+      throw this.classifyError("Failed to resolve Modal VM", error);
+    }
   }
 
   private launchLifetime(
@@ -262,15 +306,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
-      if (error instanceof ModalApiError) {
-        throw this.classifyErrorWithStatus(
-          `Restore failed with HTTP ${error.status}`,
-          error.status
-        );
-      }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
       throw this.classifyError("Failed to restore sandbox from snapshot", error);
     }
   }
@@ -520,6 +555,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
+    if (error instanceof ModalApiError)
+      return this.classifyErrorWithStatus(
+        `${message} with HTTP ${error.status}`,
+        error.detail === "race_pending" ? 503 : error.status,
+        error
+      );
     if (SandboxProviderError.isTransientNetworkError(error)) {
       return new SandboxProviderError(
         `${message}: ${error instanceof Error ? error.message : String(error)}`,

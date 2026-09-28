@@ -42,6 +42,7 @@ from .sandbox.launch_policy import (
     InvalidDockerSettingsError,
     ModalBackend,
 )
+from .sandbox.manager import VMAllocationOutcome
 
 configure_logging()
 log = get_logger("web_api")
@@ -184,6 +185,13 @@ class RestoreSandboxRequest(_ModalRequestModel):
     launch_deadline_at_ms: int | None = Field(default=None, gt=0)
 
 
+class ResolveVMSandboxRequest(_ModalRequestModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    session_id: NonEmptyString
+    sandbox_id: NonEmptyString
+
+
 @dataclass
 class _EndpointExecution:
     endpoint_name: str
@@ -232,6 +240,10 @@ async def _execute_endpoint(
         execution.http_status = 501
         execution.outcome = "error"
         raise HTTPException(status_code=501, detail="docker_not_available") from e
+    except VMAllocationOutcome as e:
+        execution.http_status = 404 if e.detail == "not_visible" else 409
+        execution.outcome = "error"
+        raise HTTPException(status_code=execution.http_status, detail=e.detail) from e
     except Exception as e:
         execution.http_status = 500
         execution.outcome = "error"
@@ -286,6 +298,8 @@ def _parse_request[RequestModelT: BaseModel](
             }.get(error_type, "user_env_vars has an invalid value")
         elif field == "timeout_seconds":
             detail = "timeout_seconds must be a positive integer"
+        elif error_type == "extra_forbidden":
+            detail = f"{field} is not allowed"
         elif len(location) > 1:
             detail = f"{field} has an invalid value"
         else:
@@ -486,6 +500,48 @@ async def api_create_sandbox(
                 "modal_object_id": handle.modal_object_id,  # Modal's internal ID for snapshot API
                 "status": handle.status.value,
                 "created_at": handle.created_at,
+                "code_server_url": handle.code_server_url,
+                "code_server_password": handle.code_server_password,
+                "vnc_url": handle.vnc_url,
+                "vnc_password": handle.vnc_password,
+                "ttyd_url": handle.ttyd_url,
+                "tunnel_urls": handle.tunnel_urls,
+                "sandbox_backend": handle.sandbox_backend,
+            },
+        }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret], timeout=150)
+@fastapi_endpoint(method="POST")
+async def api_resolve_vm_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+    x_session_id: str | None = Header(None),
+    x_sandbox_id: str | None = Header(None),
+) -> dict:
+    """Authenticated lookup-only VM recovery by session and generation; no create or retire.
+
+    POST body: {"session_id": "...", "sandbox_id": "..."}. No secrets or launch settings.
+    """
+    async with _execute_endpoint(
+        endpoint_name="api_resolve_vm_sandbox",
+        authorization=authorization,
+        trace_id=x_trace_id,
+        request_id=x_request_id,
+        session_id=x_session_id,
+        sandbox_id=x_sandbox_id,
+    ):
+        parsed = _parse_request(ResolveVMSandboxRequest, request)
+        from .sandbox.manager import SandboxManager
+
+        handle = await SandboxManager().resolve_vm_sandbox(parsed.session_id, parsed.sandbox_id)
+        return {
+            "success": True,
+            "data": {
+                "sandbox_id": handle.sandbox_id,
+                "modal_object_id": handle.modal_object_id,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
                 "vnc_url": handle.vnc_url,

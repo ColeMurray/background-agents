@@ -13,7 +13,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import modal
 
@@ -68,8 +68,12 @@ _RESERVED_LAUNCH_ENV_VARS = {
     "TERMINAL_ENABLED",
     "AGENT_SLACK_NOTIFY_ENABLED",
     "SESSION_CONFIG",
+    "CODE_SERVER_PASSWORD",
+    CODE_SERVER_PORT_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
+    TTYD_PROXY_PORT_ENV_VAR,
+    EXPECTED_TUNNEL_PORTS_ENV_VAR,
     DOCKER_ENABLED_ENV_VAR,
 }
 
@@ -80,6 +84,19 @@ class RepositoryImageUnavailableError(RuntimeError):
 
 class PendingVMReferenceNotVisible(RuntimeError):
     """The named allocation is absent or belongs to a different generation."""
+
+
+type VMAllocationDetail = Literal[
+    "not_visible", "other_generation", "window_closed", "race_pending"
+]
+
+
+class VMAllocationOutcome(RuntimeError):
+    """A known named-VM lookup or launch outcome, distinct from provider failures."""
+
+    def __init__(self, detail: VMAllocationDetail, message: str):
+        super().__init__(message)
+        self.detail = detail
 
 
 def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
@@ -326,6 +343,8 @@ class SandboxManager:
         code_server_port: int,
         novnc_port: int,
         ttyd_proxy_port: int,
+        *,
+        write_env_file: bool = True,
     ) -> tuple[str | None, str | None, str | None, dict[int, str] | None]:
         """Return (code_server_url, vnc_url, ttyd_url, extra_urls)."""
         all_ports: list[int] = []
@@ -350,7 +369,7 @@ class SandboxManager:
         ttyd_url = resolved.pop(ttyd_proxy_port, None) if terminal_enabled else None
         extra_urls = resolved if resolved else None
 
-        if extra_urls:
+        if extra_urls and write_env_file:
             await SandboxManager._write_tunnel_env_file(sandbox, sandbox_id, extra_urls)
 
         return code_server_url, vnc_url, ttyd_url, extra_urls
@@ -578,17 +597,19 @@ class SandboxManager:
         existing = await self._find_owned_docker_allocation(name, tags)
         if existing is None:
             if launch_deadline_at_ms is not None and time.time() * 1000 >= launch_deadline_at_ms:
-                raise RuntimeError("VM launch deadline expired")
+                raise VMAllocationOutcome("window_closed", "VM launch deadline expired")
             try:
                 sandbox = await _create_sandbox(
                     {**create_kwargs, "name": name, "tags": tags},
                     repository_image=repository_image,
                 )
                 return sandbox, False
-            except modal.exception.AlreadyExistsError:
+            except modal.exception.AlreadyExistsError as e:
                 existing = await self._find_owned_docker_allocation(name, tags)
                 if existing is None:
-                    raise
+                    raise VMAllocationOutcome(
+                        "race_pending", "VM allocation is not yet visible"
+                    ) from e
         log.info(
             "sandbox.docker_allocation_adopted",
             sandbox_id=sandbox_id,
@@ -597,17 +618,7 @@ class SandboxManager:
         return existing, True
 
     @staticmethod
-    async def _read_access_passwords(
-        sandbox: modal.Sandbox, *, code_server_enabled: bool, vnc_enabled: bool
-    ) -> dict[str, str]:
-        """Recover only enabled service credentials from the owned VM's launch environment."""
-        keys = []
-        if code_server_enabled:
-            keys.append("CODE_SERVER_PASSWORD")
-        if vnc_enabled:
-            keys.append(VNC_PASSWORD_ENV_VAR)
-        if not keys:
-            return {}
+    async def _read_sandbox_env(sandbox: modal.Sandbox, keys: list[str]) -> dict[str, Any]:
         process = await sandbox.exec.aio(
             "python",
             "-I",
@@ -620,14 +631,106 @@ class SandboxManager:
         if await process.wait.aio() != 0:
             raise RuntimeError("Could not recover adopted sandbox access credentials")
         try:
-            passwords = json.loads(output)
+            values = json.loads(output)
         except ValueError:
             raise RuntimeError("Could not recover adopted sandbox access credentials") from None
-        if not isinstance(passwords, dict) or any(
-            not isinstance(passwords.get(key), str) or not passwords[key] for key in keys
-        ):
+        if not isinstance(values, dict):
+            raise RuntimeError("Could not recover adopted sandbox access credentials")
+        return values
+
+    @staticmethod
+    async def _read_access_passwords(
+        sandbox: modal.Sandbox,
+        *,
+        code_server_enabled: bool,
+        vnc_enabled: bool,
+        env: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """Recover only enabled service credentials from the owned VM's launch environment."""
+        keys = []
+        if code_server_enabled:
+            keys.append("CODE_SERVER_PASSWORD")
+        if vnc_enabled:
+            keys.append(VNC_PASSWORD_ENV_VAR)
+        if not keys:
+            return {}
+        passwords = (
+            env if env is not None else await SandboxManager._read_sandbox_env(sandbox, keys)
+        )
+        if any(not isinstance(passwords.get(key), str) or not passwords[key] for key in keys):
             raise RuntimeError("Could not recover adopted sandbox access credentials")
         return {key: passwords[key] for key in keys}
+
+    async def resolve_vm_sandbox(self, session_id: str, sandbox_id: str) -> SandboxHandle:
+        """Look up only the currently running, exactly owned VM; never create or retire it."""
+        sandbox = await self._find_owned_docker_allocation(
+            docker_allocation_name(session_id), docker_allocation_tags(session_id, sandbox_id)
+        )
+        if sandbox is None:
+            raise VMAllocationOutcome("not_visible", "VM allocation is not visible")
+
+        env = await self._read_sandbox_env(
+            sandbox,
+            [
+                "CODE_SERVER_PASSWORD",
+                VNC_PASSWORD_ENV_VAR,
+                CODE_SERVER_PORT_ENV_VAR,
+                NOVNC_PORT_ENV_VAR,
+                TTYD_PROXY_PORT_ENV_VAR,
+                EXPECTED_TUNNEL_PORTS_ENV_VAR,
+                "TERMINAL_ENABLED",
+            ],
+        )
+        code_server_enabled = bool(env.get("CODE_SERVER_PASSWORD"))
+        vnc_enabled = bool(env.get(VNC_PASSWORD_ENV_VAR))
+        terminal_enabled = env.get("TERMINAL_ENABLED") == "true"
+        passwords = await self._read_access_passwords(
+            sandbox, code_server_enabled=code_server_enabled, vnc_enabled=vnc_enabled, env=env
+        )
+
+        def port(key: str, default: int) -> int:
+            value = env.get(key)
+            return (
+                int(value)
+                if isinstance(value, str) and value.isdecimal() and 1 <= int(value) <= 65535
+                else default
+            )
+
+        code_server_port = port(CODE_SERVER_PORT_ENV_VAR, CODE_SERVER_PORT)
+        novnc_port = port(NOVNC_PORT_ENV_VAR, NOVNC_PORT)
+        ttyd_proxy_port = port(TTYD_PROXY_PORT_ENV_VAR, TTYD_PROXY_PORT)
+        extra_ports = env.get(EXPECTED_TUNNEL_PORTS_ENV_VAR)
+        tunnel_ports = (
+            self._validate_ports([int(p) for p in extra_ports.split(",") if p.isdecimal()])
+            if isinstance(extra_ports, str)
+            else []
+        )
+        code_server_url, vnc_url, ttyd_url, tunnel_urls = await self._resolve_and_setup_tunnels(
+            sandbox,
+            sandbox_id,
+            code_server_enabled,
+            vnc_enabled,
+            terminal_enabled,
+            tunnel_ports,
+            code_server_port,
+            novnc_port,
+            ttyd_proxy_port,
+            write_env_file=False,
+        )
+        return SandboxHandle(
+            sandbox_id=sandbox_id,
+            modal_sandbox=sandbox,
+            status=SandboxStatus.WARMING,
+            created_at=time.time(),
+            modal_object_id=sandbox.object_id,
+            code_server_url=code_server_url,
+            code_server_password=passwords.get("CODE_SERVER_PASSWORD"),
+            vnc_url=vnc_url,
+            vnc_password=passwords.get(VNC_PASSWORD_ENV_VAR),
+            ttyd_url=ttyd_url,
+            tunnel_urls=tunnel_urls,
+            sandbox_backend="modal-vm",
+        )
 
     @staticmethod
     async def _find_owned_docker_allocation(
@@ -638,7 +741,9 @@ class SandboxManager:
         except modal.exception.NotFoundError:
             return None
         if await sandbox.get_tags.aio() != tags:
-            raise RuntimeError("Docker sandbox allocation ownership mismatch")
+            raise VMAllocationOutcome(
+                "other_generation", "Docker sandbox allocation ownership mismatch"
+            )
         return sandbox
 
     async def _retire_docker_allocation(self, session_id: str, sandbox_id: str) -> None:

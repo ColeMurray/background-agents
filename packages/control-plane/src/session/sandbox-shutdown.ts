@@ -295,6 +295,25 @@ export class SandboxShutdownCoordinator {
     this.notifyLifecycleChange();
   }
 
+  /** Bridge recovery replaces only the pending handle, leaving the lifetime and restore hold intact. */
+  recordResolvedProviderHandle(
+    generation: SandboxGeneration,
+    expectedReference: string,
+    providerObjectId: string
+  ): void {
+    const state = this.deps.store.read();
+    const row = this.deps.sandbox.getSandbox();
+    if (
+      !state ||
+      !this.current(state) ||
+      !this.matches(state, generation) ||
+      state.providerObjectId !== expectedReference ||
+      row?.modal_object_id !== providerObjectId
+    )
+      return;
+    this.publish({ ...state, providerObjectId });
+  }
+
   runtimeReady(version?: 1): void {
     const state = this.deps.store.read();
     if (!state || !this.current(state)) return;
