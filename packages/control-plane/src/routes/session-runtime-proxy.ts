@@ -176,13 +176,14 @@ async function handleSessionSnapshot(
 
   const parsed = sessionSnapshotSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) return error("Invalid session snapshot", 502);
-  const snapshot = (
-    ctx.sessionAdmission && parseTeamsEnforcementMode(_env.TEAMS_ENFORCEMENT) === "on"
-      ? checkSessionAccess(ctx.sessionAdmission.viewer, ctx.sessionAdmission.row, "sandbox").allowed
-      : ctx.authorization?.permissions.includes("sessions.sandbox_access")
-  )
-    ? parsed.data
-    : redactSessionSnapshotSandboxAccess(parsed.data);
+  const admission = ctx.sessionAdmission;
+  const sandboxAllowed =
+    admission &&
+    (admission.row.visibility === "private" ||
+      parseTeamsEnforcementMode(_env.TEAMS_ENFORCEMENT) === "on")
+      ? checkSessionAccess(admission.viewer, admission.row, "sandbox").allowed
+      : ctx.authorization?.permissions.includes("sessions.sandbox_access");
+  const snapshot = sandboxAllowed ? parsed.data : redactSessionSnapshotSandboxAccess(parsed.data);
   const headers = new Headers(response.headers);
   headers.delete("Content-Length");
   return Response.json(snapshot, { headers });

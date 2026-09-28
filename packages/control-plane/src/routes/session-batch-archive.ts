@@ -11,10 +11,7 @@ import {
   auditPrivateSessionBreakGlass,
   auditShadowSessionDenial,
 } from "../authorization/request-audit";
-import {
-  legacyPermissionForAction,
-  parseTeamsEnforcementMode,
-} from "../authorization/teams-enforcement";
+import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 import {
   resolveSessionTarget,
   sessionTargetDenial,
@@ -65,13 +62,6 @@ sessionBatchArchiveRoutes.post(
             continue;
           }
           if (!target) throw new Error("Unreachable session target");
-          if (
-            mode !== "on" &&
-            !ctx.authorization?.permissions.includes(legacyPermissionForAction("lifecycle"))
-          ) {
-            skipped.push({ sessionId, reason: "missing_permission" });
-            continue;
-          }
           if (mode === "shadow") {
             const reason = shadowSessionDenialReason(target);
             if (reason)

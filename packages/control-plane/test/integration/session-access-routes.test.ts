@@ -237,6 +237,47 @@ describe("HTTP session access by enforcement mode", () => {
     });
   });
 
+  it.each(["off", "shadow", "on"] as const)(
+    "preserves bulk-only custom-role archiving in %s mode",
+    async (mode) => {
+      const { sessionName, team } = await session("team");
+      await new TeamMembershipStore(env.DB).add(team.id, MEMBER);
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO roles (id, key, name, normalized_name, is_system)
+           VALUES ('role_bulk_only', NULL, 'Bulk Only', 'bulk only', 0)`
+        ),
+        env.DB.prepare(
+          `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES ('role_bulk_only', 'sessions.bulk_archive'),
+                  ('role_bulk_only', 'sessions.read')`
+        ),
+        env.DB.prepare(
+          "UPDATE user_role_assignments SET role_id = 'role_bulk_only' WHERE user_id = ?"
+        ).bind(MEMBER),
+      ]);
+
+      const response = await fetchMode("/sessions/batch-archive", mode, {
+        method: "POST",
+        as: { userId: MEMBER, role: "member" },
+        body: JSON.stringify({ sessionIds: [sessionName] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(
+        mode === "on"
+          ? { results: [], skipped: [{ sessionId: sessionName, reason: "missing_permission" }] }
+          : { results: [{ sessionId: sessionName, outcome: "archived" }], skipped: [] }
+      );
+      if (mode === "shadow") {
+        expect(
+          (await auditRows("authorization.request_allowed")).some(
+            (row) => row.reason_code === "shadow_denied:missing_permission"
+          )
+        ).toBe(true);
+      }
+    }
+  );
+
   it("lists, idempotently adds, and removes collaborators", async () => {
     const { sessionName } = await session("private");
     const store = new SessionCollaboratorStore(env.DB);
