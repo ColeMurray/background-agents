@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { EnvironmentStore, type EnvironmentRow } from "../../src/db/environments";
 import { TeamSlugConflictError, TeamStore } from "../../src/db/teams";
 import {
   TeamMembershipStore,
@@ -9,6 +10,21 @@ import {
 import { cleanD1Tables } from "./cleanup";
 
 beforeEach(cleanD1Tables);
+
+function environmentRow(overrides: Partial<EnvironmentRow>): EnvironmentRow {
+  const now = Date.now();
+  return {
+    id: "env_test",
+    name: "Test Environment",
+    description: null,
+    prebuild_enabled: 0,
+    channel_associations: null,
+    created_at: now,
+    updated_at: now,
+    owner_team_id: null,
+    ...overrides,
+  };
+}
 
 describe("team and membership stores", () => {
   it("validates team rows and allows any team to be archived or restored", async () => {
@@ -41,6 +57,41 @@ describe("team and membership stores", () => {
       "Default environment must belong to the team"
     );
     expect((await store.getById(team.id))?.defaultEnvironmentId).toBeNull();
+  });
+
+  it("only accepts default environments owned by the team", async () => {
+    const teams = new TeamStore(env.DB);
+    const environments = new EnvironmentStore(env.DB);
+    const team = await teams.create({
+      slug: "default-env",
+      name: "Default Env",
+      joinPolicy: "invite_only",
+    });
+    const otherTeam = await teams.create({
+      slug: "other-default-env",
+      name: "Other Default Env",
+      joinPolicy: "invite_only",
+    });
+    await environments.create(
+      environmentRow({ id: "env_same_team", name: "Same Team", owner_team_id: team.id }),
+      []
+    );
+    await environments.create(
+      environmentRow({ id: "env_other_team", name: "Other Team", owner_team_id: otherTeam.id }),
+      []
+    );
+
+    await expect(
+      teams.update(team.id, { defaultEnvironmentId: "env_same_team" })
+    ).resolves.toMatchObject({ defaultEnvironmentId: "env_same_team" });
+
+    await expect(teams.update(team.id, { defaultEnvironmentId: "env_other_team" })).rejects.toThrow(
+      "Default environment must belong to the team"
+    );
+    await expect(teams.update(team.id, { defaultEnvironmentId: "env_missing" })).rejects.toThrow(
+      "Default environment must belong to the team"
+    );
+    expect((await teams.getById(team.id))?.defaultEnvironmentId).toBe("env_same_team");
   });
 
   it("reports duplicate slugs as a typed store conflict", async () => {
