@@ -196,8 +196,6 @@ fix instead.
   guard, the harness ignores the result of any turn it did not submit.
 - **Follow-ups queue.** Both harnesses hold follow-up prompts until the running turn completes.
 - **Image.** The sandbox image pins `claude-agent-sdk`, whose wheel bundles the `claude` binary. The
-  runtime manifest names the generation carrying the current pin under `harnessMinimumGeneration`,
-  so a Claude session never boots a prebuilt image from before that generation. The Sonnet 5.5
-  rollout also raises the OpenCode image floor and rebuild floor: older prepared images may have a
-  stale model catalog. Existing sessions can still resume older snapshots and use older models, but
-  Sonnet 5.5 requires a session running a generation-74 or newer sandbox runtime.
+  runtime manifest's `harnessMinimumGeneration` controls which prepared images new Claude sessions
+  can use. Older images and resumed snapshots may lack newer models until rebuilt; a model request
+  can fail on a sandbox whose bundled CLI does not support it.

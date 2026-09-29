@@ -52,12 +52,6 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     ).toMatchObject({ type: "rebuild", reason: "invalid_provenance" });
   });
 
-  it("rebuilds a ready v73 image even when its repositories are unchanged", () => {
-    expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ runtimeVersion: "v73-node-24" })], "modal")
-    ).toEqual({ type: "rebuild", reason: "runtime_incompatible" });
-  });
-
   it("ignores ready images from another provider", () => {
     expect(
       evaluateImageBuildRebuildPolicy(unit, [row({ provider: "vercel" })], "modal")

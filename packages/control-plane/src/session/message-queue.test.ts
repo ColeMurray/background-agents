@@ -23,7 +23,6 @@ import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
-import { COMPATIBLE_RUNTIME_VERSION } from "../image-builds/test-helpers";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -145,7 +144,6 @@ function buildQueue(
   // dispatch time — the thunk exists because settings can be persisted after
   // the queue is constructed.
   let executionTimeoutMs = EXECUTION_TIMEOUT_MS;
-  let sandboxRuntimeVersion: string | null = COMPATIBLE_RUNTIME_VERSION;
   let awaitingStop: { id: string; deadline: number } | null = null;
   const log = {
     debug: vi.fn(),
@@ -305,8 +303,7 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason,
-    () => sandboxRuntimeVersion
+    getSandboxPromptBlockReason
   );
 
   return {
@@ -330,9 +327,6 @@ function buildQueue(
     log,
     setExecutionTimeoutMs(value: number) {
       executionTimeoutMs = value;
-    },
-    setSandboxRuntimeVersion(value: string | null) {
-      sandboxRuntimeVersion = value;
     },
   };
 }
@@ -1368,97 +1362,6 @@ describe("SessionMessageQueue", () => {
       sandboxWs,
       expect.objectContaining({ type: "prompt", messageId: "eligible" })
     );
-  });
-
-  it.each(["claude", "opencode"] as const)(
-    "rejects Sonnet 5.5 on an older %s filesystem, then runs an older model",
-    async (harness) => {
-      const h = buildQueue();
-      const sandboxWs = { readyState: 1 } as WebSocket;
-      h.setSandboxRuntimeVersion("v73-node-24");
-      h.repository.getSession.mockReturnValue(createSession({ harness }));
-      h.repository.getNextPendingMessage
-        .mockReturnValueOnce(createMessage({ id: "blocked", model: "anthropic/claude-sonnet-5-5" }))
-        .mockReturnValueOnce(createMessage({ id: "eligible" }));
-      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-
-      await h.queue.processMessageQueue();
-
-      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageId: "blocked",
-          success: false,
-          error: expect.stringContaining("Start a new session"),
-        }),
-        expect.any(Number),
-        "pending"
-      );
-      expect(h.wsManager.send).toHaveBeenCalledTimes(1);
-      expect(h.wsManager.send).toHaveBeenCalledWith(
-        sandboxWs,
-        expect.objectContaining({
-          type: "prompt",
-          messageId: "eligible",
-          model: "anthropic/claude-haiku-4-5",
-        })
-      );
-    }
-  );
-
-  it.each([null, "dev"])(
-    "fails closed for a missing or invalid sandbox version %s",
-    async (version) => {
-      const h = buildQueue();
-      h.setSandboxRuntimeVersion(version);
-      h.repository.getSession.mockReturnValue(
-        createSession({ harness: "claude", model: "anthropic/claude-sonnet-5-5" })
-      );
-      h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
-      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
-
-      await h.queue.processMessageQueue();
-
-      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({ messageId: "msg-1", success: false }),
-        expect.any(Number),
-        "pending"
-      );
-      expect(h.wsManager.send).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each(["claude", "opencode"] as const)(
-    "dispatches Sonnet 5.5 on a v74 %s sandbox",
-    async (harness) => {
-      const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ harness }));
-      h.repository.getNextPendingMessage.mockReturnValue(
-        createMessage({ model: "claude-sonnet-5-5" })
-      );
-      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
-
-      await h.queue.processMessageQueue();
-
-      expect(h.wsManager.send).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ type: "prompt", model: "anthropic/claude-sonnet-5-5" })
-      );
-    }
-  );
-
-  it("waits for readiness before checking a new sandbox's runtime", async () => {
-    const h = buildQueue();
-    h.setSandboxRuntimeVersion(null);
-    h.repository.getSession.mockReturnValue(
-      createSession({ harness: "claude", model: "anthropic/claude-sonnet-5-5" })
-    );
-    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
-    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting", phase: null });
-
-    await h.queue.processMessageQueue();
-
-    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
-    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
   });
 
   it("uses the canonical profile userId instead of a bot transport identity", async () => {

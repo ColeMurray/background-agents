@@ -30,10 +30,9 @@ describe("sandbox runtime manifest", () => {
     );
   });
 
-  it("keeps every per-harness floor within the rebuild policy and current generation", () => {
+  it("keeps every per-harness floor between the global floor and the current generation", () => {
     for (const [harness, floor] of Object.entries(HARNESS_MIN_RUNTIME_GENERATION)) {
       expect(floor, harness).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_GENERATION);
-      expect(floor, harness).toBeLessThanOrEqual(MIN_REBUILD_RUNTIME_GENERATION);
       expect(floor, harness).toBeLessThanOrEqual(SANDBOX_RUNTIME_GENERATION);
     }
   });

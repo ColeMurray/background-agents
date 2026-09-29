@@ -127,19 +127,6 @@ describe("evaluateImageBuildForSpawn", () => {
     }
   });
 
-  it.each(["claude", "opencode"] as const)(
-    "rejects a v73 prepared image for %s even when the repository matches",
-    async (harness) => {
-      expect(
-        await evaluateImageBuildForSpawn(
-          await readyImage({ runtime_version: "v73-node-24" }),
-          SESSION_REPOSITORIES,
-          harness
-        )
-      ).toEqual({ outcome: "miss", reason: "runtime_below_floor", imageBuildId: "imgb-1" });
-    }
-  );
-
   it("misses when the environment was edited after the session was created", async () => {
     // The image was built from the environment's CURRENT repositories; the
     // session's own snapshot predates the edit and must not receive it.
