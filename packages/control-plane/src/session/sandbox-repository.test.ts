@@ -727,6 +727,75 @@ describe("SandboxRepository boot state (SQLite)", () => {
         tunnel_urls: null,
       });
     });
+
+    it.each([
+      ["replaced", "modal_sandbox_id = 'sb-2', created_at = 3000"],
+      ["fenced", "fenced = 1"],
+      ["bridge reference changed", "modal_object_id = 'another-pending'"],
+    ])("rejects access encrypted across a %s row", async (_case, change) => {
+      const { repository, set } = createSqliteRepository();
+      set(
+        "status = 'connecting', modal_sandbox_id = 'sb-1', created_at = 2000, modal_object_id = 'pending'"
+      );
+      const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+      let beginEncryption!: () => void;
+      let releaseEncryption!: () => void;
+      const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+      const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+      const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+        beginEncryption();
+        await gate;
+        return encrypt(...args);
+      });
+      try {
+        const completion = repository.completeProviderResume(generation, access, "pending");
+        await encrypting;
+        set(change);
+        releaseEncryption();
+        await expect(completion).resolves.toBe(false);
+        expect(repository.getSandbox()).toMatchObject({
+          modal_object_id: change.includes("modal_object_id") ? "another-pending" : "pending",
+          code_server_url: null,
+          vnc_url: null,
+          ttyd_url: null,
+        });
+      } finally {
+        releaseEncryption();
+        spy.mockRestore();
+      }
+    });
+
+    it("ordinary resume does not require an expected bridge reference after encryption", async () => {
+      const { repository, set } = createSqliteRepository();
+      set(
+        "status = 'connecting', modal_sandbox_id = 'sb-1', created_at = 2000, modal_object_id = 'old'"
+      );
+      const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+      let beginEncryption!: () => void;
+      let releaseEncryption!: () => void;
+      const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+      const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+      const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+        beginEncryption();
+        await gate;
+        return encrypt(...args);
+      });
+      try {
+        const completion = repository.completeProviderResume(generation, access);
+        await encrypting;
+        set("modal_object_id = 'changed-during-encryption'");
+        releaseEncryption();
+        await expect(completion).resolves.toBe(true);
+        expect(repository.getSandbox()).toMatchObject({
+          modal_object_id: "provider-2",
+          code_server_url: "https://code.test",
+        });
+        await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("code-secret");
+      } finally {
+        releaseEncryption();
+        spy.mockRestore();
+      }
+    });
   });
 
   describe("recordBootProgress", () => {

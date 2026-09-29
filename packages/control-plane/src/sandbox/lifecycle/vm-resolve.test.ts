@@ -265,6 +265,36 @@ describe("modal-vm startup resolution", () => {
     );
   });
 
+  it("retains the foreground token for an equal-valued bridge claim after inconclusive lookup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const f = fixture();
+    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("unavailable", 503));
+    const manager = f.makeManager();
+    const spawning = manager.spawnSandbox();
+    await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS + 20_000);
+    await spawning;
+    expect(f.sandbox.status).toBe("spawning");
+    expect(f.sandbox.ttyd_token).toBeNull();
+    expect(f.client.createSandbox).toHaveBeenCalledOnce();
+
+    f.client.resolveVmSandbox.mockResolvedValue({
+      sandboxId: f.sandbox.modal_sandbox_id!,
+      modalObjectId: "sb-real",
+      sandboxBackend: "modal-vm",
+      ttydUrl: "https://terminal.example",
+    });
+    manager.onSandboxSocketAttached({
+      sandboxId: f.sandbox.modal_sandbox_id!,
+      createdAt: f.sandbox.created_at,
+    });
+    await vi.waitFor(() => expect(f.sandbox.modal_object_id).toBe("sb-real"));
+    expect(f.sandbox.ttyd_token).toBeTruthy();
+    expect(f.store.read()).toMatchObject({ phase: "running", providerObjectId: "sb-real" });
+    expect(f.client.createSandbox).toHaveBeenCalledOnce();
+  });
+
   it("completes a restore after bounded transient errors when its bridge later resolves", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));

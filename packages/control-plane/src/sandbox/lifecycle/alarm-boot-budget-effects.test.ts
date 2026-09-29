@@ -126,6 +126,57 @@ describe("boot budget alarm effects", () => {
     expect(stopSandbox).toHaveBeenCalledOnce();
   });
 
+  it("holds the termination guard only for provider stop, after publishing and detaching", async () => {
+    const sandbox = createMockSandbox({
+      status: "connecting",
+      created_at: Date.now() - DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs,
+    });
+    const observations: string[] = [];
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true },
+        stopSandbox: vi.fn(async () => {
+          observations.push(`stop:${h.manager.isSpawning()}`);
+          return { success: true };
+        }),
+      })
+    );
+    vi.spyOn(h.wsManager, "sendToSandbox").mockImplementation(() => {
+      observations.push(`send:${h.manager.isSpawning()}`);
+      return true;
+    });
+    vi.spyOn(h.storage, "fenceSandboxGeneration").mockImplementation(() => {
+      observations.push(`fence:${h.manager.isSpawning()}`);
+      sandbox.fenced = 1;
+    });
+    vi.spyOn(h.storage, "updateSandboxStatus").mockImplementation((status) => {
+      observations.push(`status:${h.manager.isSpawning()}`);
+      sandbox.status = status;
+    });
+    vi.spyOn(h.broadcaster, "broadcast").mockImplementation(() => {
+      observations.push(`broadcast:${h.manager.isSpawning()}`);
+    });
+    vi.spyOn(h.wsManager, "detachSandboxWebSocket").mockImplementation(() => {
+      observations.push(`detach:${h.manager.isSpawning()}`);
+    });
+
+    await expect(h.manager.handleAlarm()).resolves.toMatchObject({
+      kind: "boot_budget_exceeded",
+    });
+    expect(observations).toEqual([
+      "send:false",
+      "fence:false",
+      "status:false",
+      "broadcast:false",
+      "broadcast:false",
+      "broadcast:false",
+      "detach:false",
+      "stop:true",
+    ]);
+    expect(h.manager.isSpawning()).toBe(false);
+  });
+
   it.each(["rejected", "unsuccessful"] as const)(
     "preserves the budget failure after a %s provider stop",
     async (failure) => {

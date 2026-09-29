@@ -144,6 +144,51 @@ describe("rejected provider allocation", () => {
     expect(sandbox.fenced).toBe(1);
     expect(provider.createSandbox).toHaveBeenCalledTimes(1);
   });
+  it.each(["new generation", "new handle"] as const)(
+    "rearms cleanup before stop and does not clear a %s after the old stop succeeds",
+    async (replacement) => {
+      const sandbox = createMockSandbox({ status: "pending", modal_object_id: null });
+      let beginStop!: () => void;
+      let releaseStop!: () => void;
+      const stopping = new Promise<void>((resolve) => (beginStop = resolve));
+      const gate = new Promise<void>((resolve) => (releaseStop = resolve));
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true },
+        createSandbox: async () => {
+          throw new SandboxLaunchRejectedError("incompatible", "sb-rejected");
+        },
+        stopSandbox: vi.fn(async () => {
+          beginStop();
+          await gate;
+          return { success: true };
+        }),
+      });
+      const fixture = createAlarmFixture(sandbox, provider);
+      const spawning = fixture.manager.spawnSandbox();
+      try {
+        await stopping;
+        expect(sandbox).toMatchObject({
+          status: "failed",
+          startup_rejected: 1,
+          fenced: 1,
+          modal_object_id: "sb-rejected",
+        });
+        expect(fixture.alarmScheduler.schedule).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(fixture.alarmScheduler.schedule).mock.invocationCallOrder[1]).toBeLessThan(
+          vi.mocked(provider.stopSandbox!).mock.invocationCallOrder[0]
+        );
+        sandbox.modal_object_id = "sb-newer";
+        if (replacement === "new generation") {
+          sandbox.modal_sandbox_id = "newer-generation";
+          sandbox.created_at += 1;
+        }
+      } finally {
+        releaseStop();
+        await spawning;
+      }
+      expect(sandbox.modal_object_id).toBe("sb-newer");
+    }
+  );
   it.each(["create", "restore"] as const)(
     "rearms %s cleanup through the assembled alarm handler even under a shutdown hold",
     async (launch) => {
