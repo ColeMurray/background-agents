@@ -103,6 +103,11 @@ describe("MessageRepository", () => {
     expect(() => repository.getPendingOrProcessingCount()).toThrow(
       "Malformed numeric SQL result for count"
     );
+
+    mock.setOne({ duration_ms: "4500" });
+    expect(() => repository.getActiveDurationMs()).toThrow(
+      "Malformed numeric SQL result for duration_ms"
+    );
   });
 
   it("calculates active duration", () => {
@@ -163,6 +168,14 @@ describe("MessageRepository", () => {
     ]);
 
     expect(() => repository.getProcessingMessageWithCreatedAt()).toThrow(
+      SessionStorageIntegrityError
+    );
+
+    mock.setData(`SELECT id, started_at FROM messages WHERE status = 'processing' LIMIT 1`, [
+      { id: "msg-1", started_at: null },
+    ]);
+
+    expect(() => repository.getProcessingMessageWithStartedAt()).toThrow(
       SessionStorageIntegrityError
     );
   });
@@ -756,6 +769,15 @@ describe("MessageRepository", () => {
 
     it("returns 0 for an unknown message", () => {
       expect(repository.raiseReportedCost("missing", 2.5)).toBe(0);
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
+
+    it("rejects malformed persisted cost rows", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: "1" }]);
+
+      expect(() => repository.raiseReportedCost("msg-1", 2.5)).toThrow(
+        SessionStorageIntegrityError
+      );
       expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
     });
   });

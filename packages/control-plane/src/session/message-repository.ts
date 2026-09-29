@@ -22,6 +22,10 @@ const messageStopConfirmationRowSchema = messageRowSchema
   .pick({ id: true, stop_confirmation_deadline: true })
   .extend({ stop_confirmation_deadline: z.number() });
 const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageStartedAtRowSchema = messageRowSchema
+  .pick({ id: true, started_at: true })
+  .extend({ started_at: z.number() });
+const messageReportedCostRowSchema = messageRowSchema.pick({ reported_cost_usd: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -113,7 +117,7 @@ export class MessageRepository {
        FROM messages
        WHERE started_at IS NOT NULL AND completed_at IS NOT NULL`
     );
-    return (result.one() as { duration_ms: number }).duration_ms;
+    return readRequiredNumberColumn(result, "duration_ms");
   }
 
   getMessageCount(): number {
@@ -162,9 +166,9 @@ export class MessageRepository {
     // would only expose the post-update value.
     const rows = this.sql
       .exec(`SELECT reported_cost_usd FROM messages WHERE id = ?`, messageId)
-      .toArray() as Array<{ reported_cost_usd: number }>;
+      .toArray();
     if (rows.length !== 1) return 0;
-    const previous = rows[0].reported_cost_usd;
+    const previous = parseStorageRows(rows, messageReportedCostRowSchema)[0].reported_cost_usd;
     if (reportedCostUsd <= previous) return 0;
     this.sql.exec(
       `UPDATE messages SET reported_cost_usd = ? WHERE id = ?`,
@@ -190,7 +194,7 @@ export class MessageRepository {
     const result = this.sql.exec(
       `SELECT id, started_at FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ id: string; started_at: number }>;
+    const rows = parseStorageRows(result.toArray(), messageStartedAtRowSchema);
     return rows[0] ?? null;
   }
 
