@@ -12,11 +12,16 @@ import type {
   IssueCommentPayload,
   ReviewCommentPayload,
 } from "./types";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { Logger } from "./logger";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
-import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
+import {
+  getGitHubConfig,
+  resolveGitHubSessionHarness,
+  type ResolvedGitHubConfig,
+} from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
 
@@ -37,6 +42,7 @@ async function createSession(
     target: SessionTargetFields;
     title: string;
     model: string;
+    harness: HarnessId | null;
     reasoningEffort?: string | null;
     scmLogin: string;
     scmUserId: string;
@@ -50,6 +56,11 @@ async function createSession(
     scmLogin: params.scmLogin,
     scmAvatarUrl: params.scmAvatarUrl,
   };
+  // Absent harness resolves to the built-in default server-side; send it only
+  // when configured so unset behavior stays byte-identical to today.
+  if (params.harness) {
+    body.harness = params.harness;
+  }
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }
@@ -238,6 +249,7 @@ export async function handleReviewRequested(
         target,
         title: `GitHub: Review PR #${pr.number}`,
         model: config.model,
+        harness: resolveGitHubSessionHarness(config, log),
         reasoningEffort: config.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),
@@ -342,6 +354,7 @@ export async function handlePullRequestOpened(
         target,
         title: `GitHub: Review PR #${pr.number}`,
         model: config.model,
+        harness: resolveGitHubSessionHarness(config, log),
         reasoningEffort: config.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),
@@ -458,6 +471,7 @@ export async function handleIssueComment(
         target,
         title: `GitHub: PR #${issue.number} comment`,
         model: config.model,
+        harness: resolveGitHubSessionHarness(config, log),
         reasoningEffort: config.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),
@@ -566,6 +580,7 @@ export async function handleReviewComment(
         target,
         title: `GitHub: PR #${pr.number} review comment`,
         model: config.model,
+        harness: resolveGitHubSessionHarness(config, log),
         reasoningEffort: config.reasoningEffort,
         scmLogin: sender.login,
         scmUserId: String(sender.id),

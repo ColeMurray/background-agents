@@ -434,4 +434,55 @@ describe("GitHubIntegrationSettings", () => {
       );
     }
   );
+
+  it("saves a global Claude Agent harness choice", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true } },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: { defaults: { autoReviewOnOpen: true, harness: "claude" } },
+        }),
+      })
+    );
+  });
+
+  it("saves a per-repo Claude Agent harness override", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: { defaults: { autoReviewOnOpen: true } },
+      repos: [{ repo: "acme/web", settings: {} }],
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    const row = repoOverrideRow("acme/web");
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness scope" }));
+    await user.click(await screen.findByRole("option", { name: "Override harness" }));
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ settings: { harness: "claude" } }),
+      })
+    );
+  });
 });

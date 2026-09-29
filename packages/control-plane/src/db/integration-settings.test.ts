@@ -385,6 +385,22 @@ describe("IntegrationSettingsStore", () => {
       ).resolves.not.toThrow();
     });
 
+    it("accepts a compatible harness/model pair on setGlobal", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { harness: "claude", model: "anthropic/claude-opus-4-6" },
+        })
+      ).resolves.not.toThrow();
+    });
+
+    it("rejects an incompatible harness/model pair on setGlobal", async () => {
+      await expect(
+        store.setGlobal("github", {
+          defaults: { harness: "claude", model: "openai/gpt-5" },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("rejects malformed stored global settings", async () => {
       (db as unknown as { globalRows: Map<string, GlobalRow> }).globalRows.set("github", {
         integration_id: "github",

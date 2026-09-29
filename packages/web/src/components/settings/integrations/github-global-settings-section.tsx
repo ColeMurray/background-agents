@@ -10,11 +10,25 @@ import {
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
 import type { ModelCategory } from "@open-inspect/shared/models";
+import {
+  HARNESS_IDS,
+  getHarnessLabel,
+  harnessSupportsModel,
+  isValidHarness,
+} from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness } from "@/lib/session-harness";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -47,6 +61,7 @@ export function GlobalSettingsSection({
 }) {
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
+  const [harness, setHarness] = useState(settings?.defaults?.harness ?? "");
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -83,6 +98,7 @@ export function GlobalSettingsSection({
       if (settings) {
         setModel(settings.defaults?.model ?? "");
         setEffort(settings.defaults?.reasoningEffort ?? "");
+        setHarness(settings.defaults?.harness ?? "");
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -102,6 +118,24 @@ export function GlobalSettingsSection({
   }, [settings, initialized]);
 
   const isConfigured = settings !== null && settings !== undefined;
+
+  // The model picker only offers models the selected harness can run. A model
+  // the new harness cannot run is cleared, mirroring the composer behavior.
+  const visibleModelOptions =
+    harness && isValidHarness(harness)
+      ? filterModelOptionsForHarness(harness, enabledModelOptions)
+      : enabledModelOptions;
+
+  const handleHarnessChange = (next: string) => {
+    const value = next === "__system_default__" ? "" : next;
+    setHarness(value);
+    if (value && isValidHarness(value) && model && !harnessSupportsModel(value, model)) {
+      setModel("");
+      setEffort("");
+    }
+    setDirty(true);
+    setError("");
+  };
   const handleReset = () => {
     setShowResetDialog(true);
   };
@@ -117,6 +151,7 @@ export function GlobalSettingsSection({
         mutate(GLOBAL_SETTINGS_KEY);
         setModel("");
         setEffort("");
+        setHarness("");
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -148,6 +183,7 @@ export function GlobalSettingsSection({
       defaults: {
         autoReviewOnOpen,
         ...(model ? { model } : {}),
+        ...(harness && isValidHarness(harness) ? { harness } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
@@ -211,7 +247,7 @@ export function GlobalSettingsSection({
       <ModelReasoningDefaultsFields
         model={model}
         reasoningEffort={effort}
-        modelOptions={enabledModelOptions}
+        modelOptions={visibleModelOptions}
         onChange={(nextModel, nextEffort) => {
           setModel(nextModel);
           setEffort(nextEffort);
@@ -219,6 +255,28 @@ export function GlobalSettingsSection({
           setError("");
         }}
       />
+
+      <div className="mb-4">
+        <label htmlFor="github-harness" className="block text-sm font-medium text-foreground mb-1">
+          Agent harness
+        </label>
+        <Select value={harness || "__system_default__"} onValueChange={handleHarnessChange}>
+          <SelectTrigger id="github-harness" className="w-full" aria-label="Agent harness">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__system_default__">Use system default (OpenCode)</SelectItem>
+            {HARNESS_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
+                {getHarnessLabel(id)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-1">
+          Harness that runs GitHub-triggered sessions. It decides which models are available above.
+        </p>
+      </div>
 
       <label
         htmlFor="auto-review-toggle"

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
 
-import { getGitHubConfig } from "../src/utils/integration-config";
+import { getGitHubConfig, resolveGitHubSessionHarness } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
   return {
@@ -53,6 +53,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-opus-4-6",
+      harness: null,
       reasoningEffort: "high",
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -60,6 +61,59 @@ describe("getGitHubConfig", () => {
       codeReviewInstructions: "Be thorough",
       commentActionInstructions: null,
     });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("parses the harness from a successful response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: "anthropic/claude-opus-4-6",
+              harness: "claude",
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await getGitHubConfig(env, "acme/widgets");
+
+    expect(result.harness).toBe("claude");
+  });
+
+  it("treats a response without a harness key as unset (older control plane)", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: "anthropic/claude-opus-4-6",
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+    const log = createMockLogger();
+
+    const result = await getGitHubConfig(env, "acme/widgets", log);
+
+    expect(result.harness).toBeNull();
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -87,6 +141,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: null,
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: ["acme/widgets"],
@@ -106,6 +161,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -127,6 +183,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -148,6 +205,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -174,6 +232,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -198,6 +257,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],
@@ -217,6 +277,7 @@ describe("getGitHubConfig", () => {
 
     expect(result).toEqual({
       model: "anthropic/claude-haiku-4-5",
+      harness: null,
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -225,5 +286,28 @@ describe("getGitHubConfig", () => {
       commentActionInstructions: null,
     });
     expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveGitHubSessionHarness", () => {
+  it("returns null when unset, so the field is omitted", () => {
+    expect(resolveGitHubSessionHarness({ harness: null, model: "openai/gpt-5" })).toBeNull();
+  });
+
+  it("keeps a compatible configured harness", () => {
+    expect(
+      resolveGitHubSessionHarness({ harness: "claude", model: "anthropic/claude-opus-4-6" })
+    ).toBe("claude");
+  });
+
+  it("omits with a warning on a cross-level mismatch", () => {
+    const log = createMockLogger();
+    expect(
+      resolveGitHubSessionHarness({ harness: "claude", model: "openai/gpt-5" }, log)
+    ).toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.harness_model_mismatch",
+      expect.objectContaining({ harness: "claude", model: "openai/gpt-5", fallback: "opencode" })
+    );
   });
 });
