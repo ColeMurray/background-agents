@@ -516,6 +516,10 @@ describe("SessionServer", () => {
     await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
 
     expect(clientCommands.getHistoryPage).toHaveBeenCalledOnce();
+    expect(clientCommands.authorize).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ userId: "user-1" }),
+      "read"
+    );
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "history_page",
       items: [],
@@ -538,6 +542,7 @@ describe("SessionServer", () => {
     await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
 
     expect(clientCommands.getHistoryPage).toHaveBeenCalledExactlyOnceWith({ cursor });
+    expect(clientCommands.authorize).toHaveBeenCalledOnce();
     expect(sockets.send).toHaveBeenNthCalledWith(1, "client", {
       type: "error",
       code: "INVALID_CURSOR",
@@ -549,6 +554,20 @@ describe("SessionServer", () => {
       hasMore: false,
       cursor: null,
     });
+  });
+
+  it("does not throttle a history request denied by the read check", async () => {
+    const { server, clientCommands, setNow } = createHarness();
+    const cursor = { timestamp: 10, id: "event-1" };
+    vi.mocked(clientCommands.authorize).mockResolvedValueOnce("denied");
+
+    setNow(0);
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
+    setNow(100);
+    await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
+
+    expect(clientCommands.authorize).toHaveBeenCalledTimes(2);
+    expect(clientCommands.getHistoryPage).toHaveBeenCalledOnce();
   });
 
   it("parses and routes sandbox events without exposing a socket type", async () => {

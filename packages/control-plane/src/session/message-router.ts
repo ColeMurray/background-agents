@@ -16,6 +16,7 @@ export type ClientPresence = Extract<ClientMessage, { type: "presence" }>;
 export type ClientPrompt = Extract<ClientMessage, { type: "prompt" }>;
 export type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
 export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
+type ValidHistoryRequest = FetchHistory & { cursor: NonNullable<FetchHistory["cursor"]> };
 export type RecoverShutdownCommand = Extract<ClientMessage, { type: "recover_preservation" }>;
 
 type BoundarySchema<T> = {
@@ -170,6 +171,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
           await this.deps.clientCommands.notifyTyping();
           break;
         case "fetch_history":
+          if (!this.canFetchHistory(connection, client, data)) break;
           if (!(await this.authorizeCommand(connection, client, "read"))) break;
           this.handleFetchHistory(connection, client, data);
           break;
@@ -220,7 +222,11 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     return false;
   }
 
-  private handleFetchHistory(connection: Connection, client: Client, data: FetchHistory): void {
+  private canFetchHistory(
+    connection: Connection,
+    client: Client,
+    data: FetchHistory
+  ): data is ValidHistoryRequest {
     if (
       !data.cursor ||
       typeof data.cursor.timestamp !== "number" ||
@@ -233,7 +239,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         code: "INVALID_CURSOR",
         message: "Invalid cursor",
       });
-      return;
+      return false;
     }
 
     const now = this.deps.clock.nowMs();
@@ -246,10 +252,17 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
         code: "RATE_LIMITED",
         message: "Too many requests",
       });
-      return;
+      return false;
     }
-    client.lastFetchHistoryAtMs = now;
+    return true;
+  }
 
+  private handleFetchHistory(
+    connection: Connection,
+    client: Client,
+    data: ValidHistoryRequest
+  ): void {
+    client.lastFetchHistoryAtMs = this.deps.clock.nowMs();
     const page = this.deps.clientCommands.getHistoryPage({
       cursor: data.cursor,
       limit: data.limit,
