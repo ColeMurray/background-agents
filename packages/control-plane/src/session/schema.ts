@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'spawning', 'connecting', 'warming', 'ready', 'stale', 'snapshotting', 'stopped', 'failed'
   git_sync_status TEXT DEFAULT 'pending',           -- 'pending', 'in_progress', 'completed', 'failed'
   last_heartbeat INTEGER,
+  heartbeat_confirmation_heartbeat INTEGER,        -- Heartbeat observed at first ready-sandbox stale alarm
+  heartbeat_confirmation_deadline INTEGER,         -- Fixed absolute confirmation deadline
   last_activity INTEGER,                            -- Last activity timestamp for inactivity-based snapshot
   last_spawn_error TEXT,                            -- Last sandbox spawn error (if any)
   last_spawn_error_at INTEGER,                      -- Timestamp of last spawn error
@@ -758,6 +760,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Persist ready-sandbox heartbeat confirmation",
+    run: (sql) => {
+      runMigration(sql, "ALTER TABLE sandbox ADD COLUMN heartbeat_confirmation_heartbeat INTEGER");
+      runMigration(sql, "ALTER TABLE sandbox ADD COLUMN heartbeat_confirmation_deadline INTEGER");
+    },
   },
 ];
 

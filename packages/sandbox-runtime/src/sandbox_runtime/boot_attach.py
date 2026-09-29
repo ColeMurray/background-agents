@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from .git_signing import GitSigningRuntime
     from .harness import AgentHarness
 
-RECONNECT_BACKOFF_BASE = 2.0
-RECONNECT_MAX_DELAY_SECONDS = 60.0
+SIGNING_RETRY_BACKOFF_BASE = 2.0
+SIGNING_RETRY_MAX_DELAY_SECONDS = 60.0
 BOOT_EVENTS_POLL_SECONDS = 0.25
 
 
@@ -245,6 +245,6 @@ class BootAttach:
                 if not error.retryable:
                     raise
                 attempt += 1
-                delay = min(RECONNECT_BACKOFF_BASE**attempt, RECONNECT_MAX_DELAY_SECONDS)
+                delay = min(SIGNING_RETRY_BACKOFF_BASE**attempt, SIGNING_RETRY_MAX_DELAY_SECONDS)
                 self.log.warn("bridge.signing_init_retry", attempt=attempt, delay_s=delay)
                 await asyncio.sleep(delay)

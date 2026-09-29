@@ -80,6 +80,36 @@ it("upgrades existing sessions with a persisted status revision and preserves it
   }
 });
 
+it("upgrades an existing sandbox with nullable heartbeat confirmation state", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE sandbox (id TEXT PRIMARY KEY, last_heartbeat INTEGER)");
+    db.exec("INSERT INTO sandbox VALUES ('legacy', 5000)");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(({ id }) => id !== 57)) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+    applyMigrations(createDatabaseSql(db));
+    expect(db.prepare("SELECT * FROM sandbox").get()).toEqual({
+      id: "legacy",
+      last_heartbeat: 5000,
+      heartbeat_confirmation_heartbeat: null,
+      heartbeat_confirmation_deadline: null,
+    });
+    db.exec(
+      "UPDATE sandbox SET heartbeat_confirmation_heartbeat = 5000, heartbeat_confirmation_deadline = 65000"
+    );
+    applyMigrations(createDatabaseSql(db));
+    expect(db.prepare("SELECT heartbeat_confirmation_deadline FROM sandbox").get()).toEqual({
+      heartbeat_confirmation_deadline: 65000,
+    });
+  } finally {
+    db.close();
+  }
+});
+
 describe("applyMigrations", () => {
   let mock: ReturnType<typeof createMockSql>;
 

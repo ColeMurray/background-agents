@@ -62,7 +62,7 @@ export function evaluateAlarmPolicy(
     return {
       outcome: "heartbeat_stale",
       ageMs: heartbeat.ageMs,
-      isBooting: sandbox.status === "spawning" || sandbox.status === "connecting",
+      isBooting: sandbox.status !== "ready",
     };
   }
 

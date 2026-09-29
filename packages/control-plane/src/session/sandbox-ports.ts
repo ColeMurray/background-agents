@@ -15,7 +15,10 @@ export interface SandboxSocketStore extends SandboxStateReader {
 
 /** Observed runtime facts do not authorize lifecycle transitions. */
 export interface SandboxRuntimeFacts {
-  updateSandboxHeartbeat(timestamp: number): void;
+  updateSandboxHeartbeat(
+    timestamp: number,
+    generation?: { sandboxId: string | null; createdAt: number }
+  ): boolean;
   recordReportedSandboxRuntimeVersion(runtimeVersion: string | null): void;
   recordBootProgress(phase: SandboxBootPhase, bootSeq: number): boolean;
   updateSandboxGitSyncStatus(status: GitSyncStatus): void;
@@ -23,6 +26,11 @@ export interface SandboxRuntimeFacts {
 
 /** Persistence used by final graceful shutdown without exposing the repository aggregate. */
 export interface SandboxShutdownStorage extends SandboxStateReader {
+  claimStaleHeartbeat(
+    generation: { sandboxId: string | null; createdAt: number },
+    heartbeat: number,
+    deadline: number
+  ): boolean;
   recordSandboxSnapshot(
     sandboxId: string | null,
     snapshotId: string,

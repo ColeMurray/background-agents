@@ -102,6 +102,7 @@ const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 const REJECTED_ALLOCATION_CLEANUP_RETRY_MS = 30_000;
 const VM_RESOLVE_RETRY_MS = 10_000;
+const HEARTBEAT_CONFIRMATION_MS = 60_000;
 
 function vmAllocationDetail(error: unknown): string | undefined {
   const cause = error instanceof SandboxProviderError ? error.cause : error;
@@ -143,8 +144,9 @@ export interface SandboxShutdownLifecycle {
   /** Owns termination; only unmanaged permits the legacy lifecycle fallback. */
   requestShutdown(
     reason: string,
-    mode?: "graceful" | "emergency"
-  ): Promise<"owned" | "unmanaged" | "held">;
+    mode?: "graceful" | "emergency",
+    heartbeatClaim?: { generation: SandboxGeneration; heartbeat: number; deadline: number }
+  ): Promise<"owned" | "unmanaged" | "held" | "superseded">;
   /** Runs and classifies an ordinary checkpoint without exposing provider ambiguity to callers. */
   captureCheckpoint(
     generation: SandboxGeneration,
@@ -219,6 +221,12 @@ export interface SandboxStorage {
   getSandboxWithCircuitBreaker(): SandboxCircuitBreakerInfo | null;
   /** Update sandbox status */
   updateSandboxStatus(status: SandboxStatus): void;
+  beginHeartbeatConfirmation(
+    generation: SandboxGeneration,
+    heartbeat: number,
+    deadline: number
+  ): boolean;
+  claimStaleHeartbeat(generation: SandboxGeneration, heartbeat: number, deadline: number): boolean;
   /** Atomically accept readiness only for the current, eligible, unfenced attempt. */
   markSandboxReady(generation: SandboxGeneration): boolean;
   /**
@@ -1809,7 +1817,30 @@ export class SandboxLifecycleManager
         return this.failConnectTimeout(finding.elapsedMs, context);
 
       case "heartbeat_stale":
-        return this.terminateStaleHeartbeat(finding.ageMs, finding.isBooting, context);
+        if (!finding.isBooting) {
+          const heartbeat = sandbox.last_heartbeat!;
+          let deadline = sandbox.heartbeat_confirmation_deadline;
+          if (deadline === null) {
+            deadline = now + HEARTBEAT_CONFIRMATION_MS;
+            if (!this.storage.beginHeartbeatConfirmation(alarmGeneration, heartbeat, deadline))
+              return "no_action";
+          } else if (sandbox.heartbeat_confirmation_heartbeat !== heartbeat) {
+            return "no_action";
+          }
+          if (now < deadline) {
+            this.log.info("Heartbeat confirmation pending", {
+              event: "sandbox.heartbeat_confirmation_pending",
+              sandbox_id: alarmGeneration.sandboxId,
+              generation_created_at: alarmGeneration.createdAt,
+              heartbeat_age_ms: finding.ageMs,
+              deadline_ms: deadline,
+            });
+            await this.alarmScheduler.schedule(deadline);
+            return "no_action";
+          }
+          return this.terminateStaleHeartbeat(finding.ageMs, false, context, deadline);
+        }
+        return this.terminateStaleHeartbeat(finding.ageMs, true, context);
 
       case "boot_budget_exceeded":
         return this.failBootBudget(finding.elapsedMs, context);
@@ -1905,22 +1936,47 @@ export class SandboxLifecycleManager
   private async terminateStaleHeartbeat(
     ageMs: number,
     isBooting: boolean,
-    ctx: AlarmContext
+    ctx: AlarmContext,
+    confirmationDeadline?: number
   ): Promise<SandboxAlarmResult> {
-    this.log.warn("Heartbeat stale", {
-      event: "sandbox.heartbeat_stale",
-      last_heartbeat_ms: ageMs,
-      threshold_ms: this.config.heartbeat.timeoutMs,
-      sandbox_status: ctx.sandbox.status,
-    });
+    const generation = {
+      sandboxId: ctx.sandbox.modal_sandbox_id,
+      createdAt: ctx.sandbox.created_at,
+    };
+    const heartbeatClaim =
+      confirmationDeadline === undefined
+        ? undefined
+        : {
+            generation,
+            heartbeat: ctx.sandbox.last_heartbeat!,
+            deadline: confirmationDeadline,
+          };
     if (!isBooting && this.provider.capabilities.snapshotRequiresShutdown) {
       // These providers save only on the way down, and a runtime that stopped
       // heartbeating cannot take part in a graceful drain. The coordinator
       // captures the source without it, then stops it.
-      const ownership = await this.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+      const ownership = await this.shutdown.requestShutdown(
+        "heartbeat_timeout",
+        "emergency",
+        heartbeatClaim
+      );
+      if (ownership === "owned") this.logStaleHeartbeat(ageMs, ctx, confirmationDeadline);
       if (ownership !== "unmanaged") return "no_action";
     }
-    this.storage.updateSandboxStatus("stale");
+    if (heartbeatClaim) {
+      if (
+        this.shutdown.isHolding() ||
+        !this.storage.claimStaleHeartbeat(
+          generation,
+          heartbeatClaim.heartbeat,
+          heartbeatClaim.deadline
+        )
+      )
+        return "no_action";
+    } else {
+      this.storage.updateSandboxStatus("stale");
+    }
+    this.logStaleHeartbeat(ageMs, ctx, confirmationDeadline);
     // A bridge that connected and then died mid-boot is a boot failure
     // like any other; the termination re-drives the queue, and the breaker
     // is what bounds a boot that dies the same way every time.
@@ -1954,7 +2010,21 @@ export class SandboxLifecycleManager
 
     if (!ctx.isCurrentGeneration()) return "no_action";
     this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
-    return "sandbox_terminated";
+    return isBooting
+      ? "sandbox_terminated"
+      : { kind: "heartbeat_lost", reason: "The sandbox stopped responding." };
+  }
+
+  private logStaleHeartbeat(ageMs: number, ctx: AlarmContext, deadline?: number): void {
+    this.log.warn("Heartbeat stale", {
+      event: deadline === undefined ? "sandbox.boot_heartbeat_stale" : "sandbox.heartbeat_stale",
+      sandbox_id: ctx.sandbox.modal_sandbox_id,
+      generation_created_at: ctx.sandbox.created_at,
+      heartbeat_age_ms: ageMs,
+      deadline_ms: deadline ?? null,
+      threshold_ms: this.config.heartbeat.timeoutMs,
+      sandbox_status: ctx.sandbox.status,
+    });
   }
 
   /**

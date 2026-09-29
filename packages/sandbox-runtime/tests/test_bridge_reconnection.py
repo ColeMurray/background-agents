@@ -137,7 +137,7 @@ class TestIsFatalConnectionError:
         bridge.git_signing.initialize = AsyncMock()
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = connect_and_run
-        bridge.RECONNECT_BACKOFF_BASE = 0
+        bridge.TRANSPORT_RETRY_BACKOFF_BASE = 0
 
         await bridge.run()
 
@@ -149,6 +149,73 @@ class TestIsFatalConnectionError:
             reconnect_attempt_count=1,
             total_connected_duration_seconds=0.0,
         )
+
+    @pytest.mark.asyncio
+    async def test_transport_retries_stay_bounded_and_replay_a_finished_prompt(
+        self, bridge, monkeypatch
+    ):
+        bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock()
+        bridge._load_session_id = AsyncMock()
+        await bridge.event_forwarder.send({"type": "execution_complete", "messageId": "finished"})
+        assert bridge.activity.current_prompt_task is None
+        delays = []
+        original_wait_for = asyncio.wait_for
+
+        async def wait_for(awaitable, *, timeout):
+            if awaitable.cr_code.co_name == "wait":
+                delays.append(timeout)
+                awaitable.close()
+                return None
+            return await original_wait_for(awaitable, timeout=timeout)
+
+        monkeypatch.setattr("sandbox_runtime.bridge.asyncio.wait_for", wait_for)
+        ws = MagicMock(state=State.OPEN, send=AsyncMock())
+        errors = [
+            TimeoutError("handshake timed out"),
+            RuntimeError("HTTP 500"),
+            RuntimeError("HTTP 503"),
+        ] * 4
+
+        async def connect_and_run():
+            if errors:
+                raise errors.pop(0)
+            await bridge.event_forwarder.bind(ws)
+            bridge.shutdown_event.set()
+
+        bridge._connect_and_run = connect_and_run
+        await bridge.run()
+
+        assert len(delays) == 12
+        assert all(0 < delay <= 15 for delay in delays)
+        assert sum(delays[:4]) < 60
+        assert ws.send.await_count >= 1
+        assert '"execution_complete"' in ws.send.await_args.args[0]
+        assert bridge.boot_attach.git_signing is bridge.git_signing
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403, 404, 410])
+    async def test_terminal_transport_response_does_not_retry(self, bridge, status):
+        bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock()
+        bridge._load_session_id = AsyncMock()
+        bridge._connect_and_run = AsyncMock(side_effect=RuntimeError(f"HTTP {status}"))
+        await bridge.run()
+        bridge._connect_and_run.assert_awaited_once()
+        assert bridge._reconnect_attempt_count == 0
+
+    @pytest.mark.asyncio
+    async def test_shutdown_interrupts_transport_backoff(self, bridge):
+        bridge.log = MagicMock()
+        bridge.git_signing.initialize = AsyncMock()
+        bridge._load_session_id = AsyncMock()
+        bridge._connect_and_run = AsyncMock(side_effect=TimeoutError("handshake timed out"))
+        bridge.TRANSPORT_RETRY_BACKOFF_BASE = 100
+        task = asyncio.create_task(bridge.run())
+        await asyncio.sleep(0.01)
+        bridge.shutdown_event.set()
+        await asyncio.wait_for(task, timeout=1)
+        bridge._connect_and_run.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_run_retries_signing_initialization_before_connecting(self, bridge):
@@ -164,7 +231,7 @@ class TestIsFatalConnectionError:
         )
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
-        bridge.RECONNECT_BACKOFF_BASE = 0
+        bridge.TRANSPORT_RETRY_BACKOFF_BASE = 0
 
         await bridge.run()
 

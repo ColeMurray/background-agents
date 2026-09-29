@@ -139,9 +139,54 @@ export class SandboxRepository {
 
   updateSandboxStatus(status: SandboxStatus): void {
     this.sql.exec(
-      `UPDATE sandbox SET status = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      `UPDATE sandbox SET status = ?, heartbeat_confirmation_heartbeat = NULL,
+         heartbeat_confirmation_deadline = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       status
     );
+  }
+
+  /** Reserve exactly one fixed confirmation window for this ready generation and heartbeat. */
+  beginHeartbeatConfirmation(
+    generation: { sandboxId: string | null; createdAt: number },
+    heartbeat: number,
+    deadline: number
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET heartbeat_confirmation_heartbeat = ?, heartbeat_confirmation_deadline = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?
+         AND created_at = ? AND status = 'ready' AND fenced = 0
+         AND last_heartbeat = ? AND heartbeat_confirmation_deadline IS NULL`,
+      heartbeat,
+      deadline,
+      generation.sandboxId,
+      generation.createdAt,
+      heartbeat
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  /** Only the episode observed at the alarm may hand this row to legacy termination. */
+  claimStaleHeartbeat(
+    generation: { sandboxId: string | null; createdAt: number },
+    heartbeat: number,
+    deadline: number
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET status = 'stale', heartbeat_confirmation_heartbeat = NULL,
+         heartbeat_confirmation_deadline = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1) AND modal_sandbox_id IS ?
+         AND created_at = ? AND status = 'ready' AND fenced = 0
+         AND last_heartbeat = ? AND heartbeat_confirmation_heartbeat = ?
+         AND heartbeat_confirmation_deadline = ?`,
+      generation.sandboxId,
+      generation.createdAt,
+      heartbeat,
+      heartbeat,
+      deadline
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   /**
@@ -158,7 +203,8 @@ export class SandboxRepository {
     to: SandboxStatus
   ): boolean {
     const result = this.sql.exec(
-      `UPDATE sandbox SET status = ?
+      `UPDATE sandbox SET status = ?, heartbeat_confirmation_heartbeat = NULL,
+         heartbeat_confirmation_deadline = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ? AND status = ?`,
       to,
@@ -177,7 +223,8 @@ export class SandboxRepository {
     providerObjectId: string | null
   ): "failed" | "retained" | "superseded" {
     const assignments = `modal_object_id = ?, fenced = 1, startup_rejected = 1,
-         auth_token_hash = '', auth_token = NULL, active_socket_id = ''`;
+          auth_token_hash = '', auth_token = NULL, active_socket_id = '',
+          heartbeat_confirmation_heartbeat = NULL, heartbeat_confirmation_deadline = NULL`;
     const identity = `id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ?`;
     const args = [providerObjectId, generation.sandboxId, generation.createdAt];
@@ -279,7 +326,8 @@ export class SandboxRepository {
    */
   fenceSandboxGeneration(): void {
     this.sql.exec(
-      `UPDATE sandbox SET auth_token_hash = '', auth_token = NULL, active_socket_id = '', fenced = 1
+      `UPDATE sandbox SET auth_token_hash = '', auth_token = NULL, active_socket_id = '', fenced = 1,
+         heartbeat_confirmation_heartbeat = NULL, heartbeat_confirmation_deadline = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
@@ -298,6 +346,8 @@ export class SandboxRepository {
          status = ?,
          created_at = ?,
          last_heartbeat = NULL,
+         heartbeat_confirmation_heartbeat = NULL,
+         heartbeat_confirmation_deadline = NULL,
          auth_token_hash = '',
          auth_token = NULL,
          modal_sandbox_id = ?,
@@ -366,6 +416,8 @@ export class SandboxRepository {
          status = ?,
          created_at = ?,
          last_heartbeat = NULL,
+         heartbeat_confirmation_heartbeat = NULL,
+         heartbeat_confirmation_deadline = NULL,
          boot_phase = NULL,
          boot_seq = NULL,
          fenced = 0, startup_rejected = 0
@@ -459,6 +511,7 @@ export class SandboxRepository {
   discardSandboxState(generation: { sandboxId: string | null; createdAt: number }): boolean {
     const result = this.sql.exec(
       `UPDATE sandbox SET status = 'stopped', snapshot_image_id = NULL,
+          heartbeat_confirmation_heartbeat = NULL, heartbeat_confirmation_deadline = NULL,
          snapshot_runtime_version = NULL, modal_object_id = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ?`,
@@ -501,11 +554,37 @@ export class SandboxRepository {
     );
   }
 
-  updateSandboxHeartbeat(timestamp: number): void {
-    this.sql.exec(
-      `UPDATE sandbox SET last_heartbeat = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      timestamp
+  updateSandboxHeartbeat(
+    timestamp: number,
+    generation?: { sandboxId: string | null; createdAt: number }
+  ): boolean {
+    const row = this.getSandbox();
+    const result = this.sql.exec(
+      `UPDATE sandbox SET last_heartbeat = ?, heartbeat_confirmation_heartbeat = NULL,
+         heartbeat_confirmation_deadline = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND fenced = 0
+         AND status IN ('spawning', 'connecting', 'ready', 'snapshotting', 'failed')`,
+      timestamp,
+      generation ? generation.sandboxId : (row?.modal_sandbox_id ?? null),
+      generation ? generation.createdAt : (row?.created_at ?? -1)
     );
+    result.toArray();
+    const accepted = (result.rowsWritten ?? 0) > 0;
+    if (
+      accepted &&
+      row?.heartbeat_confirmation_deadline !== null &&
+      row?.heartbeat_confirmation_deadline !== undefined
+    ) {
+      this.log.info("Heartbeat contact recovered", {
+        event: "sandbox.heartbeat_recovered",
+        sandbox_id: row.modal_sandbox_id,
+        generation_created_at: row.created_at,
+        heartbeat_age_ms: timestamp - (row.heartbeat_confirmation_heartbeat ?? timestamp),
+        deadline_ms: row.heartbeat_confirmation_deadline,
+      });
+    }
+    return accepted;
   }
 
   updateSandboxLastActivity(timestamp: number): void {
@@ -604,7 +683,14 @@ export class SandboxRepository {
 function parseSandboxRow(row: unknown): RawSandboxRow | null {
   if (row === undefined) return null;
   const parsed = rawSandboxRowSchema.safeParse(row);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) {
+    const data = parsed.data;
+    if (
+      (data.heartbeat_confirmation_heartbeat === null) ===
+      (data.heartbeat_confirmation_deadline === null)
+    )
+      return data;
+  }
   throw new SessionStorageIntegrityError("Malformed persisted sandbox row");
 }
 

@@ -72,6 +72,7 @@ export type SandboxAlarmResult =
   | "no_action"
   | "sandbox_failed"
   | "sandbox_terminated"
+  | { kind: "heartbeat_lost"; reason: string }
   | { kind: "boot_budget_exceeded"; reason: string };
 
 export interface SandboxAlarm {

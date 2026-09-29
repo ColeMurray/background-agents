@@ -28,6 +28,7 @@ import contextlib
 import json
 import math
 import os
+import random
 import sys
 import tempfile
 import time
@@ -43,7 +44,7 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
-from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
+from .boot_attach import BootAttach
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
     REPO_MANIFEST_FILE_PATH,
@@ -128,8 +129,8 @@ class AgentBridge:
     """
 
     HEARTBEAT_INTERVAL = 30.0
-    RECONNECT_BACKOFF_BASE = RECONNECT_BACKOFF_BASE
-    RECONNECT_MAX_DELAY_SECONDS = RECONNECT_MAX_DELAY_SECONDS
+    TRANSPORT_RETRY_BACKOFF_BASE = 2.0
+    TRANSPORT_RETRY_MAX_DELAY_SECONDS = 15.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
@@ -355,9 +356,10 @@ class AgentBridge:
                 reconnect_attempts += 1
                 self._reconnect_attempt_count += 1
                 delay = min(
-                    self.RECONNECT_BACKOFF_BASE**reconnect_attempts,
-                    self.RECONNECT_MAX_DELAY_SECONDS,
+                    self.TRANSPORT_RETRY_BACKOFF_BASE**reconnect_attempts,
+                    self.TRANSPORT_RETRY_MAX_DELAY_SECONDS,
                 )
+                delay *= random.uniform(0.75, 1.0)
                 self.log.info(
                     "bridge.reconnect",
                     attempt=reconnect_attempts,
