@@ -187,6 +187,7 @@ class _TurnState:
     # Inside a turn the session injected (background task, channel, peer):
     # skip everything until that turn's result.
     injected: bool = False
+    injected_usage: dict[str, int] = field(default_factory=dict)
 
     def turn_text(self) -> str:
         return "\n\n".join(entry.text for entry in self.texts if entry.text)
@@ -549,6 +550,8 @@ class ClaudeHarness:
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
                     if self._belongs_to_injected_turn(state, message):
+                        if isinstance(message, ConversationResetMessage):
+                            self._translate(state, message)
                         continue
                     events, outcome = self._translate(state, message)
                     for event in events:
@@ -589,13 +592,11 @@ class ClaudeHarness:
 
         The streaming connection can interleave turns the CLI starts on its
         own (task notifications, channel and peer messages). Only the user
-        message that opens such a turn and the result that closes it carry
-        ``origin``; the assistant messages, stream events and tool results
-        between them do not. So a non-human user message opens the skip, its
-        result closes it, and nothing in between reaches the timeline. Our
-        own prompts are stamped ``origin: human``. The injected turn's spend
-        stays in the running total and lands on the prompt in flight, so the
-        session's cost still adds up.
+        message that opens such a turn and usually the result that closes it
+        carry ``origin``; the assistant messages, stream events and tool
+        results between them do not. Our own prompts are stamped ``origin:
+        human``. The injected turn's cost stays in the running total, while
+        its per-turn usage is added to the in-flight prompt's final step.
         """
         if isinstance(message, UserMessage):
             if (origin := _injected_origin(message.origin)) is not None:
@@ -603,9 +604,22 @@ class ClaudeHarness:
                 self.log.info("claude.injected_turn_started", origin_kind=origin["kind"])
             return state.injected
         if isinstance(message, ResultMessage):
-            if (origin := _injected_origin(message.origin)) is not None:
+            origin = _injected_origin(message.origin)
+            if origin is not None or (state.injected and message.origin is None):
                 state.injected = False
-                self.log.info("claude.injected_turn_ignored", origin_kind=origin["kind"])
+                for key in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                ):
+                    value = (message.usage or {}).get(key)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        state.injected_usage[key] = state.injected_usage.get(key, 0) + value
+                self.log.info(
+                    "claude.injected_turn_ignored",
+                    origin_kind=origin["kind"] if origin else "unknown",
+                )
                 return True
             state.injected = False
             return False
@@ -879,7 +893,11 @@ class ClaudeHarness:
                 "messageCostUsd": message_cost,
                 "reason": message.subtype,
             }
-            tokens = _usage_tokens(message.usage)
+            usage = dict(message.usage or {})
+            for key, value in state.injected_usage.items():
+                current = usage.get(key)
+                usage[key] = value + current if isinstance(current, int) and current >= 0 else value
+            tokens = _usage_tokens(usage)
             if tokens:
                 finish["tokens"] = tokens
             events.append(finish)
