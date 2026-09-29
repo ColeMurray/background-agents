@@ -329,7 +329,7 @@ async def test_vm_bridge_drain_does_not_wait_for_docker_preparation(monkeypatch)
     assert result["executionStopped"] is True
     assert "error" not in result
     bridge._persist_rotated_session_id.assert_awaited_once()
-    prepare_docker.assert_not_awaited()
+    prepare_docker.assert_not_called()
 
 
 @pytest.mark.asyncio
