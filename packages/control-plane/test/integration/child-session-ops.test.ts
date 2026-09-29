@@ -14,6 +14,7 @@ import {
   openClientWs,
   collectMessages,
   seedMessage,
+  seedActiveUser,
   TEST_SESSION_PROVIDER_AUTH,
 } from "./helpers";
 
@@ -508,6 +509,49 @@ describe("Child session operations (list, get, cancel)", () => {
   });
 
   describe("POST /sessions/:parentId/children/:childId/prompt", () => {
+    it("does not prompt a private child for an unverified parent prompt author", async () => {
+      const { pName, childName, sandboxToken } = await setupParentAndChild();
+      const ownerId = "22222222222222222222222222222222";
+      await seedActiveUser(ownerId);
+      await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
+        .bind(ownerId, childName)
+        .run();
+      const response = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Child session not found" });
+    });
+
+    it("lets the private child's canonical owner send a parent follow-up", async () => {
+      const { pName, childName, parentStub, sandboxToken } = await setupParentAndChild();
+      const ownerId = "22222222222222222222222222222222";
+      await seedActiveUser(ownerId);
+      await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
+        .bind(ownerId, childName)
+        .run();
+      await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+          ownerId
+        );
+      });
+      const response = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+      expect(response.status).toBe(200);
+    });
+
     it("refuses a prompt when the child moved to another team", async () => {
       const { pName, childName, sandboxToken, store } = await setupParentAndChild();
       await env.DB.prepare(

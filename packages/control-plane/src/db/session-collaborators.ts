@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { SqlDatabase, SqlStatement } from "./sql-database";
+import type { SqlDatabase } from "./sql-database";
+import { SessionAuditStore, type SessionAuditInput } from "./session-audit";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 
 const collaboratorSchema = z.object({ session_id: z.string(), user_id: z.string() });
@@ -45,7 +46,7 @@ export class SessionCollaboratorStore {
     sessionId: string,
     userId: string,
     addedBy: string,
-    audit?: SqlStatement
+    audit?: SessionAuditInput
   ): Promise<boolean> {
     const statement = this.db
       .prepare(
@@ -53,15 +54,19 @@ export class SessionCollaboratorStore {
          VALUES (?, ?, ?, ?) ON CONFLICT (session_id, user_id) DO NOTHING`
       )
       .bind(sessionId, userId, addedBy, Date.now());
-    const result = audit ? (await this.db.batch([statement, audit]))[0] : await statement.run();
+    const result = audit
+      ? (await this.db.batch([statement, new SessionAuditStore(this.db).bind(audit, true)]))[0]
+      : await statement.run();
     return result.meta.changes > 0;
   }
 
-  async remove(sessionId: string, userId: string, audit?: SqlStatement): Promise<boolean> {
+  async remove(sessionId: string, userId: string, audit?: SessionAuditInput): Promise<boolean> {
     const statement = this.db
       .prepare("DELETE FROM session_collaborators WHERE session_id = ? AND user_id = ?")
       .bind(sessionId, userId);
-    const result = audit ? (await this.db.batch([statement, audit]))[0] : await statement.run();
+    const result = audit
+      ? (await this.db.batch([statement, new SessionAuditStore(this.db).bind(audit, true)]))[0]
+      : await statement.run();
     return result.meta.changes > 0;
   }
 }

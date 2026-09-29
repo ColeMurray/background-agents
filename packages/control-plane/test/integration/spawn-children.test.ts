@@ -212,6 +212,52 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(audit).toEqual({ team_id: null, resource_id: sessionId });
   });
 
+  it("retains the private parent's owner as a child collaborator when another user authors it", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const authorId = "22222222222222222222222222222222";
+    await seedActiveUser(ownerId);
+    await seedActiveUser(authorId);
+    const { parentName, stub, sandboxToken, store } = await setupParent({
+      visibility: "private",
+      repoId: 12345,
+      userId: "slack:U1",
+      canonicalUserId: ownerId,
+    });
+    await env.DB.prepare(
+      "INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)"
+    )
+      .bind(parentName, authorId, ownerId, Date.now())
+      .run();
+    await runInSessionDO(stub, (_instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO participants (id, user_id, canonical_user_id, role, joined_at)
+         VALUES (?, ?, ?, 'member', ?)`,
+        "other-author",
+        "slack:U2",
+        authorId,
+        Date.now()
+      );
+      state.storage.sql.exec(
+        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+        "other-author"
+      );
+    });
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Shared private child", prompt: "Investigate" }),
+    });
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect((await store.get(sessionId))?.userId).toBe(authorId);
+    const collaborators = await env.DB.prepare(
+      "SELECT user_id FROM session_collaborators WHERE session_id = ? ORDER BY user_id"
+    )
+      .bind(sessionId)
+      .all<{ user_id: string }>();
+    expect(collaborators.results.map((row) => row.user_id)).toEqual([ownerId, authorId]);
+  });
+
   it("attributes a child to the active prompt author instead of the parent owner", async () => {
     const { parentName, stub, sandboxToken, store } = await setupParent({
       repoId: 12345,

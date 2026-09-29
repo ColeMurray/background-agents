@@ -14,14 +14,15 @@ export interface TeamAuditInput {
 export class TeamAuditStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  bind(input: TeamAuditInput): SqlStatement {
+  bind(input: TeamAuditInput, onlyIfPreviousChanged = false): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO authorization_audit_events
           (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
            action, resource_type, resource_id, target_user_id_snapshot, team_id,
            reason_code, operation_result, metadata_json)
-         VALUES (?, ?, ?, 'user', ?, ?, 'team', ?, ?, ?, ?, 'applied', ?)`
+          SELECT ?, ?, ?, 'user', ?, ?, 'team', ?, ?, ?, ?, 'applied', ?
+          ${onlyIfPreviousChanged ? "WHERE changes() = 1" : ""}`
       )
       .bind(
         crypto.randomUUID(),

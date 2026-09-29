@@ -1,16 +1,18 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkSessionAccess } from "@open-inspect/shared";
+import { checkSessionAccess, type SessionAction } from "@open-inspect/shared";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { TeamAuditStore } from "../db/team-audit";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { SessionIndexStore } from "../db/session-index";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamStore } from "../db/teams";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
+import type { SqlStatement } from "../db/sql-database";
 import { parseBody } from "./body";
 import { missingTeamRepository } from "./session-team-grants";
 import {
@@ -35,9 +37,23 @@ function denied(reason: string): Response {
   return json({ error: "Forbidden", code: "session_action_denied", reason_code: reason }, 403);
 }
 
+async function admitDescendants(
+  ctx: RequestContext,
+  env: Env,
+  ids: readonly string[],
+  action: SessionAction
+): Promise<Response | null> {
+  for (const id of ids.slice(1)) {
+    const result = await evaluateSessionAdmission(ctx, env, id, action, null, true);
+    if (result.kind === "not_found") return error("Session not found", 404);
+    if (result.kind === "action_denied") return denied(result.reason);
+  }
+  return null;
+}
+
 async function changeVisibility(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
   ctx: RequestContext
 ) {
@@ -53,6 +69,8 @@ async function changeVisibility(
     params.id,
     ...(body.includeChildren ? await store.listDescendantIds(params.id) : []),
   ];
+  const descendantDenial = await admitDescendants(ctx, env, ids, "changeVisibility");
+  if (descendantDenial) return descendantDenial;
   const rows = [admission.row, ...(await Promise.all(ids.slice(1).map((id) => store.get(id))))];
   if (body.visibility === "private" && rows.some((row) => !row?.userId))
     return json({ error: "Session owner required", code: "owner_required" }, 400);
@@ -80,7 +98,7 @@ async function changeVisibility(
 
 async function moveSession(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
   ctx: RequestContext
 ) {
@@ -93,6 +111,10 @@ async function moveSession(
     params.id,
     ...(body.includeChildren ? await store.listDescendantIds(params.id) : []),
   ];
+  const descendantDenial = await admitDescendants(ctx, env, ids, "move");
+  if (descendantDenial) return descendantDenial;
+  const beforeStatements: SqlStatement[] = [];
+  let joiningUserId: string | undefined;
   if (body.teamId) {
     const team = await new TeamStore(ctx.db).getById(body.teamId);
     if (!team) return error("Team not found", 404);
@@ -118,33 +140,39 @@ async function moveSession(
         );
     }
     if (!member) {
-      const joined = await memberships.addIfJoinable(body.teamId, admission.viewer.userId);
-      if (!joined && !(await memberships.listForUser(admission.viewer.userId)).has(body.teamId)) {
-        return json({ error: "Team archived", code: "team_archived" }, 409);
-      }
-      if (joined) {
-        await new TeamAuditStore(ctx.db).write({
-          requestId: ctx.request_id,
-          actorUserId: admission.viewer.userId,
-          action: "team.member_joined",
-          teamId: body.teamId,
-          targetUserId: admission.viewer.userId,
-          before: {},
-          after: { role: "member" },
-        });
-      }
+      joiningUserId = admission.viewer.userId;
+      beforeStatements.push(
+        memberships.bindAddIfJoinable(body.teamId, admission.viewer.userId),
+        new TeamAuditStore(ctx.db).bind(
+          {
+            requestId: ctx.request_id,
+            actorUserId: admission.viewer.userId,
+            action: "team.member_joined",
+            teamId: body.teamId,
+            targetUserId: admission.viewer.userId,
+            before: {},
+            after: { role: "member" },
+          },
+          true
+        )
+      );
     }
   }
-  const audit = new SessionAuditStore(ctx.db).bind({
-    requestId: ctx.request_id,
-    actorUserId: admission.viewer.userId,
-    action: "session.moved",
-    sessionId: params.id,
-    teamId: body.teamId,
-    before: { teamId: admission.row.ownerTeamId, sessionIds: ids },
-    after: { teamId: body.teamId, sessionIds: ids },
-  });
-  await store.updateOwnerTeam(ids, body.teamId, [audit]);
+  const audit = new SessionAuditStore(ctx.db).bind(
+    {
+      requestId: ctx.request_id,
+      actorUserId: admission.viewer.userId,
+      action: "session.moved",
+      sessionId: params.id,
+      teamId: body.teamId,
+      before: { teamId: admission.row.ownerTeamId, sessionIds: ids },
+      after: { teamId: body.teamId, sessionIds: ids },
+    },
+    Boolean(body.teamId)
+  );
+  if (!(await store.updateOwnerTeam(ids, body.teamId, [audit], beforeStatements, joiningUserId))) {
+    return json({ error: "Team archived", code: "team_archived" }, 409);
+  }
   return json({ sessionId: params.id, ownerTeamId: body.teamId, affectedSessionIds: ids });
 }
 
@@ -161,26 +189,28 @@ async function changeCollaborator(
     const access = checkSessionAccess(admission.viewer, admission.row, "manageCollaborators");
     if (!access.allowed) return denied(access.reason);
   }
-  const user = z
-    .object({ suspended_at: z.number().nullable(), role_id: z.string().nullable() })
-    .nullable()
-    .parse(
-      await ctx.db
-        .prepare(
-          `SELECT users.suspended_at, assignment.role_id FROM users
-           LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
-           WHERE users.id = ?`
-        )
-        .bind(params.userId)
-        .first()
-    );
-  if (!user) return error("User not found", 404);
-  if (user.suspended_at !== null || user.role_id === null)
-    return json({ error: "User inactive", code: "user_inactive" }, 409);
+  if (!remove) {
+    const user = z
+      .object({ suspended_at: z.number().nullable(), role_id: z.string().nullable() })
+      .nullable()
+      .parse(
+        await ctx.db
+          .prepare(
+            `SELECT users.suspended_at, assignment.role_id FROM users
+             LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
+             WHERE users.id = ?`
+          )
+          .bind(params.userId)
+          .first()
+      );
+    if (!user) return error("User not found", 404);
+    if (user.suspended_at !== null || user.role_id === null)
+      return json({ error: "User inactive", code: "user_inactive" }, 409);
+  }
   if (admission.row.collaboratorIds.includes(params.userId) === !remove) {
     return json({ sessionId: params.id, userId: params.userId, status: "unchanged" });
   }
-  const audit = new SessionAuditStore(ctx.db).bind({
+  const audit = {
     requestId: ctx.request_id,
     actorUserId: admission.viewer.userId,
     sessionId: params.id,
@@ -189,7 +219,7 @@ async function changeCollaborator(
     targetUserId: params.userId,
     before: { collaborator: remove },
     after: { collaborator: !remove },
-  });
+  } as const;
   const store = new SessionCollaboratorStore(ctx.db);
   const changed = remove
     ? await store.remove(params.id, params.userId, audit)

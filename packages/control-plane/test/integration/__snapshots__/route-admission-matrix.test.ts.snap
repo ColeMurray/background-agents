@@ -58,7 +58,7 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "PUT /sessions/:id/visibility owner=400",
   "PUT /sessions/:id/scope owner=400",
   "PUT /sessions/:id/collaborators/:userId owner=404",
-  "DELETE /sessions/:id/collaborators/:userId owner=404",
+  "DELETE /sessions/:id/collaborators/:userId owner=200",
   "GET /sessions owner=200",
   "GET /sessions/inbox owner=200",
   "PATCH /sessions/:id/read-state owner=400",

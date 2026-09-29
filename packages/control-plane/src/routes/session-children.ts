@@ -11,6 +11,10 @@ import {
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
 import { childSessionListResponseSchema } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { AuthorizationError, AuthorizationService } from "../authorization/service";
+import { checkSessionAccess } from "@open-inspect/shared";
 import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -111,6 +115,36 @@ export async function handlePromptChild(
   if (!authorResponse.ok) return authorResponse;
   const author = activePromptAuthorSchema.safeParse(await authorResponse.json());
   if (!author.success) return error("Failed to get active prompt author", 500);
+  if (childSession.visibility === "private") {
+    const userId = author.data.canonicalUserId;
+    if (!userId) return error("Child session not found", 404);
+    let authorization;
+    try {
+      authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
+    } catch (cause) {
+      if (cause instanceof AuthorizationError) return error("Child session not found", 404);
+      throw cause;
+    }
+    const access = checkSessionAccess(
+      {
+        kind: "user",
+        userId,
+        roleKey: authorization.role.key,
+        permissions: authorization.permissions,
+        suspended: authorization.suspendedAt !== null,
+        memberships: await new TeamMembershipStore(ctx.db).listForUser(userId),
+      },
+      {
+        id: childId,
+        ownerUserId: childSession.userId ?? null,
+        ownerTeamId: childSession.ownerTeamId,
+        visibility: childSession.visibility,
+        collaboratorIds: await new SessionCollaboratorStore(ctx.db).listUserIds(childId),
+      },
+      "collaborate"
+    );
+    if (!access.allowed) return error("Child session not found", 404);
+  }
 
   let admissionLease: ChildAdmissionLease | null = null;
   if (childSession.status === "completed" || childSession.status === "failed") {

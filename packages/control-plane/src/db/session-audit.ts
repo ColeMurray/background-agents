@@ -7,26 +7,29 @@ export type SessionAuditAction =
   | "session.collaborator_removed"
   | "session.created_private";
 
+export interface SessionAuditInput {
+  requestId: string;
+  actorUserId: string;
+  action: SessionAuditAction;
+  sessionId: string;
+  teamId: string | null;
+  targetUserId?: string | null;
+  before: unknown;
+  after: unknown;
+}
+
 export class SessionAuditStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  bind(input: {
-    requestId: string;
-    actorUserId: string;
-    action: SessionAuditAction;
-    sessionId: string;
-    teamId: string | null;
-    targetUserId?: string | null;
-    before: unknown;
-    after: unknown;
-  }): SqlStatement {
+  bind(input: SessionAuditInput, onlyIfPreviousChanged = false): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO authorization_audit_events
         (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot, action,
          resource_type, resource_id, target_user_id_snapshot, team_id, reason_code,
          operation_result, metadata_json)
-       VALUES (?, ?, ?, 'user', ?, ?, 'session', ?, ?, ?, ?, 'applied', ?)`
+        SELECT ?, ?, ?, 'user', ?, ?, 'session', ?, ?, ?, ?, 'applied', ?
+        ${onlyIfPreviousChanged ? "WHERE changes() = 1" : ""}`
       )
       .bind(
         crypto.randomUUID(),
@@ -42,7 +45,7 @@ export class SessionAuditStore {
       );
   }
 
-  async write(input: Parameters<SessionAuditStore["bind"]>[0]): Promise<void> {
+  async write(input: SessionAuditInput): Promise<void> {
     await this.bind(input).run();
   }
 }

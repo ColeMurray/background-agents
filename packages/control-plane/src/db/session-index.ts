@@ -322,6 +322,23 @@ export class SessionIndexStore {
               .bind(session.id, session.createdAt, session.collaboratorSourceSessionId),
           ]
         : []),
+      ...(session.collaboratorSourceSessionId && session.visibility === "private"
+        ? [
+            this.db
+              .prepare(
+                `INSERT INTO session_collaborators (session_id, user_id, added_by, created_at)
+                 SELECT ?, parent.user_id, parent.user_id, ? FROM sessions parent
+                 WHERE parent.id = ? AND parent.user_id IS NOT NULL AND parent.user_id != ?
+                 ON CONFLICT (session_id, user_id) DO NOTHING`
+              )
+              .bind(
+                session.id,
+                session.createdAt,
+                session.collaboratorSourceSessionId,
+                session.userId
+              ),
+          ]
+        : []),
       ...(session.privateCreationAudit ? [session.privateCreationAudit] : []),
     ]);
 
@@ -831,19 +848,35 @@ export class SessionIndexStore {
   async updateOwnerTeam(
     ids: string[],
     teamId: string | null,
-    audits: SqlStatement[] = []
-  ): Promise<void> {
-    if (!ids.length) return;
-    await this.db.batch([
+    audits: SqlStatement[] = [],
+    beforeStatements: SqlStatement[] = [],
+    joiningUserId?: string
+  ): Promise<boolean> {
+    if (!ids.length) return false;
+    const activeTeam = teamId
+      ? " AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND archived_at IS NULL)"
+      : "";
+    const membership = joiningUserId
+      ? " AND EXISTS (SELECT 1 FROM team_memberships WHERE team_id = ? AND user_id = ?)"
+      : "";
+    const results = await this.db.batch([
+      ...beforeStatements,
       ...ids.map((id) =>
         this.db
           .prepare(
-            "UPDATE sessions SET owner_team_id = ?, visibility = CASE WHEN ? IS NULL AND visibility = 'team' THEN 'workspace' ELSE visibility END WHERE id = ?"
+            `UPDATE sessions SET owner_team_id = ?, visibility = CASE WHEN ? IS NULL AND visibility = 'team' THEN 'workspace' ELSE visibility END WHERE id = ?${activeTeam}${membership}`
           )
-          .bind(teamId, teamId, id)
+          .bind(
+            teamId,
+            teamId,
+            id,
+            ...(teamId ? [teamId] : []),
+            ...(joiningUserId ? [teamId, joiningUserId] : [])
+          )
       ),
       ...audits,
     ]);
+    return (results[beforeStatements.length]?.meta.changes ?? 0) > 0;
   }
 
   /** List children of a parent session, newest first. */

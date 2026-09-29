@@ -6,7 +6,7 @@ import {
   type TeamMembership,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export class LastLeadError extends Error {
   constructor() {
@@ -138,16 +138,19 @@ export class TeamMembershipStore {
   }
 
   async addIfJoinable(teamId: string, userId: string): Promise<boolean> {
-    const result = await this.db
+    const result = await this.bindAddIfJoinable(teamId, userId).run();
+    return result.meta.changes > 0;
+  }
+
+  bindAddIfJoinable(teamId: string, userId: string): SqlStatement {
+    return this.db
       .prepare(
         `INSERT INTO team_memberships (team_id, user_id, role, source, created_at)
          SELECT id, ?, 'member', 'manual', ? FROM teams
          WHERE id = ? AND join_policy = 'open' AND archived_at IS NULL
          ON CONFLICT DO NOTHING`
       )
-      .bind(userId, Date.now(), teamId)
-      .run();
-    return result.meta.changes > 0;
+      .bind(userId, Date.now(), teamId);
   }
 
   async setRole(teamId: string, userId: string, role: TeamRole): Promise<void> {

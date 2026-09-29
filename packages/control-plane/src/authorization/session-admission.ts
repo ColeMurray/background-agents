@@ -1,4 +1,11 @@
-import { checkSessionAccess, type SessionAction, type SessionViewer } from "@open-inspect/shared";
+import {
+  checkSessionAccess,
+  sessionCapabilities,
+  type SessionAccessRow,
+  type SessionAction,
+  type SessionCapabilities,
+  type SessionViewer,
+} from "@open-inspect/shared";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
@@ -34,6 +41,28 @@ export function viewerFromContext(
     permissions: authorization.permissions,
     suspended: authorization.suspendedAt !== null,
     memberships,
+  };
+}
+
+/** Existing non-private routes keep legacy permissions while enforcement is off or shadowed. */
+export function effectiveSessionCapabilities(
+  viewer: SessionViewer,
+  row: SessionAccessRow,
+  mode: TeamsEnforcementMode
+): SessionCapabilities {
+  const capabilities = sessionCapabilities(viewer, row);
+  if (viewer.kind !== "user" || row.visibility === "private" || mode === "on") {
+    return capabilities;
+  }
+  const has = (action: SessionAction) =>
+    viewer.permissions.includes(legacyPermissionForAction(action));
+  return {
+    ...capabilities,
+    canRead: has("read"),
+    canCollaborate: has("collaborate"),
+    canManageLifecycle: has("lifecycle"),
+    canDelete: has("delete"),
+    canSandbox: has("sandbox"),
   };
 }
 

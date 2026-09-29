@@ -15,10 +15,14 @@ import {
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
-import { checkSessionAccess, sessionCapabilities } from "@open-inspect/shared";
+import { checkSessionAccess } from "@open-inspect/shared";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { TeamMembershipStore } from "../db/team-memberships";
-import { viewerFromContext } from "../authorization/session-admission";
+import {
+  effectiveSessionCapabilities,
+  teamsEnforcementMode,
+  viewerFromContext,
+} from "../authorization/session-admission";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -166,7 +170,7 @@ async function handleParticipantProfiles(
 
 async function handleSessionSnapshot(
   _request: Request,
-  _env: Env,
+  env: Env,
   params: SessionParams,
   ctx: SessionRouteContext
 ): Promise<Response> {
@@ -205,7 +209,7 @@ async function handleSessionSnapshot(
     ownerTeamId: row.ownerTeamId,
     visibility: row.visibility,
     collaborators: [...collaborators],
-    capabilities: sessionCapabilities(viewer, accessRow),
+    capabilities: effectiveSessionCapabilities(viewer, accessRow, teamsEnforcementMode(ctx, env)),
   };
   const headers = new Headers(response.headers);
   headers.delete("Content-Length");

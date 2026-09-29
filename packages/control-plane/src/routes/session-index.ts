@@ -36,8 +36,11 @@ import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session
 import { parseQuery } from "./query";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { D1QueryParameterLimitError } from "../db/query-limits";
-import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
-import { sessionCapabilities } from "@open-inspect/shared";
+import {
+  effectiveSessionCapabilities,
+  teamsEnforcementMode,
+  viewerFromContext,
+} from "../authorization/session-admission";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 
 const sessionInboxQuerySchema = z.object({
@@ -186,13 +189,17 @@ export async function handleListSessions(
   );
   const sessions = result.sessions.map((row) => ({
     ...row,
-    capabilities: sessionCapabilities(viewer, {
-      id: row.id,
-      ownerUserId: row.userId ?? null,
-      ownerTeamId: row.ownerTeamId,
-      visibility: row.visibility,
-      collaboratorIds: collaborators.get(row.id) ?? [],
-    }),
+    capabilities: effectiveSessionCapabilities(
+      viewer,
+      {
+        id: row.id,
+        ownerUserId: row.userId ?? null,
+        ownerTeamId: row.ownerTeamId,
+        visibility: row.visibility,
+        collaboratorIds: collaborators.get(row.id) ?? [],
+      },
+      teamsEnforcementMode(ctx, env)
+    ),
   }));
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
