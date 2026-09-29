@@ -10,11 +10,9 @@ import {
   DEFAULT_LIFECYCLE_CONFIG,
   type AlarmScheduler,
   type SandboxShutdownLifecycle,
-  type McpServerLookup,
-  type ImageBuildLookup,
-  type SlackAgentNotifyLookup,
 } from "./manager";
-import type { ImageBuildSpawnRow } from "./image-selection";
+import type { McpServerLookup, SlackAgentNotifyLookup } from "./launch-context";
+import type { ImageBuildLookup, ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION } from "../runtime-manifest";

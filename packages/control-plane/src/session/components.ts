@@ -42,11 +42,10 @@ import {
   type SandboxStorage,
   type SessionContextReader,
   type IdGenerator,
-  type ImageBuildLookup,
-  type McpServerLookup,
-  type SlackAgentNotifyLookup,
   type SandboxShutdownLifecycle,
 } from "../sandbox/lifecycle/manager";
+import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
+import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";

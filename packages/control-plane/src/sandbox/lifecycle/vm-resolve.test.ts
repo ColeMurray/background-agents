@@ -134,11 +134,49 @@ function fixture(action: "create" | "restore" = "create", imageBuildLookup?: Ima
       imageBuildLookup,
       backgroundTasks
     );
-  return { sandbox, storage, broadcaster, client, store, makeManager, wsManager, backgroundTasks };
+  return {
+    session,
+    sandbox,
+    storage,
+    broadcaster,
+    client,
+    provider,
+    store,
+    makeManager,
+    wsManager,
+    backgroundTasks,
+  };
 }
 
 describe("modal-vm startup resolution", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("resolves bridge settings only after the pending-reference eligibility checks", async () => {
+    const f = fixture();
+    f.sandbox.status = "ready";
+    const settingsRead = vi.fn(() => '{"sandboxTimeoutMs":3600000}');
+    Object.defineProperty(f.session, "sandbox_settings", { get: settingsRead });
+    const resolveSandbox = vi.spyOn(f.provider, "resolveSandbox");
+    const manager = f.makeManager();
+    const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
+    expect(settingsRead).not.toHaveBeenCalled();
+    manager.onSandboxSocketAttached(generation);
+    f.sandbox.modal_object_id = formatPendingVmReference("another-session", generation.sandboxId);
+    manager.onSandboxSocketAttached(generation);
+    expect(settingsRead).not.toHaveBeenCalled();
+    expect(f.client.resolveVmSandbox).not.toHaveBeenCalled();
+
+    f.sandbox.modal_object_id = formatPendingVmReference("test-session", generation.sandboxId);
+    manager.onSandboxSocketAttached(generation);
+    expect(settingsRead).toHaveBeenCalledOnce();
+    expect(resolveSandbox).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "test-session",
+      sandboxId: generation.sandboxId,
+      generationCreatedAtMs: generation.createdAt,
+      timeoutSeconds: 3600,
+    });
+    await vi.waitFor(() => expect(f.sandbox.modal_object_id).toBe("sb-real"));
+  });
 
   it.each(["create", "restore"] as const)(
     "recovers an unknown %s without resetting lifetime",
