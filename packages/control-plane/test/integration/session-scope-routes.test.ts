@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionIndexStore } from "../../src/db/session-index";
@@ -186,6 +186,40 @@ describe("session scope routes", () => {
     const denied = await request("/sessions/root/scope", "PUT", { teamId: team.id });
     expect(denied.status).toBe(409);
     expect(await denied.json()).toMatchObject({ code: "team_archived" });
+  });
+
+  it("refuses a move when existing destination membership is removed after admission", async () => {
+    await session("root");
+    const team = await new TeamStore(env.DB).create({
+      slug: "revoked",
+      name: "Revoked",
+      joinPolicy: "invite_only",
+    });
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(team.id, OWNER);
+    await grant(team.id);
+    const listForUser = TeamMembershipStore.prototype.listForUser;
+    const read = vi
+      .spyOn(TeamMembershipStore.prototype, "listForUser")
+      .mockImplementation(async function (this: TeamMembershipStore, userId) {
+        const roles = await listForUser.call(this, userId);
+        if (userId === OWNER && roles.has(team.id)) {
+          await memberships.remove(team.id, userId);
+        }
+        return roles;
+      });
+    try {
+      const response = await request("/sessions/root/scope", "PUT", { teamId: team.id });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ reason_code: "not_member" });
+      expect((await new SessionIndexStore(env.DB).get("root"))?.ownerTeamId).toBeNull();
+      const audit = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'session.moved'"
+      ).first<{ count: number }>();
+      expect(audit?.count).toBe(0);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("rolls back an open-team join when the move audit fails", async () => {

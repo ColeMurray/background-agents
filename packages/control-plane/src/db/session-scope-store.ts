@@ -68,13 +68,13 @@ export class SessionScopeStore {
     teamId: string | null,
     audits: SqlStatement[] = [],
     beforeStatements: SqlStatement[] = [],
-    joiningUserId?: string
+    memberUserId?: string
   ): Promise<boolean> {
     if (!ids.length) return false;
     const activeTeam = teamId
       ? " AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND archived_at IS NULL)"
       : "";
-    const membership = joiningUserId
+    const membership = memberUserId
       ? " AND EXISTS (SELECT 1 FROM team_memberships WHERE team_id = ? AND user_id = ?)"
       : "";
     const results = await this.db.batch([
@@ -89,7 +89,7 @@ export class SessionScopeStore {
             teamId,
             id,
             ...(teamId ? [teamId] : []),
-            ...(joiningUserId ? [teamId, joiningUserId] : [])
+            ...(memberUserId ? [teamId, memberUserId] : [])
           )
       ),
       ...audits,

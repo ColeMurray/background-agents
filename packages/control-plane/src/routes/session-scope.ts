@@ -126,7 +126,7 @@ async function moveSession(
     (row) => row.ownerTeamId !== body.teamId || (body.teamId === null && row.visibility === "team")
   );
   const beforeStatements: SqlStatement[] = [];
-  let joiningUserId: string | undefined;
+  let requiredMemberUserId: string | undefined;
   if (body.teamId) {
     const team = await new TeamStore(ctx.db).getById(body.teamId);
     if (!team) return error("Team not found", 404);
@@ -135,6 +135,7 @@ async function moveSession(
     const memberships = new TeamMembershipStore(ctx.db);
     const member = admission.viewer.memberships.has(body.teamId);
     if (!member && (!body.joinTeam || team.joinPolicy !== "open")) return denied("not_member");
+    requiredMemberUserId = actorUserId;
     for (const id of ids) {
       const missing = await missingTeamRepository(
         ctx.db,
@@ -152,7 +153,6 @@ async function moveSession(
         );
     }
     if (!member) {
-      joiningUserId = admission.viewer.userId;
       beforeStatements.push(
         memberships.bindAddIfJoinable(body.teamId, admission.viewer.userId),
         new TeamAuditStore(ctx.db).bind(
@@ -198,12 +198,18 @@ async function moveSession(
       body.teamId,
       audits,
       beforeStatements,
-      joiningUserId
+      requiredMemberUserId
     ))
   ) {
-    return body.teamId
-      ? json({ error: "Team archived", code: "team_archived" }, 409)
-      : error("Session not found", 404);
+    if (body.teamId) {
+      if (!(await new TeamStore(ctx.db).isActive(body.teamId))) {
+        return json({ error: "Team archived", code: "team_archived" }, 409);
+      }
+      if (!(await new TeamMembershipStore(ctx.db).listForUser(actorUserId)).has(body.teamId)) {
+        return denied("not_member");
+      }
+    }
+    return error("Session not found", 404);
   }
   return json({
     sessionId: params.id,
