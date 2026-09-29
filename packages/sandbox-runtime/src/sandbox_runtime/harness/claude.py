@@ -607,6 +607,7 @@ class ClaudeHarness:
             origin = _injected_origin(message.origin)
             if origin is not None or (state.injected and message.origin is None):
                 state.injected = False
+                self._adopt_rotated_session(message)
                 for key in (
                     "input_tokens",
                     "output_tokens",
@@ -729,6 +730,16 @@ class ClaudeHarness:
 
     # --- translation (§5.2) -------------------------------------------------
 
+    def _adopt_rotated_session(self, message: ResultMessage) -> None:
+        if self._session_rotated and message.session_id and message.session_id != self.session_id:
+            self.log.info(
+                "claude.session.rotated",
+                agent_session_id=message.session_id,
+                previous_session_id=self.session_id,
+            )
+            self.session_id = message.session_id
+            self._session_rotated = False
+
     def _translate(
         self, state: _TurnState, message: Any
     ) -> tuple[list[BridgeEvent], TurnOutcome | None]:
@@ -843,18 +854,7 @@ class ClaudeHarness:
             return events, None
 
         if isinstance(message, ResultMessage):
-            if (
-                self._session_rotated
-                and message.session_id
-                and message.session_id != self.session_id
-            ):
-                self.log.info(
-                    "claude.session.rotated",
-                    agent_session_id=message.session_id,
-                    previous_session_id=self.session_id,
-                )
-                self.session_id = message.session_id
-                self._session_rotated = False
+            self._adopt_rotated_session(message)
             total = message.total_cost_usd
             if total is None:
                 # No total means no baseline for the next turn either.

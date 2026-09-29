@@ -800,6 +800,38 @@ class TestTranslation:
         }
 
     @pytest.mark.asyncio
+    async def test_injected_result_rotates_session_even_without_a_human_result(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_result(0.5)],
+                [
+                    UserMessage(content="notification", origin={"kind": "task-notification"}),
+                    ConversationResetMessage(new_conversation_id="c2", uuid="u", session_id="s"),
+                    _result(
+                        0.1,
+                        session_id="rotated-id",
+                        origin={"kind": "task-notification"},
+                        usage={"input_tokens": 3},
+                    ),
+                ],
+                [_result(0.1, session_id="rotated-id")],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="first"))
+        events, outcome = await _run(h.harness, HarnessPrompt(message_id="m2", text="second"))
+
+        assert outcome.success is False and "stream ended" in (outcome.error or "")
+        assert events == []
+        assert h.harness.session_id == "rotated-id"
+        await _run(h.harness, HarnessPrompt(message_id="m3", text="third"))
+        assert h.clients[1].options["resume"] == "rotated-id"
+
+    @pytest.mark.asyncio
     async def test_missing_injected_usage_does_not_invent_tokens(self, tmp_path: Path) -> None:
         h = Harness(
             tmp_path,
