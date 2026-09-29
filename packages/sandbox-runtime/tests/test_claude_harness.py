@@ -762,6 +762,34 @@ class TestTranslation:
         assert next_events[0]["tokens"] == {"input": 2}
 
     @pytest.mark.asyncio
+    async def test_invalid_boolean_human_usage_does_not_add_to_injected_tokens(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    UserMessage(content="notification", origin={"kind": "task-notification"}),
+                    _result(
+                        0.1,
+                        origin={"kind": "task-notification"},
+                        usage={"input_tokens": 3, "output_tokens": 2},
+                    ),
+                    _result(
+                        0.2,
+                        origin={"kind": "human"},
+                        usage={"input_tokens": True, "output_tokens": 4},
+                    ),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        events, _ = await _run(h.harness)
+
+        assert events[-1]["tokens"] == {"input": 3, "output": 6}
+
+    @pytest.mark.asyncio
     async def test_reset_inside_injected_turn_preserves_usage_and_rotates_session(
         self, tmp_path: Path
     ) -> None:
@@ -853,7 +881,35 @@ class TestTranslation:
 
 
 class TestCostBaseline:
-    """§5.3: messageCostUsd = running total at turn end - baseline."""
+    """§5.3: messageCostUsd sums running-total deltas across resets."""
+
+    @pytest.mark.asyncio
+    async def test_injected_spend_before_reset_is_included_in_prompt_cost(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(
+            tmp_path,
+            turns=[
+                [_result(0.5)],
+                [
+                    UserMessage(content="first", origin={"kind": "task-notification"}),
+                    _result(0.6, origin={"kind": "task-notification"}),
+                    UserMessage(content="second", origin={"kind": "channel"}),
+                    ConversationResetMessage(new_conversation_id="c2", uuid="u", session_id="s"),
+                    _result(0.05, session_id="rotated-id", origin={"kind": "channel"}),
+                    _result(0.2, session_id="rotated-id", origin={"kind": "human"}),
+                ],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness, HarnessPrompt(message_id="m1", text="first"))
+        events, outcome = await _run(h.harness, HarnessPrompt(message_id="m2", text="second"))
+
+        assert outcome.message_cost_usd == pytest.approx(0.3)
+        finish = next(e for e in events if e["type"] == "step_finish")
+        assert finish["messageCostUsd"] == pytest.approx(0.3)
+        assert finish["cost"] == pytest.approx(0.3)
 
     @pytest.mark.asyncio
     async def test_two_turns_then_restart_then_a_third(self, tmp_path: Path) -> None:

@@ -175,8 +175,8 @@ def _injected_origin(origin: MessageOrigin | None) -> MessageOrigin | None:
 @dataclass
 class _TurnState:
     message_id: str
-    # None: the previous turn reported no running total, so the next total
-    # cannot be split between the two turns.
+    # None: no known running total to separate the next result's cost from
+    # earlier turns. Otherwise updated at each injected result.
     cost_baseline: float | None
     texts: list[_MessageText] = field(default_factory=list)
     last_token_content: str = ""
@@ -187,6 +187,7 @@ class _TurnState:
     # Inside a turn the session injected (background task, channel, peer):
     # skip everything until that turn's result.
     injected: bool = False
+    injected_cost: float = 0.0
     injected_usage: dict[str, int] = field(default_factory=dict)
 
     def turn_text(self) -> str:
@@ -608,6 +609,12 @@ class ClaudeHarness:
             if origin is not None or (state.injected and message.origin is None):
                 state.injected = False
                 self._adopt_rotated_session(message)
+                if message.total_cost_usd is not None:
+                    if state.cost_baseline is not None:
+                        state.injected_cost += max(
+                            message.total_cost_usd - state.cost_baseline, 0.0
+                        )
+                    state.cost_baseline = message.total_cost_usd
                 for key in (
                     "input_tokens",
                     "output_tokens",
@@ -856,21 +863,23 @@ class ClaudeHarness:
         if isinstance(message, ResultMessage):
             self._adopt_rotated_session(message)
             total = message.total_cost_usd
+            message_cost = state.injected_cost
             if total is None:
                 # No total means no baseline for the next turn either.
-                message_cost = 0.0
                 self._cost_baseline = None
                 events.append(
                     {
                         "type": "warning",
                         "scope": "provider",
-                        "message": "The Claude agent reported no cost for this turn; it is recorded as 0.",
+                        "message": (
+                            "The Claude agent reported no cost for this result; its additional "
+                            "cost is recorded as 0."
+                        ),
                     }
                 )
             elif state.cost_baseline is None:
-                # The previous turn's share of this total is unknowable, so
-                # neither turn is charged and the baseline re-anchors here.
-                message_cost = 0.0
+                # The previous turn's share is unknowable; re-anchor without
+                # charging this result's unknown share.
                 self._cost_baseline = total
                 events.append(
                     {
@@ -878,12 +887,12 @@ class ClaudeHarness:
                         "scope": "provider",
                         "message": (
                             "The Claude agent reported no cost for the previous turn, so this "
-                            "turn's cost cannot be separated from it; it is recorded as 0."
+                            "result's cost cannot be separated from it; it is recorded as 0."
                         ),
                     }
                 )
             else:
-                message_cost = max(total - state.cost_baseline, 0.0)
+                message_cost += max(total - state.cost_baseline, 0.0)
                 self._cost_baseline = total
             finish: BridgeEvent = {
                 "type": "step_finish",
@@ -896,7 +905,11 @@ class ClaudeHarness:
             usage = dict(message.usage or {})
             for key, value in state.injected_usage.items():
                 current = usage.get(key)
-                usage[key] = value + current if isinstance(current, int) and current >= 0 else value
+                usage[key] = (
+                    value + current
+                    if isinstance(current, int) and not isinstance(current, bool) and current >= 0
+                    else value
+                )
             tokens = _usage_tokens(usage)
             if tokens:
                 finish["tokens"] = tokens
