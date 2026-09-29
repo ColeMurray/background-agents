@@ -346,6 +346,36 @@ describe("HTTP session access by enforcement mode", () => {
     ).toMatchObject([{ team_id: child.team.id }, { team_id: child.team.id }]);
   });
 
+  it("lists only children visible in the selected enforcement mode", async () => {
+    const parent = await initSession({ userId: CREATOR });
+    await waitForSandboxStatus(parent.stub, "failed");
+    const workspace = await initSession({ userId: CREATOR });
+    await waitForSandboxStatus(workspace.stub, "failed");
+    const team = await session("team");
+    const hidden = await session("private");
+    for (const childId of [workspace.sessionName, team.sessionName, hidden.sessionName]) {
+      await env.DB.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?")
+        .bind(parent.sessionName, childId)
+        .run();
+    }
+
+    for (const mode of ["off", "shadow", "on"] as const) {
+      const response = await fetchMode(`/sessions/${parent.sessionName}/children`, mode, {
+        as: { userId: MEMBER, role: "member" },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { children: { id: string }[] };
+      expect(body.children.map((child) => child.id).sort()).toEqual(
+        (mode === "on" ? [workspace.sessionName] : [workspace.sessionName, team.sessionName]).sort()
+      );
+    }
+    expect(
+      (await auditRows("authorization.request_allowed")).filter(
+        (row) => row.reason_code === "shadow_denied:batch"
+      )
+    ).toHaveLength(1);
+  });
+
   it("audits both private reads when an Owner accesses a private child", async () => {
     const parent = await session("private");
     const child = await session("private");

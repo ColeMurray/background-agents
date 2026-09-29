@@ -176,7 +176,8 @@ export const CodexAuthProxy = async (input) => {
             proxiedRequest.headers.set("authorization", `Bearer ${accessToken}`);
             if (accountId) proxiedRequest.headers.set("ChatGPT-Account-Id", accountId);
 
-            return fetch(proxiedRequest);
+            // Let OpenCode's stream timeout handle stalls instead of Bun's fetch idle timer.
+            return fetch(proxiedRequest, { timeout: false });
           },
         };
       },

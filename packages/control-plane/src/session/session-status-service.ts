@@ -27,6 +27,11 @@ import { isSessionPromptable, isTurnSettled } from "@open-inspect/shared/types/s
 type SessionIndexProjections = Pick<SessionIndexStore, "finalizeChildAdmission" | "updateMetrics">;
 
 export class SessionStatusService {
+  /** A metrics write is in flight; later requests fold into its next pass. */
+  private metricsSyncInFlight = false;
+  /** State changed after the in-flight write read it. */
+  private metricsSyncStale = false;
+
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
@@ -168,6 +173,24 @@ export class SessionStatusService {
     );
 
     return true;
+  }
+
+  /**
+   * Re-project metrics for a step whose turn is no longer processing. A stop
+   * ends the turn before the sandbox has seen the stop, so a step already in
+   * flight lands afterwards, and the sandbox's own terminal for that turn then
+   * settles nothing. The turn decides, not the session: a budget stop leaves a
+   * queued prompt that keeps the session `active` but cannot dispatch, so no
+   * later settle would cover the step. A step of the processing turn waits
+   * for the next settle.
+   */
+  refreshMetricsAfterStep(messageId: string | null): void {
+    if (messageId !== null && this.messageRepository.getMessageStatus(messageId) === "processing") {
+      return;
+    }
+    const session = this.repository.getSession();
+    if (!session) return;
+    this.syncSessionMetrics(this.getPublicSessionId(session));
   }
 
   private async projectTransition(
@@ -338,7 +361,43 @@ export class SessionStatusService {
     });
   }
 
+  /**
+   * Writes are last-write-wins, so at most one is in flight, and each reads
+   * the session when it runs: a request made during a write only marks it
+   * stale, and the write goes round again with the newer state instead of
+   * racing it to D1. A failed pass still goes round when a newer request
+   * arrived during it; the first failure is reported once the writer drains.
+   */
   private syncSessionMetrics(sessionId: string): void {
+    if (this.metricsSyncInFlight) {
+      this.metricsSyncStale = true;
+      return;
+    }
+    if (!this.repository.getSession()) return;
+
+    this.metricsSyncInFlight = true;
+    this.backgroundTasks.submit(
+      async () => {
+        let failure: { error: unknown } | null = null;
+        do {
+          this.metricsSyncStale = false;
+          try {
+            await this.projectSessionMetrics(sessionId);
+          } catch (error) {
+            failure ??= { error };
+          }
+        } while (this.metricsSyncStale);
+        this.metricsSyncInFlight = false;
+        if (failure) throw failure.error;
+      },
+      {
+        name: "session_index.update_metrics",
+        context: { session_id: sessionId },
+      }
+    );
+  }
+
+  private async projectSessionMetrics(sessionId: string): Promise<void> {
     const session = this.repository.getSession();
     if (!session) return;
 
@@ -346,27 +405,18 @@ export class SessionStatusService {
     const activeDurationMs = this.messageRepository.getActiveDurationMs();
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
-
-    this.backgroundTasks.submit(
-      () => {
-        // The index keeps aggregate-friendly zeros; "unknown" lives in the usage rows.
-        const tokens = this.usageRepository.getSessionTotals();
-        return this.sessionIndex.updateMetrics(sessionId, {
-          totalCost: session.total_cost ?? 0,
-          activeDurationMs,
-          messageCount,
-          prCount,
-          inputTokens: tokens.inputTokens ?? 0,
-          outputTokens: tokens.outputTokens ?? 0,
-          reasoningTokens: tokens.reasoningTokens ?? 0,
-          cacheReadTokens: tokens.cacheReadTokens ?? 0,
-          cacheWriteTokens: tokens.cacheWriteTokens ?? 0,
-        });
-      },
-      {
-        name: "session_index.update_metrics",
-        context: { session_id: sessionId },
-      }
-    );
+    // The index keeps aggregate-friendly zeros; "unknown" lives in the usage rows.
+    const tokens = this.usageRepository.getSessionTotals();
+    await this.sessionIndex.updateMetrics(sessionId, {
+      totalCost: session.total_cost ?? 0,
+      activeDurationMs,
+      messageCount,
+      prCount,
+      inputTokens: tokens.inputTokens ?? 0,
+      outputTokens: tokens.outputTokens ?? 0,
+      reasoningTokens: tokens.reasoningTokens ?? 0,
+      cacheReadTokens: tokens.cacheReadTokens ?? 0,
+      cacheWriteTokens: tokens.cacheWriteTokens ?? 0,
+    });
   }
 }

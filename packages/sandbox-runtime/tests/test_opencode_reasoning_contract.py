@@ -9,7 +9,9 @@ GPT-6 Sol and Luna added from the 2026-09-22 retrieval.
 Source SHA-256: c9d3dc07540cf91a7b7362a3b42943132965f4ee6e8374113ee4f0f7b56b3d90
 Claude Opus 5.5 added from the 2026-09-23 retrieval.
 Source SHA-256: e20acec396a73dc3db45d0eca7f0ede5bff28f09f002ba96ce7b1b566de7b6d0
-Subset SHA-256: e2b3a03acdfc3551f2e1752e26578768fa3265374b0fc79432392e4ce01d061d
+Claude Sonnet 5.5 added from the 2026-09-28 retrieval.
+Source SHA-256: 06e0071dd4ae9c9da2db1fabf28eb4994914fefdc5dd10270a5b340c88a49aec
+Subset SHA-256: e9c9cc6f90fa9afbc75a2f18bf564398594d3f51693667cf1efd229617aaab0b
 Reconcile this frozen fixture with shared model/effort definitions when changing
 models or the binary. Mocks verify serialization, not live provider acceptance.
 """

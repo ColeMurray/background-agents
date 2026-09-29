@@ -202,9 +202,10 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
 describe("final graceful shutdown lifecycle integration", () => {
   function fixture(
     provider = createMockProvider(),
-    sandbox = createMockSandbox({ status: "stopped" })
+    sandbox = createMockSandbox({ status: "stopped" }),
+    session = createMockSession()
   ) {
-    const storage = createMockStorage(createMockSession(), sandbox);
+    const storage = createMockStorage(session, sandbox);
     const sockets = createMockWebSocketManager();
     const shutdown = {
       ...createUnmanagedShutdown(),
@@ -333,6 +334,130 @@ describe("final graceful shutdown lifecycle integration", () => {
     await f.manager.spawnSandbox();
     expect(resumeSandbox).toHaveBeenCalledTimes(2);
     expect(saved.read()).toMatchObject({ phase: "running", sourceRetired: false });
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it.each(["connect timeout", "fatal runtime error", "boot budget"] as const)(
+    "holds a resumed retained source after a %s instead of deleting it",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const resumeSandbox = vi.fn(async () => ({
+          success: true as const,
+          providerObjectId: "retained-source",
+          lifetime: noLifetime(),
+          ttydUrl: "https://terminal.test/resumed",
+        }));
+        const stopSandbox = vi.fn(async () => ({ success: true }));
+        const f = fixture(
+          createMockProvider({
+            resumeSandbox,
+            stopSandbox,
+            capabilities: { supportsPersistentResume: true, supportsExplicitStop: true },
+          }),
+          createMockSandbox({
+            status: "stopped",
+            modal_object_id: "retained-source",
+            // The repository clears this on resume; the mock does not.
+            last_heartbeat: null,
+            ttyd_token: await mintJwt(
+              { exp: Math.floor(Date.now() / 1000) - 1 },
+              "sandbox-auth-token"
+            ),
+          }),
+          createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) })
+        );
+        const saved = withSavedState(f, "retained");
+
+        await f.manager.spawnSandbox();
+        expect(saved.read().phase).toBe("running");
+        const row = f.storage.getSandbox()!;
+        if (failure === "fatal runtime error") {
+          row.last_heartbeat = Date.now();
+          expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+        } else {
+          vi.advanceTimersByTime(
+            failure === "connect timeout"
+              ? DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1
+              : DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs + 1
+          );
+          if (failure === "boot budget") row.last_heartbeat = Date.now();
+          expect(await f.manager.handleShutdownAlarm()).toBe("continue");
+          await f.manager.handleAlarm();
+        }
+
+        // Neither deleted nor fenced: the source is the only copy of the workspace.
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(row).toMatchObject({
+          status: "failed",
+          modal_object_id: "retained-source",
+          fenced: 0,
+        });
+        expect(saved.read()).toMatchObject({
+          phase: "unknown",
+          receipt: { kind: "retained", artifactId: "retained-source" },
+        });
+        await f.manager.spawnSandbox();
+        expect(f.provider.createSandbox).not.toHaveBeenCalled();
+
+        await saved.shutdown.recover("restore_saved");
+        expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ providerObjectId: "retained-source", intent: "preserve" })
+        );
+        await f.manager.spawnSandbox();
+        expect(resumeSandbox).toHaveBeenCalledTimes(2);
+        expect(saved.read().phase).toBe("running");
+        expect(f.provider.createSandbox).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it("keeps restore available after a later ordinary resume of the retained source fails mid-resume", async () => {
+    let finishResume!: (result: ResumeResult) => void;
+    const resumed = {
+      success: true as const,
+      providerObjectId: "retained-source",
+      lifetime: noLifetime(),
+    };
+    const resumeSandbox = vi
+      .fn<NonNullable<SandboxProvider["resumeSandbox"]>>()
+      .mockResolvedValueOnce(resumed)
+      .mockReturnValueOnce(new Promise((resolve) => (finishResume = resolve)))
+      .mockResolvedValue(resumed);
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const f = fixture(
+      createMockProvider({
+        resumeSandbox,
+        stopSandbox,
+        capabilities: { supportsPersistentResume: true, supportsExplicitStop: true },
+      }),
+      createMockSandbox({ status: "stopped", modal_object_id: "retained-source" })
+    );
+    const saved = withSavedState(f, "retained");
+    await f.manager.spawnSandbox();
+    // A heartbeat timeout preserve-stops it; the shutdown record stays running.
+    const row = f.storage.getSandbox()!;
+    row.status = "stopped";
+
+    const ordinaryResume = f.manager.spawnSandbox();
+    await vi.waitFor(() => expect(resumeSandbox).toHaveBeenCalledTimes(2));
+    row.last_heartbeat = Date.now();
+    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+    finishResume(resumed);
+    await ordinaryResume;
+
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(saved.read()).toMatchObject({ phase: "unknown", providerObjectId: "retained-source" });
+    expect(saved.shutdown.snapshot()?.availableRecoveryActions).toContain("restore_saved");
+    await saved.shutdown.recover("restore_saved");
+    expect(stopSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerObjectId: "retained-source", intent: "preserve" })
+    );
+    await f.manager.spawnSandbox();
+    expect(resumeSandbox).toHaveBeenCalledTimes(3);
+    expect(saved.read().phase).toBe("running");
     expect(f.provider.createSandbox).not.toHaveBeenCalled();
   });
 
@@ -1981,7 +2106,7 @@ describe("SandboxLifecycleManager", () => {
     });
 
     it.each(["missing", "expired"] as const)(
-      "replaces a resumable sandbox when its terminal token is %s",
+      "keeps a resumed sandbox without terminal access when its terminal token is %s",
       async (credentialState) => {
         const ttydToken =
           credentialState === "expired"
@@ -2003,7 +2128,6 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "replacement-provider-obj",
           createdAt: Date.now(),
           lifetime: noLifetime(),
-          ttydUrl: "https://terminal.test/replacement",
         }));
         const resumeSandbox = vi.fn(async () => ({
           success: true as const,
@@ -2032,22 +2156,19 @@ describe("SandboxLifecycleManager", () => {
 
         await manager.spawnSandbox();
 
-        expect(resumeSandbox).toHaveBeenCalled();
-        expect(stopSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({
-            providerObjectId: "old-provider-obj",
-            reason: "respawn",
-          })
-        );
-        expect(createSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({ sandboxSettings: { terminalEnabled: true } })
-        );
-        expect(sandbox.ttyd_token).not.toBeNull();
-        expect(sandbox.ttyd_token).not.toBe(ttydToken);
+        // The stopped sandbox is the only copy of the workspace; losing the
+        // terminal must not delete it.
+        expect(resumeSandbox).toHaveBeenCalledOnce();
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(createSandbox).not.toHaveBeenCalled();
+        expect(sandbox.modal_object_id).toBe("old-provider-obj");
+        expect(sandbox.status).toBe("connecting");
+        expect(sandbox.ttyd_url).toBeNull();
+        expect(sandbox.ttyd_token).toBeNull();
       }
     );
 
-    it("replaces a resumed sandbox after its initial terminal preview could not be issued", async () => {
+    it("keeps resuming a sandbox whose initial terminal preview could not be issued", async () => {
       const sandbox = createMockSandbox({
         status: "pending",
         created_at: Date.now() - 60_000,
@@ -2059,28 +2180,24 @@ describe("SandboxLifecycleManager", () => {
         createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
         sandbox
       );
-      let createCount = 0;
-      const createSandbox = vi.fn(async (config: CreateSandboxConfig) => {
-        createCount++;
-        return {
-          sandboxId: config.sandboxId,
-          providerObjectId: createCount === 1 ? "initial-provider-obj" : "replacement-provider-obj",
-          createdAt: Date.now(),
-          lifetime: noLifetime(),
-          ...(createCount === 2 ? { ttydUrl: "https://terminal.test/replacement" } : {}),
-        };
-      });
+      const createSandbox = vi.fn(async (config: CreateSandboxConfig) => ({
+        sandboxId: config.sandboxId,
+        providerObjectId: "initial-provider-obj",
+        createdAt: Date.now(),
+        lifetime: noLifetime(),
+      }));
       const resumeSandbox = vi.fn(async () => ({
         success: true as const,
         providerObjectId: "initial-provider-obj",
         lifetime: noLifetime(),
         ttydUrl: "https://terminal.test/resumed",
       }));
+      const stopSandbox = vi.fn(async () => ({ success: true }));
       const provider = createMockProvider({
         capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
         createSandbox,
         resumeSandbox,
-        stopSandbox: vi.fn(async () => ({ success: true })),
+        stopSandbox,
       });
       const manager = new SandboxLifecycleManager(
         provider,
@@ -2100,9 +2217,59 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(resumeSandbox).toHaveBeenCalledOnce();
-      expect(createSandbox).toHaveBeenCalledTimes(2);
-      expect(sandbox.ttyd_url).toBe("https://terminal.test/replacement");
-      expect(sandbox.ttyd_token).not.toBeNull();
+      expect(createSandbox).toHaveBeenCalledOnce();
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(sandbox.modal_object_id).toBe("initial-provider-obj");
+      expect(sandbox.ttyd_url).toBeNull();
+    });
+
+    it("resumes retained saved state without terminal access when its terminal token expired", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "retained-source",
+        ttyd_url: null,
+        ttyd_token: await mintJwt({ exp: Math.floor(Date.now() / 1000) - 1 }, "sandbox-auth-token"),
+      });
+      const storage = createMockStorage(
+        createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
+        sandbox
+      );
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({
+          success: true as const,
+          providerObjectId: "retained-source",
+          lifetime: noLifetime(),
+          ttydUrl: "https://terminal.test/resumed",
+        })),
+      });
+      const shutdown = createUnmanagedShutdown();
+      shutdown.startupDecision.mockReturnValue({
+        kind: "resume_retained",
+        providerObjectId: "retained-source",
+        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        shutdown,
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      // Retrying recovery cannot renew the credential, so holding here would
+      // leave the saved workspace unrecoverable.
+      expect(shutdown.holdFailedRecovery).not.toHaveBeenCalled();
+      expect(shutdown.recordProviderStartup).toHaveBeenCalledOnce();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(sandbox.modal_object_id).toBe("retained-source");
+      expect(sandbox.ttyd_url).toBeNull();
     });
 
     it("does not carry a predecessor's runtime version onto a replacement's snapshot", async () => {

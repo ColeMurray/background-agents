@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ENABLED_MODELS,
@@ -25,6 +26,7 @@ const ANTHROPIC_MODELS = [
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-sonnet-5",
+  "anthropic/claude-sonnet-5-5",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-opus-4-7",
@@ -92,6 +94,37 @@ const GO_MODELS = [
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
 const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5.3"] as const;
 
+it.each([
+  "../../../docs/AVAILABLE_MODELS.md",
+  "../../../packages/docs/content/docs/models/choosing-a-model.mdx",
+])("keeps the model inventory in %s aligned with the catalog", (file) => {
+  const rows = readFileSync(new URL(file, import.meta.url), "utf8")
+    .split("\n")
+    .filter((line) => /^\| `[^`]+`/.test(line))
+    .map((line) =>
+      line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.trim())
+    );
+  const models = MODEL_CATALOG.flatMap((group) => group.models);
+
+  expect(rows.map(([id]) => id).sort()).toEqual(models.map(({ id }) => `\`${id}\``).sort());
+  for (const model of models) {
+    const row = rows.find(([id]) => id === `\`${model.id}\``);
+    expect(row?.[1]).toBe(model.name);
+    if (file.endsWith("AVAILABLE_MODELS.md")) {
+      expect(row?.[2]).toBe(model.description);
+    }
+    if ("reasoning" in model) {
+      expect(row?.at(-2)).toBe(model.reasoning.efforts.join(", "));
+      expect(row?.at(-1)).toBe(model.reasoning.default ?? "Not set");
+    } else {
+      expect(row?.at(-1)).toBe("N/A");
+    }
+  }
+});
+
 describe("model utilities", () => {
   it("derives every public model view from the authoritative catalog", () => {
     const catalogModels = MODEL_CATALOG.flatMap((group) => group.models);
@@ -151,6 +184,7 @@ describe("model utilities", () => {
     expect(normalizeModelId("claude-sonnet-4-6")).toBe("anthropic/claude-sonnet-4-6");
     expect(normalizeModelId("claude-opus-4-8")).toBe("anthropic/claude-opus-4-8");
     expect(normalizeModelId("claude-opus-5")).toBe("anthropic/claude-opus-5");
+    expect(normalizeModelId("claude-sonnet-5-5")).toBe("anthropic/claude-sonnet-5-5");
     expect(normalizeModelId("claude-fable-5")).toBe("anthropic/claude-fable-5");
     expect(normalizeModelId("claude-fable-5-1")).toBe("anthropic/claude-fable-5-1");
     expect(normalizeModelId("gpt-6-sol")).toBe("openai/gpt-6-sol");
@@ -158,6 +192,7 @@ describe("model utilities", () => {
     expect(isValidModel("claude-sonnet-4-6")).toBe(true);
     expect(isValidModel("claude-opus-4-8")).toBe(true);
     expect(isValidModel("claude-opus-5")).toBe(true);
+    expect(isValidModel("claude-sonnet-5-5")).toBe(true);
     expect(isValidModel("claude-fable-5")).toBe(true);
     expect(isValidModel("claude-fable-5-1")).toBe(true);
     expect(isValidModel("gpt-6-sol")).toBe(true);
@@ -355,6 +390,7 @@ describe("model utilities", () => {
     expect(getDefaultReasoningEffort("anthropic/claude-sonnet-4-6")).toBe("high");
     expect(getDefaultReasoningEffort("anthropic/claude-opus-4-8")).toBe("high");
     expect(getDefaultReasoningEffort("anthropic/claude-sonnet-5")).toBe("high");
+    expect(getDefaultReasoningEffort("anthropic/claude-sonnet-5-5")).toBe("high");
     expect(getDefaultReasoningEffort("anthropic/claude-opus-5")).toBe("high");
     expect(getDefaultReasoningEffort("anthropic/claude-opus-5-5")).toBe("high");
     expect(getDefaultReasoningEffort("anthropic/claude-fable-5")).toBe("high");
@@ -378,6 +414,10 @@ describe("model utilities", () => {
       default: "high",
     });
     expect(getReasoningConfig("anthropic/claude-sonnet-5")).toEqual({
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      default: "high",
+    });
+    expect(getReasoningConfig("anthropic/claude-sonnet-5-5")).toEqual({
       efforts: ["low", "medium", "high", "xhigh", "max"],
       default: "high",
     });
@@ -448,6 +488,8 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "xhigh")).toBe(true);
     expect(isValidReasoningEffort("anthropic/claude-opus-4-8", "none")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-sonnet-5", "xhigh")).toBe(true);
+    expect(isValidReasoningEffort("anthropic/claude-sonnet-5-5", "max")).toBe(true);
+    expect(isValidReasoningEffort("anthropic/claude-sonnet-5-5", "none")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-opus-5", "xhigh")).toBe(true);
     expect(isValidReasoningEffort("anthropic/claude-opus-5", "none")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-opus-5-5", "xhigh")).toBe(true);

@@ -152,6 +152,8 @@ export interface SandboxShutdownLifecycle {
   ): Promise<SandboxCheckpointOutcome>;
   /** Decides startup without exposing the coordinator's persisted receipt representation. */
   startupDecision(): SandboxStartupDecision;
+  /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
+  holdFailedRetainedBoot(error: string, generation: SandboxGeneration): boolean;
   /** Converts a failed or interrupted saved-state startup into a durable safety hold. */
   holdFailedRecovery(error: string, generation?: SandboxGeneration): void;
   /** Records runtime protocol support; does not itself grant lifecycle command readiness. */
@@ -1493,10 +1495,15 @@ export class SandboxLifecycleManager
         ? await this.storage.getSandboxAccessSecret("ttyd")
         : null;
       const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
-      const replaceForTerminalCredential = Boolean(result.ttydUrl && !validTtydToken);
-      if (replaceForTerminalCredential && restoringSavedState) {
-        this.shutdown.holdFailedRecovery("Terminal credential is missing or expired", generation);
-        return;
+      if (result.ttydUrl && !validTtydToken) {
+        // Terminal tokens are signed with the sandbox auth token, which is kept
+        // only as a hash, so an expired or missing one cannot be renewed. The
+        // resumed sandbox holds the workspace; keep it without terminal access.
+        this.log.warn("Terminal credential unavailable; resuming without terminal access", {
+          event: "sandbox.resume_terminal_credential_unavailable",
+          provider_object_id: finalProviderObjectId,
+          reason: ttydToken ? "invalid_or_expired" : "missing",
+        });
       }
       let completed: boolean;
       try {
@@ -1507,12 +1514,7 @@ export class SandboxLifecycleManager
               ? { url: result.codeServerUrl, password: result.codeServerPassword }
               : null,
           vnc: result.vncAccess ?? null,
-          ttyd: validTtydToken
-            ? {
-                url: replaceForTerminalCredential ? null : (result.ttydUrl ?? null),
-                token: validTtydToken,
-              }
-            : null,
+          ttyd: validTtydToken ? { url: result.ttydUrl ?? null, token: validTtydToken } : null,
           tunnelUrls: result.tunnelUrls ?? null,
         });
       } catch (error) {
@@ -1535,16 +1537,6 @@ export class SandboxLifecycleManager
       this.providerStartupPending = false;
       await this.shutdown.recordProviderStartup(generation, result.lifetime);
       startupClaimed = true;
-
-      if (replaceForTerminalCredential) {
-        this.log.info("Terminal credential unavailable; replacing resumed sandbox", {
-          event: "sandbox.resume_terminal_credential_unavailable",
-          provider_object_id: finalProviderObjectId,
-          reason: ttydToken ? "invalid_or_expired" : "missing",
-        });
-        await this.doSpawn(previousGeneration);
-        return;
-      }
 
       if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
@@ -1846,6 +1838,20 @@ export class SandboxLifecycleManager
   }
 
   /**
+   * Hold a failed boot of the retained source instead of destroying it. That
+   * sandbox is the saved workspace itself, and a fence would revoke the
+   * credential its next resume needs. Like a failed retained resume, it waits
+   * for an explicit recovery, which retires the source before resuming it
+   * again. Resolves false for any other generation.
+   */
+  private holdFailedRetainedBoot(sandbox: SandboxRow, reason: string): boolean {
+    return this.shutdown.holdFailedRetainedBoot(reason, {
+      sandboxId: sandbox.modal_sandbox_id,
+      createdAt: sandbox.created_at,
+    });
+  }
+
+  /**
    * Give up on a generation whose bridge never arrived. The row is failed and
    * the breaker charged before the provider stop, so a prompt landing mid-stop
    * learns the spawn died instead of waiting on the provider to confirm it.
@@ -1862,7 +1868,11 @@ export class SandboxLifecycleManager
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
     this.clearSandboxAccessState();
-    if (this.canStopProviderSandbox()) {
+    const held = this.holdFailedRetainedBoot(
+      ctx.sandbox,
+      "Sandbox failed to connect within the allowed time"
+    );
+    if (!held && this.canStopProviderSandbox()) {
       // Fenced before the stop: a bridge arriving while the stop is in
       // flight is refused at the door instead of self-healing into a
       // container being killed. Where the provider cannot be stopped the
@@ -1879,7 +1889,9 @@ export class SandboxLifecycleManager
     }
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(
-      "Sandbox failed to connect within the allowed time. It will be retried on your next message."
+      held
+        ? "Sandbox failed to connect within the allowed time."
+        : "Sandbox failed to connect within the allowed time. It will be retried on your next message."
     );
     return "sandbox_failed";
   }
@@ -1988,9 +2000,10 @@ export class SandboxLifecycleManager
    * stopped; only then is the row failed. The failure is published and
    * persisted before the provider stop yields, and the spawn guard is held
    * across it, so a prompt arriving mid-stop neither waits to learn the boot
-   * died nor reserves a replacement that inherits this failure. Returns the
-   * failure text so the alarm handler can fail the pending prompt with the
-   * same words.
+   * died nor reserves a replacement that inherits this failure. A boot of the
+   * retained source is held instead, and its runtime and sandbox are left for
+   * the recovery. Returns the failure text so the alarm handler can fail the
+   * pending prompt with the same words.
    */
   private async failBootBudget(elapsedMs: number, ctx: AlarmContext): Promise<SandboxAlarmResult> {
     const bootPhase = parseStoredSandboxBootPhase(ctx.sandbox.boot_phase);
@@ -2004,13 +2017,17 @@ export class SandboxLifecycleManager
       elapsed_ms: elapsedMs,
       timeout_ms: this.config.bootBudget.timeoutMs,
     });
-    this.wsManager.sendToSandbox({ type: "shutdown" });
-    this.storage.fenceSandboxGeneration();
+    const held = this.holdFailedRetainedBoot(ctx.sandbox, reason);
+    if (!held) {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.storage.fenceSandboxGeneration();
+    }
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
     this.clearSandboxAccessState();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
+    if (held) return { kind: "boot_budget_exceeded", reason };
     this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
     if (this.canStopProviderSandbox()) {
       this.isTerminatingSandbox = true;
@@ -2131,7 +2148,8 @@ export class SandboxLifecycleManager
    * provider allows. Resolves true only when this call took the sandbox down,
    * which is the caller's cue to re-evaluate the queue. Serving executions
    * remain fenced by preservation until explicit recovery; only failed boots
-   * may automatically get a clean replacement. A row
+   * may automatically get a clean replacement, and a failed boot of the
+   * retained source is held instead. A row
    * that is already dead — including one the connect watchdog failed while
    * its boot was still running — resolves false: there is nothing to
    * terminate, and re-driving the queue for it would spawn a replacement for
@@ -2159,11 +2177,13 @@ export class SandboxLifecycleManager
         return ownership === "owned";
       }
       if (!this.isCurrentSandboxState(sandbox)) return false;
+      const held = this.holdFailedRetainedBoot(sandbox, reason);
       this.storage.updateSandboxStatus("failed");
       this.recordSpawnFailure(Date.now(), sandbox.created_at);
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(reason);
       this.clearSandboxAccessState();
+      if (held) return false;
 
       const canStopProvider = this.canStopProviderSandbox();
       if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
