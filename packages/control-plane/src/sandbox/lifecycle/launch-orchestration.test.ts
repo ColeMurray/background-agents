@@ -263,6 +263,56 @@ describe("launch input orchestration", () => {
     }
   );
 
+  it.each(["repo-less", "multi-repo"] as const)(
+    "%s fresh launch skips the image await before MCP resolution",
+    async (mode) => {
+      vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+      const session = createMockSession(
+        mode === "repo-less" ? { repo_owner: null, repo_name: null } : {}
+      );
+      const repositories: SessionRepositoryInfo[] =
+        mode === "repo-less"
+          ? []
+          : [
+              { repoOwner: "testowner", repoName: "testrepo", baseBranch: "main" },
+              { repoOwner: "group/subgroup", repoName: "api", baseBranch: "release" },
+            ];
+      const storage = createMockStorage(
+        session,
+        createMockSandbox({ status: "pending", modal_object_id: null, last_heartbeat: null })
+      );
+      const effects: string[] = [];
+      vi.mocked(storage.getSessionRepositories).mockImplementation(() => {
+        effects.push("repositories");
+        queueMicrotask(() => effects.push("next_microtask"));
+        return repositories;
+      });
+      const manager = new SandboxLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        {
+          ...createTestConfig(),
+          mcpServerLookup: {
+            getDecryptedForSession: async () => {
+              effects.push("mcp");
+              return [];
+            },
+          },
+        }
+      );
+
+      await manager.spawnSandbox();
+
+      expect(effects).toEqual(["repositories", "mcp", "next_microtask"]);
+    }
+  );
+
   it("resume retains its smaller exact payload without env, repositories, integrations, images, or hash work", async () => {
     vi.mocked(hashToken).mockClear();
     const session = createMockSession({ sandbox_settings: '{"sandboxTimeoutMs":3600000}' });

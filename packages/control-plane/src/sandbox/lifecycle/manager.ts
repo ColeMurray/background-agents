@@ -772,11 +772,8 @@ export class SandboxLifecycleManager
       const agent = this.launchContext.resolveAgent(session);
       const { repositories, fields: repositoryFields } =
         this.launchContext.resolveRepositories(session);
-      // Keep the eligibility gate here so ineligible sessions gain no extra await.
-      const selectedImage =
-        session.environment_id || (sessionHasRepository(session) && repositories.length === 1)
-          ? await this.launchContext.lookupImageBuildForSpawn(session, repositories)
-          : null;
+      const imageLookup = this.launchContext.lookupImageBuildForSpawn(session, repositories);
+      const selectedImage = imageLookup ? await imageLookup : null;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
@@ -787,8 +784,8 @@ export class SandboxLifecycleManager
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
-      const sandboxSettings = this.launchContext.parseSandboxSettings(session);
-      const timeoutSeconds = this.launchContext.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { sandboxSettings, timeoutSeconds } =
+        this.launchContext.resolveSandboxSettings(session);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         generationCreatedAtMs: generation.createdAt,
@@ -1098,8 +1095,8 @@ export class SandboxLifecycleManager
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.launchContext.loadMcpServers(repositories);
-      const sandboxSettings = this.launchContext.parseSandboxSettings(session);
-      const timeoutSeconds = this.launchContext.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { sandboxSettings, timeoutSeconds } =
+        this.launchContext.resolveSandboxSettings(session);
       const restoreConfig = {
         snapshotImageId,
         generationCreatedAtMs: generation.createdAt,
@@ -1274,8 +1271,8 @@ export class SandboxLifecycleManager
         this.storage.updateSandboxRuntimeVersion(sourceRuntimeVersion);
       });
 
-      const sandboxSettings = this.launchContext.parseSandboxSettings(session);
-      const timeoutSeconds = this.launchContext.resolveSandboxTimeoutSeconds(sandboxSettings);
+      const { sandboxSettings, timeoutSeconds } =
+        this.launchContext.resolveSandboxSettings(session);
 
       if (restoringSavedState) this.shutdown.markRecoveryInvoked(generation, providerObjectId);
       const result = await this.provider.resumeSandbox({
@@ -2429,9 +2426,7 @@ export class SandboxLifecycleManager
       sessionId: pending.sessionId,
       sandboxId: pending.sandboxId,
       generationCreatedAtMs: generation.createdAt,
-      timeoutSeconds: this.launchContext.resolveSandboxTimeoutSeconds(
-        this.launchContext.parseSandboxSettings(session)
-      ),
+      timeoutSeconds: this.launchContext.resolveSandboxSettings(session).timeoutSeconds,
     };
     const retryDeadlineAtMs = Date.now() + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS;
     this.bridgeResolution = generation;

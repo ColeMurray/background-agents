@@ -105,10 +105,10 @@ describe("createSandboxLaunchContext", () => {
   it("resolves the current logger at each use rather than caching construction context", () => {
     const f = fixture();
     const session = createMockSession({ sandbox_settings: "not-json" });
-    f.context.parseSandboxSettings(session);
+    f.context.resolveSandboxSettings(session);
     const nextLogger = { info: vi.fn(), warn: vi.fn() };
     f.getLogger.mockReturnValue(nextLogger);
-    f.context.parseSandboxSettings(session);
+    f.context.resolveSandboxSettings(session);
 
     expect(f.logger.warn).toHaveBeenCalledOnce();
     expect(nextLogger.warn).toHaveBeenCalledOnce();
@@ -285,32 +285,46 @@ describe("createSandboxLaunchContext", () => {
       });
     });
 
-    it("skips repo images for ad-hoc multi-repo sessions", async () => {
+    it("synchronously skips repo images for ad-hoc multi-repo sessions", () => {
       const f = fixture();
 
       expect(
-        await f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY, SECONDARY])
+        f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY, SECONDARY])
       ).toBeNull();
       expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
       expect(f.getLogger).not.toHaveBeenCalled();
     });
 
-    it.each([null, "environment-1"])(
-      "skips lookup for repo-less sessions in scope %s",
-      async (environment_id) => {
-        const f = fixture();
-        const session = createMockSession({ repo_owner: null, repo_name: null, environment_id });
+    it("synchronously skips lookup for repo-less ad-hoc sessions", () => {
+      const f = fixture();
+      const session = createMockSession({ repo_owner: null, repo_name: null });
 
-        expect(await f.context.lookupImageBuildForSpawn(session, [])).toBeNull();
-        expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
-        expect(f.getLogger).not.toHaveBeenCalled();
-      }
-    );
+      expect(f.context.lookupImageBuildForSpawn(session, [])).toBeNull();
+      expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+      expect(f.getLogger).not.toHaveBeenCalled();
+    });
+
+    it("retains the async boundary for a repo-less environment without invoking lookup", async () => {
+      const f = fixture();
+      const session = createMockSession({
+        repo_owner: null,
+        repo_name: null,
+        environment_id: "environment-1",
+      });
+
+      const lookup = f.context.lookupImageBuildForSpawn(session, []);
+      expect(lookup).toBeInstanceOf(Promise);
+      expect(await lookup).toBeNull();
+      expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+      expect(f.getLogger).not.toHaveBeenCalled();
+    });
 
     it("skips lookup and invalidation when no image lookup is configured", async () => {
       const f = fixture({ imageBuildLookup: undefined });
 
-      expect(await f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY])).toBeNull();
+      const lookup = f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY]);
+      expect(lookup).toBeInstanceOf(Promise);
+      expect(await lookup).toBeNull();
       await expect(
         f.context.markImageBuildRestoreFailed(SELECTED_IMAGE, new Error("unavailable"))
       ).resolves.toBeUndefined();
@@ -556,11 +570,14 @@ describe("createSandboxLaunchContext", () => {
     });
   });
 
-  describe("parseSandboxSettings", () => {
+  describe("resolveSandboxSettings", () => {
     it("returns empty settings without logging when no settings are stored", () => {
       const f = fixture();
 
-      expect(f.context.parseSandboxSettings(createMockSession())).toEqual({});
+      expect(f.context.resolveSandboxSettings(createMockSession())).toEqual({
+        sandboxSettings: {},
+        timeoutSeconds: undefined,
+      });
       expect(f.getLogger).not.toHaveBeenCalled();
     });
 
@@ -575,10 +592,10 @@ describe("createSandboxLaunchContext", () => {
       };
 
       expect(
-        f.context.parseSandboxSettings(
+        f.context.resolveSandboxSettings(
           createMockSession({ sandbox_settings: JSON.stringify(settings) })
         )
-      ).toEqual(settings);
+      ).toEqual({ sandboxSettings: settings, timeoutSeconds: 3600 });
       expect(f.getLogger).not.toHaveBeenCalled();
     });
 
@@ -586,10 +603,10 @@ describe("createSandboxLaunchContext", () => {
       const f = fixture();
 
       expect(
-        f.context.parseSandboxSettings(
+        f.context.resolveSandboxSettings(
           createMockSession({ sandbox_settings: "invalid-private-blob" })
         )
-      ).toEqual({});
+      ).toEqual({ sandboxSettings: {}, timeoutSeconds: undefined });
       expect(f.logger.warn.mock.calls).toEqual([
         ["Failed to parse sandbox_settings, using defaults"],
       ]);
@@ -599,7 +616,7 @@ describe("createSandboxLaunchContext", () => {
       const f = fixture();
 
       expect(
-        f.context.parseSandboxSettings(
+        f.context.resolveSandboxSettings(
           createMockSession({
             sandbox_settings: JSON.stringify({
               sandboxTimeoutMs: 999,
@@ -611,17 +628,20 @@ describe("createSandboxLaunchContext", () => {
             }),
           })
         )
-      ).toEqual({ tunnelPorts: [3000], maxTotalChildSessions: 8 });
+      ).toEqual({
+        sandboxSettings: { tunnelPorts: [3000], maxTotalChildSessions: 8 },
+        timeoutSeconds: undefined,
+      });
       expect(f.getLogger).not.toHaveBeenCalled();
     });
 
-    it("drops unsupported provider settings and warns with their names only", () => {
+    it("drops unsupported provider settings before timeout conversion and warns with their names only", () => {
       const f = fixture({
         provider: { name: "daytona", capabilities: { supportsSandboxTimeout: false } },
       });
 
       expect(
-        f.context.parseSandboxSettings(
+        f.context.resolveSandboxSettings(
           createMockSession({
             sandbox_settings: JSON.stringify({
               cpuCores: 2,
@@ -632,7 +652,10 @@ describe("createSandboxLaunchContext", () => {
             }),
           })
         )
-      ).toEqual({ terminalEnabled: true, buildTimeoutSeconds: 2400 });
+      ).toEqual({
+        sandboxSettings: { terminalEnabled: true, buildTimeoutSeconds: 2400 },
+        timeoutSeconds: undefined,
+      });
       expect(f.logger.warn).toHaveBeenCalledExactlyOnceWith(
         "Ignoring persisted sandbox settings unsupported by the provider",
         {
@@ -642,9 +665,7 @@ describe("createSandboxLaunchContext", () => {
         }
       );
     });
-  });
 
-  describe("resolveSandboxTimeoutSeconds", () => {
     it.each([true, false])(
       "leaves an absent timeout undefined with capability %s",
       (supportsSandboxTimeout) => {
@@ -652,7 +673,10 @@ describe("createSandboxLaunchContext", () => {
           provider: { name: "test-provider", capabilities: { supportsSandboxTimeout } },
         });
 
-        expect(f.context.resolveSandboxTimeoutSeconds({})).toBeUndefined();
+        expect(f.context.resolveSandboxSettings(createMockSession())).toEqual({
+          sandboxSettings: {},
+          timeoutSeconds: undefined,
+        });
         expect(f.getLogger).not.toHaveBeenCalled();
       }
     );
@@ -660,14 +684,21 @@ describe("createSandboxLaunchContext", () => {
     it("converts an explicit timeout from milliseconds to seconds", () => {
       const { context } = fixture();
 
-      expect(context.resolveSandboxTimeoutSeconds({ sandboxTimeoutMs: 3_661_000 })).toBe(3661);
+      expect(
+        context.resolveSandboxSettings(
+          createMockSession({ sandbox_settings: '{"sandboxTimeoutMs":3661000}' })
+        )
+      ).toEqual({ sandboxSettings: { sandboxTimeoutMs: 3_661_000 }, timeoutSeconds: 3661 });
     });
 
     it("raises a permanent provider error for an explicit unsupported timeout", () => {
       const { context } = fixture({
         provider: { name: "test-provider", capabilities: { supportsSandboxTimeout: false } },
       });
-      const resolve = () => context.resolveSandboxTimeoutSeconds({ sandboxTimeoutMs: 3_600_000 });
+      const resolve = () =>
+        context.resolveSandboxSettings(
+          createMockSession({ sandbox_settings: '{"sandboxTimeoutMs":3600000}' })
+        );
 
       expect(resolve).toThrow(SandboxProviderError);
       expect(resolve).toThrow(

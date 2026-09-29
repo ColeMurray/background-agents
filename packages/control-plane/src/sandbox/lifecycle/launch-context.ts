@@ -99,10 +99,10 @@ export function createSandboxLaunchContext({
       };
     },
 
-    async lookupImageBuildForSpawn(
+    lookupImageBuildForSpawn(
       session: SessionRow,
       repositories: SessionRepositoryInfo[]
-    ): Promise<SelectedImageBuild | null> {
+    ): Promise<SelectedImageBuild | null> | null {
       // Environment misses never fall back to a repo image (which bakes different setup/secrets).
       // Ad-hoc multi-repo sessions cannot use an image that bakes a single checkout.
       const scope = session.environment_id
@@ -110,42 +110,46 @@ export function createSandboxLaunchContext({
         : sessionHasRepository(session) && repositories.length === 1
           ? repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName)
           : null;
-      if (!scope || !imageBuildLookup || repositories.length === 0) return null;
-      try {
-        const image = await imageBuildLookup.getLatestReady(scope);
-        const result = await evaluateImageBuildForSpawn(
-          image,
-          repositories,
-          getValidHarnessOrDefault(session.harness)
-        );
-        if (result.outcome === "selected") {
-          getLogger().info("Using prebuilt image", {
-            event: "image_build.spawn_selected",
+      // Only ineligible scopes skip the await; eligible misses retain the existing async boundary.
+      if (!scope) return null;
+      return (async () => {
+        if (!imageBuildLookup || repositories.length === 0) return null;
+        try {
+          const image = await imageBuildLookup.getLatestReady(scope);
+          const result = await evaluateImageBuildForSpawn(
+            image,
+            repositories,
+            getValidHarnessOrDefault(session.harness)
+          );
+          if (result.outcome === "selected") {
+            getLogger().info("Using prebuilt image", {
+              event: "image_build.spawn_selected",
+              scope_kind: scope.kind,
+              scope_id: scope.id,
+              image_build_id: result.image.imageBuildId,
+              runtime_version: result.image.runtimeVersion,
+            });
+            return result.image;
+          }
+          getLogger().info("Prebuilt image miss, using base image", {
+            event: "image_build.spawn_miss",
             scope_kind: scope.kind,
             scope_id: scope.id,
-            image_build_id: result.image.imageBuildId,
-            runtime_version: result.image.runtimeVersion,
+            reason: result.reason,
+            image_build_id: result.imageBuildId,
           });
-          return result.image;
+          return null;
+        } catch (e) {
+          getLogger().warn("Failed to look up prebuilt image, using base image", {
+            event: "image_build.spawn_miss",
+            scope_kind: scope.kind,
+            scope_id: scope.id,
+            reason: "lookup_failed",
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return null;
         }
-        getLogger().info("Prebuilt image miss, using base image", {
-          event: "image_build.spawn_miss",
-          scope_kind: scope.kind,
-          scope_id: scope.id,
-          reason: result.reason,
-          image_build_id: result.imageBuildId,
-        });
-        return null;
-      } catch (e) {
-        getLogger().warn("Failed to look up prebuilt image, using base image", {
-          event: "image_build.spawn_miss",
-          scope_kind: scope.kind,
-          scope_id: scope.id,
-          reason: "lookup_failed",
-          error: e instanceof Error ? e.message : String(e),
-        });
-        return null;
-      }
+      })();
     },
 
     /** Called only by the manager's confirmed-unavailable branch; retry must survive D1 failure. */
@@ -203,7 +207,11 @@ export function createSandboxLaunchContext({
       }
     },
 
-    parseSandboxSettings(session: SessionRow): SandboxSettings {
+    resolveSandboxSettings(session: SessionRow): {
+      sandboxSettings: SandboxSettings;
+      timeoutSeconds: number | undefined;
+    } {
+      let sandboxSettings: SandboxSettings;
       try {
         const settings = parsePersistedSandboxSettings(session.sandbox_settings);
         const unsupported = unsupportedSandboxSettings(settings, provider.name);
@@ -214,14 +222,11 @@ export function createSandboxLaunchContext({
             settings: unsupported,
           });
         }
-        return omitUnsupportedSandboxSettings(settings, provider.name);
+        sandboxSettings = omitUnsupportedSandboxSettings(settings, provider.name);
       } catch {
         getLogger().warn("Failed to parse sandbox_settings, using defaults");
-        return {};
+        sandboxSettings = {};
       }
-    },
-
-    resolveSandboxTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
       if (!provider.capabilities.supportsSandboxTimeout) {
         if (sandboxSettings.sandboxTimeoutMs !== undefined) {
           throw new SandboxProviderError(
@@ -229,10 +234,13 @@ export function createSandboxLaunchContext({
             "permanent"
           );
         }
-        return undefined;
+        return { sandboxSettings, timeoutSeconds: undefined };
       }
       const timeoutMs = sandboxSettings.sandboxTimeoutMs;
-      return timeoutMs === undefined ? undefined : timeoutMs / 1000;
+      return {
+        sandboxSettings,
+        timeoutSeconds: timeoutMs === undefined ? undefined : timeoutMs / 1000,
+      };
     },
   };
 }

@@ -61,8 +61,12 @@ pipeline or a new await before provider registration:
 - Bridge: existing pending-reference/generation eligibility checks precede settings/timeout
   resolution.
 
-The manager retains the fresh image eligibility gate so an ineligible session gains no new await.
-Launch lookup never invalidates a miss or lookup error. Only the manager's existing
+Launch context owns fresh image eligibility and returns synchronous `null` for ineligible scopes;
+the manager conditionally awaits the returned promise without reconstructing that policy. Eligible
+scopes retain their existing await even when lookup is disabled or the repository list is empty.
+`resolveSandboxSettings(session)` normalizes and filters persisted settings before returning both
+`sandboxSettings` and the derived `timeoutSeconds`; callers do not assemble that ordering
+themselves. Launch lookup never invalidates a miss or lookup error. Only the manager's existing
 `PrebuiltImageUnavailableError` branch explicitly requests invalidation, then reserves a new
 identity/token for base-image retry. Transient provider errors retain the valid prebuild.
 
@@ -82,7 +86,7 @@ root:
 | Command                                                                                             | Result                                                        |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | `npm run build -w @open-inspect/shared`                                                             | Passed.                                                       |
-| `npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle`                                  | Passed: 17 files, 547 tests, including 48 new cases.          |
+| `npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle`                                  | Passed: 17 files, 549 tests, including 50 new cases.          |
 | `npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown` | Passed: 2 files, 20 tests, with Workerd provider substitutes. |
 | `npm run typecheck -w @open-inspect/control-plane`                                                  | Passed all four TypeScript configurations.                    |
 | `npm run lint -w @open-inspect/control-plane`                                                       | Passed.                                                       |
@@ -100,5 +104,8 @@ Direct launch-context tests use narrow dependency mocks. New assembled-manager t
 fresh/restore/resume payloads and use deferred hashing/env/integration work to verify reservation
 and ordered lookups. Existing image fallback/identity rotation, pending VM lifetime provenance,
 early-connect and shutdown tests remain. The bridge regression checks lazy settings resolution at
-the provider boundary. This is not exhaustive interleaving proof, a full package/bundle sweep,
-deployment or live-provider verification; final-story verification remains T7's scope.
+the provider boundary. Review follow-up added two microtask-order cases for ineligible image scopes,
+strengthened eligible-miss async-boundary assertions, and verifies normalized settings and their
+timeout together. The commands above passed again after that follow-up. This is not exhaustive
+interleaving proof, a full package/bundle sweep, deployment or live-provider verification;
+final-story verification remains T7's scope.
