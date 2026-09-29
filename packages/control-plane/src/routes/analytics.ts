@@ -10,6 +10,9 @@ import {
 import { type AnalyticsFilters, AnalyticsStore } from "../db/analytics-store";
 import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
 import { SessionRunStore } from "../db/session-run-store";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 import {
   type PullRequestAnalyticsFilters,
   PullRequestAnalyticsStore,
@@ -88,9 +91,21 @@ function getPullRequestFilters(days: AnalyticsDays): PullRequestAnalyticsFilters
   return { startAt: now - days * 24 * 60 * 60 * 1000, endAt: now, now };
 }
 
+async function analyticsAccess(ctx: RequestContext, env: Env) {
+  const memberships = ctx.authorization
+    ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
+        ctx.authorization.userId
+      ))
+    : new Map<string, TeamRole>();
+  return {
+    viewer: viewerFromContext(ctx, memberships),
+    mode: teamsEnforcementMode(ctx, env),
+  };
+}
+
 async function handleDashboard(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
@@ -99,7 +114,8 @@ async function handleDashboard(
   const { days, scope } = query;
 
   const generatedAt = Date.now();
-  const store = new AnalyticsDashboardStore(ctx.db);
+  const { viewer, mode } = await analyticsAccess(ctx, env);
+  const store = new AnalyticsDashboardStore(ctx.db, viewer, mode);
   return json(
     await store.get({
       days,
@@ -112,7 +128,7 @@ async function handleDashboard(
 
 async function handleSummary(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
@@ -120,13 +136,14 @@ async function handleSummary(
   if (query instanceof Response) return query;
   const { days, scope } = query;
 
-  const store = new AnalyticsStore(ctx.db);
+  const { viewer, mode } = await analyticsAccess(ctx, env);
+  const store = new AnalyticsStore(ctx.db, viewer, mode);
   return json(await store.getSummary(getFilters(days, scope)));
 }
 
 async function handleTimeseries(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
@@ -134,13 +151,14 @@ async function handleTimeseries(
   if (query instanceof Response) return query;
   const { days, scope } = query;
 
-  const store = new AnalyticsStore(ctx.db);
+  const { viewer, mode } = await analyticsAccess(ctx, env);
+  const store = new AnalyticsStore(ctx.db, viewer, mode);
   return json(await store.getTimeseries(getFilters(days, scope)));
 }
 
 async function handleBreakdown(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
@@ -148,13 +166,14 @@ async function handleBreakdown(
   if (query instanceof Response) return query;
   const { days, scope, by } = query;
 
-  const store = new AnalyticsStore(ctx.db);
+  const { viewer, mode } = await analyticsAccess(ctx, env);
+  const store = new AnalyticsStore(ctx.db, viewer, mode);
   return json(await store.getBreakdown(getFilters(days, scope), by));
 }
 
 async function handlePullRequests(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
@@ -162,20 +181,22 @@ async function handlePullRequests(
   if (query instanceof Response) return query;
   const { days } = query;
 
-  const store = new PullRequestAnalyticsStore(ctx.db);
+  const { viewer, mode } = await analyticsAccess(ctx, env);
+  const store = new PullRequestAnalyticsStore(ctx.db, viewer, mode);
   return json(await store.get(getPullRequestFilters(days)));
 }
 
 async function handleRuns(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
   const query = parseQuery(request, runsQuery);
   if (query instanceof Response) return query;
   const endAt = Date.now();
-  const store = new SessionRunStore(ctx.db);
+  const { viewer, mode } = await analyticsAccess(ctx, env);
+  const store = new SessionRunStore(ctx.db, viewer, mode);
   return json({
     runs: await store.list({
       startAt: endAt - query.days * 24 * 60 * 60 * 1000,

@@ -29,6 +29,7 @@ const snapshot = {
     totalSessions: 1,
     activeUsers: 1,
     totalCost: 1,
+    privateSessionsCostUsd: 0,
     avgCost: 1,
     totalPrs: 9,
     statusBreakdown: {

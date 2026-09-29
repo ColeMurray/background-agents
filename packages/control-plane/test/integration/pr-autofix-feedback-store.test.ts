@@ -122,4 +122,54 @@ describe("PrAutofixFeedbackStore", () => {
     expect(second.records.map((record) => record.feedbackKey)).toEqual(["github:pr_comment:1234"]);
     expect(second.nextCursor).toBeNull();
   });
+
+  it("filters attached private sessions before paging but retains unattached ledger rows", async () => {
+    const store = new PrAutofixFeedbackStore(env.DB);
+    const publicFeedback = await store.receive(COMMENT_ENVELOPE, 1_000);
+    const privateFeedback = await store.receive(
+      { ...COMMENT_ENVELOPE, providerObject: { kind: "pr_comment", id: "private" } },
+      2_000
+    );
+    const unattached = await store.receive(
+      { ...COMMENT_ENVELOPE, providerObject: { kind: "pr_comment", id: "unattached" } },
+      3_000
+    );
+    for (const [id, visibility] of [
+      ["public", "workspace"],
+      ["private", "private"],
+    ] as const) {
+      await new SessionIndexStore(env.DB).create({
+        id,
+        ownerTeamId: null,
+        visibility,
+        title: null,
+        repoOwner: "acme",
+        repoName: "widgets",
+        model: "test-model",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status: "active",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      });
+    }
+    const context = {
+      artifactId: "artifact",
+      authorId: "7",
+      authorLogin: "alice",
+      authorType: "User",
+      feedbackUrl: "https://example.com",
+    };
+    await store.attachContext(publicFeedback.feedbackKey, { ...context, sessionId: "public" });
+    await store.attachContext(privateFeedback.feedbackKey, { ...context, sessionId: "private" });
+
+    const first = await store.listActivity({ limit: 1, cursor: null });
+    expect(first.records.map(({ feedbackKey }) => feedbackKey)).toEqual([unattached.feedbackKey]);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await store.listActivity({ limit: 1, cursor: first.nextCursor });
+    expect(second.records.map(({ feedbackKey }) => feedbackKey)).toEqual([
+      publicFeedback.feedbackKey,
+    ]);
+    expect(second.nextCursor).toBeNull();
+  });
 });

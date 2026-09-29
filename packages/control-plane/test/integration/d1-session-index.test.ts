@@ -740,7 +740,7 @@ describe("D1 SessionIndexStore", () => {
     });
 
     it("listByParent returns children newest-first", async () => {
-      const children = await store.listByParent(parentId);
+      const children = await store.listByParent(parentId, { kind: "service", teamId: null });
       expect(children).toHaveLength(2);
       expect(children[0].id).toBe(childId2); // newer
       expect(children[1].id).toBe(childId1); // older
@@ -769,7 +769,7 @@ describe("D1 SessionIndexStore", () => {
         updatedAt: now,
       });
 
-      const children = await store.listByParent(parentId);
+      const children = await store.listByParent(parentId, { kind: "service", teamId: null });
 
       expect(children.find((child) => child.id === childId1)?.pullRequestSummary).toEqual({
         total: 1,
@@ -782,7 +782,10 @@ describe("D1 SessionIndexStore", () => {
     });
 
     it("listByParent returns empty array when no children exist", async () => {
-      const children = await store.listByParent("nonexistent-parent");
+      const children = await store.listByParent("nonexistent-parent", {
+        kind: "service",
+        teamId: null,
+      });
       expect(children).toEqual([]);
     });
 

@@ -11,10 +11,13 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
+import type { SessionViewer } from "@open-inspect/shared";
 import { getModelDisplayName, normalizeModelId } from "@open-inspect/shared/models";
 import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
+import { visibleSessionsPredicate } from "./session-visibility";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { z } from "zod";
 
 /** `now` anchors the open-inventory age computation. */
@@ -84,7 +87,11 @@ function prCreatedAtExpr(alias = ""): string {
 }
 
 export class PullRequestAnalyticsStore {
-  constructor(private readonly db: SqlDatabase) {}
+  constructor(
+    private readonly db: SqlDatabase,
+    private readonly viewer: SessionViewer = { kind: "service", teamId: null },
+    private readonly mode: TeamsEnforcementMode = "on"
+  ) {}
 
   /**
    * Two windows with different populations: the funnel/repos/sources cohort is
@@ -102,98 +109,106 @@ export class PullRequestAnalyticsStore {
   }
 
   prepare(filters: PullRequestAnalyticsFilters): SqlStatement[] {
-    const prCreatedAt = prCreatedAtExpr();
+    const prCreatedAt = prCreatedAtExpr("p");
     const cohortWindow = `${prCreatedAt} >= ? AND ${prCreatedAt} < ?`;
     const cohortBinds = [filters.startAt, filters.endAt];
+    const visible = visibleSessionsPredicate("s", this.viewer, {
+      mode: this.mode,
+      excludePrivate: true,
+    });
+    const prSessions = `FROM session_pull_requests p JOIN sessions s ON s.id = p.session_id`;
 
     const statements = [
       this.db
         .prepare(
           `SELECT
                COUNT(*) AS created,
-               COALESCE(SUM(CASE WHEN lifecycle_state = 'open' AND is_draft = 0 THEN 1 ELSE 0 END), 0) AS open,
-               COALESCE(SUM(CASE WHEN lifecycle_state = 'open' AND is_draft = 1 THEN 1 ELSE 0 END), 0) AS draft,
-               COALESCE(SUM(CASE WHEN lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
-               COALESCE(SUM(CASE WHEN lifecycle_state = 'closed' THEN 1 ELSE 0 END), 0) AS closed
-             FROM session_pull_requests
-             WHERE ${cohortWindow}`
+                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'open' AND p.is_draft = 0 THEN 1 ELSE 0 END), 0) AS open,
+                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'open' AND p.is_draft = 1 THEN 1 ELSE 0 END), 0) AS draft,
+                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
+                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'closed' THEN 1 ELSE 0 END), 0) AS closed
+              ${prSessions}
+              WHERE ${cohortWindow} AND ${visible.sql}`
         )
-        .bind(...cohortBinds),
+        .bind(...cohortBinds, ...visible.params),
       this.db
         .prepare(
-          `SELECT COALESCE(SUM(total_cost), 0) AS cost
-             FROM sessions
-             WHERE id IN (
-               SELECT DISTINCT session_id FROM session_pull_requests WHERE ${cohortWindow}
-             )`
+          `SELECT COALESCE(SUM(s.total_cost), 0) AS cost
+              FROM sessions s
+              WHERE s.id IN (
+                SELECT DISTINCT p.session_id FROM session_pull_requests p WHERE ${cohortWindow}
+              ) AND ${visible.sql}`
         )
-        .bind(...cohortBinds),
+        .bind(...cohortBinds, ...visible.params),
       this.db
         .prepare(
           `SELECT
                COUNT(*) AS merged,
-               AVG(merged_at - ${prCreatedAt}) AS avg_time_to_merge_ms
-             FROM session_pull_requests
-             WHERE lifecycle_state = 'merged' AND merged_at >= ? AND merged_at < ?`
+                AVG(p.merged_at - ${prCreatedAt}) AS avg_time_to_merge_ms
+              ${prSessions}
+              WHERE p.lifecycle_state = 'merged' AND p.merged_at >= ? AND p.merged_at < ? AND ${visible.sql}`
         )
-        .bind(filters.startAt, filters.endAt),
+        .bind(filters.startAt, filters.endAt, ...visible.params),
       this.db
         .prepare(
           `SELECT
                COUNT(*) AS total,
                AVG(? - ${prCreatedAt}) AS avg_age_ms
-             FROM session_pull_requests
-             WHERE lifecycle_state = 'open'`
+              ${prSessions}
+              WHERE p.lifecycle_state = 'open' AND ${visible.sql}`
         )
-        .bind(filters.now),
+        .bind(filters.now, ...visible.params),
       this.db
         .prepare(
           `SELECT ${prCreatedAt} / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
-             FROM session_pull_requests
-             WHERE ${cohortWindow}
+              ${prSessions}
+              WHERE ${cohortWindow} AND ${visible.sql}
              GROUP BY day_index
              ORDER BY day_index ASC`
         )
-        .bind(...cohortBinds),
+        .bind(...cohortBinds, ...visible.params),
       this.db
         .prepare(
-          `SELECT merged_at / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
-             FROM session_pull_requests
-             WHERE lifecycle_state = 'merged' AND merged_at >= ? AND merged_at < ?
+          `SELECT p.merged_at / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
+              ${prSessions}
+              WHERE p.lifecycle_state = 'merged' AND p.merged_at >= ? AND p.merged_at < ? AND ${visible.sql}
              GROUP BY day_index
              ORDER BY day_index ASC`
         )
-        .bind(filters.startAt, filters.endAt),
+        .bind(filters.startAt, filters.endAt, ...visible.params),
       this.db
         .prepare(
           `SELECT
-               repo_owner || '/' || repo_name AS key,
+                p.repo_owner || '/' || p.repo_name AS key,
                COUNT(*) AS created,
-               COALESCE(SUM(CASE WHEN lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
-               COALESCE(SUM(CASE WHEN lifecycle_state = 'closed' THEN 1 ELSE 0 END), 0) AS closed,
-               AVG(CASE WHEN lifecycle_state = 'merged' AND merged_at IS NOT NULL
-                        THEN merged_at - ${prCreatedAt} END) AS avg_time_to_merge_ms
-             FROM session_pull_requests
-             WHERE ${cohortWindow}
+                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
+                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'closed' THEN 1 ELSE 0 END), 0) AS closed,
+                AVG(CASE WHEN p.lifecycle_state = 'merged' AND p.merged_at IS NOT NULL
+                         THEN p.merged_at - ${prCreatedAt} END) AS avg_time_to_merge_ms
+              ${prSessions}
+              WHERE ${cohortWindow} AND ${visible.sql}
              GROUP BY key
              ORDER BY created DESC, key ASC`
         )
-        .bind(...cohortBinds),
+        .bind(...cohortBinds, ...visible.params),
       this.db
         .prepare(
           `SELECT
                s.spawn_source AS source,
                COUNT(*) AS created,
                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged
-             FROM session_pull_requests p
-             JOIN sessions s ON p.session_id = s.id
-             WHERE ${prCreatedAtExpr("p")} >= ? AND ${prCreatedAtExpr("p")} < ?
+              ${prSessions}
+              WHERE ${cohortWindow} AND ${visible.sql}
              GROUP BY s.spawn_source
              ORDER BY created DESC, source ASC`
         )
-        .bind(...cohortBinds),
+        .bind(...cohortBinds, ...visible.params),
     ];
     for (const dimension of ["model", "harness"] as const) {
+      const costVisible = visibleSessionsPredicate("x", this.viewer, {
+        mode: this.mode,
+        excludePrivate: true,
+      });
       statements.push(
         this.db
           .prepare(
@@ -201,19 +216,19 @@ export class PullRequestAnalyticsStore {
                     COUNT(*) AS created,
                     COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
                     (SELECT COALESCE(SUM(x.total_cost), 0)
-                     FROM sessions x
-                     WHERE x.${dimension} = s.${dimension}
-                       AND x.id IN (
+                      FROM sessions x
+                      WHERE x.${dimension} = s.${dimension}
+                        AND ${costVisible.sql}
+                        AND x.id IN (
                          SELECT DISTINCT cost_p.session_id FROM session_pull_requests cost_p
                          WHERE ${prCreatedAtExpr("cost_p")} >= ? AND ${prCreatedAtExpr("cost_p")} < ?
                        )) AS session_cost
-             FROM session_pull_requests p
-             JOIN sessions s ON p.session_id = s.id
-             WHERE ${prCreatedAtExpr("p")} >= ? AND ${prCreatedAtExpr("p")} < ?
+              ${prSessions}
+              WHERE ${cohortWindow} AND ${visible.sql}
              GROUP BY s.${dimension}
              ORDER BY session_cost DESC, key ASC`
           )
-          .bind(...cohortBinds, ...cohortBinds)
+          .bind(...costVisible.params, ...cohortBinds, ...cohortBinds, ...visible.params)
       );
     }
     return statements;

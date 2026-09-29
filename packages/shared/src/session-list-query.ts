@@ -5,6 +5,7 @@ import {
   type SpawnSource,
 } from "./types/sessions";
 import { isCanonicalUserId } from "./user-id";
+import { sessionVisibilitySchema, type SessionVisibility } from "./types/teams";
 
 export const SESSION_LIST_CURRENT_USER = "me";
 export const DEFAULT_SESSION_LIST_LIMIT = 50;
@@ -28,7 +29,11 @@ export const SESSION_LIST_QUERY_PARAMS = [
   "repoName",
   "environmentId",
   "origin",
-] as const satisfies readonly (keyof SessionListQuery)[];
+  "teamIds[]",
+  "ownerFilter",
+  "visibility",
+  "scope",
+] as const satisfies readonly (keyof SessionListQuery | "teamIds[]")[];
 
 export type SessionListQueryParam = (typeof SESSION_LIST_QUERY_PARAMS)[number];
 
@@ -60,10 +65,14 @@ export interface SessionListQuery {
    * run is `agent`.
    */
   origin?: SpawnSource;
+  teamIds?: readonly string[];
+  ownerFilter?: "started" | "participating" | "anyone";
+  visibility?: SessionVisibility;
+  scope?: "workspace" | "all";
 }
 
 type SessionListQueryParamsAreExhaustive =
-  Exclude<keyof SessionListQuery, SessionListQueryParam> extends never ? true : never;
+  Exclude<keyof SessionListQuery, SessionListQueryParam | "teamIds"> extends never ? true : never;
 const _sessionListQueryParamsAreExhaustive: SessionListQueryParamsAreExhaustive = true;
 void _sessionListQueryParamsAreExhaustive;
 
@@ -155,6 +164,30 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
   const origin = originParam ? spawnSourceSchema.safeParse(originParam) : undefined;
   if (origin && !origin.success) return { success: false, invalidParam: "origin" };
 
+  const teamIds = searchParams.getAll("teamIds[]");
+  if (teamIds.some((id) => !/^team_[a-zA-Z0-9_-]{1,256}$/.test(id))) {
+    return { success: false, invalidParam: "teamIds[]" };
+  }
+  const ownerFilter = searchParams.get("ownerFilter");
+  if (
+    ownerFilter !== null &&
+    ownerFilter !== "started" &&
+    ownerFilter !== "participating" &&
+    ownerFilter !== "anyone"
+  ) {
+    return { success: false, invalidParam: "ownerFilter" };
+  }
+  const visibilityParam = searchParams.get("visibility");
+  const visibility = visibilityParam
+    ? sessionVisibilitySchema.safeParse(visibilityParam)
+    : undefined;
+  if (visibilityParam !== null && (!visibility || !visibility.success))
+    return { success: false, invalidParam: "visibility" };
+  const scope = searchParams.get("scope");
+  if (scope !== null && scope !== "workspace" && scope !== "all") {
+    return { success: false, invalidParam: "scope" };
+  }
+
   return {
     success: true,
     data: {
@@ -168,6 +201,10 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
       ...(repoOwner !== undefined && repoName !== undefined ? { repoOwner, repoName } : {}),
       ...(environmentId !== undefined ? { environmentId } : {}),
       ...(origin ? { origin: origin.data } : {}),
+      ...(teamIds.length ? { teamIds: [...new Set(teamIds)] } : {}),
+      ...(ownerFilter !== null ? { ownerFilter } : {}),
+      ...(visibility ? { visibility: visibility.data } : {}),
+      ...(scope ? { scope } : {}),
     },
   };
 }
@@ -191,6 +228,10 @@ export function serializeSessionListQuery(query: SessionListQuery): URLSearchPar
   }
   if (query.environmentId) searchParams.set("environmentId", query.environmentId);
   if (query.origin) searchParams.set("origin", query.origin);
+  for (const teamId of query.teamIds ?? []) searchParams.append("teamIds[]", teamId);
+  if (query.ownerFilter) searchParams.set("ownerFilter", query.ownerFilter);
+  if (query.visibility) searchParams.set("visibility", query.visibility);
+  if (query.scope) searchParams.set("scope", query.scope);
 
   return searchParams;
 }

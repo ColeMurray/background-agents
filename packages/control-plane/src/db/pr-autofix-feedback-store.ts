@@ -1,5 +1,6 @@
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import type { SqlDatabase } from "./sql-database";
+import { visibleSessionsPredicate } from "./session-visibility";
 
 type PrAutofixDecision = "received" | "queued" | "skipped" | "failed";
 
@@ -175,23 +176,25 @@ export class PrAutofixFeedbackStore {
     cursor: string | null;
   }): Promise<{ records: PrAutofixFeedbackRecord[]; nextCursor: string | null }> {
     const cursor = options.cursor ? decodeActivityCursor(options.cursor) : null;
-    const statement = cursor
-      ? this.db
-          .prepare(
-            `SELECT * FROM pr_autofix_feedback
-             WHERE last_received_at < ?
-                OR (last_received_at = ? AND feedback_key < ?)
-             ORDER BY last_received_at DESC, feedback_key DESC
-             LIMIT ?`
-          )
-          .bind(cursor.lastReceivedAt, cursor.lastReceivedAt, cursor.feedbackKey, options.limit + 1)
-      : this.db
-          .prepare(
-            `SELECT * FROM pr_autofix_feedback
-             ORDER BY last_received_at DESC, feedback_key DESC
-             LIMIT ?`
-          )
-          .bind(options.limit + 1);
+    const visibility = visibleSessionsPredicate(
+      "s",
+      { kind: "service", teamId: null },
+      { excludePrivate: true }
+    );
+    const statement = this.db
+      .prepare(
+        `SELECT f.* FROM pr_autofix_feedback f
+         LEFT JOIN sessions s ON s.id = f.session_id
+         WHERE (f.session_id IS NULL OR (s.id IS NOT NULL AND (${visibility.sql})))
+           ${cursor ? "AND (f.last_received_at < ? OR (f.last_received_at = ? AND f.feedback_key < ?))" : ""}
+         ORDER BY f.last_received_at DESC, f.feedback_key DESC
+         LIMIT ?`
+      )
+      .bind(
+        ...visibility.params,
+        ...(cursor ? [cursor.lastReceivedAt, cursor.lastReceivedAt, cursor.feedbackKey] : []),
+        options.limit + 1
+      );
     const result = await statement.all<PrAutofixFeedbackRow>();
     const hasMore = result.results.length > options.limit;
     const rows = hasMore ? result.results.slice(0, options.limit) : result.results;

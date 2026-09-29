@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import type {
   AnalyticsBreakdownResponse,
   AnalyticsDashboardResponse,
@@ -10,8 +10,10 @@ import type {
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { SessionRunStore } from "../../src/db/session-run-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
 
 const zeroTokens: AnalyticsTokenTotals = {
   inputTokens: 0,
@@ -34,6 +36,9 @@ async function seedSession(
     baseBranch?: string | null;
     scmLogin: string | null;
     userId?: string | null;
+    ownerTeamId?: string | null;
+    visibility?: "workspace" | "team" | "private";
+    parentSessionId?: string;
     spawnSource?: SpawnSource;
     harness?: HarnessId;
     automationId?: string;
@@ -50,8 +55,8 @@ async function seedSession(
 ): Promise<void> {
   await store.create({
     id: input.id,
-    ownerTeamId: null,
-    visibility: "workspace",
+    ownerTeamId: input.ownerTeamId ?? null,
+    visibility: input.visibility ?? "workspace",
     title: input.id,
     repoOwner: input.repoOwner,
     repoName: input.repoName,
@@ -65,6 +70,7 @@ async function seedSession(
     spawnSource: input.spawnSource,
     scmLogin: input.scmLogin,
     userId: input.userId,
+    parentSessionId: input.parentSessionId,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
   });
@@ -97,6 +103,98 @@ async function seedUser(
 
 describe("Analytics API", () => {
   beforeEach(cleanD1Tables);
+
+  it("limits every dashboard population to visible non-private sessions while reconciling all private cost", async () => {
+    const member = "22222222222222222222222222222222";
+    const now = Date.now() - 60_000;
+    await serviceRequestHeaders("https://test.local/analytics/dashboard", {
+      as: { userId: member, role: "member" },
+    });
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('analytics-allowed', 'analytics-allowed', 'Allowed', 1, 1), ('analytics-denied', 'analytics-denied', 'Denied', 1, 1)"
+    ).run();
+    await new TeamMembershipStore(env.DB).add("analytics-allowed", member);
+    const store = new SessionIndexStore(env.DB);
+    for (const [id, teamId, visibility, cost, parentSessionId] of [
+      ["visible-root", null, "workspace", 1, undefined],
+      ["visible-child", "analytics-allowed", "team", 2, "visible-root"],
+      ["hidden-child", "analytics-denied", "team", 4, "visible-root"],
+      ["private-child", null, "private", 8, "visible-root"],
+      ["owner-private", null, "private", 16, undefined],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: id,
+        userId: member,
+        ownerTeamId: teamId,
+        visibility,
+        parentSessionId,
+        spawnSource: id === "owner-private" ? "agent" : "user",
+        status: "completed",
+        createdAt: now,
+        updatedAt: now + 10,
+        totalCost: cost,
+        activeDurationMs: 10,
+        messageCount: 1,
+        prCount: 1,
+        tokens: {
+          inputTokens: cost,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      });
+    }
+    const fetchAnalytics = async (path: string, mode: "on" | "off") => {
+      const url = `https://test.local/analytics/${path}`;
+      return routeRequest(
+        new Request(url, {
+          headers: await serviceRequestHeaders(url, { as: { userId: member, role: "member" } }),
+        }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+    };
+
+    const dashboardResponse = await fetchAnalytics("dashboard?scope=all", "on");
+    expect(dashboardResponse.status).toBe(200);
+    const dashboard = await dashboardResponse.json<AnalyticsDashboardResponse>();
+    expect(dashboard.summary).toMatchObject({
+      totalSessions: 2,
+      totalCost: 3,
+      inputTokens: 3,
+      privateSessionsCostUsd: 24,
+    });
+    expect(
+      dashboard.timeseries.series
+        .flatMap((point) => Object.values(point.groups))
+        .reduce((a, b) => a + b, 0)
+    ).toBe(2);
+    for (const dimension of ["repository", "user", "model", "harness", "provider"] as const) {
+      expect(
+        dashboard.breakdowns[dimension].entries.reduce((sum, entry) => sum + entry.cost, 0)
+      ).toBe(3);
+    }
+    expect(dashboard.runs).toEqual([
+      expect.objectContaining({ rootSessionId: "visible-root", sessionCount: 2, totalCost: 3 }),
+    ]);
+    expect(
+      await new SessionRunStore(env.DB, { kind: "service", teamId: null }).get("owner-private")
+    ).toBeNull();
+    expect(
+      (await (await fetchAnalytics("runs", "on")).json<{ runs: { totalCost: number }[] }>()).runs[0]
+        .totalCost
+    ).toBe(3);
+    expect(
+      await (await fetchAnalytics("summary?scope=human", "on")).json<AnalyticsSummaryResponse>()
+    ).toMatchObject({ totalSessions: 2, totalCost: 3, privateSessionsCostUsd: 24 });
+    expect(
+      await (await fetchAnalytics("summary?scope=all", "off")).json<AnalyticsSummaryResponse>()
+    ).toMatchObject({ totalSessions: 3, totalCost: 7, privateSessionsCostUsd: 24 });
+  });
 
   it("sums token totals across sessions and provider merges without excluding zero-token history", async () => {
     const store = new SessionIndexStore(env.DB);
@@ -348,6 +446,7 @@ describe("Analytics API", () => {
       cacheHitRatio: null,
       activeUsers: 3,
       totalCost: 3,
+      privateSessionsCostUsd: 0,
       avgCost: 0.5,
       totalPrs: 2,
       statusBreakdown: {

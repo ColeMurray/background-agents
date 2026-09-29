@@ -4,8 +4,34 @@ import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import type { SessionInboxCategory } from "@open-inspect/shared/types/session-inbox";
+import type { SessionViewer } from "@open-inspect/shared";
+import { SessionInboxStore } from "../../src/db/session-inbox-store";
 
 const VIEWER_ID = "11111111111111111111111111111111";
+const viewer: SessionViewer = {
+  kind: "user",
+  userId: VIEWER_ID,
+  roleKey: "member",
+  permissions: ["sessions.read"],
+  suspended: false,
+  memberships: new Map([["team-a", "member"]]),
+};
+
+async function seedTeams(): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, 'Viewer', 1, 1)"
+  )
+    .bind(VIEWER_ID)
+    .run();
+  await env.DB.prepare(
+    "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team-a', 'a', 'A', 1, 1), ('team-b', 'b', 'B', 1, 1)"
+  ).run();
+  await env.DB.prepare(
+    "INSERT INTO team_memberships (team_id, user_id, created_at) VALUES ('team-a', ?, 1)"
+  )
+    .bind(VIEWER_ID)
+    .run();
+}
 
 function session(id: string, overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
@@ -31,6 +57,151 @@ function session(id: string, overrides: Partial<SessionEntry> = {}): SessionEntr
 
 describe("session inbox", () => {
   beforeEach(cleanD1Tables);
+
+  it("excludes hidden roots and children before category aggregation and reroots visible descendants", async () => {
+    await seedTeams();
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("visible-root", { updatedAt: 5000 }));
+    await store.create(
+      session("hidden-child", {
+        parentSessionId: "visible-root",
+        ownerTeamId: "team-b",
+        visibility: "team",
+        spawnDepth: 1,
+        status: "active",
+        updatedAt: 6000,
+      })
+    );
+    await store.create(
+      session("visible-leaf", {
+        parentSessionId: "hidden-child",
+        spawnDepth: 2,
+        updatedAt: 4000,
+      })
+    );
+    await store.create(
+      session("hidden-root", {
+        ownerTeamId: "team-b",
+        visibility: "team",
+        updatedAt: 7000,
+      })
+    );
+    await store.create(
+      session("visible-child", {
+        parentSessionId: "hidden-root",
+        spawnDepth: 1,
+        updatedAt: 3000,
+      })
+    );
+
+    const inbox = new SessionInboxStore(env.DB);
+    const options = { viewer, mode: "on" as const, viewerUserId: VIEWER_ID, limit: 10 };
+    const page = await inbox.list({ ...options, category: "finished", cursor: null });
+    expect(page.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "visible-root",
+      "visible-leaf",
+      "visible-child",
+    ]);
+    expect(page.items.every(({ descendantSessions }) => descendantSessions.length === 0)).toBe(
+      true
+    );
+    const snapshot = await inbox.snapshot(options);
+    expect(snapshot.in_progress.items).toEqual([]);
+    expect(snapshot.finished.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "visible-root",
+      "visible-leaf",
+      "visible-child",
+    ]);
+  });
+
+  it("applies teamIds in the eligibility CTE before rerooting and paging", async () => {
+    await seedTeams();
+    const store = new SessionIndexStore(env.DB);
+    await store.create(
+      session("other-team", { ownerTeamId: "team-b", visibility: "team", updatedAt: 6000 })
+    );
+    await store.create(session("workspace-root", { updatedAt: 5000 }));
+    await store.create(
+      session("team-child", {
+        ownerTeamId: "team-a",
+        visibility: "team",
+        parentSessionId: "workspace-root",
+        spawnDepth: 1,
+        updatedAt: 4000,
+      })
+    );
+    const inbox = new SessionInboxStore(env.DB);
+    const options = {
+      viewer,
+      mode: "off" as const,
+      viewerUserId: VIEWER_ID,
+      limit: 1,
+      teamIds: ["team-a"],
+    };
+    const page = await inbox.list({ ...options, category: "finished", cursor: null });
+    expect(page.items.map(({ rootSession }) => rootSession.id)).toEqual(["team-child"]);
+    expect(page.hasMore).toBe(false);
+    const snapshot = await inbox.snapshot(options);
+    expect(snapshot.finished.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "team-child",
+    ]);
+  });
+
+  it("excludes private children even when team enforcement is off", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("visible-root", { updatedAt: 5000 }));
+    await store.create(
+      session("private-child", {
+        parentSessionId: "visible-root",
+        spawnDepth: 1,
+        visibility: "private",
+        userId: "another-user",
+        status: "active",
+        updatedAt: 6000,
+      })
+    );
+    const inbox = new SessionInboxStore(env.DB);
+    const options = { viewer, mode: "off" as const, viewerUserId: VIEWER_ID, limit: 10 };
+    expect((await inbox.list({ ...options, category: "in_progress", cursor: null })).items).toEqual(
+      []
+    );
+    expect(
+      (await inbox.snapshot(options)).finished.items.map(({ rootSession }) => rootSession.id)
+    ).toEqual(["visible-root"]);
+  });
+
+  it("filters children independently of their visible parent", async () => {
+    await seedTeams();
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("parent"));
+    await store.create(
+      session("hidden", {
+        parentSessionId: "parent",
+        ownerTeamId: "team-b",
+        visibility: "team",
+        spawnDepth: 1,
+      })
+    );
+    await store.create(
+      session("private", {
+        parentSessionId: "parent",
+        userId: "another-user",
+        visibility: "private",
+        spawnDepth: 1,
+      })
+    );
+    await store.create(
+      session("visible", {
+        parentSessionId: "parent",
+        ownerTeamId: "team-a",
+        visibility: "team",
+        spawnDepth: 1,
+      })
+    );
+
+    const children = await store.listByParent("parent", viewer, { mode: "on" });
+    expect(children.map(({ id }) => id)).toEqual(["visible"]);
+  });
 
   it("classifies complete hierarchies on the server", async () => {
     await serviceFetch("https://example.com/sessions/inbox?category=finished");

@@ -305,6 +305,20 @@ describe("sessions API route (discovery params)", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
+  it("forwards repeated team filters and owner, visibility, and scope filters", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
+      Response.json({ sessions: [], hasMore: false })
+    );
+    await GET(
+      request(
+        "/api/sessions?teamIds%5B%5D=team_a&teamIds%5B%5D=team_b&ownerFilter=participating&visibility=team&scope=all&ignored=true"
+      )
+    );
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions?teamIds%5B%5D=team_a&teamIds%5B%5D=team_b&ownerFilter=participating&visibility=team&scope=all"
+    );
+  });
+
   it("propagates the control plane's rejection of an oversized search", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
       Response.json({ error: "Invalid q" }, { status: 400 })

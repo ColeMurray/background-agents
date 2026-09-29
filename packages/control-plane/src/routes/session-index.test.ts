@@ -66,7 +66,7 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
     new Request(`https://test.local/sessions${query}`),
     createEnv(),
     {},
-    createCtx(principal)
+    createCtx(principal ?? { kind: "service", service: "web", actor: null })
   );
 }
 
@@ -162,28 +162,32 @@ describe("session index routes", () => {
     const response = await listSessions("?limit=abc&offset=nope");
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: [],
-      limit: 50,
-      offset: 0,
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        limit: 50,
+        offset: 0,
+      })
+    );
   });
 
   it("clamps pagination values before querying the store", async () => {
     const response = await listSessions("?limit=500&offset=-10");
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: [],
-      limit: 100,
-      offset: 0,
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        limit: 100,
+        offset: 0,
+      })
+    );
   });
 
   it("passes validated status filters through to the store", async () => {
@@ -212,14 +216,16 @@ describe("session index routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
-      limit: 50,
-      offset: 0,
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+        limit: 50,
+        offset: 0,
+      })
+    );
   });
 
   it("resolves createdBy=me from the authenticated user principal", async () => {
@@ -230,15 +236,65 @@ describe("session index routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: undefined,
-      excludeAutomationLineage: false,
-      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
-      limit: 50,
-      offset: 0,
-      viewerUserId: "0123456789abcdef0123456789abcdef",
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: undefined,
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        limit: 50,
+        offset: 0,
+        viewerUserId: "0123456789abcdef0123456789abcdef",
+        ownerFilter: "started",
+      })
+    );
+  });
+
+  it("passes team and participation filters with the admitted viewer", async () => {
+    const response = await listSessions(
+      "?teamIds%5B%5D=team_alpha&ownerFilter=participating&visibility=team&scope=workspace",
+      USER_PRINCIPAL
+    );
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamIds: ["team_alpha"],
+        ownerFilter: "participating",
+        visibility: "team",
+        scope: "workspace",
+        viewer: expect.objectContaining({ userId: "user-1" }),
+        mode: "shadow",
+      })
+    );
+  });
+
+  it("keeps createdBy=me when an explicit ownerFilter is present", async () => {
+    const userId = "0123456789abcdef0123456789abcdef";
+    const response = await listSessions("?createdBy=me&ownerFilter=participating", {
+      kind: "user",
+      userId,
     });
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ createdByUserIds: [userId], ownerFilter: "participating" })
+    );
+  });
+
+  it("rejects scope=all for a non-administrator", async () => {
+    const response = await listSessions("?scope=all");
+    expect(response.status).toBe(403);
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it("passes inbox team filters before grouping", async () => {
+    const response = await listInbox("?teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_beta");
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamIds: ["team_alpha", "team_beta"],
+        viewer: expect.objectContaining({ userId: "user-1" }),
+      })
+    );
   });
 
   it("does not mark service session lists as private viewer data", async () => {
@@ -465,19 +521,22 @@ describe("session discovery filters", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
-      status: undefined,
-      excludeStatus: "archived",
-      excludeAutomationLineage: false,
-      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
-      search: "login",
-      repository: { repoOwner: "acme", repoName: "web-app" },
-      environmentId: "env-1",
-      spawnSource: "automation",
-      limit: 50,
-      offset: 0,
-      viewerUserId: "0123456789abcdef0123456789abcdef",
-    });
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: undefined,
+        excludeStatus: "archived",
+        excludeAutomationLineage: false,
+        createdByUserIds: [],
+        ownerFilter: "started",
+        search: "login",
+        repository: { repoOwner: "acme", repoName: "web-app" },
+        environmentId: "env-1",
+        spawnSource: "automation",
+        limit: 50,
+        offset: 0,
+        viewerUserId: "0123456789abcdef0123456789abcdef",
+      })
+    );
   });
 
   it("omits discovery filters that were not supplied", async () => {

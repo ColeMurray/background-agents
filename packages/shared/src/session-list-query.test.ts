@@ -8,6 +8,31 @@ import {
 } from "./session-list-query";
 
 describe("session list query codec", () => {
+  it("round-trips team, participation, visibility, and workspace scope filters", () => {
+    const query = {
+      teamIds: ["team_a", "team_b"],
+      ownerFilter: "participating" as const,
+      visibility: "private" as const,
+      scope: "workspace" as const,
+    };
+    expect(parseSessionListQuery(serializeSessionListQuery(query))).toMatchObject({
+      success: true,
+      data: query,
+    });
+  });
+
+  it.each([
+    ["teamIds[]=", "teamIds[]"],
+    ["ownerFilter=mine", "ownerFilter"],
+    ["visibility=unknown", "visibility"],
+    ["scope=team", "scope"],
+  ] as const)("rejects an invalid list filter %s", (query, invalidParam) => {
+    expect(parseSessionListQuery(new URLSearchParams(query))).toEqual({
+      success: false,
+      invalidParam,
+    });
+  });
+
   it("serializes the typed query in stable cache-key order", () => {
     expect(
       serializeSessionListQuery({

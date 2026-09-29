@@ -1,5 +1,6 @@
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionViewer } from "@open-inspect/shared";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import {
   type ExportPullRequest,
@@ -8,11 +9,13 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { sessionRepositoryRowSchema, toSessionRepository } from "./session-list-metadata";
 import { decodeSessionPullRequest } from "./session-pull-request-store";
 import { sessionRowSchema, toSessionFields, type SessionRow } from "./session-row";
 import type { RunsExportCursor, SessionExportCursor } from "./session-export-cursor";
 import type { SqlDatabase } from "./sql-database";
+import { visibleSessionsPredicate } from "./session-visibility";
 
 export const DEFAULT_EXPORT_LIMIT = 100;
 
@@ -85,6 +88,8 @@ function toExportRow(
 
 /** Shared filters for either export ordering. */
 interface ExportFilters {
+  viewer: SessionViewer;
+  mode: TeamsEnforcementMode;
   /** Page size; the store reads one extra row to answer hasMore. */
   limit: number;
   /** Inclusive lower bound on session creation, or root creation in runs scope (epoch ms). */
@@ -143,8 +148,9 @@ export class SessionExportStore {
   private async listSessions(
     options: ExportFilters & { scope?: "sessions"; cursor: SessionExportCursor | null }
   ): Promise<SessionsPage> {
-    const conditions: string[] = [];
-    const bindings: (string | number)[] = [];
+    const visibility = visibleSessionsPredicate("sessions", options.viewer, { mode: options.mode });
+    const conditions: string[] = [`(${visibility.sql})`];
+    const bindings: unknown[] = [...visibility.params];
     const firstPage = options.cursor === null;
     if (options.cursor) {
       const cursor = options.cursor;
@@ -194,8 +200,10 @@ export class SessionExportStore {
       cursor: RunsExportCursor | null;
     }
   ): Promise<RunsPage> {
-    const conditions: string[] = [];
-    const bindings: (string | number)[] = [];
+    const rootVisibility = visibleSessionsPredicate("root", options.viewer, { mode: options.mode });
+    const memberVisibility = visibleSessionsPredicate("s", options.viewer, { mode: options.mode });
+    const conditions: string[] = [`(${rootVisibility.sql})`, `(${memberVisibility.sql})`];
+    const bindings: unknown[] = [...rootVisibility.params, ...memberVisibility.params];
     const firstPage = options.cursor === null;
     if (options.cursor) {
       const cursor = options.cursor;
@@ -278,7 +286,7 @@ export class SessionExportStore {
     select: string;
     pageFrom: string;
     pageId: string;
-    bindings: (string | number)[];
+    bindings: unknown[];
     limit: number;
     snapshotMax: number | undefined;
     schema: z.ZodType<Row>;

@@ -5,6 +5,9 @@ import {
   type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { SessionViewer } from "@open-inspect/shared";
+import { visibleSessionsPredicate } from "./session-visibility";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
@@ -15,6 +18,9 @@ export interface ListSessionInboxOptions {
   category: SessionInboxCategory;
   createdByUserIds?: readonly string[];
   excludeAutomatedSessions?: boolean;
+  teamIds?: readonly string[];
+  viewer: SessionViewer;
+  mode?: TeamsEnforcementMode;
   viewerUserId: string;
   limit: number;
   cursor: SessionInboxCursor | null;
@@ -193,7 +199,12 @@ export class SessionInboxStore {
   private inboxCtes(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "viewerUserId"
+      | "createdByUserIds"
+      | "excludeAutomatedSessions"
+      | "teamIds"
+      | "viewer"
+      | "mode"
+      | "viewerUserId"
     >
   ): { sql: string; params: unknown[] } {
     const { conditions, params } = this.eligibility(options);
@@ -250,7 +261,10 @@ export class SessionInboxStore {
   }
 
   private eligibility(
-    options: Pick<ListSessionInboxOptions, "createdByUserIds" | "excludeAutomatedSessions">
+    options: Pick<
+      ListSessionInboxOptions,
+      "createdByUserIds" | "excludeAutomatedSessions" | "teamIds" | "viewer" | "mode"
+    >
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
     const params: unknown[] = [];
@@ -263,6 +277,13 @@ export class SessionInboxStore {
       );
       params.push(...options.createdByUserIds);
     }
+    if (options.teamIds?.length) {
+      conditions.push(`sessions.owner_team_id IN (${options.teamIds.map(() => "?").join(", ")})`);
+      params.push(...options.teamIds);
+    }
+    const visibility = visibleSessionsPredicate("sessions", options.viewer, { mode: options.mode });
+    conditions.push(visibility.sql);
+    params.push(...visibility.params);
     return { conditions, params };
   }
 

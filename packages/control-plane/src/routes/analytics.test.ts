@@ -3,11 +3,14 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import {
   authorizationDatabase,
   createTestRequestHandler,
+  emptyStatement,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
 } from "../router.test-support";
 import type { Env } from "../types";
+import type { SqlStatement } from "../db/sql-database";
+import { AnalyticsDashboardStore } from "../db/analytics-dashboard-store";
 import { analyticsRoutes, DEFAULT_ANALYTICS_DAYS } from "./analytics";
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -100,6 +103,39 @@ describe("analytics route handlers", () => {
 
       expect(response.status).toBe(400);
       expect(mockDashboardStore.get).not.toHaveBeenCalled();
+    });
+
+    it("passes the authorized viewer, team memberships and enforcement mode to the dashboard", async () => {
+      mockDashboardStore.get.mockResolvedValue({});
+      const database = authorizationDatabase({
+        statement: (sql) => {
+          const statement: SqlStatement = {
+            ...emptyStatement(),
+            bind: () => statement,
+            all: async <T>() => ({
+              results: [{ team_id: "team-a", role: "member" }] as T[],
+              meta: { changes: 0 },
+            }),
+          };
+          if (sql.includes("FROM team_memberships")) return statement;
+          throw new Error(`Unexpected query: ${sql}`);
+        },
+      });
+      const response = await handleRequest(
+        new Request("https://test.local/analytics/dashboard"),
+        { ...env, DB: database, TEAMS_ENFORCEMENT: "on" },
+        TEST_BACKGROUND_TASK_CONTEXT
+      );
+      expect(response.status).toBe(200);
+      expect(vi.mocked(AnalyticsDashboardStore)).toHaveBeenCalledWith(
+        expect.objectContaining({ prepare: expect.any(Function) }),
+        expect.objectContaining({
+          kind: "user",
+          userId: "user-1",
+          memberships: new Map([["team-a", "member"]]),
+        }),
+        "on"
+      );
     });
   });
 

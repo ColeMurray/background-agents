@@ -14,6 +14,7 @@ const summary: AnalyticsSummaryResponse = {
   totalSessions: 2,
   activeUsers: 1,
   totalCost: 1,
+  privateSessionsCostUsd: 0,
   avgCost: 0.5,
   totalPrs: 0,
   statusBreakdown: { created: 0, active: 0, completed: 2, failed: 0, archived: 0, cancelled: 0 },

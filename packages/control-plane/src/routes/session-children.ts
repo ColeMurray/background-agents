@@ -11,7 +11,7 @@ import {
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
 import { childSessionListResponseSchema } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
-import { evaluateSessionAdmission } from "../authorization/session-admission";
+import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
@@ -41,18 +41,16 @@ export async function handleListChildren(
   const parentId = params.id;
 
   const sessionStore = new SessionIndexStore(ctx.db);
-  const children = await sessionStore.listByParent(parentId);
-  const visible = [];
-  for (const child of children) {
-    if (
-      ctx.principal?.kind === "sandbox" ||
-      (await evaluateSessionAdmission(ctx, env, child.id, "read", null)).kind === "allowed"
-    ) {
-      visible.push(child);
-    }
-  }
+  const viewer =
+    ctx.principal?.kind === "sandbox"
+      ? { kind: "service" as const, teamId: null }
+      : (ctx.sessionAdmission?.viewer ??
+        viewerFromContext(ctx, ctx.sessionMemberships ?? new Map()));
+  const children = await sessionStore.listByParent(parentId, viewer, {
+    mode: teamsEnforcementMode(ctx, env),
+  });
 
-  return json(childSessionListResponseSchema.parse({ children: visible }));
+  return json(childSessionListResponseSchema.parse({ children }));
 }
 
 export async function handleGetChild(

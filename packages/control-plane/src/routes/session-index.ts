@@ -33,6 +33,8 @@ import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
 import { parseQuery } from "./query";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
 
 const sessionInboxQuerySchema = z.object({
   category: z
@@ -99,6 +101,10 @@ export async function handleListSessions(
     origin,
     limit,
     offset,
+    teamIds,
+    ownerFilter,
+    visibility,
+    scope,
   } = parsedQuery.data;
   const viewerUserId =
     ctx.principal?.kind === "user"
@@ -106,10 +112,36 @@ export async function handleListSessions(
       : ctx.principal?.kind === "service"
         ? (ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId)
         : undefined;
-  const createdByUserIds = parseCreatedByFilters(createdBy, viewerUserId ?? null);
+  const legacyStarted =
+    ownerFilter === undefined &&
+    createdBy.length === 1 &&
+    createdBy[0] === SESSION_LIST_CURRENT_USER;
+  if (legacyStarted && !isCanonicalUserId(viewerUserId)) return error("Invalid createdBy", 400);
+  const createdByUserIds = parseCreatedByFilters(
+    legacyStarted ? [] : createdBy,
+    viewerUserId ?? null
+  );
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
+  }
+
+  const viewer = viewerFromContext(
+    ctx,
+    ctx.authorization
+      ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
+          ctx.authorization.userId
+        ))
+      : new Map()
+  );
+  if (
+    scope === "all" &&
+    (viewer.kind !== "user" || !["owner", "administrator"].includes(viewer.roleKey ?? ""))
+  ) {
+    return error("Invalid scope", 403);
+  }
+  if (ownerFilter && ownerFilter !== "anyone" && viewer.kind !== "user") {
+    return error("Invalid ownerFilter", 400);
   }
 
   const store = new SessionIndexStore(ctx.db);
@@ -119,6 +151,12 @@ export async function handleListSessions(
     excludeStatus,
     excludeAutomationLineage,
     createdByUserIds,
+    ...(teamIds ? { teamIds } : {}),
+    ownerFilter: ownerFilter ?? (legacyStarted ? "started" : "anyone"),
+    visibility,
+    scope,
+    viewer,
+    mode: teamsEnforcementMode(ctx, env),
     ...(q ? { search: q } : {}),
     ...(repoOwner && repoName ? { repository: { repoOwner, repoName } } : {}),
     ...(environmentId ? { environmentId } : {}),
@@ -151,7 +189,7 @@ export async function handleListSessions(
 
 export async function handleListSessionInbox(
   request: Request,
-  _env: Env,
+  env: Env,
   _params: object,
   ctx: UserRouteContext
 ): Promise<Response> {
@@ -163,6 +201,16 @@ export async function handleListSessionInbox(
   }
   const parsedCursor = parseSessionInboxCursor(query.cursor);
   if (!parsedCursor.ok) return error(parsedCursor.error, 400);
+  const teamIds = new URL(request.url).searchParams.getAll("teamIds[]");
+  if (teamIds.some((id) => !/^team_[a-zA-Z0-9_-]{1,256}$/.test(id))) {
+    return error("Invalid teamIds[]", 400);
+  }
+  const viewer = viewerFromContext(
+    ctx,
+    (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
+      ctx.principal.userId
+    ))
+  );
 
   const startedAt = Date.now();
   const store = new SessionIndexStore(ctx.db);
@@ -171,6 +219,9 @@ export async function handleListSessionInbox(
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
     excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
+    viewer,
+    mode: teamsEnforcementMode(ctx, env),
+    teamIds,
   };
 
   if (category === null) {

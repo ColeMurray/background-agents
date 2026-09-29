@@ -4,6 +4,30 @@ import { buildSessionListPredicates } from "./session-list-predicates";
 const collapse = (sql: string) => sql.replace(/\s+/g, " ").trim();
 
 describe("buildSessionListPredicates", () => {
+  it("combines participation, workspace, and row visibility before pagination", () => {
+    const result = buildSessionListPredicates({
+      ownerFilter: "participating",
+      scope: "workspace",
+      teamIds: ["team-a"],
+      visibility: "team",
+      viewer: {
+        kind: "user",
+        userId: "user-a",
+        roleKey: "member",
+        suspended: false,
+        permissions: ["sessions.read"],
+        memberships: new Map(),
+      },
+      mode: "on",
+    });
+    expect(result.where).toContain("session_read_states");
+    expect(result.where).toContain("owner_team_id IS NULL");
+    expect(result.where).toContain("owner_team_id IN (?)");
+    expect(result.where).toContain("visibility = ?");
+    expect(result.where).toContain("team_memberships");
+    expect(result.params).toContain("user-a");
+  });
+
   it("returns no clause for an unfiltered list", () => {
     expect(buildSessionListPredicates({})).toEqual({ where: "", params: [] });
   });

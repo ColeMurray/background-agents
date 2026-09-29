@@ -13,6 +13,9 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import type { SessionViewer } from "@open-inspect/shared";
+import { visibleSessionsPredicate } from "./session-visibility";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import {
   sessionModelProviderAuthSchema,
   SUBSCRIPTION_PROVIDER_IDS,
@@ -759,10 +762,17 @@ export class SessionIndexStore {
   }
 
   /** List children of a parent session, newest first. */
-  async listByParent(parentSessionId: string): Promise<SessionEntry[]> {
+  async listByParent(
+    parentSessionId: string,
+    viewer: SessionViewer,
+    options?: { mode?: TeamsEnforcementMode }
+  ): Promise<SessionEntry[]> {
+    const visibility = visibleSessionsPredicate("sessions", viewer, options);
     const result = await this.db
-      .prepare(`SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC`)
-      .bind(parentSessionId)
+      .prepare(
+        `SELECT * FROM sessions WHERE parent_session_id = ? AND ${visibility.sql} ORDER BY created_at DESC`
+      )
+      .bind(parentSessionId, ...visibility.params)
       .all<SessionRow>();
     return this.attachListMetadata((result.results || []).map(toEntry));
   }

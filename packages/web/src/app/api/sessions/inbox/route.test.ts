@@ -31,4 +31,12 @@ describe("session inbox API route", () => {
     );
     expect(snapshotResponse.headers.get("Cache-Control")).toBe("private, no-store");
   });
+
+  it("forwards repeated teamIds[] filters", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ categories: {} }));
+    await GET(request("/api/sessions/inbox?teamIds%5B%5D=team_a&teamIds%5B%5D=team_b"));
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/sessions/inbox?teamIds%5B%5D=team_a&teamIds%5B%5D=team_b"
+    );
+  });
 });

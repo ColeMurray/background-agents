@@ -7,6 +7,8 @@ import { AnalyticsStore } from "./analytics-store";
 import { PullRequestAnalyticsStore } from "./pull-request-analytics-store";
 import { SessionRunStore } from "./session-run-store";
 import type { SqlDatabase } from "./sql-database";
+import type { SessionViewer } from "@open-inspect/shared";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 
 export interface AnalyticsDashboardFilters {
   days: AnalyticsDays;
@@ -18,12 +20,16 @@ export interface AnalyticsDashboardFilters {
 export const DASHBOARD_RUNS_LIMIT = 20;
 
 export class AnalyticsDashboardStore {
-  constructor(private readonly db: SqlDatabase) {}
+  constructor(
+    private readonly db: SqlDatabase,
+    private readonly viewer: SessionViewer = { kind: "service", teamId: null },
+    private readonly mode: TeamsEnforcementMode = "on"
+  ) {}
 
   async get(filters: AnalyticsDashboardFilters): Promise<AnalyticsDashboardResponse> {
-    const analytics = new AnalyticsStore(this.db);
-    const pullRequests = new PullRequestAnalyticsStore(this.db);
-    const runs = new SessionRunStore(this.db);
+    const analytics = new AnalyticsStore(this.db, this.viewer, this.mode);
+    const pullRequests = new PullRequestAnalyticsStore(this.db, this.viewer, this.mode);
+    const runs = new SessionRunStore(this.db, this.viewer, this.mode);
     const sessionFilters = {
       startAt: filters.startAt,
       endAt: filters.endAt,

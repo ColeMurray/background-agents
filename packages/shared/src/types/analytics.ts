@@ -70,6 +70,8 @@ export interface AnalyticsSummaryResponse extends AnalyticsTokenTotals {
   totalSessions: number;
   activeUsers: number;
   totalCost: number;
+  /** Windowed private-session cost, excluded from all attributed metrics regardless of viewer or scope. */
+  privateSessionsCostUsd: number;
   avgCost: number;
   totalPrs: number;
   cacheHitRatio: number | null;
@@ -105,7 +107,7 @@ export interface AnalyticsBreakdownResponse {
   entries: AnalyticsBreakdownEntry[];
 }
 
-/** All sessions in one root_session_id family, attributed to the root. */
+/** Visible non-private sessions in one root_session_id family, attributed to its visible root. */
 export interface SessionRun {
   rootSessionId: string;
   title: string | null;

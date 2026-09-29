@@ -23,6 +23,7 @@ it("leaves the dedicated PR funnel as the only top-level PR-created metric", () 
         totalSessions: 10,
         activeUsers: 2,
         totalCost: 5,
+        privateSessionsCostUsd: 0,
         avgCost: 0.5,
         totalPrs: 99,
         statusBreakdown: {

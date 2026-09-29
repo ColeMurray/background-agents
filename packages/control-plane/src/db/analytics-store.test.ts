@@ -24,6 +24,7 @@ describe("AnalyticsStore row decoding", () => {
             total_sessions: 2,
             active_users: 1,
             total_cost: 4,
+            private_sessions_cost: 1.5,
             total_prs: 3,
             input_tokens: 2,
             output_tokens: 4,
@@ -43,6 +44,7 @@ describe("AnalyticsStore row decoding", () => {
       totalSessions: 2,
       activeUsers: 1,
       totalCost: 4,
+      privateSessionsCostUsd: 1.5,
       avgCost: 2,
       totalPrs: 3,
       inputTokens: 2,
@@ -67,6 +69,7 @@ describe("AnalyticsStore row decoding", () => {
       inputTokens: 0,
       cacheReadTokens: 0,
       cacheHitRatio: null,
+      privateSessionsCostUsd: 0,
     });
   });
 

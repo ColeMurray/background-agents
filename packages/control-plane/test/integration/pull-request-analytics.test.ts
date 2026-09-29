@@ -6,16 +6,17 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
 import {
   SessionPullRequestStore,
   type SessionPullRequestRecord,
 } from "../../src/db/session-pull-request-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -30,12 +31,14 @@ async function seedSession(input: {
   createdAt: number;
   model?: string;
   harness?: "opencode" | "claude";
+  ownerTeamId?: string | null;
+  visibility?: "workspace" | "team" | "private";
 }): Promise<void> {
   const store = new SessionIndexStore(env.DB);
   await store.create({
     id: input.id,
-    ownerTeamId: null,
-    visibility: "workspace",
+    ownerTeamId: input.ownerTeamId ?? null,
+    visibility: input.visibility ?? "workspace",
     title: input.id,
     repoOwner: "acme",
     repoName: "web",
@@ -89,6 +92,69 @@ function makePrRecord(
 
 describe("GET /analytics/pull-requests", () => {
   beforeEach(cleanD1Tables);
+
+  it("filters every PR cohort, inventory, merge and dimension cost by session visibility", async () => {
+    const member = "33333333333333333333333333333333";
+    const now = Date.now();
+    await serviceRequestHeaders("https://test.local/analytics/pull-requests", {
+      as: { userId: member, role: "member" },
+    });
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('pr-allowed', 'pr-allowed', 'Allowed', 1, 1), ('pr-denied', 'pr-denied', 'Denied', 1, 1)"
+    ).run();
+    await new TeamMembershipStore(env.DB).add("pr-allowed", member);
+    const prs = new SessionPullRequestStore(env.DB);
+    for (const [id, ownerTeamId, visibility, cost, prNumber] of [
+      ["pr-workspace", null, "workspace", 1, 1],
+      ["pr-allowed-session", "pr-allowed", "team", 2, 2],
+      ["pr-denied-session", "pr-denied", "team", 4, 3],
+      ["pr-private-session", null, "private", 8, 4],
+    ] as const) {
+      await seedSession({
+        id,
+        spawnSource: "user",
+        totalCost: cost,
+        createdAt: now - DAY_MS,
+        ownerTeamId,
+        visibility,
+        model: "openai/gpt-5",
+      });
+      await prs.upsert(
+        makePrRecord({
+          artifactId: `artifact-${id}`,
+          sessionId: id,
+          prNumber,
+          providerCreatedAt: now - DAY_MS / 2,
+          mergedAt: prNumber === 1 || prNumber === 3 ? now - DAY_MS / 4 : null,
+          lifecycleState: prNumber === 1 || prNumber === 3 ? "merged" : "open",
+        })
+      );
+    }
+    const url = "https://test.local/analytics/pull-requests?days=7";
+    const response = await routeRequest(
+      new Request(url, {
+        headers: await serviceRequestHeaders(url, { as: { userId: member, role: "member" } }),
+      }),
+      { ...env, TEAMS_ENFORCEMENT: "on" },
+      createExecutionContext()
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json<AnalyticsPullRequestsResponse>();
+    expect(body.funnel).toEqual({ created: 2, open: 1, draft: 0, merged: 1, closed: 0 });
+    expect(body.prSessionCost).toBe(3);
+    expect(body.mergedInWindow).toBe(1);
+    expect(body.openInventory.total).toBe(1);
+    expect(body.timeseries.reduce((sum, point) => sum + point.created, 0)).toBe(2);
+    expect(body.timeseries.reduce((sum, point) => sum + point.merged, 0)).toBe(1);
+    expect(body.repos).toEqual([expect.objectContaining({ created: 2, merged: 1 })]);
+    expect(body.sources).toEqual([expect.objectContaining({ created: 2, merged: 1 })]);
+    expect(body.models).toEqual([
+      expect.objectContaining({ created: 2, merged: 1, sessionCost: 3 }),
+    ]);
+    expect(body.harnesses).toEqual([
+      expect.objectContaining({ created: 2, merged: 1, sessionCost: 3 }),
+    ]);
+  });
 
   it("reports the PR value stream scoped to PRs, never sessions", async () => {
     const prs = new SessionPullRequestStore(env.DB);
