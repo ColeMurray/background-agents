@@ -221,6 +221,15 @@ export const MODEL_CATALOG = [
         },
       },
       {
+        id: "openai/gpt-6.1-sol",
+        name: "GPT-6.1 Sol",
+        description: "Complex coding, computer use, and professional work",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+      {
         id: "openai/gpt-6-luna",
         name: "GPT-6 Luna",
         description: "Efficient model for focused, high-volume tasks",

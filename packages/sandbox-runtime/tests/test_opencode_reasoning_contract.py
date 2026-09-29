@@ -11,7 +11,9 @@ Claude Opus 5.5 added from the 2026-09-23 retrieval.
 Source SHA-256: e20acec396a73dc3db45d0eca7f0ede5bff28f09f002ba96ce7b1b566de7b6d0
 Claude Sonnet 5.5 added from the 2026-09-28 retrieval.
 Source SHA-256: 06e0071dd4ae9c9da2db1fabf28eb4994914fefdc5dd10270a5b340c88a49aec
-Subset SHA-256: e9c9cc6f90fa9afbc75a2f18bf564398594d3f51693667cf1efd229617aaab0b
+GPT-6.1 Sol added from the 2026-09-29 retrieval.
+Source SHA-256: e4677e698a53d3b8b11c569c0ecc2f5722cd8126677bf5f7dbff23daf942a17b
+Subset SHA-256: 121c3cf245d515b9862685a084ca8fdb1b9200ab672cca1658949b1dd0de6265
 Reconcile this frozen fixture with shared model/effort definitions when changing
 models or the binary. Mocks verify serialization, not live provider acceptance.
 """

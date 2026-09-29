@@ -51,16 +51,17 @@ Accounts) applies only on the Claude Agent harness; OpenCode sessions use `ANTHR
 OpenAI models support connected ChatGPT provider accounts or `OPENAI_API_KEY` mode. See
 [Using OpenAI Models](OPENAI_MODELS.md) for account setup and coexistence details.
 
-| Model ID               | Display name  | Description                                    | Reasoning efforts                   | Default effort |
-| ---------------------- | ------------- | ---------------------------------------------- | ----------------------------------- | -------------- |
-| `openai/gpt-5.4`       | GPT 5.4       | Flagship model                                 | none, low, medium, high, xhigh      | Not set        |
-| `openai/gpt-5.5`       | GPT 5.5       | Latest flagship model                          | none, low, medium, high, xhigh      | Not set        |
-| `openai/gpt-5.6-sol`   | GPT 5.6 Sol   | Frontier model for complex professional work   | none, low, medium, high, xhigh      | medium         |
-| `openai/gpt-5.6-terra` | GPT 5.6 Terra | Balanced, cost-efficient everyday work         | none, low, medium, high, xhigh      | medium         |
-| `openai/gpt-5.6-luna`  | GPT 5.6 Luna  | Fast, cost-efficient high-volume workloads     | none, low, medium, high, xhigh, max | medium         |
-| `openai/gpt-6-astra`   | GPT-6 Astra   | Most capable model for complex, demanding work | low, medium, high, xhigh, max       | medium         |
-| `openai/gpt-6-sol`     | GPT-6 Sol     | Complex coding and agentic workflows           | none, low, medium, high, xhigh, max | medium         |
-| `openai/gpt-6-luna`    | GPT-6 Luna    | Efficient model for focused, high-volume tasks | none, low, medium, high, xhigh, max | medium         |
+| Model ID               | Display name  | Description                                         | Reasoning efforts                   | Default effort |
+| ---------------------- | ------------- | --------------------------------------------------- | ----------------------------------- | -------------- |
+| `openai/gpt-5.4`       | GPT 5.4       | Flagship model                                      | none, low, medium, high, xhigh      | Not set        |
+| `openai/gpt-5.5`       | GPT 5.5       | Latest flagship model                               | none, low, medium, high, xhigh      | Not set        |
+| `openai/gpt-5.6-sol`   | GPT 5.6 Sol   | Frontier model for complex professional work        | none, low, medium, high, xhigh      | medium         |
+| `openai/gpt-5.6-terra` | GPT 5.6 Terra | Balanced, cost-efficient everyday work              | none, low, medium, high, xhigh      | medium         |
+| `openai/gpt-5.6-luna`  | GPT 5.6 Luna  | Fast, cost-efficient high-volume workloads          | none, low, medium, high, xhigh, max | medium         |
+| `openai/gpt-6-astra`   | GPT-6 Astra   | Most capable model for complex, demanding work      | low, medium, high, xhigh, max       | medium         |
+| `openai/gpt-6-sol`     | GPT-6 Sol     | Complex coding and agentic workflows                | none, low, medium, high, xhigh, max | medium         |
+| `openai/gpt-6.1-sol`   | GPT-6.1 Sol   | Complex coding, computer use, and professional work | low, medium, high, xhigh, max       | medium         |
+| `openai/gpt-6-luna`    | GPT-6 Luna    | Efficient model for focused, high-volume tasks      | none, low, medium, high, xhigh, max | medium         |
 
 ## xAI / SuperGrok
 
