@@ -20,7 +20,7 @@ import type { SessionEventStream, SessionHistoryPage } from "./event-stream";
 import type { SessionConnectionAuthenticator } from "./connection-authenticator";
 import type { SessionMessageQueue } from "./message-queue";
 import type { PresenceService } from "./presence-service";
-import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { SessionAction } from "@open-inspect/shared";
 import type { SessionWebSocket } from "../platform-ports";
 import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
 
@@ -81,8 +81,8 @@ export class SessionClientCommandFacade implements SessionClientCommands<
 
   authorize(
     client: ClientInfo,
-    permission: PermissionId
+    action: SessionAction
   ): Promise<"allowed" | "denied" | "unavailable"> {
-    return this.authenticator.authorizeClientCommand(client.userId, permission);
+    return this.authenticator.authorizeClientCommand(client.userId, action);
   }
 }

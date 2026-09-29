@@ -6,6 +6,10 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Added
 
+WebSocket subscribe and per-command session checks now follow the current session row. Private
+sessions stay restricted in every enforcement mode; team access follows the resolver when
+`TEAMS_ENFORCEMENT=on`, including lifecycle access after membership or scope changes.
+
 `TEAMS_ENFORCEMENT` controls session route access (`off`, `shadow` by default, or `on`). Private
 sessions remain restricted in every mode; with enforcement on, session deletion requires the owner,
 a team lead, or a workspace administrator.

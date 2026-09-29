@@ -2,7 +2,8 @@ import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/type
 import { clientRequestIdSchema, promptValidationError } from "@open-inspect/shared/types/prompts";
 import type { ZodError } from "zod";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
-import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { SessionAction } from "@open-inspect/shared";
+import { legacyPermissionForAction } from "../authorization/teams-enforcement";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
@@ -40,7 +41,7 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
   }) => SessionHistoryPage;
   authorize: (
     client: Client,
-    permission: PermissionId
+    action: SessionAction
   ) => Promise<"allowed" | "denied" | "unavailable">;
 }
 
@@ -142,26 +143,19 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
 
       switch (data.type) {
         case "prompt":
-          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
+          if (!(await this.authorizeCommand(connection, client, "collaborate"))) break;
           await this.deps.clientCommands.submitPrompt(connection, client, data);
           break;
         case "cancel_prompt":
-          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
+          if (!(await this.authorizeCommand(connection, client, "lifecycle"))) break;
           await this.deps.clientCommands.cancelPrompt(connection, data);
           break;
         case "stop":
-          if (!(await this.authorizeCommand(connection, client, "sessions.lifecycle"))) break;
+          if (!(await this.authorizeCommand(connection, client, "lifecycle"))) break;
           await this.deps.clientCommands.stopExecution();
           break;
         case "recover_preservation":
-          if (
-            !(await this.authorizeCommand(
-              connection,
-              client,
-              "sessions.lifecycle",
-              data.clientRequestId
-            ))
-          )
+          if (!(await this.authorizeCommand(connection, client, "lifecycle", data.clientRequestId)))
             break;
           await this.deps.clientCommands.recoverShutdown(data.action);
           if (data.clientRequestId)
@@ -172,13 +166,15 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
             });
           break;
         case "typing":
-          if (!(await this.authorizeCommand(connection, client, "sessions.collaborate"))) break;
+          if (!(await this.authorizeCommand(connection, client, "collaborate"))) break;
           await this.deps.clientCommands.notifyTyping();
           break;
         case "fetch_history":
+          if (!(await this.authorizeCommand(connection, client, "read"))) break;
           this.handleFetchHistory(connection, client, data);
           break;
         case "presence":
+          if (!(await this.authorizeCommand(connection, client, "read"))) break;
           this.deps.clientCommands.updatePresence(client, data);
           break;
         default:
@@ -207,10 +203,10 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
   private async authorizeCommand(
     connection: Connection,
     client: Client,
-    permission: PermissionId,
+    action: SessionAction,
     clientRequestId?: string
   ): Promise<boolean> {
-    const result = await this.deps.clientCommands.authorize(client, permission);
+    const result = await this.deps.clientCommands.authorize(client, action);
     if (result === "allowed") return true;
     this.deps.sockets.send(connection, {
       type: "error",
@@ -218,7 +214,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
       message:
         result === "unavailable"
           ? "Authorization is temporarily unavailable"
-          : `Permission required: ${permission}`,
+          : `Permission required: ${legacyPermissionForAction(action)}`,
       ...(clientRequestId ? { clientRequestId } : {}),
     });
     return false;

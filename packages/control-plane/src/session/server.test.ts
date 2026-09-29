@@ -470,20 +470,28 @@ describe("SessionServer", () => {
   });
 
   it.each([
-    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "sessions.collaborate"],
+    [
+      { type: "prompt", content: "work", clientRequestId: "request-1" },
+      "collaborate",
+      "sessions.collaborate",
+    ],
     [
       { type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" },
+      "lifecycle",
       "sessions.lifecycle",
     ],
-    [{ type: "stop" }, "sessions.lifecycle"],
-    [{ type: "recover_preservation", action: "restore_saved" }, "sessions.lifecycle"],
-  ] as const)("rejects %s without its command permission", async (message, permission) => {
+    [{ type: "stop" }, "lifecycle", "sessions.lifecycle"],
+    [{ type: "recover_preservation", action: "restore_saved" }, "lifecycle", "sessions.lifecycle"],
+    [{ type: "typing" }, "collaborate", "sessions.collaborate"],
+    [{ type: "fetch_history", cursor: { timestamp: 10, id: "event-1" } }, "read", "sessions.read"],
+    [{ type: "presence", status: "idle" }, "read", "sessions.read"],
+  ] as const)("rejects %s without its command action", async (message, action, permission) => {
     const { server, sockets, clientCommands, client } = createHarness();
     vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
 
     await server.onMessage("client", JSON.stringify(message));
 
-    expect(clientCommands.authorize).toHaveBeenCalledWith(client, permission);
+    expect(clientCommands.authorize).toHaveBeenCalledWith(client, action);
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "error",
       code: "PERMISSION_REQUIRED",
@@ -493,6 +501,9 @@ describe("SessionServer", () => {
     expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
     expect(clientCommands.stopExecution).not.toHaveBeenCalled();
     expect(clientCommands.recoverShutdown).not.toHaveBeenCalled();
+    expect(clientCommands.notifyTyping).not.toHaveBeenCalled();
+    expect(clientCommands.getHistoryPage).not.toHaveBeenCalled();
+    expect(clientCommands.updatePresence).not.toHaveBeenCalled();
   });
 
   it("routes fetch_history and enforces throttling with the injected clock", async () => {
