@@ -55,6 +55,18 @@ describe("GET /sessions/export with include", () => {
     });
   });
 
+  it("filters hidden bulk rows before reading included events", async () => {
+    const visible = await initSession({ title: "visible" });
+    const hidden = await initSession({ title: "hidden" });
+    await env.DB.prepare("UPDATE sessions SET visibility = 'private' WHERE id = ?")
+      .bind(hidden.sessionName)
+      .run();
+
+    const lines = await exportLines("events");
+    expect(lines).toMatchObject([{ type: "session", id: visible.sessionName, events: [] }]);
+    expect(lines.every((line) => line.id !== hidden.sessionName)).toBe(true);
+  });
+
   it("downloads only the requested session and rejects scope on the single route", async () => {
     const root = await initSession({ title: "root" });
     const child = await initSession({ title: "child" });

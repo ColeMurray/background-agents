@@ -6,6 +6,8 @@ import { SessionIndexStore, type ListSessionsOptions } from "../../src/db/sessio
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 
+type TestListOptions = Omit<ListSessionsOptions, "readScope" | "mode">;
+
 interface SeedSession {
   id: string;
   title?: string | null;
@@ -22,6 +24,7 @@ interface SeedSession {
 
 const ALICE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BOB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const internal = { kind: "internal", reason: "session discovery integration tests" } as const;
 
 async function seed(store: SessionIndexStore, session: SeedSession): Promise<void> {
   const repositories = session.repositories?.map((repository) => ({
@@ -50,20 +53,20 @@ async function seed(store: SessionIndexStore, session: SeedSession): Promise<voi
   });
 }
 
-async function listIds(store: SessionIndexStore, options: ListSessionsOptions): Promise<string[]> {
-  const result = await store.list(options);
+async function listIds(store: SessionIndexStore, options: TestListOptions): Promise<string[]> {
+  const result = await store.list({ ...options, readScope: internal, mode: "on" });
   return result.sessions.map((session) => session.id);
 }
 
 /** Walk every offset page for `options` and return the ids in page order. */
 async function listAllIds(
   store: SessionIndexStore,
-  options: Omit<ListSessionsOptions, "limit" | "offset">,
+  options: Omit<TestListOptions, "limit" | "offset">,
   limit: number
 ): Promise<string[]> {
   const ids: string[] = [];
   for (let offset = 0; ; offset += limit) {
-    const page = await store.list({ ...options, limit, offset });
+    const page = await store.list({ ...options, limit, offset, readScope: internal, mode: "on" });
     ids.push(...page.sessions.map((session) => session.id));
     if (!page.hasMore) return ids;
   }
@@ -112,6 +115,8 @@ describe("session discovery search (D1)", () => {
       excludeStatus: "archived",
       search: "login redirect",
       limit: 2,
+      readScope: internal,
+      mode: "on",
     });
     console.info(
       `[session-discovery] search over ${123} rows took ${Date.now() - startedAt}ms (page of 2)`
@@ -224,7 +229,7 @@ describe("session discovery search (D1)", () => {
       updatedAt: 2,
     });
 
-    const result = await store.list({ search: "changelog" });
+    const result = await store.list({ search: "changelog", readScope: internal, mode: "on" });
     expect(result.sessions.map(({ id, parentSessionId }) => ({ id, parentSessionId }))).toEqual([
       { id: "child", parentSessionId: "parent" },
     ]);
@@ -319,7 +324,13 @@ describe("session discovery search (D1)", () => {
       await seed(store, { id: `s${index}`, title: "walk", updatedAt: index });
     }
 
-    const first = await store.list({ search: "walk", limit: 2, offset: 0 });
+    const first = await store.list({
+      search: "walk",
+      limit: 2,
+      offset: 0,
+      readScope: internal,
+      mode: "on",
+    });
     expect(first.sessions.map((session) => session.id)).toEqual(["s6", "s5"]);
 
     // Activity on a not-yet-paged session reorders the list underneath the
@@ -330,9 +341,21 @@ describe("session discovery search (D1)", () => {
     // and the moved session leads the next first page.
     await store.updateTitle("s2", "walk again", 100);
 
-    const second = await store.list({ search: "walk", limit: 2, offset: 2 });
+    const second = await store.list({
+      search: "walk",
+      limit: 2,
+      offset: 2,
+      readScope: internal,
+      mode: "on",
+    });
     expect(second.sessions.map((session) => session.id)).toEqual(["s5", "s4"]);
-    const third = await store.list({ search: "walk", limit: 2, offset: 4 });
+    const third = await store.list({
+      search: "walk",
+      limit: 2,
+      offset: 4,
+      readScope: internal,
+      mode: "on",
+    });
     expect(third.sessions.map((session) => session.id)).toEqual(["s3", "s1"]);
     expect(third.hasMore).toBe(false);
 
@@ -340,7 +363,13 @@ describe("session discovery search (D1)", () => {
     expect(new Set(walked)).toEqual(new Set(["s6", "s5", "s4", "s3", "s1"]));
     expect(walked.filter((id) => id === "s5")).toHaveLength(2);
 
-    const refreshed = await store.list({ search: "walk", limit: 2, offset: 0 });
+    const refreshed = await store.list({
+      search: "walk",
+      limit: 2,
+      offset: 0,
+      readScope: internal,
+      mode: "on",
+    });
     expect(refreshed.sessions.map((session) => session.id)).toEqual(["s2", "s6"]);
   });
 
@@ -369,17 +398,17 @@ describe("session discovery search (D1)", () => {
     ).run();
     const store = new SessionIndexStore(env.DB);
 
-    const median = async (options: ListSessionsOptions, runs = 5): Promise<number> => {
+    const median = async (options: TestListOptions, runs = 5): Promise<number> => {
       const durations: number[] = [];
       for (let run = 0; run < runs; run += 1) {
         const started = performance.now();
-        await store.list({ ...options, viewerUserId: ALICE });
+        await store.list({ ...options, viewerUserId: ALICE, readScope: internal, mode: "on" });
         durations.push(performance.now() - started);
       }
       durations.sort((a, b) => a - b);
       return Math.round(durations[Math.floor(runs / 2)]);
     };
-    const cases: Array<[string, ListSessionsOptions, number]> = [
+    const cases: Array<[string, TestListOptions, number]> = [
       ["default page", { excludeStatus: "archived" }, 50],
       [
         "repository via scalar primary (500 matches)",
@@ -400,7 +429,12 @@ describe("session discovery search (D1)", () => {
       ["search with one match", { excludeStatus: "archived", search: "work 4999" }, 1],
     ];
     for (const [label, options, expectedRows] of cases) {
-      const result = await store.list({ ...options, viewerUserId: ALICE });
+      const result = await store.list({
+        ...options,
+        viewerUserId: ALICE,
+        readScope: internal,
+        mode: "on",
+      });
       expect(result.sessions, label).toHaveLength(expectedRows);
       console.info(`[session-discovery] ${total} sessions, ${label}: ${await median(options)} ms`);
     }
@@ -421,13 +455,13 @@ describe("session discovery search (D1)", () => {
     await seed(store, { id: "plan-target", title: "plan me", updatedAt: 1 });
 
     const explain = async (
-      options: ListSessionsOptions,
+      options: TestListOptions,
       bindings: unknown[],
       label: string,
       { sortsCandidates = false }: { sortsCandidates?: boolean } = {}
     ): Promise<string> => {
       preparedQueries.length = 0;
-      await store.list(options);
+      await store.list({ ...options, readScope: internal, mode: "on" });
       const pageQuery = preparedQueries.find((query) => query.includes("WITH paged_sessions AS"));
       expect(pageQuery).toBeDefined();
       expect(pageQuery).not.toContain("plan'");

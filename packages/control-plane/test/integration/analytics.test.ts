@@ -12,6 +12,7 @@ import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionRunStore } from "../../src/db/session-run-store";
+import { AnalyticsStore } from "../../src/db/analytics-store";
 import { cleanD1Tables } from "./cleanup";
 import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
 
@@ -104,7 +105,60 @@ async function seedUser(
 describe("Analytics API", () => {
   beforeEach(cleanD1Tables);
 
-  it("limits every dashboard population to visible non-private sessions while reconciling all private cost", async () => {
+  it("limits private cost to privileged viewers and the requested spawn-source window", async () => {
+    const now = Date.now() - 60_000;
+    const store = new SessionIndexStore(env.DB);
+    for (const [id, source, cost, createdAt] of [
+      ["private-human", "user", 2, now],
+      ["private-agent", "agent", 5, now],
+      ["private-old", "user", 11, now - 45 * 24 * 60 * 60 * 1000],
+      ["public-human", "user", 3, now],
+    ] as const) {
+      await seedSession(store, {
+        id,
+        repoOwner: "acme",
+        repoName: "app",
+        scmLogin: "alice",
+        visibility: id.startsWith("private") ? "private" : "workspace",
+        spawnSource: source,
+        status: "completed",
+        createdAt,
+        updatedAt: createdAt,
+        totalCost: cost,
+        activeDurationMs: 0,
+        messageCount: 0,
+        prCount: 0,
+      });
+    }
+    const owner = { as: { userId: "44444444444444444444444444444444", role: "owner" as const } };
+    const human = await (
+      await serviceFetch("https://test.local/analytics/summary?scope=human", owner)
+    ).json<AnalyticsSummaryResponse>();
+    expect(human).toMatchObject({ totalSessions: 1, totalCost: 3, privateSessionsCostUsd: 2 });
+    const agent = await (
+      await serviceFetch("https://test.local/analytics/summary?scope=agent", owner)
+    ).json<AnalyticsSummaryResponse>();
+    expect(agent).toMatchObject({ totalSessions: 0, totalCost: 0, privateSessionsCostUsd: 5 });
+    const dashboard = await (
+      await serviceFetch("https://test.local/analytics/dashboard?scope=all", owner)
+    ).json<AnalyticsDashboardResponse>();
+    expect(dashboard.summary).toMatchObject({ totalCost: 3, privateSessionsCostUsd: 7 });
+    const member = await (
+      await serviceFetch("https://test.local/analytics/summary?scope=all", {
+        as: { userId: "55555555555555555555555555555555", role: "member" },
+      })
+    ).json<AnalyticsSummaryResponse>();
+    expect(member).toMatchObject({ totalCost: 3, privateSessionsCostUsd: null });
+    expect(
+      await new AnalyticsStore(
+        env.DB,
+        { kind: "internal", reason: "verify raw totals" },
+        "on"
+      ).getSummary({ startAt: now - 1000, endAt: now + 1000, scope: "all" })
+    ).toMatchObject({ totalSessions: 3, totalCost: 10, privateSessionsCostUsd: null });
+  });
+
+  it("limits every dashboard population to visible non-private sessions without exposing private cost to members", async () => {
     const member = "22222222222222222222222222222222";
     const now = Date.now() - 60_000;
     await serviceRequestHeaders("https://test.local/analytics/dashboard", {
@@ -166,7 +220,7 @@ describe("Analytics API", () => {
       totalSessions: 2,
       totalCost: 3,
       inputTokens: 3,
-      privateSessionsCostUsd: 24,
+      privateSessionsCostUsd: null,
     });
     expect(
       dashboard.timeseries.series
@@ -182,7 +236,9 @@ describe("Analytics API", () => {
       expect.objectContaining({ rootSessionId: "visible-root", sessionCount: 2, totalCost: 3 }),
     ]);
     expect(
-      await new SessionRunStore(env.DB, { kind: "service", teamId: null }).get("owner-private")
+      await new SessionRunStore(env.DB, { kind: "service", teamId: null }, "on").get(
+        "owner-private"
+      )
     ).toBeNull();
     expect(
       (await (await fetchAnalytics("runs", "on")).json<{ runs: { totalCost: number }[] }>()).runs[0]
@@ -190,10 +246,10 @@ describe("Analytics API", () => {
     ).toBe(3);
     expect(
       await (await fetchAnalytics("summary?scope=human", "on")).json<AnalyticsSummaryResponse>()
-    ).toMatchObject({ totalSessions: 2, totalCost: 3, privateSessionsCostUsd: 24 });
+    ).toMatchObject({ totalSessions: 2, totalCost: 3, privateSessionsCostUsd: null });
     expect(
       await (await fetchAnalytics("summary?scope=all", "off")).json<AnalyticsSummaryResponse>()
-    ).toMatchObject({ totalSessions: 3, totalCost: 7, privateSessionsCostUsd: 24 });
+    ).toMatchObject({ totalSessions: 3, totalCost: 7, privateSessionsCostUsd: null });
   });
 
   it("sums token totals across sessions and provider merges without excluding zero-token history", async () => {

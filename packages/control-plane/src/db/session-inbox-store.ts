@@ -5,8 +5,7 @@ import {
   type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { SessionViewer } from "@open-inspect/shared";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
@@ -20,8 +19,8 @@ export interface ListSessionInboxOptions {
   createdByUserIds?: readonly string[];
   excludeAutomatedSessions?: boolean;
   teamIds?: readonly string[];
-  viewer: SessionViewer;
-  mode?: TeamsEnforcementMode;
+  readScope: SessionReadScope;
+  mode: TeamsEnforcementMode;
   viewerUserId: string;
   limit: number;
   cursor: SessionInboxCursor | null;
@@ -206,7 +205,7 @@ export class SessionInboxStore {
       | "createdByUserIds"
       | "excludeAutomatedSessions"
       | "teamIds"
-      | "viewer"
+      | "readScope"
       | "mode"
       | "viewerUserId"
     >
@@ -267,7 +266,7 @@ export class SessionInboxStore {
   private eligibility(
     options: Pick<
       ListSessionInboxOptions,
-      "createdByUserIds" | "excludeAutomatedSessions" | "teamIds" | "viewer" | "mode"
+      "createdByUserIds" | "excludeAutomatedSessions" | "teamIds" | "readScope" | "mode"
     >
   ): { conditions: string[]; params: unknown[] } {
     const conditions = ["sessions.status != 'archived'", "sessions.root_session_id IS NOT NULL"];
@@ -285,9 +284,13 @@ export class SessionInboxStore {
       conditions.push(`sessions.owner_team_id IN (${options.teamIds.map(() => "?").join(", ")})`);
       params.push(...options.teamIds);
     }
-    const visibility = visibleSessionsPredicate("sessions", options.viewer, { mode: options.mode });
-    conditions.push(visibility.sql);
-    params.push(...visibility.params);
+    if (options.readScope.kind !== "internal") {
+      const visibility = visibleSessionsPredicate("sessions", options.readScope, {
+        mode: options.mode,
+      });
+      conditions.push(visibility.sql);
+      params.push(...visibility.params);
+    }
     return { conditions, params };
   }
 

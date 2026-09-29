@@ -1,13 +1,16 @@
 import type { SessionViewer } from "@open-inspect/shared";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 
+export type SessionReadScope = SessionViewer | { kind: "internal"; reason: string };
+
 /** A SQL visibility check on a persisted session row, before pagination or aggregation. */
 export function visibleSessionsPredicate(
   alias: string,
   viewer: SessionViewer,
-  options: { mode?: TeamsEnforcementMode; excludePrivate?: boolean } = {}
+  options: { mode: TeamsEnforcementMode; excludePrivate?: boolean }
 ): { sql: string; params: unknown[] } {
   if (viewer.kind === "service") {
+    if (options.mode !== "on") return { sql: `${alias}.visibility != 'private'`, params: [] };
     return viewer.teamId === null
       ? { sql: `${alias}.visibility != 'private'`, params: [] }
       : {
@@ -16,7 +19,7 @@ export function visibleSessionsPredicate(
         };
   }
 
-  const teamsEnforced = (options.mode ?? "on") === "on";
+  const teamsEnforced = options.mode === "on";
   const teamSql = teamsEnforced
     ? `(${alias}.visibility = 'team' AND (? = 1 OR EXISTS (
          SELECT 1 FROM team_memberships tm

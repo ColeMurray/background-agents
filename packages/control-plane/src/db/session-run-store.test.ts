@@ -18,7 +18,11 @@ describe("SessionRunStore row validation", () => {
 
   it("rejects malformed list rows rather than returning unchecked data", async () => {
     await expect(
-      new SessionRunStore(database).list({
+      new SessionRunStore(
+        database,
+        { kind: "internal", reason: "validate persisted rows" },
+        "on"
+      ).list({
         startAt: 0,
         endAt: 1,
         limit: 1,
@@ -29,9 +33,13 @@ describe("SessionRunStore row validation", () => {
   });
 
   it("rejects malformed single-run rows", async () => {
-    await expect(new SessionRunStore(database).get("root")).rejects.toThrow(
-      "Invalid session run row"
-    );
+    await expect(
+      new SessionRunStore(
+        database,
+        { kind: "internal", reason: "validate persisted rows" },
+        "on"
+      ).get("root")
+    ).rejects.toThrow("Invalid session run row");
   });
 });
 
@@ -45,13 +53,17 @@ it("prepares root-windowed scoped runs and decodes a nullable title", () => {
       return statement;
     },
   };
-  const store = new SessionRunStore({
-    prepare: (sql) => {
-      query = sql;
-      return statement;
+  const store = new SessionRunStore(
+    {
+      prepare: (sql) => {
+        query = sql;
+        return statement;
+      },
+      batch: async () => [],
     },
-    batch: async () => [],
-  });
+    { kind: "internal", reason: "verify unfiltered run rollup" },
+    "on"
+  );
   store.prepareList({ startAt: 10, endAt: 20, limit: 2, orderBy: "cost", scope: "human" });
   expect(query).toContain("root.created_at >= ? AND root.created_at < ?");
   expect(query).toContain("root.spawn_source IN (?, ?, ?, ?)");

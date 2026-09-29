@@ -6,6 +6,8 @@ import { SessionPullRequestStore } from "../../src/db/session-pull-request-store
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { cleanD1Tables } from "./cleanup";
 
+const internal = { kind: "internal", reason: "session index integration tests" } as const;
+
 describe("D1 SessionIndexStore", () => {
   beforeEach(cleanD1Tables);
 
@@ -323,7 +325,7 @@ describe("D1 SessionIndexStore", () => {
       });
     }
 
-    const { sessions } = await store.list();
+    const { sessions } = await store.list({ readScope: internal, mode: "on" });
 
     expect(sessions.map((session) => session.id)).toEqual([
       "summary-session-new",
@@ -373,11 +375,11 @@ describe("D1 SessionIndexStore", () => {
       updatedAt: now - 1000,
     });
 
-    const activeResult = await store.list({ status: "active" });
+    const activeResult = await store.list({ status: "active", readScope: internal, mode: "on" });
     expect(activeResult.sessions.length).toBe(1);
     expect(activeResult.sessions[0].id).toBe("session-active-1");
 
-    const allResult = await store.list({});
+    const allResult = await store.list({ readScope: internal, mode: "on" });
     expect(allResult.sessions.length).toBe(2);
   });
 
@@ -403,7 +405,7 @@ describe("D1 SessionIndexStore", () => {
     const session = await store.get("session-with-effort");
     expect(session!.reasoningEffort).toBe("high");
 
-    const result = await store.list({});
+    const result = await store.list({ readScope: internal, mode: "on" });
     const listed = result.sessions.find((s) => s.id === "session-with-effort");
     expect(listed!.reasoningEffort).toBe("high");
   });
@@ -740,7 +742,7 @@ describe("D1 SessionIndexStore", () => {
     });
 
     it("listByParent returns children newest-first", async () => {
-      const children = await store.listByParent(parentId, { kind: "service", teamId: null });
+      const children = await store.listByParent(parentId, internal, "on");
       expect(children).toHaveLength(2);
       expect(children[0].id).toBe(childId2); // newer
       expect(children[1].id).toBe(childId1); // older
@@ -769,7 +771,7 @@ describe("D1 SessionIndexStore", () => {
         updatedAt: now,
       });
 
-      const children = await store.listByParent(parentId, { kind: "service", teamId: null });
+      const children = await store.listByParent(parentId, internal, "on");
 
       expect(children.find((child) => child.id === childId1)?.pullRequestSummary).toEqual({
         total: 1,
@@ -782,10 +784,7 @@ describe("D1 SessionIndexStore", () => {
     });
 
     it("listByParent returns empty array when no children exist", async () => {
-      const children = await store.listByParent("nonexistent-parent", {
-        kind: "service",
-        teamId: null,
-      });
+      const children = await store.listByParent("nonexistent-parent", internal, "on");
       expect(children).toEqual([]);
     });
 
@@ -993,6 +992,8 @@ describe("D1 SessionIndexStore", () => {
     const result = await store.list({
       createdByUserIds: ["user-1"],
       excludeAutomationLineage: true,
+      readScope: internal,
+      mode: "on",
     });
 
     expect(result.sessions.map((session) => session.id)).toEqual(["manual-session"]);
@@ -1031,10 +1032,16 @@ describe("D1 SessionIndexStore", () => {
     const filtered = await store.list({
       createdByUserIds: ["user-1"],
       excludeAutomationLineage: true,
+      readScope: internal,
+      mode: "on",
     });
     expect(filtered.sessions.map((session) => session.id)).toEqual(["manual-session"]);
 
-    const unfiltered = await store.list({ createdByUserIds: ["user-1"] });
+    const unfiltered = await store.list({
+      createdByUserIds: ["user-1"],
+      readScope: internal,
+      mode: "on",
+    });
     expect(unfiltered.sessions.map((session) => session.id)).toEqual([
       "auto-review",
       "manual-session",

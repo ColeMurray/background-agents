@@ -447,7 +447,7 @@ describe("GET /sessions/export", () => {
       cursor: null,
       limit: 100,
       mode: "on",
-      viewer: expect.objectContaining({
+      readScope: expect.objectContaining({
         kind: "user",
         userId: "user-1",
         memberships: new Map([["team-1", "member"]]),
@@ -502,7 +502,11 @@ describe("GET /sessions/export", () => {
       cursor: null,
       limit: 100,
       mode: "shadow",
-      viewer: expect.objectContaining({ kind: "user", userId: "user-1", memberships: new Map() }),
+      readScope: expect.objectContaining({
+        kind: "user",
+        userId: "user-1",
+        memberships: new Map(),
+      }),
     });
   });
 
@@ -530,7 +534,7 @@ describe("GET /sessions/export", () => {
       cursor: { createdAt: 1_000, id: "session-1", snapshotMaxRowId: 42 },
       limit: 100,
       mode: "shadow",
-      viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
+      readScope: expect.objectContaining({ kind: "user", userId: "user-1" }),
     });
   });
 
@@ -555,8 +559,32 @@ describe("GET /sessions/export", () => {
       cursor: null,
       limit: MAX_INCLUDED_EXPORT_LIMIT,
       mode: "shadow",
-      viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
+      readScope: expect.objectContaining({ kind: "user", userId: "user-1" }),
     });
+  });
+
+  it("does not fetch a hidden bulk row's trace with include=events", async () => {
+    const hidden = { ...sampleRow, id: "hidden", createdAt: 2_000 };
+    mocks.list.mockImplementation(async (options: ListSessionsForExportOptions) => {
+      expect(options.readScope).toMatchObject({ kind: "user", userId: "user-1" });
+      const rows = [hidden, sampleRow].filter((row) => row.id !== hidden.id);
+      return { sessions: rows, hasMore: false, nextCursor: null };
+    });
+    mocks.runtimeFetch.mockResolvedValue(traceResponse({ events: [] }));
+
+    const lines = await readLines(await callExport({ include: "events" }));
+
+    expect(lines).toMatchObject([{ type: "session", id: "session-1", events: [] }]);
+    expect(mocks.runtimeFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.runtimeFetch).toHaveBeenCalledWith(
+      "session-1",
+      "/internal/trace-export",
+      expect.anything(),
+      "?include=events"
+    );
+    expect(mocks.runtimeFetch.mock.calls.some(([sessionId]) => sessionId === hidden.id)).toBe(
+      false
+    );
   });
 
   it("inlines the prompt, tool activity, step tokens and outcome on one session line", async () => {
@@ -628,7 +656,7 @@ describe("GET /sessions/export", () => {
       createdBefore: 950,
       limit: MAX_INCLUDED_EXPORT_LIMIT,
       mode: "shadow",
-      viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
+      readScope: expect.objectContaining({ kind: "user", userId: "user-1" }),
     });
     expect(mocks.runtimeFetch.mock.calls[0][3]).toBe("?include=events&format=compact");
   });

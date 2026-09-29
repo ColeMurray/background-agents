@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildSessionListPredicates } from "./session-list-predicates";
 
 const collapse = (sql: string) => sql.replace(/\s+/g, " ").trim();
+const internal = {
+  readScope: { kind: "internal", reason: "test filter SQL" },
+  mode: "on",
+} as const;
 
 describe("buildSessionListPredicates", () => {
   it("combines participation, workspace, and row visibility before pagination", () => {
@@ -10,7 +14,7 @@ describe("buildSessionListPredicates", () => {
       scope: "workspace",
       teamIds: ["team-a"],
       visibility: "team",
-      viewer: {
+      readScope: {
         kind: "user",
         userId: "user-a",
         roleKey: "member",
@@ -28,12 +32,13 @@ describe("buildSessionListPredicates", () => {
     expect(result.params).toContain("user-a");
   });
 
-  it("returns no clause for an unfiltered list", () => {
-    expect(buildSessionListPredicates({})).toEqual({ where: "", params: [] });
+  it("requires an explicit internal scope for an unfiltered list", () => {
+    expect(buildSessionListPredicates(internal)).toEqual({ where: "", params: [] });
   });
 
   it("binds each filter in clause order", () => {
     const { where, params } = buildSessionListPredicates({
+      ...internal,
       status: "active",
       excludeStatus: "archived",
       excludeAutomationLineage: true,
@@ -49,6 +54,7 @@ describe("buildSessionListPredicates", () => {
 
   it("matches a repository by normalized identity through the scalar primary or any member row", () => {
     const { where, params } = buildSessionListPredicates({
+      ...internal,
       repository: { repoOwner: " Acme ", repoName: "Web-App" },
     });
     expect(collapse(where)).toBe(
@@ -59,7 +65,7 @@ describe("buildSessionListPredicates", () => {
   });
 
   it("binds escaped LIKE patterns for title, id prefix, and repository labels", () => {
-    const { where, params } = buildSessionListPredicates({ search: "50%_off\\" });
+    const { where, params } = buildSessionListPredicates({ ...internal, search: "50%_off\\" });
     expect(where).not.toContain("50%");
     expect(collapse(where)).toBe(
       "WHERE (title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' OR (repo_owner || '/' || repo_name) LIKE ? ESCAPE '\\' OR EXISTS ( SELECT 1 FROM session_repositories sr WHERE sr.session_id = sessions.id AND (sr.repo_owner || '/' || sr.repo_name) LIKE ? ESCAPE '\\' ))"

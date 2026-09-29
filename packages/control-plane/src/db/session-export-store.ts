@@ -1,6 +1,5 @@
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
-import type { SessionViewer } from "@open-inspect/shared";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import {
   type ExportPullRequest,
@@ -15,7 +14,7 @@ import { decodeSessionPullRequest } from "./session-pull-request-store";
 import { sessionRowSchema, toSessionFields, type SessionRow } from "./session-row";
 import type { RunsExportCursor, SessionExportCursor } from "./session-export-cursor";
 import type { SqlDatabase } from "./sql-database";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 
 export const DEFAULT_EXPORT_LIMIT = 100;
 
@@ -88,7 +87,7 @@ function toExportRow(
 
 /** Shared filters for either export ordering. */
 interface ExportFilters {
-  viewer: SessionViewer;
+  readScope: SessionReadScope;
   mode: TeamsEnforcementMode;
   /** Page size; the store reads one extra row to answer hasMore. */
   limit: number;
@@ -148,9 +147,15 @@ export class SessionExportStore {
   private async listSessions(
     options: ExportFilters & { scope?: "sessions"; cursor: SessionExportCursor | null }
   ): Promise<SessionsPage> {
-    const visibility = visibleSessionsPredicate("sessions", options.viewer, { mode: options.mode });
-    const conditions: string[] = [`(${visibility.sql})`];
-    const bindings: unknown[] = [...visibility.params];
+    const conditions: string[] = [];
+    const bindings: unknown[] = [];
+    if (options.readScope.kind !== "internal") {
+      const visibility = visibleSessionsPredicate("sessions", options.readScope, {
+        mode: options.mode,
+      });
+      conditions.push(`(${visibility.sql})`);
+      bindings.push(...visibility.params);
+    }
     const firstPage = options.cursor === null;
     if (options.cursor) {
       const cursor = options.cursor;
@@ -200,10 +205,18 @@ export class SessionExportStore {
       cursor: RunsExportCursor | null;
     }
   ): Promise<RunsPage> {
-    const rootVisibility = visibleSessionsPredicate("root", options.viewer, { mode: options.mode });
-    const memberVisibility = visibleSessionsPredicate("s", options.viewer, { mode: options.mode });
-    const conditions: string[] = [`(${rootVisibility.sql})`, `(${memberVisibility.sql})`];
-    const bindings: unknown[] = [...rootVisibility.params, ...memberVisibility.params];
+    const conditions: string[] = [];
+    const bindings: unknown[] = [];
+    if (options.readScope.kind !== "internal") {
+      const rootVisibility = visibleSessionsPredicate("root", options.readScope, {
+        mode: options.mode,
+      });
+      const memberVisibility = visibleSessionsPredicate("s", options.readScope, {
+        mode: options.mode,
+      });
+      conditions.push(`(${rootVisibility.sql})`, `(${memberVisibility.sql})`);
+      bindings.push(...rootVisibility.params, ...memberVisibility.params);
+    }
     const firstPage = options.cursor === null;
     if (options.cursor) {
       const cursor = options.cursor;

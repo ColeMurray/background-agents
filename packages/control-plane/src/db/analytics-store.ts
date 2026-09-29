@@ -12,7 +12,6 @@ import {
   getCacheHitRatio,
 } from "@open-inspect/shared/types/analytics";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
-import type { SessionViewer } from "@open-inspect/shared";
 import {
   getModelDisplayName,
   normalizeModelId,
@@ -22,7 +21,7 @@ import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses"
 import { SUBSCRIPTION_PROVIDER_DISPLAY_METADATA } from "@open-inspect/shared/types/provider-accounts";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { z } from "zod";
 
@@ -63,7 +62,7 @@ const summaryRowSchema = tokenRowSchema.extend({
   total_sessions: z.number(),
   active_users: z.number(),
   total_cost: z.number(),
-  private_sessions_cost: z.number(),
+  private_sessions_cost: z.number().nullable(),
   total_prs: z.number(),
   created_count: z.number(),
   active_count: z.number(),
@@ -157,12 +156,14 @@ export function mergeBreakdownEntries(
 export class AnalyticsStore {
   constructor(
     private readonly db: SqlDatabase,
-    private readonly viewer: SessionViewer = { kind: "service", teamId: null },
-    private readonly mode: TeamsEnforcementMode = "on"
+    private readonly readScope: SessionReadScope,
+    private readonly mode: TeamsEnforcementMode
   ) {}
 
   private visible(alias: string) {
-    return visibleSessionsPredicate(alias, this.viewer, { mode: this.mode, excludePrivate: true });
+    return this.readScope.kind === "internal"
+      ? { sql: "", params: [] }
+      : visibleSessionsPredicate(alias, this.readScope, { mode: this.mode, excludePrivate: true });
   }
 
   async getSummary(filters: AnalyticsFilters): Promise<AnalyticsSummaryResponse> {
@@ -173,6 +174,10 @@ export class AnalyticsStore {
   prepareSummary(filters: AnalyticsFilters): SqlStatement {
     const { sql, binds } = scopePredicate(filters.scope, "s.spawn_source");
     const visible = this.visible("s");
+    const privileged =
+      this.readScope.kind === "user" &&
+      (this.readScope.roleKey === "owner" || this.readScope.roleKey === "administrator");
+    const privateScope = scopePredicate(filters.scope, "private.spawn_source");
 
     return this.db
       .prepare(
@@ -184,8 +189,13 @@ export class AnalyticsStore {
            -- count. Resolves once the Phase 6 backfill populates user_id on historical rows.
            COUNT(DISTINCT COALESCE(s.user_id, NULLIF(s.scm_login, ''))) AS active_users,
            COALESCE(SUM(s.total_cost), 0) AS total_cost,
-           (SELECT COALESCE(SUM(private.total_cost), 0) FROM sessions private
-            WHERE private.visibility = 'private' AND private.created_at >= ? AND private.created_at < ?) AS private_sessions_cost,
+            ${
+              privileged
+                ? `(SELECT COALESCE(SUM(private.total_cost), 0) FROM sessions private
+             WHERE private.visibility = 'private' AND private.created_at >= ? AND private.created_at < ?
+             ${privateScope.sql})`
+                : "NULL"
+            } AS private_sessions_cost,
            COALESCE(SUM(pr_count), 0) AS total_prs,
            COALESCE(SUM(input_tokens), 0) AS input_tokens,
            COALESCE(SUM(output_tokens), 0) AS output_tokens,
@@ -200,11 +210,10 @@ export class AnalyticsStore {
            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count
           FROM sessions s
           WHERE s.created_at >= ? AND s.created_at < ?
-             ${sql} AND ${visible.sql}`
+              ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}`
       )
       .bind(
-        filters.startAt,
-        filters.endAt,
+        ...(privileged ? [filters.startAt, filters.endAt, ...privateScope.binds] : []),
         filters.startAt,
         filters.endAt,
         ...binds,
@@ -223,7 +232,11 @@ export class AnalyticsStore {
       totalSessions,
       activeUsers: row?.active_users ?? 0,
       totalCost,
-      privateSessionsCostUsd: row?.private_sessions_cost ?? 0,
+      privateSessionsCostUsd:
+        this.readScope.kind === "user" &&
+        (this.readScope.roleKey === "owner" || this.readScope.roleKey === "administrator")
+          ? (row?.private_sessions_cost ?? 0)
+          : null,
       avgCost: totalSessions > 0 ? totalCost / totalSessions : 0,
       totalPrs: row?.total_prs ?? 0,
       ...tokens,
@@ -257,7 +270,7 @@ export class AnalyticsStore {
          FROM sessions s
          LEFT JOIN users u ON s.user_id = u.id
          WHERE s.created_at >= ? AND s.created_at < ?
-             ${sql} AND ${visible.sql}
+              ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
          GROUP BY day_index, COALESCE(s.user_id, '__unlinked__' || COALESCE(s.scm_login, '__none__'))
          ORDER BY day_index ASC, group_key ASC`
       )
@@ -308,7 +321,7 @@ export class AnalyticsStore {
        FROM sessions s
        JOIN session_model_provider_auth a ON a.session_id = s.id AND a.auth_mode = 'provider_account'
        WHERE s.created_at >= ? AND s.created_at < ?
-          ${sql} AND ${visible.sql}
+           ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
        GROUP BY s.model, a.provider`
       )
       .bind(filters.startAt, filters.endAt, ...binds, ...visible.params);
@@ -370,7 +383,7 @@ export class AnalyticsStore {
          FROM sessions s
          ${joinClause}
          WHERE s.created_at >= ? AND s.created_at < ?
-             ${sql} AND ${visible.sql}
+              ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}
             ${by === "automation" ? "AND s.automation_id IS NOT NULL" : ""}
          GROUP BY key
          ORDER BY sessions DESC, ${orderTail}`

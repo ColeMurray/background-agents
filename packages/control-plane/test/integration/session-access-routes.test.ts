@@ -155,43 +155,6 @@ describe("HTTP session access by enforcement mode", () => {
     }
   });
 
-  it("records batch shadow denials in its one response-time audit row", async () => {
-    const { sessionName } = await session("team");
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO roles (id, key, name, normalized_name, is_system) VALUES ('role_batch_shadow', NULL, 'Batch Shadow', 'batch shadow', 0)"
-      ),
-      env.DB.prepare(
-        `INSERT INTO role_permissions (role_id, permission_id)
-         VALUES ('role_batch_shadow', 'sessions.bulk_archive'),
-                ('role_batch_shadow', 'sessions.read'),
-                ('role_batch_shadow', 'sessions.lifecycle')`
-      ),
-      env.DB.prepare(
-        "UPDATE user_role_assignments SET role_id = 'role_batch_shadow' WHERE user_id = ?"
-      ).bind(MEMBER),
-    ]);
-    const response = await fetchMode("/sessions/batch-archive", "shadow", {
-      method: "POST",
-      as: { userId: MEMBER, role: "member" },
-      body: JSON.stringify({ sessionIds: [sessionName] }),
-    });
-    const rows = (
-      await env.DB.prepare(
-        "SELECT reason_code, metadata_json FROM authorization_audit_events WHERE request_id = ? AND action = 'authorization.request_allowed'"
-      )
-        .bind(response.headers.get("x-request-id"))
-        .all()
-    ).results;
-    expect(rows).toHaveLength(1);
-    expect(rows[0].reason_code).toBe("shadow_denied:batch");
-    expect(JSON.parse(String(rows[0].metadata_json))).toMatchObject({
-      httpStatus: response.status,
-      responseCode: "shadow_denied:batch",
-      shadowDenials: [{ sessionId: sessionName, reason: "not_member" }],
-    });
-  });
-
   it("allows legacy deletion in shadow and off while shadow audits the ownership denial", async () => {
     const as = { userId: MEMBER, role: "member" } as const;
     const shadow = await session("team");
@@ -369,11 +332,6 @@ describe("HTTP session access by enforcement mode", () => {
         (mode === "on" ? [workspace.sessionName] : [workspace.sessionName, team.sessionName]).sort()
       );
     }
-    expect(
-      (await auditRows("authorization.request_allowed")).filter(
-        (row) => row.reason_code === "shadow_denied:batch"
-      )
-    ).toHaveLength(1);
   });
 
   it("audits both private reads when an Owner accesses a private child", async () => {

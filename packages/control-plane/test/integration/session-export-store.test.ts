@@ -47,13 +47,18 @@ describe("SessionExportStore integration", () => {
     await setVisibility("hidden", "private");
     const store = new SessionExportStore(sqlDatabase(env.DB));
 
-    const first = await store.list({ cursor: null, limit: 1, viewer: serviceViewer, mode: "on" });
+    const first = await store.list({
+      cursor: null,
+      limit: 1,
+      readScope: serviceViewer,
+      mode: "on",
+    });
     expect(first.sessions.map(({ id }) => id)).toEqual(["visible-new"]);
     expect(first.hasMore).toBe(true);
     const second = await store.list({
       cursor: first.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(second.sessions.map(({ id }) => id)).toEqual(["visible-old"]);
@@ -74,7 +79,7 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(first.sessions.map(({ id }) => id)).toEqual(["public-root"]);
@@ -82,11 +87,55 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: first.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(second.sessions.map(({ id }) => id)).toEqual(["public-child"]);
     expect(second.nextCursor).toBeNull();
+  });
+
+  it("omits visibility predicates for explicitly internal session and run exports", async () => {
+    await insertSession("private-root", 200);
+    await setVisibility("private-root", "private");
+    await insertDescendant("private-child", "private-root", "private-root", 210, 1);
+    await setVisibility("private-child", "private");
+    await insertSession("workspace", 100);
+
+    const raw = sqlDatabase(env.DB);
+    const pageQueries: string[] = [];
+    const db: SqlDatabase = {
+      prepare(sql) {
+        if (sql.startsWith("SELECT sessions.*") || sql.startsWith("SELECT s.*")) {
+          pageQueries.push(sql);
+        }
+        return raw.prepare(sql);
+      },
+      batch(statements) {
+        return raw.batch(statements);
+      },
+    };
+    const store = new SessionExportStore(db);
+    const options = {
+      readScope: { kind: "internal" as const, reason: "data export" },
+      mode: "on" as const,
+      cursor: null,
+      limit: 10,
+    };
+    expect((await store.list(options)).sessions.map(({ id }) => id)).toEqual([
+      "private-child",
+      "private-root",
+      "workspace",
+    ]);
+    expect((await store.list({ ...options, scope: "runs" })).sessions.map(({ id }) => id)).toEqual([
+      "private-root",
+      "private-child",
+      "workspace",
+    ]);
+    expect(pageQueries).toHaveLength(2);
+    for (const sql of pageQueries) {
+      expect(sql).not.toMatch(/\b(?:sessions|root|s)\.visibility\b/);
+      expect(sql).not.toContain("team_memberships");
+    }
   });
 
   it("honors enforcement mode for users but never exposes private rows to services", async () => {
@@ -112,16 +161,16 @@ describe("SessionExportStore integration", () => {
     };
     const store = new SessionExportStore(sqlDatabase(env.DB));
 
-    const on = await store.list({ cursor: null, limit: 10, viewer, mode: "on" });
+    const on = await store.list({ cursor: null, limit: 10, readScope: viewer, mode: "on" });
     expect(on.sessions.map(({ id }) => id)).toEqual(["workspace"]);
-    const shadow = await store.list({ cursor: null, limit: 10, viewer, mode: "shadow" });
+    const shadow = await store.list({ cursor: null, limit: 10, readScope: viewer, mode: "shadow" });
     expect(shadow.sessions.map(({ id }) => id)).toEqual(["team", "workspace"]);
-    const off = await store.list({ cursor: null, limit: 10, viewer, mode: "off" });
+    const off = await store.list({ cursor: null, limit: 10, readScope: viewer, mode: "off" });
     expect(off.sessions.map(({ id }) => id)).toEqual(["team", "workspace"]);
     const service = await store.list({
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "off",
     });
     expect(service.sessions.map(({ id }) => id)).toEqual(["team", "workspace"]);
@@ -147,7 +196,12 @@ describe("SessionExportStore integration", () => {
     await insertSession("session-newest", 300);
     const store = new SessionExportStore(sqlDatabase(env.DB));
 
-    const first = await store.list({ cursor: null, limit: 2, viewer: serviceViewer, mode: "on" });
+    const first = await store.list({
+      cursor: null,
+      limit: 2,
+      readScope: serviceViewer,
+      mode: "on",
+    });
     expect(first.sessions.map(({ id }) => id)).toEqual(["session-newest", "session-c"]);
     expect(first.nextCursor).toEqual({
       createdAt: 200,
@@ -160,7 +214,7 @@ describe("SessionExportStore integration", () => {
     const second = await store.list({
       cursor: first.nextCursor,
       limit: 2,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(second.sessions.map(({ id }) => id)).toEqual(["session-b", "session-a"]);
@@ -176,7 +230,7 @@ describe("SessionExportStore integration", () => {
     const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
       createdAfter: 200,
       createdBefore: 300,
@@ -197,7 +251,7 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
       createdAfter: 200,
       createdBefore: 300,
@@ -228,7 +282,7 @@ describe("SessionExportStore integration", () => {
         scope: "runs",
         cursor,
         limit: 3,
-        viewer: serviceViewer,
+        readScope: serviceViewer,
         mode: "on",
       });
       const pageIds = page.sessions.map(({ id }) => id);
@@ -255,28 +309,28 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     const second = await store.list({
       scope: "runs",
       cursor: first.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     const third = await store.list({
       scope: "runs",
       cursor: second.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     const fourth = await store.list({
       scope: "runs",
       cursor: third.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -311,7 +365,7 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     if (!pageSql) throw new Error("Run page query was not prepared");
@@ -330,7 +384,7 @@ describe("SessionExportStore integration", () => {
 
     const cursor = first.nextCursor;
     if (!cursor) throw new Error("Expected a second run export page");
-    await store.list({ scope: "runs", cursor, limit: 1, viewer: serviceViewer, mode: "on" });
+    await store.list({ scope: "runs", cursor, limit: 1, readScope: serviceViewer, mode: "on" });
     if (!pageSql) throw new Error("Continuation query was not prepared");
     const continuation = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageSql}`)
       .bind(
@@ -369,7 +423,7 @@ describe("SessionExportStore integration", () => {
         scope: "runs",
         cursor,
         limit: 1,
-        viewer: serviceViewer,
+        readScope: serviceViewer,
         mode: "on",
       });
       ids.push(...page.sessions.map(({ id }) => id));
@@ -388,7 +442,7 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     await insertDescendant("late-child", "root", "root", 220, 1);
@@ -396,14 +450,14 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: first.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     const third = await store.list({
       scope: "runs",
       cursor: second.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -424,7 +478,7 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     const deleted = await env.DB.prepare("SELECT rowid FROM sessions WHERE id = ?")
@@ -440,14 +494,14 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: first.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     const third = await store.list({
       scope: "runs",
       cursor: second.nextCursor,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -465,14 +519,19 @@ describe("SessionExportStore integration", () => {
     await insertDescendant("child", "root", "root", 210, 1);
     const store = new SessionExportStore(sqlDatabase(env.DB));
     const window = { scope: "runs" as const, limit: 1, createdAfter: 100, createdBefore: 220 };
-    const first = await store.list({ ...window, cursor: null, viewer: serviceViewer, mode: "on" });
+    const first = await store.list({
+      ...window,
+      cursor: null,
+      readScope: serviceViewer,
+      mode: "on",
+    });
     expect(first.sessions.map(({ id }) => id)).toEqual(["root"]);
 
     await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind("root").run();
     const second = await store.list({
       ...window,
       cursor: first.nextCursor,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(second.sessions.map(({ id }) => id)).toEqual(["old-root"]);
@@ -482,7 +541,7 @@ describe("SessionExportStore integration", () => {
       ...window,
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(fresh.sessions.map(({ id, rootSessionId }) => [id, rootSessionId])).toEqual([
@@ -504,7 +563,7 @@ describe("SessionExportStore integration", () => {
       scope: "runs",
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
     expect(result.sessions).toEqual([]);
@@ -581,7 +640,7 @@ describe("SessionExportStore integration", () => {
     const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
       cursor: null,
       limit: 1,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -643,7 +702,7 @@ describe("SessionExportStore integration", () => {
     const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -666,7 +725,7 @@ describe("SessionExportStore integration", () => {
     const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -700,7 +759,7 @@ describe("SessionExportStore integration", () => {
     const result = await new SessionExportStore(sqlDatabase(env.DB)).list({
       cursor: null,
       limit: 101,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 
@@ -782,7 +841,7 @@ describe("SessionExportStore integration", () => {
     const result = await new SessionExportStore(db).list({
       cursor: null,
       limit: 10,
-      viewer: serviceViewer,
+      readScope: serviceViewer,
       mode: "on",
     });
 

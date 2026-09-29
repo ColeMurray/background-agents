@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_SESSION_LIST_TEAM_IDS,
+  MAX_SESSION_LIST_FILTER_IDS,
   MAX_SESSION_LIST_SEARCH_LENGTH,
   normalizeSessionListSearch,
   parseSessionListQuery,
@@ -30,10 +30,18 @@ describe("session list query codec", () => {
       data: { teamIds: ["team_a"] },
     });
     const params = new URLSearchParams();
-    for (let i = 0; i <= MAX_SESSION_LIST_TEAM_IDS; i++) {
+    for (let i = 0; i <= MAX_SESSION_LIST_FILTER_IDS; i++) {
       params.append("teamIds[]", `team_${i}`);
     }
     expect(parseSessionListQuery(params)).toEqual({ success: false, invalidParam: "teamIds[]" });
+  });
+
+  it("rejects more than the shared ID cap in createdBy", () => {
+    const params = new URLSearchParams();
+    for (let i = 0; i <= MAX_SESSION_LIST_FILTER_IDS; i++) {
+      params.append("createdBy", "a".repeat(32));
+    }
+    expect(parseSessionListQuery(params)).toEqual({ success: false, invalidParam: "createdBy" });
   });
 
   it.each([

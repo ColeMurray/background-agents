@@ -316,7 +316,7 @@ async function handleExport(
   async function* records(): AsyncGenerator<ExportRecord> {
     const page = await store.list({
       ...selection,
-      viewer,
+      readScope: viewer,
       mode,
       limit,
       ...(createdAfter === undefined ? {} : { createdAfter }),

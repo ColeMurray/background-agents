@@ -167,7 +167,7 @@ export async function handleListSessions(
       ownerFilter: ownerFilter ?? (legacyStarted ? "started" : "anyone"),
       visibility,
       scope,
-      viewer,
+      readScope: viewer,
       mode: teamsEnforcementMode(ctx, env),
       ...(q ? { search: q } : {}),
       ...(repoOwner && repoName ? { repository: { repoOwner, repoName } } : {}),
@@ -233,7 +233,7 @@ export async function handleListSessionInbox(
     createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
     excludeAutomatedSessions: mine === "true",
     viewerUserId: ctx.principal.userId,
-    viewer,
+    readScope: viewer,
     mode: teamsEnforcementMode(ctx, env),
     teamIds,
   };

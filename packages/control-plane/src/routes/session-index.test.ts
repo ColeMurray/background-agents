@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleListSessionInbox, handleListSessions, handlePatchReadState } from "./session-index";
-import { MAX_SESSION_LIST_TEAM_IDS } from "@open-inspect/shared/session-list-query";
+import { MAX_SESSION_LIST_FILTER_IDS } from "@open-inspect/shared/session-list-query";
 import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import { D1QueryParameterLimitError } from "../db/query-limits";
@@ -264,7 +264,7 @@ describe("session index routes", () => {
         ownerFilter: "participating",
         visibility: "team",
         scope: "workspace",
-        viewer: expect.objectContaining({ userId: "user-1" }),
+        readScope: expect.objectContaining({ userId: "user-1" }),
         mode: "shadow",
       })
     );
@@ -288,6 +288,27 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 
+  it("allows scope=all for an administrator", async () => {
+    const response = await listSessions("?scope=all", USER_PRINCIPAL);
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        readScope: expect.objectContaining({ roleKey: "owner" }),
+      })
+    );
+  });
+
+  it("rejects ownerFilter for an actorless service", async () => {
+    const response = await listSessions("?ownerFilter=started", {
+      kind: "service",
+      service: "linear-bot",
+      actor: null,
+    });
+    expect(response.status).toBe(400);
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
   it("passes inbox team filters before grouping", async () => {
     const response = await listInbox(
       "?teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_beta"
@@ -296,7 +317,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         teamIds: ["team_alpha", "team_beta"],
-        viewer: expect.objectContaining({ userId: "user-1" }),
+        readScope: expect.objectContaining({ userId: "user-1" }),
       })
     );
   });
@@ -323,7 +344,7 @@ describe("session index routes", () => {
 
   it("rejects inbox team filters that exceed the query budget before reading D1", async () => {
     const params = new URLSearchParams();
-    for (let i = 0; i <= MAX_SESSION_LIST_TEAM_IDS; i++) {
+    for (let i = 0; i <= MAX_SESSION_LIST_FILTER_IDS; i++) {
       params.append("teamIds[]", `team_${i}`);
     }
     const response = await listInbox(`?${params}`);

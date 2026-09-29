@@ -7,9 +7,8 @@ import { spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { scopePredicate } from "./analytics-store";
-import type { SessionViewer } from "@open-inspect/shared";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 
 export interface ListSessionRunsOptions {
   startAt: number;
@@ -92,26 +91,26 @@ function toRun(value: unknown): SessionRun {
 export class SessionRunStore {
   constructor(
     private readonly db: SqlDatabase,
-    private readonly viewer: SessionViewer = { kind: "service", teamId: null },
-    private readonly mode: TeamsEnforcementMode = "on"
+    private readonly readScope: SessionReadScope,
+    private readonly mode: TeamsEnforcementMode
   ) {}
+
+  private visible(alias: string) {
+    return this.readScope.kind === "internal"
+      ? { sql: "", params: [] }
+      : visibleSessionsPredicate(alias, this.readScope, { mode: this.mode, excludePrivate: true });
+  }
 
   prepareList({ startAt, endAt, limit, orderBy, scope }: ListSessionRunsOptions): SqlStatement {
     const order = orderBy === "cost" ? "total_cost" : "created_at";
     const { sql, binds } = scopePredicate(scope, "root.spawn_source");
-    const rootVisible = visibleSessionsPredicate("root", this.viewer, {
-      mode: this.mode,
-      excludePrivate: true,
-    });
-    const childVisible = visibleSessionsPredicate("s", this.viewer, {
-      mode: this.mode,
-      excludePrivate: true,
-    });
+    const rootVisible = this.visible("root");
+    const childVisible = this.visible("s");
     return this.db
       .prepare(
         `${RUN_SELECT}
          WHERE root.created_at >= ? AND root.created_at < ?
-          ${sql} AND ${rootVisible.sql} AND ${childVisible.sql}
+           ${sql} ${rootVisible.sql ? `AND ${rootVisible.sql}` : ""} ${childVisible.sql ? `AND ${childVisible.sql}` : ""}
          ${RUN_GROUP}
          ORDER BY ${order} DESC, root_session_id ASC
          LIMIT ?`
@@ -128,17 +127,11 @@ export class SessionRunStore {
   }
 
   async get(rootSessionId: string): Promise<SessionRun | null> {
-    const rootVisible = visibleSessionsPredicate("root", this.viewer, {
-      mode: this.mode,
-      excludePrivate: true,
-    });
-    const childVisible = visibleSessionsPredicate("s", this.viewer, {
-      mode: this.mode,
-      excludePrivate: true,
-    });
+    const rootVisible = this.visible("root");
+    const childVisible = this.visible("s");
     const row = await this.db
       .prepare(
-        `${RUN_SELECT} WHERE root.id = ? AND ${rootVisible.sql} AND ${childVisible.sql} ${RUN_GROUP}`
+        `${RUN_SELECT} WHERE root.id = ? ${rootVisible.sql ? `AND ${rootVisible.sql}` : ""} ${childVisible.sql ? `AND ${childVisible.sql}` : ""} ${RUN_GROUP}`
       )
       .bind(rootSessionId, ...rootVisible.params, ...childVisible.params)
       .first<unknown>();

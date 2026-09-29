@@ -87,7 +87,11 @@ describe("AnalyticsDashboardStore", () => {
       }),
       batch: batch as SqlDatabase["batch"],
     };
-    const store = new AnalyticsDashboardStore(db);
+    const store = new AnalyticsDashboardStore(
+      db,
+      { kind: "internal", reason: "verify batch" },
+      "on"
+    );
 
     const response = await store.get({
       days: 7,

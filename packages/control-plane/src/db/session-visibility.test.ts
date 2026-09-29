@@ -39,12 +39,25 @@ describe("visibleSessionsPredicate", () => {
   });
 
   it("keeps service readers outside private sessions and scopes bound services", () => {
-    expect(visibleSessionsPredicate("s", { kind: "service", teamId: null })).toEqual({
+    expect(
+      visibleSessionsPredicate("s", { kind: "service", teamId: null }, { mode: "on" })
+    ).toEqual({
       sql: "s.visibility != 'private'",
       params: [],
     });
-    const bound = visibleSessionsPredicate("s", { kind: "service", teamId: "team-a" });
+    const bound = visibleSessionsPredicate(
+      "s",
+      { kind: "service", teamId: "team-a" },
+      { mode: "on" }
+    );
     expect(bound.sql).toContain("s.owner_team_id = ?");
     expect(bound.params).toEqual(["team-a"]);
+  });
+
+  it.each(["off", "shadow"] as const)("does not bind services to teams in %s mode", (mode) => {
+    expect(visibleSessionsPredicate("s", { kind: "service", teamId: "team-a" }, { mode })).toEqual({
+      sql: "s.visibility != 'private'",
+      params: [],
+    });
   });
 });

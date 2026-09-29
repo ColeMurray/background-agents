@@ -203,6 +203,14 @@ describe("cross-reader D1 session visibility", () => {
         attention: ["workspace-root"],
       },
       {
+        viewer: userViewer("viewer", "member"),
+        mode: "off" as const,
+        ids: [...PUBLIC_IDS, "own-private"],
+        publicIds: PUBLIC_IDS,
+        cost: 15,
+        attention: ["workspace-root"],
+      },
+      {
         viewer: userViewer("collaborator", "member"),
         mode: "on" as const,
         ids: ["workspace-root", "beta-root", "beta-child", "shared-private"],
@@ -239,12 +247,12 @@ describe("cross-reader D1 session visibility", () => {
     for (const { viewer, mode, ids, publicIds, cost, attention } of cases) {
       const expected = [...ids].sort();
       const label = `${viewer.kind === "user" ? viewer.userId : "service"}/${mode}`;
-      const listed = await index.list({ viewer, mode, limit: 20 });
+      const listed = await index.list({ readScope: viewer, mode, limit: 20 });
       expect(listed.sessions.map(({ id }) => id).sort(), label).toEqual(expected);
       expect(listed.hasMore, label).toBe(false);
 
       const inbox = await index.listInboxSnapshot({
-        viewer,
+        readScope: viewer,
         mode,
         viewerUserId: viewer.userId,
         limit: 20,
@@ -271,8 +279,14 @@ describe("cross-reader D1 session visibility", () => {
         label
       ).toEqual(expected.filter((id) => !attention.includes(id) && id !== "beta-child").sort());
 
-      const sessionsPage = await exports.list({ viewer, mode, cursor: null, limit: 20 });
-      const runsPage = await exports.list({ viewer, mode, scope: "runs", cursor: null, limit: 20 });
+      const sessionsPage = await exports.list({ readScope: viewer, mode, cursor: null, limit: 20 });
+      const runsPage = await exports.list({
+        readScope: viewer,
+        mode,
+        scope: "runs",
+        cursor: null,
+        limit: 20,
+      });
       expect(sessionsPage.sessions.map(({ id }) => id).sort(), label).toEqual(expected);
       expect(runsPage.sessions.map(({ id }) => id).sort(), label).toEqual(expected);
       expect(sessionsPage.nextCursor, label).toBeNull();
@@ -286,7 +300,8 @@ describe("cross-reader D1 session visibility", () => {
         totalSessions: publicIds.length,
         totalCost: cost,
         inputTokens: cost,
-        privateSessionsCostUsd: 112,
+        privateSessionsCostUsd:
+          viewer.roleKey === "owner" || viewer.roleKey === "administrator" ? 112 : null,
       });
       expect(breakdown.entries, label).toMatchObject([
         { key: "acme/widgets", sessions: publicIds.length, cost, inputTokens: cost },
@@ -314,6 +329,17 @@ describe("cross-reader D1 session visibility", () => {
         label
       ).toBe(cost);
     }
+
+    expect(
+      (
+        await index.list({
+          readScope: userViewer("viewer", "member"),
+          mode: "on",
+          search: "alpha",
+          limit: 20,
+        })
+      ).sessions.map(({ id }) => id)
+    ).toEqual(["alpha-root"]);
   });
 
   it("keeps private rows out of service lists and autofix activity, including before paging", async () => {
@@ -323,14 +349,18 @@ describe("cross-reader D1 session visibility", () => {
       [{ kind: "service", teamId: null }, PUBLIC_IDS],
       [{ kind: "service", teamId: "team_alpha" }, ["workspace-root", "alpha-root"]],
     ] as const satisfies ReadonlyArray<readonly [SessionViewer, readonly string[]]>) {
-      expect((await index.list({ viewer, limit: 20 })).sessions.map(({ id }) => id).sort()).toEqual(
-        [...expected].sort()
-      );
       expect(
-        (await exports.list({ viewer, mode: "shadow", cursor: null, limit: 20 })).sessions
+        (await index.list({ readScope: viewer, mode: "on", limit: 20 })).sessions
           .map(({ id }) => id)
           .sort()
       ).toEqual([...expected].sort());
+      for (const mode of ["off", "shadow"] as const) {
+        expect(
+          (await exports.list({ readScope: viewer, mode, cursor: null, limit: 20 })).sessions
+            .map(({ id }) => id)
+            .sort()
+        ).toEqual([...PUBLIC_IDS].sort());
+      }
     }
 
     const activity = new PrAutofixFeedbackStore(env.DB);

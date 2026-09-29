@@ -13,7 +13,8 @@ Workspace-wide session lists, bulk export, and WebSocket authorization follow in
 No route can make a session private or team-owned before those changes land.
 
 Session lists, the inbox, children lists, bulk export, and analytics now filter by persisted row
-visibility. Private sessions remain restricted in every mode. The WebSocket path follows in a later
+visibility. Private sessions remain restricted in every mode; only Owners and administrators receive
+their unattributed, scope-filtered cost total in analytics. The WebSocket path follows in a later
 change; no route can yet make a session private or team-owned.
 
 ## September 28, 2026

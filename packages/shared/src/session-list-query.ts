@@ -11,8 +11,8 @@ export const SESSION_LIST_CURRENT_USER = "me";
 export const DEFAULT_SESSION_LIST_LIMIT = 50;
 export const DEFAULT_SESSION_LIST_OFFSET = 0;
 export const MAX_SESSION_LIST_LIMIT = 100;
-/** Reserve bindings for viewer visibility, pagination and other list filters. */
-export const MAX_SESSION_LIST_TEAM_IDS = 50;
+/** Maximum IDs accepted for each repeated session-list filter. */
+export const MAX_SESSION_LIST_FILTER_IDS = 50;
 /** Longest accepted `q` after trimming; longer input is rejected, not truncated. */
 export const MAX_SESSION_LIST_SEARCH_LENGTH = 200;
 /** Longest accepted repository owner/name or environment id filter value. */
@@ -127,7 +127,7 @@ function parseIdentifier(value: string | null): string | null | undefined {
 export function parseSessionListTeamIds(searchParams: URLSearchParams): string[] | null {
   const teamIds = [...new Set(searchParams.getAll("teamIds[]"))];
   if (
-    teamIds.length > MAX_SESSION_LIST_TEAM_IDS ||
+    teamIds.length > MAX_SESSION_LIST_FILTER_IDS ||
     teamIds.some((id) => !/^team_[a-zA-Z0-9_-]{1,256}$/.test(id))
   ) {
     return null;
@@ -155,6 +155,9 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
   }
 
   const createdBy = searchParams.getAll("createdBy");
+  if (createdBy.length > MAX_SESSION_LIST_FILTER_IDS) {
+    return { success: false, invalidParam: "createdBy" };
+  }
   if (createdBy.some((value) => value !== SESSION_LIST_CURRENT_USER && !isCanonicalUserId(value))) {
     return { success: false, invalidParam: "createdBy" };
   }

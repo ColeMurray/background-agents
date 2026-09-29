@@ -7,14 +7,25 @@ function result(results: unknown[]): SqlResult {
 }
 
 describe("AnalyticsStore row decoding", () => {
-  const store = new AnalyticsStore({
-    prepare: () => {
-      throw new Error("not used");
+  const store = new AnalyticsStore(
+    {
+      prepare: () => {
+        throw new Error("not used");
+      },
+      batch: async () => {
+        throw new Error("not used");
+      },
     },
-    batch: async () => {
-      throw new Error("not used");
+    {
+      kind: "user",
+      userId: "owner",
+      roleKey: "owner",
+      permissions: [],
+      suspended: false,
+      memberships: new Map(),
     },
-  });
+    "on"
+  );
 
   it("decodes a valid summary row", () => {
     expect(
@@ -252,6 +263,53 @@ describe("AnalyticsStore row decoding", () => {
 });
 
 describe("scope and breakdown merging", () => {
+  it("binds the privileged private-cost query to the same window and scope", () => {
+    const queries: string[] = [];
+    const bindings: unknown[][] = [];
+    const statement = {
+      bind: (...values: unknown[]) => {
+        bindings.push(values);
+        return statement;
+      },
+      first: vi.fn(),
+      run: vi.fn(),
+      all: vi.fn(),
+    };
+    const db = {
+      prepare: (query: string) => {
+        queries.push(query);
+        return statement;
+      },
+      batch: async () => [],
+    };
+    const filters = { startAt: 10, endAt: 20, scope: "agent" as const };
+    new AnalyticsStore(
+      db,
+      {
+        kind: "user",
+        userId: "owner",
+        roleKey: "owner",
+        permissions: [],
+        suspended: false,
+        memberships: new Map(),
+      },
+      "on"
+    ).prepareSummary(filters);
+    expect(queries[0]).toContain("private.spawn_source IN (?)");
+    expect(bindings[0]).toEqual([10, 20, "agent", 10, 20, "agent", 1, "owner"]);
+
+    new AnalyticsStore(db, { kind: "service", teamId: null }, "on").prepareSummary(filters);
+    expect(queries[1]).toContain("NULL AS private_sessions_cost");
+    expect(bindings[1]).toEqual([10, 20, "agent"]);
+    const service = new AnalyticsStore(db, { kind: "service", teamId: null }, "on");
+    expect(service.decodeSummary(result([])).privateSessionsCostUsd).toBeNull();
+    new AnalyticsStore(db, { kind: "internal", reason: "audit all costs" }, "on").prepareSummary(
+      filters
+    );
+    expect(queries[2]).not.toContain("visibility");
+    expect(bindings[2]).toEqual([10, 20, "agent"]);
+  });
+
   it("uses the exact human population and no predicate for all", () => {
     expect(scopePredicate("human", "s.spawn_source")).toEqual({
       sql: "AND s.spawn_source IN (?, ?, ?, ?)",
@@ -277,14 +335,18 @@ describe("scope and breakdown merging", () => {
       run: vi.fn(),
       all: vi.fn(),
     };
-    const store = new AnalyticsStore({
-      prepare: (query) => {
-        sql = query;
-        queries.push(query);
-        return statement;
+    const store = new AnalyticsStore(
+      {
+        prepare: (query) => {
+          sql = query;
+          queries.push(query);
+          return statement;
+        },
+        batch: async () => [],
       },
-      batch: async () => [],
-    });
+      { kind: "internal", reason: "verify unfiltered billing" },
+      "on"
+    );
     store.prepareBilling({ startAt: 10, endAt: 20, scope: "agent" });
     expect(sql).toContain(
       "JOIN session_model_provider_auth a ON a.session_id = s.id AND a.auth_mode = 'provider_account'"

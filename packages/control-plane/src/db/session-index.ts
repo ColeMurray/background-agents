@@ -13,8 +13,7 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
-import type { SessionViewer } from "@open-inspect/shared";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import { assertD1QueryParameterLimit } from "./query-limits";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import {
@@ -472,7 +471,7 @@ export class SessionIndexStore {
   }
 
   /** List sessions with optional viewer-specific read state. */
-  async list(options: ListSessionsOptions = {}): Promise<ListSessionsResult> {
+  async list(options: ListSessionsOptions): Promise<ListSessionsResult> {
     const {
       limit = DEFAULT_SESSION_LIST_LIMIT,
       offset = DEFAULT_SESSION_LIST_OFFSET,
@@ -766,13 +765,16 @@ export class SessionIndexStore {
   /** List children of a parent session, newest first. */
   async listByParent(
     parentSessionId: string,
-    viewer: SessionViewer,
-    options?: { mode?: TeamsEnforcementMode }
+    readScope: SessionReadScope,
+    mode: TeamsEnforcementMode
   ): Promise<SessionEntry[]> {
-    const visibility = visibleSessionsPredicate("sessions", viewer, options);
+    const visibility =
+      readScope.kind === "internal"
+        ? { sql: "", params: [] }
+        : visibleSessionsPredicate("sessions", readScope, { mode });
     const result = await this.db
       .prepare(
-        `SELECT * FROM sessions WHERE parent_session_id = ? AND ${visibility.sql} ORDER BY created_at DESC`
+        `SELECT * FROM sessions WHERE parent_session_id = ? ${visibility.sql ? `AND ${visibility.sql}` : ""} ORDER BY created_at DESC`
       )
       .bind(parentSessionId, ...visibility.params)
       .all<SessionRow>();

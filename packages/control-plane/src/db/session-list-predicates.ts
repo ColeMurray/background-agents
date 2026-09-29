@@ -1,10 +1,9 @@
 import { normalizeOptionalRepositoryPair } from "@open-inspect/shared/types/repositories";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
-import type { SessionViewer } from "@open-inspect/shared";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { LIKE_ESCAPE_CLAUSE, likeContains, likePrefix } from "./like-pattern";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 
 /** Filters for a session index list query; each maps to one `SessionListQuery` field. */
 export interface SessionListFilters {
@@ -27,8 +26,8 @@ export interface SessionListFilters {
   ownerFilter?: SessionListQuery["ownerFilter"];
   visibility?: SessionListQuery["visibility"];
   scope?: SessionListQuery["scope"];
-  viewer?: SessionViewer;
-  mode?: TeamsEnforcementMode;
+  readScope: SessionReadScope;
+  mode: TeamsEnforcementMode;
 }
 
 export interface SessionListPredicates {
@@ -69,7 +68,7 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
     ownerFilter,
     visibility,
     scope,
-    viewer,
+    readScope,
     mode,
   } = filters;
   const conditions: string[] = [];
@@ -108,17 +107,17 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
     conditions.push("visibility = ?");
     params.push(visibility);
   }
-  if (ownerFilter === "started" && viewer?.kind === "user") {
+  if (ownerFilter === "started" && readScope.kind === "user") {
     conditions.push("user_id = ?");
-    params.push(viewer.userId);
+    params.push(readScope.userId);
   }
-  if (ownerFilter === "participating" && viewer?.kind === "user") {
+  if (ownerFilter === "participating" && readScope.kind === "user") {
     conditions.push(`(user_id = ? OR EXISTS (
       SELECT 1 FROM session_collaborators sc WHERE sc.session_id = sessions.id AND sc.user_id = ?
     ) OR EXISTS (
       SELECT 1 FROM session_read_states rs WHERE rs.session_id = sessions.id AND rs.user_id = ?
     ))`);
-    params.push(viewer.userId, viewer.userId, viewer.userId);
+    params.push(readScope.userId, readScope.userId, readScope.userId);
   }
 
   if (environmentId) {
@@ -160,8 +159,8 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
     params.push(contains, likePrefix(search), contains, contains);
   }
 
-  if (viewer) {
-    const visible = visibleSessionsPredicate("sessions", viewer, { mode });
+  if (readScope.kind !== "internal") {
+    const visible = visibleSessionsPredicate("sessions", readScope, { mode });
     conditions.push(visible.sql);
     params.push(...visible.params);
   }

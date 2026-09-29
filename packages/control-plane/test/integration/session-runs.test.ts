@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import type { AnalyticsRunsResponse } from "@open-inspect/shared/types/analytics";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
 import { SessionRunStore } from "../../src/db/session-run-store";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -22,6 +22,8 @@ async function seedSession(
         | "automationId"
         | "repoOwner"
         | "repoName"
+        | "ownerTeamId"
+        | "visibility"
       >
     >,
   cost: number,
@@ -148,8 +150,70 @@ describe("session runs", () => {
         repoName: "project",
       },
     ]);
-    expect(await new SessionRunStore(env.DB).get("root")).toEqual(body.runs[0]);
-    expect(await new SessionRunStore(env.DB).get("missing")).toBeNull();
+    expect(
+      await new SessionRunStore(env.DB, { kind: "internal", reason: "verify rollup" }, "on").get(
+        "root"
+      )
+    ).toEqual(body.runs[0]);
+    expect(
+      await new SessionRunStore(
+        env.DB,
+        { kind: "internal", reason: "verify missing run" },
+        "on"
+      ).get("missing")
+    ).toBeNull();
+  });
+
+  it("excludes an entire run when its root is hidden, even if a child is visible", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now() - DAY_MS;
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('hidden-run-team', 'hidden-run-team', 'Hidden', 1, 1)"
+    ).run();
+    await seedSession(
+      store,
+      {
+        id: "hidden-root",
+        createdAt: now,
+        updatedAt: now,
+        visibility: "team",
+        ownerTeamId: "hidden-run-team",
+      },
+      4,
+      0,
+      0
+    );
+    await seedSession(
+      store,
+      {
+        id: "visible-child",
+        parentSessionId: "hidden-root",
+        createdAt: now + 1,
+        updatedAt: now + 1,
+      },
+      2,
+      0,
+      0
+    );
+    const url = "https://test.local/analytics/runs?scope=all";
+    const response = await routeRequest(
+      new Request(url, {
+        headers: await serviceRequestHeaders(url, {
+          as: { userId: "66666666666666666666666666666666", role: "member" },
+        }),
+      }),
+      { ...env, TEAMS_ENFORCEMENT: "on" },
+      createExecutionContext()
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json<AnalyticsRunsResponse>()).runs).toEqual([]);
+    expect(
+      await new SessionRunStore(
+        env.DB,
+        { kind: "internal", reason: "audit hidden roots" },
+        "on"
+      ).get("hidden-root")
+    ).toMatchObject({ sessionCount: 2, totalCost: 6 });
   });
 
   it("windows by root creation, not child creation, and includes later children", async () => {
@@ -210,7 +274,11 @@ describe("session runs", () => {
     expect(body.runs.map((run) => run.rootSessionId)).toEqual(["recent-root"]);
     expect(body.runs[0]).toMatchObject({ sessionCount: 2, totalCost: 7, totalPrs: 1 });
 
-    const runs = await new SessionRunStore(env.DB).list({
+    const runs = await new SessionRunStore(
+      env.DB,
+      { kind: "internal", reason: "verify old root window" },
+      "on"
+    ).list({
       startAt: now - 11 * DAY_MS,
       endAt: now - 7 * DAY_MS,
       limit: 10,
@@ -246,7 +314,7 @@ describe("session runs", () => {
       0
     );
 
-    const runs = new SessionRunStore(env.DB);
+    const runs = new SessionRunStore(env.DB, { kind: "internal", reason: "verify ordering" }, "on");
     const window = { startAt: now - 7 * DAY_MS, endAt: now, limit: 1, scope: "all" as const };
     expect(
       (await runs.list({ ...window, orderBy: "cost" })).map((run) => run.rootSessionId)

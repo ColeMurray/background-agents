@@ -541,10 +541,14 @@ describe("SessionIndexStore", () => {
   });
 
   describe("list", () => {
+    const internal = {
+      readScope: { kind: "internal", reason: "index store test" },
+      mode: "on",
+    } as const;
     it("rejects combined team and creator filters above the D1 parameter limit", async () => {
       await expect(
         store.list({
-          viewer: {
+          readScope: {
             kind: "user",
             userId: "viewer",
             roleKey: "member",
@@ -565,7 +569,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "new", updatedAt: 3000 }));
       await store.create(makeSession({ id: "mid", updatedAt: 2000 }));
 
-      const result = await store.list();
+      const result = await store.list(internal);
       expect(result.sessions.map((s) => s.id)).toEqual(["new", "mid", "old"]);
       expect(result.hasMore).toBe(false);
     });
@@ -574,7 +578,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "a", status: "active" }));
       await store.create(makeSession({ id: "b", status: "archived" }));
 
-      const result = await store.list({ status: "active" });
+      const result = await store.list({ ...internal, status: "active" });
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0].id).toBe("a");
     });
@@ -584,7 +588,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "b", status: "archived", updatedAt: 1000 }));
       await store.create(makeSession({ id: "c", status: "created", updatedAt: 3000 }));
 
-      const result = await store.list({ excludeStatus: "archived" });
+      const result = await store.list({ ...internal, excludeStatus: "archived" });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map((s) => s.id)).toEqual(["c", "a"]);
     });
@@ -595,7 +599,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "alice-new", userId: "alice", updatedAt: 4000 }));
       await store.create(makeSession({ id: "historical", userId: null, updatedAt: 5000 }));
 
-      const result = await store.list({ createdByUserIds: ["alice"] });
+      const result = await store.list({ ...internal, createdByUserIds: ["alice"] });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
       expect(result.hasMore).toBe(false);
@@ -625,7 +629,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "manual-old", spawnSource: "user", updatedAt: 2000 }));
       await store.delete("automation");
 
-      const result = await store.list({ excludeAutomationLineage: true, limit: 2 });
+      const result = await store.list({ ...internal, excludeAutomationLineage: true, limit: 2 });
 
       expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);
@@ -636,7 +640,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "bob", userId: "bob", updatedAt: 3000 }));
       await store.create(makeSession({ id: "carol", userId: "carol", updatedAt: 4000 }));
 
-      const result = await store.list({ createdByUserIds: ["alice", "bob"] });
+      const result = await store.list({ ...internal, createdByUserIds: ["alice", "bob"] });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["bob", "alice"]);
     });
@@ -646,15 +650,15 @@ describe("SessionIndexStore", () => {
         await store.create(makeSession({ id: `s${i}`, updatedAt: i * 1000 }));
       }
 
-      const page1 = await store.list({ limit: 2, offset: 0 });
+      const page1 = await store.list({ ...internal, limit: 2, offset: 0 });
       expect(page1.sessions).toHaveLength(2);
       expect(page1.hasMore).toBe(true);
 
-      const page2 = await store.list({ limit: 2, offset: 2 });
+      const page2 = await store.list({ ...internal, limit: 2, offset: 2 });
       expect(page2.sessions).toHaveLength(2);
       expect(page2.hasMore).toBe(true);
 
-      const page3 = await store.list({ limit: 2, offset: 4 });
+      const page3 = await store.list({ ...internal, limit: 2, offset: 4 });
       expect(page3.sessions).toHaveLength(1);
       expect(page3.hasMore).toBe(false);
     });
@@ -665,7 +669,7 @@ describe("SessionIndexStore", () => {
       }
       db.preparedQueries.length = 0;
 
-      const result = await store.list({ limit: 2 });
+      const result = await store.list({ ...internal, limit: 2 });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["s2", "s1"]);
       expect(result.hasMore).toBe(true);

@@ -41,14 +41,16 @@ export async function handleListChildren(
   const parentId = params.id;
 
   const sessionStore = new SessionIndexStore(ctx.db);
-  const viewer =
+  const readScope =
     ctx.principal?.kind === "sandbox"
-      ? { kind: "service" as const, teamId: null }
+      ? { kind: "internal" as const, reason: "parent-bound sandbox" }
       : (ctx.sessionAdmission?.viewer ??
         viewerFromContext(ctx, ctx.sessionMemberships ?? new Map()));
-  const children = await sessionStore.listByParent(parentId, viewer, {
-    mode: teamsEnforcementMode(ctx, env),
-  });
+  const children = await sessionStore.listByParent(
+    parentId,
+    readScope,
+    teamsEnforcementMode(ctx, env)
+  );
 
   return json(childSessionListResponseSchema.parse({ children }));
 }

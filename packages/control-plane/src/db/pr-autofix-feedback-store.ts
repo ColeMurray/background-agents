@@ -175,11 +175,12 @@ export class PrAutofixFeedbackStore {
     limit: number;
     cursor: string | null;
   }): Promise<{ records: PrAutofixFeedbackRecord[]; nextCursor: string | null }> {
+    // Deleted sessions set feedback.session_id to NULL; unattached rows retain PR metadata.
     const cursor = options.cursor ? decodeActivityCursor(options.cursor) : null;
     const visibility = visibleSessionsPredicate(
       "s",
       { kind: "service", teamId: null },
-      { excludePrivate: true }
+      { mode: "on", excludePrivate: true }
     );
     const statement = this.db
       .prepare(

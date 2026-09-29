@@ -11,12 +11,11 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
-import type { SessionViewer } from "@open-inspect/shared";
 import { getModelDisplayName, normalizeModelId } from "@open-inspect/shared/models";
 import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 import { MS_PER_DAY, utcDateFromDayIndex } from "./utc-day";
-import { visibleSessionsPredicate } from "./session-visibility";
+import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { z } from "zod";
 
@@ -89,9 +88,18 @@ function prCreatedAtExpr(alias = ""): string {
 export class PullRequestAnalyticsStore {
   constructor(
     private readonly db: SqlDatabase,
-    private readonly viewer: SessionViewer = { kind: "service", teamId: null },
-    private readonly mode: TeamsEnforcementMode = "on"
+    private readonly readScope: SessionReadScope,
+    private readonly mode: TeamsEnforcementMode
   ) {}
+
+  private visible(alias: string): { sql: string; params: unknown[] } {
+    if (this.readScope.kind === "internal") return { sql: "", params: [] };
+    const visible = visibleSessionsPredicate(alias, this.readScope, {
+      mode: this.mode,
+      excludePrivate: true,
+    });
+    return { sql: `(${alias}.id IS NULL OR ${visible.sql})`, params: visible.params };
+  }
 
   /**
    * Two windows with different populations: the funnel/repos/sources cohort is
@@ -112,11 +120,9 @@ export class PullRequestAnalyticsStore {
     const prCreatedAt = prCreatedAtExpr("p");
     const cohortWindow = `${prCreatedAt} >= ? AND ${prCreatedAt} < ?`;
     const cohortBinds = [filters.startAt, filters.endAt];
-    const visible = visibleSessionsPredicate("s", this.viewer, {
-      mode: this.mode,
-      excludePrivate: true,
-    });
-    const prSessions = `FROM session_pull_requests p JOIN sessions s ON s.id = p.session_id`;
+    const visible = this.visible("s");
+    const whereVisible = visible.sql ? `AND ${visible.sql}` : "";
+    const prSessions = `FROM session_pull_requests p LEFT JOIN sessions s ON s.id = p.session_id`;
 
     const statements = [
       this.db
@@ -128,16 +134,15 @@ export class PullRequestAnalyticsStore {
                 COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
                 COALESCE(SUM(CASE WHEN p.lifecycle_state = 'closed' THEN 1 ELSE 0 END), 0) AS closed
               ${prSessions}
-              WHERE ${cohortWindow} AND ${visible.sql}`
+               WHERE ${cohortWindow} ${whereVisible}`
         )
         .bind(...cohortBinds, ...visible.params),
       this.db
         .prepare(
           `SELECT COALESCE(SUM(s.total_cost), 0) AS cost
-              FROM sessions s
-              WHERE s.id IN (
-                SELECT DISTINCT p.session_id FROM session_pull_requests p WHERE ${cohortWindow}
-              ) AND ${visible.sql}`
+               FROM (SELECT DISTINCT p.session_id FROM session_pull_requests p WHERE ${cohortWindow}) cohort
+               LEFT JOIN sessions s ON s.id = cohort.session_id
+               WHERE 1 = 1 ${whereVisible}`
         )
         .bind(...cohortBinds, ...visible.params),
       this.db
@@ -146,7 +151,7 @@ export class PullRequestAnalyticsStore {
                COUNT(*) AS merged,
                 AVG(p.merged_at - ${prCreatedAt}) AS avg_time_to_merge_ms
               ${prSessions}
-              WHERE p.lifecycle_state = 'merged' AND p.merged_at >= ? AND p.merged_at < ? AND ${visible.sql}`
+               WHERE p.lifecycle_state = 'merged' AND p.merged_at >= ? AND p.merged_at < ? ${whereVisible}`
         )
         .bind(filters.startAt, filters.endAt, ...visible.params),
       this.db
@@ -155,14 +160,14 @@ export class PullRequestAnalyticsStore {
                COUNT(*) AS total,
                AVG(? - ${prCreatedAt}) AS avg_age_ms
               ${prSessions}
-              WHERE p.lifecycle_state = 'open' AND ${visible.sql}`
+               WHERE p.lifecycle_state = 'open' ${whereVisible}`
         )
         .bind(filters.now, ...visible.params),
       this.db
         .prepare(
           `SELECT ${prCreatedAt} / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
               ${prSessions}
-              WHERE ${cohortWindow} AND ${visible.sql}
+               WHERE ${cohortWindow} ${whereVisible}
              GROUP BY day_index
              ORDER BY day_index ASC`
         )
@@ -171,7 +176,7 @@ export class PullRequestAnalyticsStore {
         .prepare(
           `SELECT p.merged_at / ${MS_PER_DAY} AS day_index, COUNT(*) AS count
               ${prSessions}
-              WHERE p.lifecycle_state = 'merged' AND p.merged_at >= ? AND p.merged_at < ? AND ${visible.sql}
+               WHERE p.lifecycle_state = 'merged' AND p.merged_at >= ? AND p.merged_at < ? ${whereVisible}
              GROUP BY day_index
              ORDER BY day_index ASC`
         )
@@ -186,7 +191,7 @@ export class PullRequestAnalyticsStore {
                 AVG(CASE WHEN p.lifecycle_state = 'merged' AND p.merged_at IS NOT NULL
                          THEN p.merged_at - ${prCreatedAt} END) AS avg_time_to_merge_ms
               ${prSessions}
-              WHERE ${cohortWindow} AND ${visible.sql}
+               WHERE ${cohortWindow} ${whereVisible}
              GROUP BY key
              ORDER BY created DESC, key ASC`
         )
@@ -198,17 +203,14 @@ export class PullRequestAnalyticsStore {
                COUNT(*) AS created,
                COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged
               ${prSessions}
-              WHERE ${cohortWindow} AND ${visible.sql}
+               WHERE ${cohortWindow} ${whereVisible} AND s.spawn_source IS NOT NULL
              GROUP BY s.spawn_source
              ORDER BY created DESC, source ASC`
         )
         .bind(...cohortBinds, ...visible.params),
     ];
     for (const dimension of ["model", "harness"] as const) {
-      const costVisible = visibleSessionsPredicate("x", this.viewer, {
-        mode: this.mode,
-        excludePrivate: true,
-      });
+      const costVisible = this.visible("x");
       statements.push(
         this.db
           .prepare(
@@ -216,19 +218,17 @@ export class PullRequestAnalyticsStore {
                     COUNT(*) AS created,
                     COALESCE(SUM(CASE WHEN p.lifecycle_state = 'merged' THEN 1 ELSE 0 END), 0) AS merged,
                     (SELECT COALESCE(SUM(x.total_cost), 0)
-                      FROM sessions x
-                      WHERE x.${dimension} = s.${dimension}
-                        AND ${costVisible.sql}
-                        AND x.id IN (
-                         SELECT DISTINCT cost_p.session_id FROM session_pull_requests cost_p
-                         WHERE ${prCreatedAtExpr("cost_p")} >= ? AND ${prCreatedAtExpr("cost_p")} < ?
-                       )) AS session_cost
-              ${prSessions}
-              WHERE ${cohortWindow} AND ${visible.sql}
+                       FROM (SELECT DISTINCT cost_p.session_id FROM session_pull_requests cost_p
+                             WHERE ${prCreatedAtExpr("cost_p")} >= ? AND ${prCreatedAtExpr("cost_p")} < ?) cohort
+                       LEFT JOIN sessions x ON x.id = cohort.session_id
+                       WHERE x.${dimension} = s.${dimension}
+                         ${costVisible.sql ? `AND ${costVisible.sql}` : ""}) AS session_cost
+               ${prSessions}
+               WHERE ${cohortWindow} ${whereVisible} AND s.${dimension} IS NOT NULL
              GROUP BY s.${dimension}
              ORDER BY session_cost DESC, key ASC`
           )
-          .bind(...costVisible.params, ...cohortBinds, ...cohortBinds, ...visible.params)
+          .bind(...cohortBinds, ...costVisible.params, ...cohortBinds, ...visible.params)
       );
     }
     return statements;

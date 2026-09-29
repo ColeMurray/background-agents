@@ -95,7 +95,7 @@ describe("session inbox", () => {
     );
 
     const inbox = new SessionInboxStore(env.DB);
-    const options = { viewer, mode: "on" as const, viewerUserId: VIEWER_ID, limit: 10 };
+    const options = { readScope: viewer, mode: "on" as const, viewerUserId: VIEWER_ID, limit: 10 };
     const page = await inbox.list({ ...options, category: "finished", cursor: null });
     expect(page.items.map(({ rootSession }) => rootSession.id)).toEqual([
       "visible-root",
@@ -132,7 +132,7 @@ describe("session inbox", () => {
     );
     const inbox = new SessionInboxStore(env.DB);
     const options = {
-      viewer,
+      readScope: viewer,
       mode: "off" as const,
       viewerUserId: VIEWER_ID,
       limit: 1,
@@ -150,7 +150,7 @@ describe("session inbox", () => {
   it("rejects combined inbox filters before exceeding D1's parameter budget", async () => {
     const inbox = new SessionInboxStore(env.DB);
     const options = {
-      viewer,
+      readScope: viewer,
       mode: "on" as const,
       viewerUserId: VIEWER_ID,
       limit: 20,
@@ -177,13 +177,57 @@ describe("session inbox", () => {
       })
     );
     const inbox = new SessionInboxStore(env.DB);
-    const options = { viewer, mode: "off" as const, viewerUserId: VIEWER_ID, limit: 10 };
+    const options = { readScope: viewer, mode: "off" as const, viewerUserId: VIEWER_ID, limit: 10 };
     expect((await inbox.list({ ...options, category: "in_progress", cursor: null })).items).toEqual(
       []
     );
     expect(
       (await inbox.snapshot(options)).finished.items.map(({ rootSession }) => rootSession.id)
     ).toEqual(["visible-root"]);
+  });
+
+  it("includes all eligibility-matching rows only with an explicit internal scope", async () => {
+    await seedTeams();
+    const store = new SessionIndexStore(env.DB);
+    await store.create(session("workspace", { updatedAt: 1000 }));
+    await store.create(
+      session("hidden-team", {
+        visibility: "team",
+        ownerTeamId: "team-b",
+        updatedAt: 2000,
+      })
+    );
+    await store.create(
+      session("hidden-private", { visibility: "private", userId: "someone-else", updatedAt: 3000 })
+    );
+
+    const inbox = new SessionInboxStore(env.DB);
+    const options = { mode: "on" as const, viewerUserId: VIEWER_ID, limit: 10 };
+    const page = await inbox.list({
+      ...options,
+      readScope: { kind: "internal", reason: "inbox maintenance" },
+      category: "finished",
+      cursor: null,
+    });
+    expect(page.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "hidden-private",
+      "hidden-team",
+      "workspace",
+    ]);
+    const snapshot = await inbox.snapshot({
+      ...options,
+      readScope: { kind: "internal", reason: "inbox maintenance" },
+    });
+    expect(snapshot.finished.items.map(({ rootSession }) => rootSession.id)).toEqual([
+      "hidden-private",
+      "hidden-team",
+      "workspace",
+    ]);
+    expect(
+      (
+        await inbox.list({ ...options, readScope: viewer, category: "finished", cursor: null })
+      ).items.map(({ rootSession }) => rootSession.id)
+    ).toEqual(["workspace"]);
   });
 
   it("filters children independently of their visible parent", async () => {
@@ -215,7 +259,7 @@ describe("session inbox", () => {
       })
     );
 
-    const children = await store.listByParent("parent", viewer, { mode: "on" });
+    const children = await store.listByParent("parent", viewer, "on");
     expect(children.map(({ id }) => id)).toEqual(["visible"]);
   });
 
