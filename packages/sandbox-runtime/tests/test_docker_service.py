@@ -389,3 +389,60 @@ async def test_control_rejects_service_budgets_beyond_capture_deadline(tmp_path,
         await control.start()
 
     assert not (tmp_path / "control.sock").exists()
+
+
+async def test_shutdown_during_preparation_does_not_restart_docker(processes, tmp_path):
+    processes.ignore_sigterm = True
+    service = _service(tmp_path, stop_timeout_seconds=0.1)
+    supervisor = _session_supervisor(tmp_path, service)
+    try:
+        await supervisor._start_docker()
+        preparing = asyncio.create_task(request("prepare", supervisor.docker_control.path))
+        await _until(lambda: service.exit_expected)
+
+        await asyncio.wait_for(supervisor.shutdown(), timeout=3)
+        with pytest.raises(RuntimeError):
+            await preparing
+
+        assert len([spawn for spawn in processes.spawns if spawn[0] == "dockerd"]) == 1
+        assert all(process.returncode is not None for process in processes.children)
+        assert supervisor._docker_watch_failure is None
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()
+
+
+async def test_shutdown_cancels_inflight_recovery_without_watcher(processes, tmp_path):
+    processes.daemon_exit = 1
+    service = _service(tmp_path, stop_timeout_seconds=0.1)
+    supervisor = _session_supervisor(tmp_path, service)
+    restart_entered = asyncio.Event()
+    finish_restart = asyncio.Event()
+    try:
+        await supervisor._start_docker()
+        original_start = service.start
+
+        async def delayed_restart():
+            restart_entered.set()
+            await finish_restart.wait()
+            await original_start()
+
+        service.start = delayed_restart
+        preparing = asyncio.create_task(request("prepare", supervisor.docker_control.path))
+        await asyncio.wait_for(restart_entered.wait(), timeout=2)
+
+        shutdown = asyncio.create_task(supervisor.shutdown())
+        await _until(lambda: supervisor.docker_control.stopping)
+        finish_restart.set()
+        await asyncio.wait_for(shutdown, timeout=2)
+        with pytest.raises(RuntimeError):
+            await preparing
+
+        assert supervisor._docker_watch_task is None
+        assert supervisor._docker_watch_failure is None
+        assert len([spawn for spawn in processes.spawns if spawn[0] == "dockerd"]) == 1
+        assert all(process.returncode is not None for process in processes.children)
+    finally:
+        finish_restart.set()
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()

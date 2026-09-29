@@ -55,3 +55,22 @@ async def test_failed_preparation_never_acknowledges_capture(socket_path):
             await request("status", path)
     finally:
         await control.stop()
+
+
+async def test_stop_closes_idle_control_connections(socket_path):
+    service = Mock(
+        start_timeout_seconds=DOCKER_START_TIMEOUT_SECONDS,
+        stop_timeout_seconds=DOCKER_STOP_TIMEOUT_SECONDS,
+    )
+    control = DockerControl(service, socket_path)
+    await control.start()
+    reader, writer = await asyncio.open_unix_connection(socket_path)
+    try:
+        async with asyncio.timeout(1):
+            while not control._handlers:
+                await asyncio.sleep(0)
+        await asyncio.wait_for(control.stop(), timeout=1)
+        assert await asyncio.wait_for(reader.readline(), timeout=1) == b""
+    finally:
+        writer.close()
+        await writer.wait_closed()

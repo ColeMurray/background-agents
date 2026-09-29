@@ -46,11 +46,9 @@ from .attachment_processor import (
 from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
-    DOCKER_ENABLED_ENV_VAR,
     REPO_MANIFEST_FILE_PATH,
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
-from .docker_control import request as request_docker_preparation
 from .event_forwarder import BufferedEventForwarder
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
@@ -883,9 +881,8 @@ class AgentBridge:
             )
 
         async def persist_session() -> None:
+            # The provider prepares Docker during capture, after the stop deadline.
             await self._persist_rotated_session_id(self._require_harness(), strict=True)
-            if os.environ.get(DOCKER_ENABLED_ENV_VAR) == "true":
-                await request_docker_preparation("prepare")
 
         result = await self.shutdown_preparation.prepare(
             cmd,

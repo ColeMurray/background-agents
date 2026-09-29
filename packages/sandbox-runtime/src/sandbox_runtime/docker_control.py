@@ -36,8 +36,10 @@ class DockerControl:
         self.path = path
         self.recover = recover
         self.prepared = False
+        self.stopping = False
         self._lock = asyncio.Lock()
         self._server: asyncio.Server | None = None
+        self._handlers: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         if (
@@ -50,22 +52,38 @@ class DockerControl:
         Path(self.path).chmod(0o600)
 
     async def stop(self) -> None:
+        self.stopping = True
         if self._server:
             self._server.close()
+        handlers = tuple(self._handlers)
+        for task in handlers:
+            task.cancel()
+        await asyncio.gather(*handlers, return_exceptions=True)
+        # No supervisor teardown may stop Docker until an active prepare or
+        # recovery has left the same lock used to serialize control requests.
+        async with self._lock:
+            pass
+        if self._server:
             await self._server.wait_closed()
+            self._server = None
         Path(self.path).unlink(missing_ok=True)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self._handlers.add(task)
         try:
+            if self.stopping:
+                return
             async with asyncio.timeout(CONTROL_TIMEOUT_SECONDS):
                 command = await reader.readline()
                 async with self._lock:
-                    if command == b"prepare\n" and not self.prepared:
+                    if command == b"prepare\n" and not self.prepared and not self.stopping:
                         try:
                             async with asyncio.timeout(PREPARATION_TIMEOUT_SECONDS):
                                 await self.service.prepare_for_snapshot()
                         except (Exception, asyncio.CancelledError) as error:
-                            if self.recover is not None:
+                            if self.recover is not None and not self.stopping:
                                 self.service.log.error("docker.prepare_failed", exc=error)
                                 await self.recover()
                                 self.prepared = False
@@ -73,7 +91,9 @@ class DockerControl:
                             self.prepared = True
                     result = (
                         b"prepared\n"
-                        if self.prepared and command in (b"prepare\n", b"status\n")
+                        if self.prepared
+                        and not self.stopping
+                        and command in (b"prepare\n", b"status\n")
                         else b"not_prepared\n"
                     )
                 writer.write(result)
@@ -82,8 +102,11 @@ class DockerControl:
             # No acknowledgement is a failure, never permission to capture.
             pass
         finally:
-            writer.close()
-            await writer.wait_closed()
+            try:
+                writer.close()
+                await writer.wait_closed()
+            finally:
+                self._handlers.discard(task)
 
 
 async def request(command: str, path: str = SOCKET_PATH) -> None:

@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from websockets import State
 
+from sandbox_runtime import bridge as bridge_module
 from sandbox_runtime.bridge import AgentBridge
+from sandbox_runtime.constants import DOCKER_ENABLED_ENV_VAR
 from sandbox_runtime.harness.base import TurnOutcome
 from sandbox_runtime.push_operation import PushRequest, PushResult
 from tests.conftest import ScriptedHarness
@@ -310,6 +312,24 @@ async def test_prepare_deadline_reports_unconfirmed_and_keeps_fence() -> None:
     assert result["executionStopped"] is False
     assert result["error"] == "stop_deadline_exceeded"
     assert bridge.shutdown_preparation.state.operation_id == "operation-1"
+
+
+@pytest.mark.asyncio
+async def test_vm_bridge_drain_does_not_wait_for_docker_preparation(monkeypatch) -> None:
+    monkeypatch.setenv(DOCKER_ENABLED_ENV_VAR, "true")
+    prepare_docker = AsyncMock()
+    monkeypatch.setattr(bridge_module, "request_docker_preparation", prepare_docker, raising=False)
+    bridge = make_bridge(ShutdownPreparationHarness())
+    bridge._persist_rotated_session_id = AsyncMock()
+    await establish_generation(bridge)
+
+    await bridge._handle_command(prepare_command(stopByMs=time.time() * 1000 + 500))
+
+    result = bridge._send_event.await_args_list[-1].args[0]
+    assert result["executionStopped"] is True
+    assert "error" not in result
+    bridge._persist_rotated_session_id.assert_awaited_once()
+    prepare_docker.assert_not_awaited()
 
 
 @pytest.mark.asyncio

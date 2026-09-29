@@ -426,6 +426,9 @@ class SandboxSupervisor:
         """Replace a daemon after a failed snapshot attempt without losing session supervision."""
         service = self.docker_service
         assert service is not None
+        control = self.docker_control
+        if control is not None and control.stopping:
+            return
         if not service.exit_expected:
             # Preparation never signalled this daemon; its exit belongs to
             # ordinary crash supervision, not failed-save recovery.
@@ -433,14 +436,20 @@ class SandboxSupervisor:
         await self._stop_docker_watch()
         try:
             await service.stop()
+            if control is not None and control.stopping:
+                return
             await service.start()
         except BaseException as error:
+            if control is not None and control.stopping:
+                raise
             self.log.error("docker.exited_unexpectedly", exc=error)
             self._docker_watch_failure = RuntimeError(
                 "Required Docker daemon exited unexpectedly after failed preparation"
             )
             self.shutdown_event.set()
             raise
+        if control is not None and control.stopping:
+            return
         self._docker_watch_task = asyncio.create_task(self._watch_docker())
         self.log.info("docker.restarted_after_prepare")
 
@@ -796,6 +805,8 @@ class SandboxSupervisor:
             )
             return False
         finally:
+            if self.docker_control is not None:
+                await self.docker_control.stop()
             await self._stop_docker_watch()
             await self._stop_bridge_watch()
             await self.shutdown()
