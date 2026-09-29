@@ -541,6 +541,25 @@ describe("SessionIndexStore", () => {
   });
 
   describe("list", () => {
+    it("rejects combined team and creator filters above the D1 parameter limit", async () => {
+      await expect(
+        store.list({
+          viewer: {
+            kind: "user",
+            userId: "viewer",
+            roleKey: "member",
+            permissions: ["sessions.read"],
+            suspended: false,
+            memberships: new Map(),
+          },
+          mode: "on",
+          teamIds: Array.from({ length: 50 }, (_, i) => `team_${i}`),
+          createdByUserIds: Array.from({ length: 45 }, (_, i) => `user_${i}`),
+          viewerUserId: "viewer",
+        })
+      ).rejects.toThrow("Too many session filters");
+    });
+
     it("returns sessions sorted by updatedAt descending", async () => {
       await store.create(makeSession({ id: "old", updatedAt: 1000 }));
       await store.create(makeSession({ id: "new", updatedAt: 3000 }));

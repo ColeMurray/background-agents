@@ -3,6 +3,7 @@ import { handleListSessionInbox, handleListSessions, handlePatchReadState } from
 import { MAX_SESSION_LIST_TEAM_IDS } from "@open-inspect/shared/session-list-query";
 import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
+import { D1QueryParameterLimitError } from "../db/query-limits";
 import type { Env } from "../types";
 import type { Principal } from "../auth/principal";
 import { createTestEnv, TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
@@ -299,6 +300,26 @@ describe("session index routes", () => {
       })
     );
   });
+
+  it("returns 400 for a combined list filter exceeding the D1 parameter budget", async () => {
+    mockSessionIndexStore.list.mockRejectedValueOnce(new D1QueryParameterLimitError());
+    const response = await listSessions("?teamIds[]=team_alpha");
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Too many session filters" });
+  });
+
+  it.each(["", "?category=finished"])(
+    "returns 400 for an inbox filter exceeding the D1 parameter budget (%s)",
+    async (query) => {
+      const method = query
+        ? mockSessionIndexStore.listInbox
+        : mockSessionIndexStore.listInboxSnapshot;
+      method.mockRejectedValueOnce(new D1QueryParameterLimitError());
+      const response = await listInbox(query);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Too many session filters" });
+    }
+  );
 
   it("rejects inbox team filters that exceed the query budget before reading D1", async () => {
     const params = new URLSearchParams();

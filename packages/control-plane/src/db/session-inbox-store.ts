@@ -11,6 +11,7 @@ import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import { attachSessionListMetadata } from "./session-list-metadata";
 import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
+import { assertD1QueryParameterLimit } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 /** Viewer, filtering, and pagination inputs for an inbox query. */
@@ -121,6 +122,19 @@ export class SessionInboxStore {
   /** Select one ordered category page plus one extra root for cursor metadata. */
   private bindInboxQuery(options: ListSessionInboxOptions): SqlStatement {
     const { sql, params } = this.inboxCtes(options);
+    const binds = [
+      ...params,
+      options.category,
+      ...(options.cursor
+        ? [
+            options.cursor.latestUpdatedAt,
+            options.cursor.latestUpdatedAt,
+            options.cursor.rootSessionId,
+          ]
+        : []),
+      options.limit + 1,
+    ];
+    assertD1QueryParameterLimit(binds.length);
     const cursorCondition = options.cursor
       ? `AND (latest_updated_at < ? OR (latest_updated_at = ? AND effective_root_session_id < ?))`
       : "";
@@ -145,18 +159,7 @@ export class SessionInboxStore {
                   effective_sessions.updated_at DESC,
                   effective_sessions.id DESC`
       )
-      .bind(
-        ...params,
-        options.category,
-        ...(options.cursor
-          ? [
-              options.cursor.latestUpdatedAt,
-              options.cursor.latestUpdatedAt,
-              options.cursor.rootSessionId,
-            ]
-          : []),
-        options.limit + 1
-      );
+      .bind(...binds);
   }
 
   /** Select the first page of every category through one shared recursive traversal. */
@@ -164,6 +167,7 @@ export class SessionInboxStore {
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): SqlStatement {
     const { sql, params } = this.inboxCtes(options);
+    assertD1QueryParameterLimit(params.length + 1);
     return this.db
       .prepare(
         `${sql},

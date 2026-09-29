@@ -15,6 +15,7 @@ import type { SessionListRepository } from "@open-inspect/shared/types/repositor
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { SessionViewer } from "@open-inspect/shared";
 import { visibleSessionsPredicate } from "./session-visibility";
+import { assertD1QueryParameterLimit } from "./query-limits";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 import {
   sessionModelProviderAuthSchema,
@@ -482,6 +483,7 @@ export class SessionIndexStore {
     // `id DESC` breaks updated_at ties so offset pages never overlap or skip.
     const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`;
     const pageParams = [...params, limit + 1, offset];
+    assertD1QueryParameterLimit(pageParams.length + (viewerUserId ? 1 : 0));
     const result = viewerUserId
       ? await this.db
           .prepare(

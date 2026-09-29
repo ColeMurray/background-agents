@@ -35,6 +35,7 @@ import { createLogger } from "../logger";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
 import { parseQuery } from "./query";
 import { TeamMembershipStore } from "../db/team-memberships";
+import { D1QueryParameterLimitError } from "../db/query-limits";
 import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
 
 const sessionInboxQuerySchema = z.object({
@@ -56,6 +57,15 @@ const sessionInboxQuerySchema = z.object({
 
 const log = createLogger("session-read-state");
 const SESSION_INBOX_LIMIT = 20;
+
+async function readSessionList<T>(read: () => Promise<T>): Promise<T | Response> {
+  try {
+    return await read();
+  } catch (cause) {
+    if (cause instanceof D1QueryParameterLimitError) return error(cause.message, 400);
+    throw cause;
+  }
+}
 
 function parseCreatedByFilters(
   values: readonly string[],
@@ -147,25 +157,28 @@ export async function handleListSessions(
 
   const store = new SessionIndexStore(ctx.db);
   const listStartedAt = Date.now();
-  const result = await store.list({
-    status,
-    excludeStatus,
-    excludeAutomationLineage,
-    createdByUserIds,
-    ...(teamIds ? { teamIds } : {}),
-    ownerFilter: ownerFilter ?? (legacyStarted ? "started" : "anyone"),
-    visibility,
-    scope,
-    viewer,
-    mode: teamsEnforcementMode(ctx, env),
-    ...(q ? { search: q } : {}),
-    ...(repoOwner && repoName ? { repository: { repoOwner, repoName } } : {}),
-    ...(environmentId ? { environmentId } : {}),
-    ...(origin ? { spawnSource: origin } : {}),
-    limit,
-    offset,
-    ...(viewerUserId ? { viewerUserId } : {}),
-  });
+  const result = await readSessionList(() =>
+    store.list({
+      status,
+      excludeStatus,
+      excludeAutomationLineage,
+      createdByUserIds,
+      ...(teamIds ? { teamIds } : {}),
+      ownerFilter: ownerFilter ?? (legacyStarted ? "started" : "anyone"),
+      visibility,
+      scope,
+      viewer,
+      mode: teamsEnforcementMode(ctx, env),
+      ...(q ? { search: q } : {}),
+      ...(repoOwner && repoName ? { repository: { repoOwner, repoName } } : {}),
+      ...(environmentId ? { environmentId } : {}),
+      ...(origin ? { spawnSource: origin } : {}),
+      limit,
+      offset,
+      ...(viewerUserId ? { viewerUserId } : {}),
+    })
+  );
+  if (result instanceof Response) return result;
   if (viewerUserId) {
     log.info("session_read_state.decorated", {
       event: "session_read_state.decorated",
@@ -226,7 +239,8 @@ export async function handleListSessionInbox(
   };
 
   if (category === null) {
-    const snapshot = await store.listInboxSnapshot(commonOptions);
+    const snapshot = await readSessionList(() => store.listInboxSnapshot(commonOptions));
+    if (snapshot instanceof Response) return snapshot;
     const body = sessionInboxSnapshotSchema.parse({
       categories: Object.fromEntries(
         SESSION_INBOX_CATEGORIES.map((inboxCategory) => [
@@ -240,11 +254,14 @@ export async function handleListSessionInbox(
     return response;
   }
 
-  const result = await store.listInbox({
-    ...commonOptions,
-    category,
-    cursor: parsedCursor.cursor,
-  });
+  const result = await readSessionList(() =>
+    store.listInbox({
+      ...commonOptions,
+      category,
+      cursor: parsedCursor.cursor,
+    })
+  );
+  if (result instanceof Response) return result;
   const nextCursor = result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null;
   const response = json(
     sessionInboxPageSchema.parse({

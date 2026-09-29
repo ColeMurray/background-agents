@@ -147,6 +147,22 @@ describe("session inbox", () => {
     ]);
   });
 
+  it("rejects combined inbox filters before exceeding D1's parameter budget", async () => {
+    const inbox = new SessionInboxStore(env.DB);
+    const options = {
+      viewer,
+      mode: "on" as const,
+      viewerUserId: VIEWER_ID,
+      limit: 20,
+      teamIds: Array.from({ length: 50 }, (_, i) => `team_${i}`),
+      createdByUserIds: Array.from({ length: 45 }, (_, i) => `user_${i}`),
+    };
+    await expect(inbox.snapshot(options)).rejects.toThrow("Too many session filters");
+    await expect(inbox.list({ ...options, category: "finished", cursor: null })).rejects.toThrow(
+      "Too many session filters"
+    );
+  });
+
   it("excludes private children even when team enforcement is off", async () => {
     const store = new SessionIndexStore(env.DB);
     await store.create(session("visible-root", { updatedAt: 5000 }));
