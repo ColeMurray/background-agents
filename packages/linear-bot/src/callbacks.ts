@@ -244,10 +244,13 @@ async function handleCompletionCallback(
       message = formatAgentResponse(agentResponse);
     } else {
       activityType = "error";
+      const failureReason = agentResponse.error || payload.error;
       if (agentResponse.textContent) {
-        message = `The agent encountered an error.\n\n${agentResponse.textContent.slice(0, 500)}`;
+        message = `The agent encountered an error${failureReason ? `: ${failureReason}` : "."}\n\n${agentResponse.textContent.slice(0, 500)}`;
       } else {
-        message = `The agent was unable to complete this task.`;
+        message = failureReason
+          ? `The agent encountered an error: ${failureReason}`
+          : "The agent was unable to complete this task.";
       }
     }
 
