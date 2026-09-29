@@ -856,6 +856,7 @@ test("dispatches a non-generation Request without reshaping it", async () => {
   assert.equal(call.request.headers.get("authorization"), "Bearer cp-access");
   const sent = new Uint8Array(await call.request.arrayBuffer());
   assert.deepEqual([...sent], [...body], "the body bytes are untouched");
+  assert.equal(call.init.timeout, undefined, "Bun's fetch timeout stays in force");
 });
 
 test("cancels a stalled streaming body when the caller aborts", async () => {
