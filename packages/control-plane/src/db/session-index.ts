@@ -39,8 +39,7 @@ import {
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
 import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
-import { sessionRepositoryRowSchema } from "./session-list-metadata";
-import { z } from "zod";
+import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
@@ -114,6 +113,10 @@ export interface SessionEntry {
    */
   pullRequestSummary?: PullRequestSummary;
   readState?: SessionReadState;
+}
+
+/** Declarative fields used only when creating a session index row. */
+export interface CreateSessionCommand extends SessionEntry {
   /** Resolved manifest to persist atomically with a new top-level session. */
   skillManifest?: SessionSkillManifestInput;
   /** Parent manifest to copy atomically for an agent-spawned child. */
@@ -122,7 +125,7 @@ export interface SessionEntry {
   providerAuth?: SessionModelProviderAuthInput[];
   /** Copy access grants with the parent row in the creation batch. */
   collaboratorSourceSessionId?: string;
-  privateCreationAudit?: SqlStatement;
+  privateCreationActor?: { requestId: string; actorUserId: string };
 }
 
 interface SessionModelProviderAuthRow {
@@ -208,7 +211,7 @@ export class SessionIndexStore {
     return result !== null;
   }
 
-  async create(session: SessionEntry): Promise<void> {
+  async create(session: CreateSessionCommand): Promise<void> {
     const repository = normalizeSessionRepositoryFields(session);
 
     if (session.skillManifest && session.skillManifestSourceSessionId) {
@@ -339,7 +342,23 @@ export class SessionIndexStore {
               ),
           ]
         : []),
-      ...(session.privateCreationAudit ? [session.privateCreationAudit] : []),
+      ...(session.visibility === "private" && session.privateCreationActor
+        ? [
+            new SessionAuditStore(this.db).bind({
+              requestId: session.privateCreationActor.requestId,
+              actorUserId: session.privateCreationActor.actorUserId,
+              action: "session.created_private",
+              sessionId: session.id,
+              teamId: session.ownerTeamId,
+              before: {},
+              after: {
+                ownerUserId: session.userId ?? null,
+                teamId: session.ownerTeamId,
+                visibility: "private",
+              },
+            }),
+          ]
+        : []),
     ]);
 
     // Session ids are always freshly generated, so a skipped insert is a bug;
@@ -793,90 +812,6 @@ export class SessionIndexStore {
     ]);
 
     return (result.meta?.changes ?? 0) > 0;
-  }
-
-  async listDescendantIds(id: string): Promise<string[]> {
-    const rows = await this.db
-      .prepare(
-        `WITH RECURSIVE descendants(id) AS (
-           SELECT id FROM sessions WHERE parent_session_id = ?
-           UNION
-           SELECT child.id FROM sessions child
-           JOIN descendants ON child.parent_session_id = descendants.id
-         ) SELECT id FROM descendants`
-      )
-      .bind(id)
-      .all();
-    return z
-      .array(z.object({ id: z.string() }))
-      .parse(rows.results)
-      .map((row) => row.id);
-  }
-
-  async listRepositoryIds(
-    id: string
-  ): Promise<Array<{ repoOwner: string; repoName: string; repoId: number | null }>> {
-    const rows = await this.db
-      .prepare("SELECT * FROM session_repositories WHERE session_id = ? ORDER BY position")
-      .bind(id)
-      .all();
-    const repositories = rows.results.map((row) => {
-      const parsed = sessionRepositoryRowSchema.parse(row);
-      return { repoOwner: parsed.repo_owner, repoName: parsed.repo_name, repoId: parsed.repo_id };
-    });
-    if (repositories.length) return repositories;
-    const session = await this.get(id);
-    return session?.repoOwner && session.repoName
-      ? [{ repoOwner: session.repoOwner, repoName: session.repoName, repoId: null }]
-      : [];
-  }
-
-  async updateVisibility(
-    ids: string[],
-    visibility: SessionVisibility,
-    audits: SqlStatement[] = []
-  ): Promise<void> {
-    if (!ids.length) return;
-    await this.db.batch([
-      ...ids.map((id) =>
-        this.db.prepare("UPDATE sessions SET visibility = ? WHERE id = ?").bind(visibility, id)
-      ),
-      ...audits,
-    ]);
-  }
-
-  async updateOwnerTeam(
-    ids: string[],
-    teamId: string | null,
-    audits: SqlStatement[] = [],
-    beforeStatements: SqlStatement[] = [],
-    joiningUserId?: string
-  ): Promise<boolean> {
-    if (!ids.length) return false;
-    const activeTeam = teamId
-      ? " AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND archived_at IS NULL)"
-      : "";
-    const membership = joiningUserId
-      ? " AND EXISTS (SELECT 1 FROM team_memberships WHERE team_id = ? AND user_id = ?)"
-      : "";
-    const results = await this.db.batch([
-      ...beforeStatements,
-      ...ids.map((id) =>
-        this.db
-          .prepare(
-            `UPDATE sessions SET owner_team_id = ?, visibility = CASE WHEN ? IS NULL AND visibility = 'team' THEN 'workspace' ELSE visibility END WHERE id = ?${activeTeam}${membership}`
-          )
-          .bind(
-            teamId,
-            teamId,
-            id,
-            ...(teamId ? [teamId] : []),
-            ...(joiningUserId ? [teamId, joiningUserId] : [])
-          )
-      ),
-      ...audits,
-    ]);
-    return (results[beforeStatements.length]?.meta.changes ?? 0) > 0;
   }
 
   /** List children of a parent session, newest first. */

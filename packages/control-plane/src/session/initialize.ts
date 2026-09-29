@@ -10,7 +10,6 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
-import { SessionAuditStore } from "../db/session-audit";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
@@ -194,21 +193,12 @@ export async function initializeSession(
     ownerTeamId: input.ownerTeamId,
     visibility: input.visibility,
     collaboratorSourceSessionId: input.collaboratorSourceSessionId,
-    privateCreationAudit:
+    privateCreationActor:
       input.visibility === "private" && input.platformUserId
-        ? new SessionAuditStore(ctx.db).bind({
+        ? {
             requestId: ctx.request_id,
             actorUserId: input.platformUserId,
-            action: "session.created_private",
-            sessionId: input.sessionId,
-            teamId: input.ownerTeamId,
-            before: {},
-            after: {
-              ownerUserId: input.platformUserId,
-              teamId: input.ownerTeamId,
-              visibility: "private",
-            },
-          })
+          }
         : undefined,
     createdAt: now,
     updatedAt: now,

@@ -5,7 +5,8 @@ import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { TeamAuditStore } from "../db/team-audit";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
-import { SessionIndexStore } from "../db/session-index";
+import { SessionIndexStore, type SessionEntry } from "../db/session-index";
+import { SessionScopeStore } from "../db/session-scope-store";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamStore } from "../db/teams";
@@ -65,9 +66,10 @@ async function changeVisibility(
   if (body.visibility === "team" && !admission.row.ownerTeamId)
     return json({ error: "A team is required", code: "team_required" }, 400);
   const store = new SessionIndexStore(ctx.db);
+  const scope = new SessionScopeStore(ctx.db);
   const ids = [
     params.id,
-    ...(body.includeChildren ? await store.listDescendantIds(params.id) : []),
+    ...(body.includeChildren ? await scope.listDescendantIds(params.id) : []),
   ];
   const descendantDenial = await admitDescendants(ctx, env, ids, "changeVisibility");
   if (descendantDenial) return descendantDenial;
@@ -92,7 +94,7 @@ async function changeVisibility(
         ]
       : []
   );
-  await store.updateVisibility(ids, body.visibility, audits);
+  await scope.updateVisibility(ids, body.visibility, audits);
   return json({ sessionId: params.id, visibility: body.visibility, affectedSessionIds: ids });
 }
 
@@ -106,13 +108,23 @@ async function moveSession(
   if (body instanceof Response) return body;
   const admission = ctx.sessionAdmission!;
   if (admission.viewer.kind !== "user") return denied("missing_permission");
+  const actorUserId = admission.viewer.userId;
   const store = new SessionIndexStore(ctx.db);
+  const scope = new SessionScopeStore(ctx.db);
   const ids = [
     params.id,
-    ...(body.includeChildren ? await store.listDescendantIds(params.id) : []),
+    ...(body.includeChildren ? await scope.listDescendantIds(params.id) : []),
   ];
   const descendantDenial = await admitDescendants(ctx, env, ids, "move");
   if (descendantDenial) return descendantDenial;
+  const rows = [
+    admission.row,
+    ...(await Promise.all(ids.slice(1).map((id) => store.get(id)))),
+  ].filter((row): row is SessionEntry => row !== null);
+  if (rows.length !== ids.length) return error("Session not found", 404);
+  const changedRows = rows.filter(
+    (row) => row.ownerTeamId !== body.teamId || (body.teamId === null && row.visibility === "team")
+  );
   const beforeStatements: SqlStatement[] = [];
   let joiningUserId: string | undefined;
   if (body.teamId) {
@@ -127,7 +139,7 @@ async function moveSession(
       const missing = await missingTeamRepository(
         ctx.db,
         body.teamId,
-        await store.listRepositoryIds(id)
+        await scope.listRepositoryIds(id)
       );
       if (missing)
         return json(
@@ -158,22 +170,46 @@ async function moveSession(
       );
     }
   }
-  const audit = new SessionAuditStore(ctx.db).bind(
-    {
-      requestId: ctx.request_id,
-      actorUserId: admission.viewer.userId,
-      action: "session.moved",
-      sessionId: params.id,
-      teamId: body.teamId,
-      before: { teamId: admission.row.ownerTeamId, sessionIds: ids },
-      after: { teamId: body.teamId, sessionIds: ids },
-    },
-    Boolean(body.teamId)
-  );
-  if (!(await store.updateOwnerTeam(ids, body.teamId, [audit], beforeStatements, joiningUserId))) {
-    return json({ error: "Team archived", code: "team_archived" }, 409);
+  if (changedRows.length === 0) {
+    return json({ sessionId: params.id, ownerTeamId: body.teamId, affectedSessionIds: [] });
   }
-  return json({ sessionId: params.id, ownerTeamId: body.teamId, affectedSessionIds: ids });
+  const auditStore = new SessionAuditStore(ctx.db);
+  const audits = changedRows.map((row) =>
+    auditStore.bind(
+      {
+        requestId: ctx.request_id,
+        actorUserId,
+        action: "session.moved",
+        sessionId: row.id,
+        teamId: body.teamId,
+        before: { teamId: row.ownerTeamId, visibility: row.visibility },
+        after: {
+          teamId: body.teamId,
+          visibility:
+            body.teamId === null && row.visibility === "team" ? "workspace" : row.visibility,
+        },
+      },
+      Boolean(body.teamId)
+    )
+  );
+  if (
+    !(await scope.updateOwnerTeam(
+      changedRows.map((row) => row.id),
+      body.teamId,
+      audits,
+      beforeStatements,
+      joiningUserId
+    ))
+  ) {
+    return body.teamId
+      ? json({ error: "Team archived", code: "team_archived" }, 409)
+      : error("Session not found", 404);
+  }
+  return json({
+    sessionId: params.id,
+    ownerTeamId: body.teamId,
+    affectedSessionIds: changedRows.map((row) => row.id),
+  });
 }
 
 async function changeCollaborator(

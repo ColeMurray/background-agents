@@ -3,8 +3,7 @@
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import useSWR from "swr";
-import { z } from "zod";
-import { createTeamRequestSchema } from "@open-inspect/shared/types/teams";
+import { createTeamRequestSchema, teamSettingsSchema } from "@open-inspect/shared/types/teams";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useTeams } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -16,7 +15,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 
 const TEAM_SETTINGS_KEY = "/api/settings/teams";
-const teamSettingsSchema = z.object({ requireTeamOnCreate: z.boolean() });
 
 export function TeamsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();

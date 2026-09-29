@@ -4,6 +4,7 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { SessionScopeStore } from "../../src/db/session-scope-store";
 import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSession,
@@ -553,11 +554,11 @@ describe("Child session operations (list, get, cancel)", () => {
     });
 
     it("refuses a prompt when the child moved to another team", async () => {
-      const { pName, childName, sandboxToken, store } = await setupParentAndChild();
+      const { pName, childName, sandboxToken } = await setupParentAndChild();
       await env.DB.prepare(
         "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_other', 'other', 'Other', 1, 1)"
       ).run();
-      await store.updateOwnerTeam([childName], "team_other");
+      await new SessionScopeStore(env.DB).updateOwnerTeam([childName], "team_other");
 
       const response = await SELF.fetch(
         `https://test.local/sessions/${pName}/children/${childName}/prompt`,

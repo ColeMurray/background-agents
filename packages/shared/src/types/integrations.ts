@@ -2,6 +2,7 @@
 
 import { escapeRegExp } from "../regex";
 import { z } from "zod";
+import { teamSettingsSchema } from "./teams";
 
 export type IntegrationId = "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack";
 
@@ -557,6 +558,13 @@ export const integrationSettingsSchemas = {
   scm: {
     global: scmGlobalConfigSchema,
     repo: scmSettingsSchema,
+  },
+  teams: {
+    global: z.strictObject({
+      enabledRepos: z.never().optional(),
+      defaults: teamSettingsSchema.optional(),
+    }),
+    repo: z.strictObject({}),
   },
 } as const;
 

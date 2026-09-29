@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
-import type { SessionEntry } from "./session-index";
+import type { CreateSessionCommand } from "./session-index";
 
 type SessionRow = {
   id: string;
@@ -369,7 +369,7 @@ class FakePreparedStatement {
   }
 }
 
-function makeSession(overrides: Partial<SessionEntry> = {}): SessionEntry {
+function makeSession(overrides: Partial<CreateSessionCommand> = {}): CreateSessionCommand {
   return {
     id: "test-id",
     title: "Test Session",

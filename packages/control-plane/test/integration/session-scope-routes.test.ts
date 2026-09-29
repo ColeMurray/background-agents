@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { SessionScopeStore } from "../../src/db/session-scope-store";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { TeamAuditStore } from "../../src/db/team-audit";
 import { SessionAuditStore } from "../../src/db/session-audit";
@@ -81,9 +82,69 @@ describe("session scope routes", () => {
       ]),
     });
     const audit = await env.DB.prepare(
-      "SELECT action, team_id FROM authorization_audit_events WHERE action = 'session.moved'"
-    ).all();
-    expect(audit.results).toEqual([{ action: "session.moved", team_id: team.id }]);
+      "SELECT resource_id, team_id, metadata_json FROM authorization_audit_events WHERE action = 'session.moved' ORDER BY resource_id"
+    ).all<{ resource_id: string; team_id: string; metadata_json: string }>();
+    expect(
+      audit.results.map((row) => ({
+        sessionId: row.resource_id,
+        teamId: row.team_id,
+        metadata: JSON.parse(row.metadata_json),
+      }))
+    ).toEqual(
+      ["child", "grandchild", "root"].map((sessionId) => ({
+        sessionId,
+        teamId: team.id,
+        metadata: {
+          before: { teamId: null, visibility: "workspace" },
+          requested: {},
+          after: { teamId: team.id, visibility: "workspace" },
+        },
+      }))
+    );
+  });
+
+  it("records each independently scoped child's actual source team on a cascade", async () => {
+    await session("root");
+    await session("child", "root");
+    const teams = new TeamStore(env.DB);
+    const source = await teams.create({
+      slug: "source",
+      name: "Source",
+      joinPolicy: "invite_only",
+    });
+    const target = await teams.create({
+      slug: "target",
+      name: "Target",
+      joinPolicy: "invite_only",
+    });
+    await env.DB.prepare("UPDATE sessions SET owner_team_id = ? WHERE id = 'child'")
+      .bind(source.id)
+      .run();
+    await new TeamMembershipStore(env.DB).add(target.id, OWNER);
+    await grant(target.id);
+
+    expect((await request("/sessions/root/scope", "PUT", { teamId: target.id })).status).toBe(200);
+    const audits = await env.DB.prepare(
+      "SELECT resource_id, metadata_json FROM authorization_audit_events WHERE action = 'session.moved' ORDER BY resource_id"
+    ).all<{ resource_id: string; metadata_json: string }>();
+    expect(
+      audits.results.map((row) => ({
+        sessionId: row.resource_id,
+        before: JSON.parse(row.metadata_json).before.teamId,
+      }))
+    ).toEqual([
+      { sessionId: "child", before: source.id },
+      { sessionId: "root", before: null },
+    ]);
+  });
+
+  it("does not audit a move when the requested scope is unchanged", async () => {
+    await session("root");
+    expect((await request("/sessions/root/scope", "PUT", { teamId: null })).status).toBe(200);
+    const audit = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'session.moved'"
+    ).first<{ count: number }>();
+    expect(audit?.count).toBe(0);
   });
 
   it("does not move a child without includeChildren and refuses a missing grant", async () => {
@@ -168,7 +229,7 @@ describe("session scope routes", () => {
       after: {},
     });
     await expect(
-      new SessionIndexStore(failAudit).updateOwnerTeam(
+      new SessionScopeStore(failAudit).updateOwnerTeam(
         ["root"],
         team.id,
         [moveAudit],
@@ -221,7 +282,7 @@ describe("session scope routes", () => {
     );
     await new TeamStore(env.DB).archive(team.id);
     expect(
-      await new SessionIndexStore(env.DB).updateOwnerTeam(
+      await new SessionScopeStore(env.DB).updateOwnerTeam(
         ["root"],
         team.id,
         [moveAudit],
@@ -263,7 +324,7 @@ describe("session scope routes", () => {
     );
     await memberships.add(team.id, OWNER);
     expect(
-      await new SessionIndexStore(env.DB).updateOwnerTeam(
+      await new SessionScopeStore(env.DB).updateOwnerTeam(
         ["root"],
         team.id,
         [],
@@ -354,6 +415,10 @@ describe("session scope routes", () => {
       200
     );
     expect(await (await request("/settings/teams")).json()).toEqual({ requireTeamOnCreate: true });
+    const stored = await env.DB.prepare(
+      "SELECT settings FROM integration_settings WHERE integration_id = 'teams'"
+    ).first<{ settings: string }>();
+    expect(JSON.parse(stored!.settings)).toEqual({ defaults: { requireTeamOnCreate: true } });
     expect(
       (await request("/settings/teams", "PATCH", { requireTeamOnCreate: false }, COLLABORATOR))
         .status

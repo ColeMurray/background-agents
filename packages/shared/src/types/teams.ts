@@ -10,6 +10,9 @@ export type TeamJoinPolicy = z.infer<typeof teamJoinPolicySchema>;
 export const sessionVisibilitySchema = z.enum(["team", "workspace", "private"]);
 export type SessionVisibility = z.infer<typeof sessionVisibilitySchema>;
 
+export const teamSettingsSchema = z.strictObject({ requireTeamOnCreate: z.boolean() });
+export type TeamSettings = z.infer<typeof teamSettingsSchema>;
+
 export const teamRowSchema = z.object({
   id: z.string(),
   slug: z.string(),
