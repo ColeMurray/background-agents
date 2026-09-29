@@ -5,7 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import { ModalApiError, ModalVmStartupError } from "../client";
+import { ModalApiError, ModalVmStartupError, isAmbiguousModalVmLaunchError } from "../client";
 import { formatPendingVmReference, parsePendingVmReference } from "./pending-vm-reference";
 import {
   PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
@@ -123,7 +123,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     if (cause instanceof ModalVmStartupError)
       return cause.outcome === "unknown" || cause.outcome === "race_pending";
     if (cause instanceof ModalApiError)
-      return cause.detail === "race_pending" || cause.status >= 500;
+      return cause.detail === "race_pending" || isAmbiguousModalVmLaunchError(cause);
     return cause instanceof TypeError || SandboxProviderError.isTransientNetworkError(cause);
   }
 
@@ -572,7 +572,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
             error.detail === "other_generation" ? "permanent" : "transient",
             error
           );
-        if (error.status >= 500) return new SandboxProviderError(context, "transient", error);
+        if (isAmbiguousModalVmLaunchError(error))
+          return new SandboxProviderError(context, "transient", error);
       }
       return this.classifyErrorWithStatus(context, error.status, error);
     }

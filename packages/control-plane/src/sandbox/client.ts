@@ -330,6 +330,14 @@ export class ModalApiError extends Error {
   }
 }
 
+/**
+ * Whether a modal-vm launch HTTP error leaves the allocation unknown: any 5xx, except
+ * `docker_not_available`, which Modal returns before retiring or allocating a VM.
+ */
+export function isAmbiguousModalVmLaunchError(error: ModalApiError): boolean {
+  return error.status >= 500 && error.detail !== "docker_not_available";
+}
+
 export type ModalVmStartupOutcome =
   | "unknown"
   | "not_visible"
@@ -427,7 +435,7 @@ export class ModalClient {
           detail === "race_pending"
         )
           throw new ModalVmStartupError(detail, error);
-        if (error.status < 500) throw error;
+        if (!isAmbiguousModalVmLaunchError(error)) throw error;
       }
       throw new ModalVmStartupError(
         "unknown",

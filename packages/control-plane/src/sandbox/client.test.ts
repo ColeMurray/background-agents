@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
   MODAL_SNAPSHOT_REQUEST_DEADLINE_MS,
+  ModalApiError,
   buildModalSandboxDashboardUrl,
   buildModalWorkspaceSlug,
   createModalClient,
@@ -216,6 +217,24 @@ describe("ModalClient", () => {
         model: "test",
       })
     ).rejects.toMatchObject({ name: "ModalVmStartupError", outcome: "window_closed" });
+  });
+
+  it("keeps a VM create rejected before allocation as its HTTP error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ detail: "docker_not_available" }, { status: 501 })
+    );
+    const created = createModalClient("secret", "acme").createSandbox({
+      sessionId: "session",
+      sandboxId: "generation",
+      sandboxBackend: "modal-vm",
+      repoOwner: null,
+      repoName: null,
+      controlPlaneUrl: "https://control.test",
+      sandboxAuthToken: "token",
+      harness: "opencode",
+    });
+    await expect(created).rejects.toBeInstanceOf(ModalApiError);
+    await expect(created).rejects.toMatchObject({ status: 501, detail: "docker_not_available" });
   });
 
   it("times out image-build creation when response headers stall", async () => {

@@ -201,6 +201,23 @@ describe("modal-vm startup resolution", () => {
     expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce();
   });
 
+  it("fails a create rejected before allocation without resolving, counting the failure", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const f = fixture();
+    f.client.createSandbox.mockRejectedValue(
+      new ModalApiError("Modal API error: 501", 501, "docker_not_available")
+    );
+    f.client.resolveVmSandbox.mockRejectedValue(new ModalApiError("invisible", 409, "not_visible"));
+    const spawning = f.makeManager().spawnSandbox();
+    await vi.waitFor(() => expect(f.client.createSandbox).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS + 20_000);
+    await spawning;
+    expect(f.client.resolveVmSandbox).not.toHaveBeenCalled();
+    expect(f.sandbox.status).toBe("failed");
+    expect(f.sandbox.spawn_failure_count).toBe(1);
+  });
+
   it("resolves an ambiguous base-image retry after a prebuilt image is unavailable", async () => {
     const imageBuildLookup: ImageBuildLookup = {
       getLatestReady: vi.fn(async () => ({

@@ -95,14 +95,15 @@ const testConfig = {
 
 describe("ModalSandboxProvider", () => {
   it.each([
-    [409, "race_pending", true],
-    [409, "other_generation", false],
-    [409, "window_closed", false],
-    [502, undefined, true],
-    [500, undefined, true],
+    [409, "race_pending", true, "transient"],
+    [409, "other_generation", false, "permanent"],
+    [409, "window_closed", false, "transient"],
+    [502, undefined, true, "transient"],
+    [500, undefined, true, "transient"],
+    [501, "docker_not_available", false, "permanent"],
   ] as const)(
     "classifies VM launch HTTP %s / %s without matching messages",
-    async (status, detail, unknown) => {
+    async (status, detail, unknown, errorType) => {
       const error = new ModalApiError("arbitrary message", status, detail);
       const provider = new ModalSandboxProvider(
         createMockModalClient({
@@ -121,9 +122,7 @@ describe("ModalSandboxProvider", () => {
       expect(caught).toBeInstanceOf(SandboxProviderError);
       expect((caught as SandboxProviderError).cause).toBe(error);
       expect(provider.isUnknownStartupError(caught)).toBe(unknown);
-      expect((caught as SandboxProviderError).errorType).toBe(
-        detail === "other_generation" ? "permanent" : "transient"
-      );
+      expect((caught as SandboxProviderError).errorType).toBe(errorType);
     }
   );
 
