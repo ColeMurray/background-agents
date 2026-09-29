@@ -106,6 +106,22 @@ describe("POST /complete failure", () => {
     expect(body).toContain(`The agent encountered an error: ${SIZE_LIMIT_ERROR}`);
   });
 
+  it.each(["eventError", "callbackError"] as const)(
+    "omits an oversized, sensitive %s while keeping partial text",
+    async (source) => {
+      const body = await postFailedCompletion({
+        text: "Partial answer",
+        [source]: `Provider error at https://user:secret-token@example.test/ ${"x".repeat(1_000_000)}`,
+      });
+
+      expect(body).toContain(
+        "The agent encountered an error: Error details omitted for safety.\n\nPartial answer"
+      );
+      expect(body).not.toContain("secret-token");
+      expect(body.length).toBeLessThan(1_000);
+    }
+  );
+
   it("keeps incomplete text when no error reason exists", async () => {
     const body = await postFailedCompletion({ text: "Partial answer" });
 
