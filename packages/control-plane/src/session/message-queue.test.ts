@@ -1229,6 +1229,24 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
+  it.each(["openai/gpt-5.3-codex", "openai/gpt-5.3-codex-spark"])(
+    "dispatches a resumed %s session through the OpenAI replacement",
+    async (model) => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ model }));
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+      await h.queue.processMessageQueue();
+
+      expect(h.getProviderAuthenticationError).toHaveBeenCalledWith("openai/gpt-6-sol");
+      expect(h.wsManager.send).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ type: "prompt", model: "openai/gpt-6-sol" })
+      );
+    }
+  );
+
   it.each([
     { kind: "review", authorType: "human" },
     { kind: "review", authorType: "bot" },

@@ -87,6 +87,39 @@ function member(repoOwner: string, repoName: string, position: number) {
 }
 
 describe("SessionHeader", () => {
+  it("gives the desktop title available header space instead of a fixed width", () => {
+    const title = "Correctness review of background agents";
+    render(
+      <SessionHeader
+        sessionState={createSessionState({ title })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).not.toHaveClass("md:max-w-40");
+    expect(heading.parentElement).not.toHaveClass("md:flex-initial");
+    expect(heading.parentElement?.parentElement).not.toHaveClass("md:flex-initial");
+    expect(screen.getByText("acme/web")).toHaveClass("truncate");
+
+    fireEvent.click(screen.getByRole("button", { name: title }));
+    const input = screen.getByRole("textbox", { name: "Session title" });
+    expect(input).toHaveClass("w-full");
+    expect(input).not.toHaveClass("md:max-w-40");
+  });
+
   it("disables lifecycle controls and connection UI for a read-only session", async () => {
     render(
       <SessionHeader

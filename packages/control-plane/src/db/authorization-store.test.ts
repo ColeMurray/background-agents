@@ -9,8 +9,10 @@ function result(changes: number, rows: unknown[] = []): SqlResult {
 function fakeDatabase(options: {
   batchResults?: SqlResult[];
   allResults?: unknown[];
+  firstResults?: unknown[];
   prepared?: Array<{ sql: string; values: unknown[] }>;
 }): SqlDatabase {
+  const firstResults = [...(options.firstResults ?? [])];
   return {
     prepare: (sql) => {
       const prepared = { sql, values: [] as unknown[] };
@@ -20,7 +22,7 @@ function fakeDatabase(options: {
           prepared.values = values;
           return statement;
         },
-        first: async <T>() => null as T | null,
+        first: async <T>() => (firstResults.shift() as T | undefined) ?? null,
         run: async <T>() => result(0) as SqlResult<T>,
         all: async <T>() => result(0, options.allResults) as SqlResult<T>,
       };
@@ -41,6 +43,48 @@ const replaceMemberStatusInput: Parameters<AuthorizationStore["replaceMemberStat
 };
 
 describe("AuthorizationStore", () => {
+  it("maps an effective authorization row with no role assignment", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        firstResults: [
+          {
+            user_id: "user-1",
+            suspended_at: null,
+            role_id: null,
+            role_key: null,
+            role_name: null,
+          },
+        ],
+      })
+    );
+
+    await expect(store.getEffectiveAuthorization("user-1")).resolves.toEqual({
+      userId: "user-1",
+      suspendedAt: null,
+      role: null,
+    });
+  });
+
+  it("rejects a malformed effective authorization row", async () => {
+    const store = new AuthorizationStore(
+      fakeDatabase({
+        firstResults: [
+          {
+            user_id: "user-1",
+            suspended_at: null,
+            role_id: "role_builtin_owner",
+            role_key: "superuser",
+            role_name: "Owner",
+          },
+        ],
+      })
+    );
+
+    await expect(store.getEffectiveAuthorization("user-1")).rejects.toThrow(
+      "Malformed persisted authorization row"
+    );
+  });
+
   it("maps persistence role fields at the store boundary", async () => {
     const store = new AuthorizationStore(
       fakeDatabase({

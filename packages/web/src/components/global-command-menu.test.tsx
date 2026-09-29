@@ -152,7 +152,7 @@ describe("GlobalCommandMenu", () => {
     await user.type(input, "old archived work{Enter}");
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work");
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work&lifecycle=all");
   });
 
   it("keeps genuine matches ahead of the handoff in keyboard order", async () => {
@@ -170,7 +170,7 @@ describe("GlobalCommandMenu", () => {
     expect(options.at(-1)).toHaveTextContent("Search all sessions");
 
     await user.keyboard("{End}{Enter}");
-    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=sessions");
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=sessions&lifecycle=all");
   });
 
   it("navigates directly to a settings destination", async () => {
@@ -341,7 +341,16 @@ describe("GlobalCommandMenu search-all handoff", () => {
     await user.click(screen.getByText("Search all sessions"));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work");
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?q=old+archived+work&lifecycle=all");
+  });
+
+  it("opens every lifecycle, archived included, when selected without search text", async () => {
+    const user = userEvent.setup();
+    const { onNavigate } = renderMenu();
+
+    await user.click(screen.getByText("Archived and older sessions, with filters"));
+
+    expect(onNavigate).toHaveBeenCalledWith("/sessions?lifecycle=all");
   });
 
   it("omits the search-all handoff and Sessions destination without session read permission", () => {

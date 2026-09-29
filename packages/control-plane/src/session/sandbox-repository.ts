@@ -30,6 +30,7 @@ const sandboxCircuitBreakerRowSchema = z.object({
 type SandboxCircuitBreakerRow = z.infer<typeof sandboxCircuitBreakerRowSchema>;
 
 const sandboxAccessSecretRowSchema = z.object({ secret: z.string().nullable() });
+const sandboxStatusReturnRowSchema = z.object({ status: z.unknown() });
 
 /** URL and secret columns backing each access artifact kind. */
 const ACCESS_ARTIFACT_COLUMNS: Record<
@@ -214,8 +215,8 @@ export class SandboxRepository {
       generation.createdAt,
       allowFailedSelfHeal ? 1 : 0
     );
-    const row = result.toArray()[0] as { status?: SandboxStatus } | undefined;
-    return row?.status ?? null;
+    const row = sandboxStatusReturnRowSchema.safeParse(result.toArray()[0]);
+    return row.success ? coerceSandboxStatus(row.data.status, this.log) : null;
   }
 
   /**

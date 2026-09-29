@@ -17,7 +17,7 @@ import {
   type McpServerConfig,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
-import { extractProviderAndModel } from "@open-inspect/shared/models";
+import { extractProviderAndModel, getValidModelOrDefault } from "@open-inspect/shared/models";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
@@ -2349,10 +2349,10 @@ export class SandboxLifecycleManager
 
   /**
    * Resolve the provider and model ID from the session or config default.
-   * e.g., "openai/gpt-5.3-codex" -> { provider: "openai", model: "gpt-5.3-codex" }
+   * e.g., "openai/gpt-6-sol" -> { provider: "openai", model: "gpt-6-sol" }
    */
   private resolveProviderAndModel(session: SessionRow): { provider: string; model: string } {
-    return extractProviderAndModel(session.model || this.config.model);
+    return extractProviderAndModel(getValidModelOrDefault(session.model || this.config.model));
   }
 
   /**

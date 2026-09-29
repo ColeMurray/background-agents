@@ -553,6 +553,26 @@ describe("SandboxRepository boot state (SQLite)", () => {
         modal_object_id: "provider-1",
       });
     });
+
+    it("coerces malformed returned statuses instead of asserting them", () => {
+      const log = createLog();
+      const repository = new SandboxRepository(
+        {
+          exec: () => ({
+            toArray: () => [{ status: "unexpected" }],
+            one: () => null,
+          }),
+        },
+        log,
+        TEST_ENCRYPTION_KEY
+      );
+
+      expect(repository.commitProviderStartup(generation, "provider-1", true)).toBe("failed");
+      expect(log.warn).toHaveBeenCalledWith(
+        "sandbox.status.unrecognized",
+        expect.objectContaining({ status: "unexpected" })
+      );
+    });
   });
 
   it("resolves a VM only while its generation and pending handle still match", async () => {

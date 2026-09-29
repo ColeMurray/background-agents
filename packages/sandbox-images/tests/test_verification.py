@@ -1,6 +1,7 @@
 """Image-contract checks that do not require a running provider sandbox."""
 
 import contextlib
+import itertools
 import runpy
 import socket
 import sys
@@ -186,3 +187,25 @@ def test_rfb_wait_stops_when_a_desktop_process_exits():
     exited.poll.return_value = 1
     with pytest.raises(RuntimeError, match="Desktop process exited"):
         verification["wait_for_rfb"](1, [exited], deadline=time.monotonic() + 5)
+
+
+@pytest.mark.parametrize(
+    ("accept_delay_seconds", "banner"),
+    [(0, b"RFB 003.008\n"), (1.5, b"RFB 003.008\n"), (1.5, None)],
+)
+def test_rfb_wait_stops_when_a_desktop_process_exits_while_waiting_for_the_banner(
+    accept_delay_seconds, banner
+):
+    exits_after_connect = Mock()
+    exits_after_connect.poll.side_effect = itertools.chain([None], itertools.repeat(1))
+    listener, stopped = _vnc_server(accept_delay_seconds=accept_delay_seconds, banner=banner)
+    with listener:
+        try:
+            with pytest.raises(RuntimeError, match="Desktop process exited"):
+                verification["wait_for_rfb"](
+                    listener.getsockname()[1],
+                    [exits_after_connect],
+                    deadline=time.monotonic() + 3,
+                )
+        finally:
+            stopped.set()

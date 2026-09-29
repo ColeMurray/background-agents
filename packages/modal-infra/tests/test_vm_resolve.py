@@ -18,6 +18,7 @@ from sandbox_runtime.constants import (
 from src import web_api
 from src.sandbox import manager as manager_module
 from src.sandbox.launch_policy import docker_allocation_name, docker_allocation_tags
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 SESSION = "session-1"
 GENERATION = "generation-1"
@@ -78,14 +79,14 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
     monkeypatch.setattr(manager_module.modal.Sandbox, "from_name", SimpleNamespace(aio=from_name))
     monkeypatch.setattr(manager_module.modal.Sandbox, "create", SimpleNamespace(aio=create))
     tunnels = AsyncMock(
-        return_value=(
+        return_value=TunnelUrls(
             "https://code.example",
             "https://vnc.example",
             "https://terminal.example",
             {3000: "https://app.example", 3001: "https://other.example"},
         )
     )
-    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+    monkeypatch.setattr(SandboxTunnels, "resolve", tunnels)
 
     result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
 
@@ -108,9 +109,7 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
     sandbox.exec.aio.assert_awaited_once()
     sandbox.terminate.aio.assert_not_awaited()
     create.assert_not_awaited()
-    tunnels.assert_awaited_once_with(
-        sandbox, GENERATION, True, True, True, [3000, 3001], 9000, 9001, 9002, write_env_file=False
-    )
+    tunnels.assert_awaited_once_with(sandbox, GENERATION, write_env_file=False)
 
 
 @pytest.mark.asyncio
@@ -137,7 +136,7 @@ async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missi
     create = AsyncMock(side_effect=AssertionError("resolve must not create"))
     monkeypatch.setattr(manager_module.modal.Sandbox, "create", SimpleNamespace(aio=create))
     monkeypatch.setattr(
-        manager_module.SandboxManager,
+        SandboxTunnels,
         "_resolve_tunnels",
         AsyncMock(
             return_value={
@@ -148,7 +147,7 @@ async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missi
         ),
     )
     write_env = AsyncMock(side_effect=AssertionError("resolve must not write"))
-    monkeypatch.setattr(manager_module.SandboxManager, "_write_tunnel_env_file", write_env)
+    monkeypatch.setattr(SandboxTunnels, "_write_tunnel_env_file", write_env)
 
     with pytest.raises(HTTPException) as exc:
         await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
@@ -168,16 +167,14 @@ async def test_resolve_disabled_access_does_not_return_credentials(monkeypatch):
         "from_name",
         SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
     )
-    tunnels = AsyncMock(return_value=(None, None, None, None))
-    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+    tunnels = AsyncMock(return_value=TunnelUrls())
+    monkeypatch.setattr(SandboxTunnels, "resolve", tunnels)
 
     result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
 
     assert result["data"]["code_server_password"] is None
     assert result["data"]["vnc_password"] is None
-    tunnels.assert_awaited_once_with(
-        sandbox, GENERATION, False, False, False, [], 8080, 6080, 7680, write_env_file=False
-    )
+    tunnels.assert_awaited_once_with(sandbox, GENERATION, write_env_file=False)
 
 
 @pytest.mark.asyncio
@@ -193,12 +190,12 @@ async def test_resolve_extra_tunnels_does_not_write_into_vm(monkeypatch):
         SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
     )
     monkeypatch.setattr(
-        manager_module.SandboxManager,
+        SandboxTunnels,
         "_resolve_tunnels",
         AsyncMock(return_value={3000: "https://app.example"}),
     )
     write_env = AsyncMock(side_effect=AssertionError("resolve must not write"))
-    monkeypatch.setattr(manager_module.SandboxManager, "_write_tunnel_env_file", write_env)
+    monkeypatch.setattr(SandboxTunnels, "_write_tunnel_env_file", write_env)
 
     result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
 
@@ -225,7 +222,7 @@ async def test_resolve_legacy_user_password_does_not_enable_access(monkeypatch):
         SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
     )
     tunnels = AsyncMock(side_effect=AssertionError("legacy resolve must not inspect tunnels"))
-    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+    monkeypatch.setattr(SandboxTunnels, "resolve", tunnels)
 
     result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
 
@@ -257,8 +254,8 @@ async def test_resolve_versioned_flags_ignore_user_password_when_service_disable
         "from_name",
         SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
     )
-    tunnels = AsyncMock(return_value=(None, "https://vnc.example", None, None))
-    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+    tunnels = AsyncMock(return_value=TunnelUrls(vnc_url="https://vnc.example"))
+    monkeypatch.setattr(SandboxTunnels, "resolve", tunnels)
 
     result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
 
@@ -266,9 +263,7 @@ async def test_resolve_versioned_flags_ignore_user_password_when_service_disable
     assert result["data"]["code_server_url"] is None
     assert result["data"]["vnc_password"] == "vnc-password"
     assert sandbox.exec.aio.call_args.args[-1:] == (VNC_PASSWORD_ENV_VAR,)
-    tunnels.assert_awaited_once_with(
-        sandbox, GENERATION, False, True, False, [], 9000, 9001, 9002, write_env_file=False
-    )
+    tunnels.assert_awaited_once_with(sandbox, GENERATION, write_env_file=False)
 
 
 @pytest.mark.asyncio
@@ -296,7 +291,7 @@ async def test_resolve_unknown_or_incomplete_metadata_never_falls_back_to_env(
         SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
     )
     tunnels = AsyncMock(side_effect=AssertionError("invalid metadata must not inspect tunnels"))
-    monkeypatch.setattr(manager_module.SandboxManager, "_resolve_and_setup_tunnels", tunnels)
+    monkeypatch.setattr(SandboxTunnels, "resolve", tunnels)
 
     result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
 

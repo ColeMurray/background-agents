@@ -300,6 +300,14 @@ describe("SessionCoreRepository", () => {
       expect(mock.calls[0].query).toContain("RETURNING total_cost");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
     });
+
+    it("rejects malformed returned total_cost rows", () => {
+      mock.setOne({ total_cost: "1.25" });
+
+      expect(() => repo.addSessionCost(0.0123, 5000)).toThrow(
+        "Malformed persisted session cost row"
+      );
+    });
   });
 
   describe("budget state", () => {

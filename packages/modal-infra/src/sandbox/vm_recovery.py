@@ -9,6 +9,7 @@ import modal
 from sandbox_runtime.constants import VNC_PASSWORD_ENV_VAR
 
 from ..app_config import APP_NAME
+from .tunnels import SandboxTunnels
 
 VM_LAUNCH_TAG = "openinspect_vm_launch"
 VM_PORTS_TAG = "openinspect_vm_ports"
@@ -36,6 +37,10 @@ class VMServiceLaunch:
     novnc_port: int
     ttyd_proxy_port: int
     tunnel_ports: list[int]
+
+    @classmethod
+    def from_tunnels(cls, tunnels: SandboxTunnels) -> "VMServiceLaunch":
+        return cls(*tunnels.service_enabled, *tunnels.service_ports, tunnels.extra_ports)
 
     def tags(self) -> dict[str, str]:
         # Two short, tag-safe values keep even ten five-digit extra ports within Modal's limit.
@@ -114,9 +119,6 @@ async def recover_vm_access(
     sandbox_id: str,
     tags: dict[str, str],
     read_passwords: Callable[..., Awaitable[dict[str, str]]],
-    resolve_tunnels: Callable[
-        ..., Awaitable[tuple[str | None, str | None, str | None, dict[int, str] | None]]
-    ],
 ) -> VMAccess:
     launch = parse_vm_service_launch(tags)
     if launch is None:
@@ -126,30 +128,30 @@ async def recover_vm_access(
         code_server_enabled=launch.code_server_enabled,
         vnc_enabled=launch.vnc_enabled,
     )
-    code_url, vnc_url, ttyd_url, tunnel_urls = await resolve_tunnels(
-        sandbox,
-        sandbox_id,
-        launch.code_server_enabled,
-        launch.vnc_enabled,
-        launch.terminal_enabled,
-        launch.tunnel_ports,
-        launch.code_server_port,
-        launch.novnc_port,
-        launch.ttyd_proxy_port,
-        write_env_file=False,
+    tunnels = SandboxTunnels(
+        code_server_enabled=launch.code_server_enabled,
+        vnc_enabled=launch.vnc_enabled,
+        settings={
+            "terminalEnabled": launch.terminal_enabled,
+            "codeServerPort": launch.code_server_port,
+            "vncPort": launch.novnc_port,
+            "terminalPort": launch.ttyd_proxy_port,
+            "tunnelPorts": launch.tunnel_ports,
+        },
     )
+    urls = await tunnels.resolve(sandbox, sandbox_id, write_env_file=False)
     if (
-        (launch.code_server_enabled and not code_url)
-        or (launch.vnc_enabled and not vnc_url)
-        or (launch.terminal_enabled and not ttyd_url)
-        or any(not (tunnel_urls or {}).get(port) for port in launch.tunnel_ports)
+        (launch.code_server_enabled and not urls.code_server_url)
+        or (launch.vnc_enabled and not urls.vnc_url)
+        or (launch.terminal_enabled and not urls.ttyd_url)
+        or any(not (urls.tunnel_urls or {}).get(port) for port in launch.tunnel_ports)
     ):
         raise VMAllocationOutcome("race_pending", "VM allocation tunnels are not yet visible")
     return VMAccess(
-        code_server_url=code_url,
+        code_server_url=urls.code_server_url,
         code_server_password=passwords.get("CODE_SERVER_PASSWORD"),
-        vnc_url=vnc_url,
+        vnc_url=urls.vnc_url,
         vnc_password=passwords.get(VNC_PASSWORD_ENV_VAR),
-        ttyd_url=ttyd_url,
-        tunnel_urls=tunnel_urls,
+        ttyd_url=urls.ttyd_url,
+        tunnel_urls=urls.tunnel_urls,
     )
