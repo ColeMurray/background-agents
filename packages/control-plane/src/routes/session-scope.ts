@@ -1,0 +1,219 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import { checkSessionAccess } from "@open-inspect/shared";
+import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
+import { SessionAuditStore } from "../db/session-audit";
+import { TeamAuditStore } from "../db/team-audit";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { SessionIndexStore } from "../db/session-index";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { TeamStore } from "../db/teams";
+import { admit, dispatch } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import type { Env } from "../types";
+import { parseBody } from "./body";
+import { missingTeamRepository } from "./session-team-grants";
+import {
+  error,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  json,
+  requireSession,
+  type RequestContext,
+} from "./shared";
+
+const visibilityBody = z.strictObject({
+  visibility: sessionVisibilitySchema,
+  includeChildren: z.boolean().default(true),
+});
+const scopeBody = z.strictObject({
+  teamId: z.string().min(1).nullable(),
+  includeChildren: z.boolean().default(true),
+  joinTeam: z.boolean().default(false),
+});
+
+function denied(reason: string): Response {
+  return json({ error: "Forbidden", code: "session_action_denied", reason_code: reason }, 403);
+}
+
+async function changeVisibility(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: RequestContext
+) {
+  const body = await parseBody(request, visibilityBody, "Invalid visibility");
+  if (body instanceof Response) return body;
+  const admission = ctx.sessionAdmission!;
+  if (admission.viewer.kind !== "user") return denied("missing_permission");
+  const actorUserId = admission.viewer.userId;
+  if (body.visibility === "team" && !admission.row.ownerTeamId)
+    return json({ error: "A team is required", code: "team_required" }, 400);
+  const store = new SessionIndexStore(ctx.db);
+  const ids = [
+    params.id,
+    ...(body.includeChildren ? await store.listDescendantIds(params.id) : []),
+  ];
+  const rows = [admission.row, ...(await Promise.all(ids.slice(1).map((id) => store.get(id))))];
+  if (body.visibility === "private" && rows.some((row) => !row?.userId))
+    return json({ error: "Session owner required", code: "owner_required" }, 400);
+  if (body.visibility === "team" && rows.some((row) => !row?.ownerTeamId))
+    return json({ error: "A team is required", code: "team_required" }, 400);
+  const auditStore = new SessionAuditStore(ctx.db);
+  const audits = rows.flatMap((row) =>
+    row && row.visibility !== body.visibility
+      ? [
+          auditStore.bind({
+            requestId: ctx.request_id,
+            actorUserId,
+            action: "session.visibility_changed",
+            sessionId: row.id,
+            teamId: row.ownerTeamId,
+            before: { visibility: row.visibility },
+            after: { visibility: body.visibility },
+          }),
+        ]
+      : []
+  );
+  await store.updateVisibility(ids, body.visibility, audits);
+  return json({ sessionId: params.id, visibility: body.visibility, affectedSessionIds: ids });
+}
+
+async function moveSession(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: RequestContext
+) {
+  const body = await parseBody(request, scopeBody, "Invalid scope");
+  if (body instanceof Response) return body;
+  const admission = ctx.sessionAdmission!;
+  if (admission.viewer.kind !== "user") return denied("missing_permission");
+  const store = new SessionIndexStore(ctx.db);
+  const ids = [
+    params.id,
+    ...(body.includeChildren ? await store.listDescendantIds(params.id) : []),
+  ];
+  if (body.teamId) {
+    const team = await new TeamStore(ctx.db).getById(body.teamId);
+    if (!team) return error("Team not found", 404);
+    if (team.archivedAt !== null)
+      return json({ error: "Team archived", code: "team_archived" }, 409);
+    const memberships = new TeamMembershipStore(ctx.db);
+    const member = admission.viewer.memberships.has(body.teamId);
+    if (!member && (!body.joinTeam || team.joinPolicy !== "open")) return denied("not_member");
+    for (const id of ids) {
+      const missing = await missingTeamRepository(
+        ctx.db,
+        body.teamId,
+        await store.listRepositoryIds(id)
+      );
+      if (missing)
+        return json(
+          {
+            error: "Target team lacks repository grant",
+            code: "target_team_missing_grant",
+            repository: `${missing.repoOwner}/${missing.repoName}`,
+          },
+          409
+        );
+    }
+    if (!member) {
+      const joined = await memberships.addIfJoinable(body.teamId, admission.viewer.userId);
+      if (!joined && !(await memberships.listForUser(admission.viewer.userId)).has(body.teamId)) {
+        return json({ error: "Team archived", code: "team_archived" }, 409);
+      }
+      if (joined) {
+        await new TeamAuditStore(ctx.db).write({
+          requestId: ctx.request_id,
+          actorUserId: admission.viewer.userId,
+          action: "team.member_joined",
+          teamId: body.teamId,
+          targetUserId: admission.viewer.userId,
+          before: {},
+          after: { role: "member" },
+        });
+      }
+    }
+  }
+  const audit = new SessionAuditStore(ctx.db).bind({
+    requestId: ctx.request_id,
+    actorUserId: admission.viewer.userId,
+    action: "session.moved",
+    sessionId: params.id,
+    teamId: body.teamId,
+    before: { teamId: admission.row.ownerTeamId, sessionIds: ids },
+    after: { teamId: body.teamId, sessionIds: ids },
+  });
+  await store.updateOwnerTeam(ids, body.teamId, [audit]);
+  return json({ sessionId: params.id, ownerTeamId: body.teamId, affectedSessionIds: ids });
+}
+
+async function changeCollaborator(
+  _request: Request,
+  _env: Env,
+  params: { id: string; userId: string },
+  ctx: RequestContext,
+  remove: boolean
+) {
+  const admission = ctx.sessionAdmission!;
+  if (admission.viewer.kind !== "user") return denied("missing_permission");
+  if (remove && admission.viewer.userId !== params.userId) {
+    const access = checkSessionAccess(admission.viewer, admission.row, "manageCollaborators");
+    if (!access.allowed) return denied(access.reason);
+  }
+  const user = z
+    .object({ suspended_at: z.number().nullable(), role_id: z.string().nullable() })
+    .nullable()
+    .parse(
+      await ctx.db
+        .prepare(
+          `SELECT users.suspended_at, assignment.role_id FROM users
+           LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
+           WHERE users.id = ?`
+        )
+        .bind(params.userId)
+        .first()
+    );
+  if (!user) return error("User not found", 404);
+  if (user.suspended_at !== null || user.role_id === null)
+    return json({ error: "User inactive", code: "user_inactive" }, 409);
+  if (admission.row.collaboratorIds.includes(params.userId) === !remove) {
+    return json({ sessionId: params.id, userId: params.userId, status: "unchanged" });
+  }
+  const audit = new SessionAuditStore(ctx.db).bind({
+    requestId: ctx.request_id,
+    actorUserId: admission.viewer.userId,
+    sessionId: params.id,
+    action: remove ? "session.collaborator_removed" : "session.collaborator_added",
+    teamId: admission.row.ownerTeamId,
+    targetUserId: params.userId,
+    before: { collaborator: remove },
+    after: { collaborator: !remove },
+  });
+  const store = new SessionCollaboratorStore(ctx.db);
+  const changed = remove
+    ? await store.remove(params.id, params.userId, audit)
+    : await store.add(params.id, params.userId, admission.viewer.userId, audit);
+  return json({
+    sessionId: params.id,
+    userId: params.userId,
+    status: changed ? "updated" : "unchanged",
+  });
+}
+
+export const sessionScopeRoutes = new Hono<ControlPlaneHonoEnv>();
+const always = (action: "changeVisibility" | "move" | "manageCollaborators" | "read") =>
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: requireSession(action, { enforceAlways: true }),
+  });
+sessionScopeRoutes.put("/sessions/:id/visibility", always("changeVisibility"), (c) =>
+  dispatch(c, changeVisibility)
+);
+sessionScopeRoutes.put("/sessions/:id/scope", always("move"), (c) => dispatch(c, moveSession));
+sessionScopeRoutes.put("/sessions/:id/collaborators/:userId", always("manageCollaborators"), (c) =>
+  dispatch(c, (request, env, params, ctx) => changeCollaborator(request, env, params, ctx, false))
+);
+sessionScopeRoutes.delete("/sessions/:id/collaborators/:userId", always("read"), (c) =>
+  dispatch(c, (request, env, params, ctx) => changeCollaborator(request, env, params, ctx, true))
+);

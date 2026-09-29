@@ -508,6 +508,25 @@ describe("Child session operations (list, get, cancel)", () => {
   });
 
   describe("POST /sessions/:parentId/children/:childId/prompt", () => {
+    it("refuses a prompt when the child moved to another team", async () => {
+      const { pName, childName, sandboxToken, store } = await setupParentAndChild();
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_other', 'other', 'Other', 1, 1)"
+      ).run();
+      await store.updateOwnerTeam([childName], "team_other");
+
+      const response = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "child_moved" });
+    });
+
     it("queues a follow-up in the direct child as the parent prompt author", async () => {
       const { pName, childName, childStub, sandboxToken } = await setupParentAndChild();
 

@@ -669,7 +669,8 @@ async function enforceSessionRequirement(
       env,
       sessionId,
       requirement.action,
-      requirement.sessionIdParam === "childId" ? "child" : "session"
+      requirement.sessionIdParam === "childId" ? "child" : "session",
+      requirement.enforceAlways
     );
     if (result.kind === "not_found") {
       return authorizationDenial(

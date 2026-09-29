@@ -3,9 +3,15 @@ import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
-import { sandboxStatusSchema, sessionStatusSchema, timelineSequenceSchema } from "./sessions";
+import {
+  sandboxStatusSchema,
+  sessionCapabilitiesSchema,
+  sessionStatusSchema,
+  timelineSequenceSchema,
+} from "./sessions";
 import { sandboxShutdownSchema, shutdownRecoveryActionSchema } from "./sandbox-shutdown";
 import { clientRequestIdSchema } from "./prompts";
+import { sessionVisibilitySchema } from "./teams";
 
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),
@@ -16,6 +22,10 @@ export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 
 const sessionStateSchema = z.object({
   id: z.string(),
+  ownerTeamId: z.string().nullable().optional(),
+  visibility: sessionVisibilitySchema.optional(),
+  collaborators: z.array(z.string()).optional(),
+  capabilities: sessionCapabilitiesSchema.optional(),
   title: z.string().nullable(),
   repoOwner: z.string().nullable(),
   repoName: z.string().nullable(),

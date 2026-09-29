@@ -10,6 +10,7 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
+import { SessionAuditStore } from "../db/session-audit";
 import { SessionInternalPaths } from "./contracts";
 import { createSessionRuntimeClient } from "./runtime-client";
 import { createLogger } from "../logger";
@@ -67,6 +68,7 @@ export interface SessionInitInput {
   platformUserId: string | null;
   ownerTeamId: string | null;
   visibility: SessionVisibility;
+  collaboratorSourceSessionId?: string;
 
   // SCM identity
   scmLogin?: string | null;
@@ -167,6 +169,9 @@ export async function initializeSession(
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
   const sessionStore = new SessionIndexStore(ctx.db);
+  if (input.visibility === "private" && !input.platformUserId) {
+    throw new Error("Private sessions require a canonical owner");
+  }
   await sessionStore.create({
     id: input.sessionId,
     title: input.title || null,
@@ -188,6 +193,23 @@ export async function initializeSession(
     userId: input.platformUserId,
     ownerTeamId: input.ownerTeamId,
     visibility: input.visibility,
+    collaboratorSourceSessionId: input.collaboratorSourceSessionId,
+    privateCreationAudit:
+      input.visibility === "private" && input.platformUserId
+        ? new SessionAuditStore(ctx.db).bind({
+            requestId: ctx.request_id,
+            actorUserId: input.platformUserId,
+            action: "session.created_private",
+            sessionId: input.sessionId,
+            teamId: input.ownerTeamId,
+            before: {},
+            after: {
+              ownerUserId: input.platformUserId,
+              teamId: input.ownerTeamId,
+              visibility: "private",
+            },
+          })
+        : undefined,
     createdAt: now,
     updatedAt: now,
     skillManifest: input.managedSkillsManifest,

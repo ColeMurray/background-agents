@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateEncryptionKey } from "./auth/crypto";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
@@ -16,6 +16,9 @@ import { resolveManagedSkills } from "./session/skill-resolution";
 import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "./model-provider-accounts/selection-policy";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "./repos/resolve";
+import { TeamStore } from "./db/teams";
+import { TeamMembershipStore } from "./db/team-memberships";
+import { TeamRepositoryGrantStore } from "./db/team-repository-grants";
 
 const { getAccessToken } = vi.hoisted(() => ({
   getAccessToken: vi.fn(async () => ({
@@ -84,6 +87,7 @@ vi.mock("./repos/resolve", async (importOriginal) => {
 });
 
 describe("handleCreateSession D1 ordering", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveManagedSkills).mockResolvedValue({
@@ -227,6 +231,74 @@ describe("handleCreateSession D1 ordering", () => {
       SESSION: fakeSessionRuntimeDispatch(initFetch),
     };
   }
+
+  it("rejects a team session when its repository is not granted", async () => {
+    vi.spyOn(TeamStore.prototype, "getById").mockResolvedValue({
+      id: "team_alpha",
+      slug: "alpha",
+      name: "Alpha",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "member"]])
+    );
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
+    const response = await createSessionRequestWithBody(createEnv(vi.fn()), {
+      teamId: "team_alpha",
+      repoOwner: "acme",
+      repoName: "web-app",
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "target_team_missing_grant",
+      repository: "acme/web-app",
+    });
+  });
+
+  it("uses the team's default visibility when creating an owned session", async () => {
+    vi.spyOn(TeamStore.prototype, "getById").mockResolvedValue({
+      id: "team_alpha",
+      slug: "alpha",
+      name: "Alpha",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "member"]])
+    );
+    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([
+      { grant_kind: "installation", repo_external_id: null },
+    ]);
+    const create = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create } as never;
+    });
+    const response = await createSessionRequestWithBody(
+      createEnv(vi.fn(async () => Response.json({ status: "created" }))),
+      { teamId: "team_alpha", repoOwner: "acme", repoName: "web-app" }
+    );
+    expect(response.status).toBe(201);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerTeamId: "team_alpha",
+        visibility: "team",
+        userId: "user-1",
+      })
+    );
+  });
 
   it.each([
     {

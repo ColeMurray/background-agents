@@ -5,8 +5,9 @@ you can do. This guide explains the behavior users and workspace administrators 
 
 > **Important:** Open-Inspect is designed for a single trusted organization. A deployment is one
 > workspace, and the source-control App installation defines the repositories available to that
-> workspace. Roles control which Open-Inspect features a person can use; they are not per-repository
-> access lists.
+> workspace. Roles control which Open-Inspect features a person can use; teams and session
+> visibility further limit access to sessions. Neither is a replacement for source-control
+> repository permissions.
 
 ---
 
@@ -44,8 +45,8 @@ Open-Inspect includes four built-in roles.
 | Use repositories and environments in sessions     |  Yes  |      Yes      |  Yes   |   No   |
 | Manage shared settings, integrations, and secrets |  Yes  |      Yes      |   No   |   No   |
 | Create sessions                                   |  Yes  |      Yes      |  Yes   |   No   |
-| View every session                                |  Yes  |      Yes      |  Yes   |  Yes   |
-| Collaborate in and manage sessions                |  Yes  |      Yes      |  Yes   |   No   |
+| View sessions allowed by visibility               |  Yes  |      Yes      |  Yes   |  Yes   |
+| Collaborate in and manage permitted sessions      |  Yes  |      Yes      |  Yes   |   No   |
 | View automations                                  |  Yes  |      Yes      |  Yes   |  Yes   |
 | Create automations                                |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger own automations                |  Yes  |      Yes      |  Yes   |   No   |
@@ -59,51 +60,121 @@ Open-Inspect includes four built-in roles.
 
 ### Owner
 
-Owners have full access to the workspace. Only Owners can grant or remove the Owner role or suspend
-and restore another Owner. Open-Inspect also prevents the final active Owner from being suspended or
-demoted, so the workspace cannot accidentally lose all ownership.
+Owners administer the workspace but do not automatically collaborate in other people's private
+sessions. Only Owners can grant or remove the Owner role or suspend and restore another Owner.
+Open-Inspect also prevents the final active Owner from being suspended or demoted, so the workspace
+cannot accidentally lose all ownership.
 
 ### Administrator
 
-Administrators can operate the workspace day to day. They can manage members, sessions, automations,
-repositories, environments, provider accounts, integrations, and secrets. They cannot transfer
+Administrators can operate the workspace day to day. They can manage members, permitted sessions,
+automations, repositories, environments, provider accounts, integrations, and secrets. They cannot
+access another person's private session unless added as a collaborator. They cannot transfer
 ownership, change who holds the Owner role, or suspend and restore an Owner.
 
 ### Member
 
-Members can create and use sessions, collaborate in existing sessions, use shared repositories and
-environments, and create automations. They can manage and manually trigger automations they own but
-cannot modify another person's automation or administer shared configuration. They can view
-workspace analytics.
+Members can create and use sessions, collaborate in sessions visible to them (except private
+sessions where they are not collaborators), use shared repositories and environments, and create
+automations. They can manage and manually trigger automations they own but cannot modify another
+person's automation or administer shared configuration. They can view workspace analytics.
 
 ### Viewer
 
-Viewers have read-only access to shared workspace resources. They can inspect sessions, automations,
-analytics, repositories, environments, skills, and MCP servers. They cannot create or prompt
-sessions, access sandboxes, manage personal skill profiles, trigger automations, or change shared
-configuration.
+Viewers have read-only access to shared workspace resources. They can inspect sessions visible to
+them, automations, analytics, repositories, environments, skills, and MCP servers. They cannot
+create or prompt sessions, access sandboxes, manage personal skill profiles, trigger automations, or
+change shared configuration.
 
-## How Session Access Works
+## Teams and Session Visibility
 
-Sessions are workspace resources rather than private resources owned by their creator.
+Teams are optional within a workspace. Existing and teamless sessions remain workspace rows with
+`ownerTeamId: null`; creating a team does not move them into it. A team has members and leads, a
+join policy (open or invite-only), and a default session visibility. Owners and Administrators can
+create teams in **Settings > Teams**; the creator becomes the first lead. Team membership does not
+replace the workspace role: a person still needs the relevant session permission in addition to any
+team access.
 
-- Anyone with session read access can view every session in the workspace.
-- Anyone with collaboration access can prompt and contribute to every session.
-- Anyone with lifecycle access can stop, retry, archive, unarchive, and otherwise manage every
-  session.
-- Anyone with sandbox access can use supported sandbox tools for every session.
-- Anyone with delete access can delete every session.
+Each session stores a visibility independently of its team:
 
-The creator shown on a session records attribution; it is not an access list. Likewise, participant
-labels identify who contributed to a session but do not grant or remove workspace permissions. The
-**Mine** filter is a convenience for finding sessions you created, not a security boundary.
+| Visibility  | Who can read the session when team enforcement is on                                                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace` | Workspace users with session read permission, even if the session has a team.                                                                                                                   |
+| `team`      | Members of the owning team, plus workspace Owners and Administrators, with session read permission. Requires an owning team.                                                                    |
+| `private`   | The session owner and explicit collaborators with session read permission. A workspace Owner can also open it by ID under audited break-glass access; Administrators do not get this exception. |
 
-Creating a session also requires permission to use its selected repository or environment. A role
-may therefore be able to view an existing session without being allowed to create a new one.
+Private visibility is enforced in every enforcement mode. An Owner's break-glass read is audited,
+does not cause the session to appear in their lists, and does not grant prompt or sandbox access. An
+Owner with the required lifecycle or delete permission can manage a private session they opened by
+ID; being an Administrator alone does not grant access. Actorless bot services cannot read private
+sessions; user-backed integration requests still depend on the acting user's access.
 
-New HTTP requests reflect role changes and suspension immediately. Live browser connections to a
-session are rechecked at least every five minutes, so a connection may remain open for up to five
-minutes after access changes. Recreating the session is not required.
+The **Mine** filter helps find sessions you created but does not define who may access them. A
+session's owner is its creating workspace user, not its team. Explicit collaborators are an access
+grant for private sessions; they still need the relevant workspace permission to read, prompt, or
+use the sandbox. Runtime participants record who connected or contributed and may carry runtime
+credentials; being a participant alone is not a visibility grant. Conversely, making someone a
+collaborator does not turn them into a runtime participant. Removing a collaborator revokes their
+private-session access on subsequent authorization checks.
+
+Session actions have additional rules after visibility: prompting requires collaboration permission,
+sandbox use requires sandbox permission, and lifecycle operations require lifecycle permission. With
+team enforcement on, deletion requires delete permission **and** session ownership, a lead role in
+the owning team, or a workspace Owner/Administrator role. Team leads do not gain access to private
+sessions simply by leading the team. Changes to team ownership require the session owner, an
+owning-team lead, or a workspace Owner/Administrator, as well as lifecycle permission; changing
+private visibility is reserved for the session owner or a workspace Owner. Private-session action
+rules apply even while team enforcement is off or in shadow mode.
+
+### Creating and Moving Sessions
+
+Session creation checks the selected repository or environment as well as the creator's workspace
+permission. Supplying a team requires active membership in that team and a grant covering **every**
+repository used by the session; archived teams cannot be selected. Without an explicit visibility,
+team sessions use the team's default and teamless sessions default to `workspace`. `team` visibility
+requires a team; `private` requires a workspace user owner. A teamless session may still be private.
+
+Owners and Administrators can configure **Settings > Teams > Require a team for new sessions**
+(`requireTeamOnCreate`). It is off by default. When enabled, new sessions must select a team; it
+does not migrate or hide existing `ownerTeamId: null` workspace rows.
+
+Moving a session to a team checks active membership in the destination (or an explicit join to an
+open team) and repository grants for every repository in the session and included descendants. A
+missing grant blocks the move. Moving to no team sets `ownerTeamId` to `null` and turns `team`
+visibility into `workspace`. Moving or changing visibility can include descendants. Team grants
+constrain selection and moves, not the source-control App token already available to a running
+sandbox.
+
+### Enforcement and Access Paths
+
+Operators set `TEAMS_ENFORCEMENT` to `off`, `shadow` (the default), or `on`:
+
+- `off`: legacy workspace-wide session authorization for non-private sessions; private sessions
+  remain restricted.
+- `shadow`: continue legacy access for non-private sessions while recording where team or ownership
+  rules would deny access; private restrictions still take effect.
+- `on`: enforce visibility, team membership, and action/ownership rules for sessions.
+
+The session boundary covers four paths, not just the session page:
+
+- **HTTP item routes** authorize by the persisted session row before serving snapshots, actions,
+  children, exports, or other session-specific data. A session hidden by visibility responds with a
+  non-enumerating `404` rather than confirming that its ID exists.
+- **Lists and aggregates** filter by visibility before returning sessions in search, inbox, child
+  lists, bulk export, and analytics. Private sessions do not appear in an Owner's lists solely
+  because of break-glass access; administrative analytics can include a scope-filtered, unattributed
+  private cost total without exposing those sessions.
+- **Durable Object connections** recheck subscription and commands against the current session row,
+  so a stale browser tab does not turn a previous grant into lasting access. A private break-glass
+  subscription requires an audit write.
+- **Sandbox access** is a separate session action. Snapshot sandbox URLs and supported sandbox tools
+  are not granted just because a session can be read; a break-glass Owner cannot use another
+  person's private sandbox without becoming a collaborator. Session-bound sandbox credentials are
+  not general user visibility grants.
+
+New HTTP requests reflect role, membership, collaborator, and visibility changes on the next check.
+Live browser connections are rechecked at least every five minutes, so an existing connection may
+remain open for up to five minutes after access changes. Recreating the session is not required.
 
 ## How Automation Access Works
 
@@ -167,7 +238,10 @@ Owner can manage that session separately.
 ## Repository and Credential Boundaries
 
 Open-Inspect uses a shared source-control App installation for clone, fetch, and push operations.
-The App should be installed only on repositories intended for the workspace.
+The App should be installed only on repositories intended for the workspace. Team repository grants
+check which repositories may be chosen for a team session or move; they do **not** narrow the shared
+installation token delivered to a sandbox. Token narrowing is a future phase, not a protection
+provided by team visibility today.
 
 A user's role determines whether they may read or use workspace repositories, but Open-Inspect does
 not compare that role with the user's personal GitHub access for each repository. Linked GitHub

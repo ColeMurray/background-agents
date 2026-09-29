@@ -4,6 +4,7 @@ import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { eventResponseSchema } from "./sandbox-events";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
 import type { PullRequestLifecycleState } from "./artifacts";
+import type { SessionCapabilities } from "./session-access";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -131,6 +132,8 @@ export type SessionReadState = z.infer<typeof sessionReadStateSchema>;
 
 /** Fields shared only by the list, inbox, and direct-child response projections. */
 export const sessionSummaryBaseSchema = z.object({
+  ownerTeamId: z.string().nullable().optional(),
+  visibility: z.enum(["team", "workspace", "private"]).optional(),
   id: z.string(),
   title: z.string().nullable(),
   repoOwner: z.string().nullable(),
@@ -170,7 +173,19 @@ export const childSessionListResponseSchema = z.object({
 export type ChildSessionListResponse = z.infer<typeof childSessionListResponseSchema>;
 
 /** Flat session-list item. Read state is absent for callers without a viewer identity. */
+export const sessionCapabilitiesSchema = z.object({
+  canRead: z.boolean(),
+  canCollaborate: z.boolean(),
+  canManageLifecycle: z.boolean(),
+  canDelete: z.boolean(),
+  canMove: z.boolean(),
+  canSandbox: z.boolean(),
+  canManageCollaborators: z.boolean(),
+  canChangeVisibility: z.boolean(),
+});
+
 export const sessionListSummarySchema = childSessionSummarySchema.extend({
+  capabilities: sessionCapabilitiesSchema.optional(),
   readState: sessionReadStateSchema.optional(),
 });
 export type SessionListSummary = z.infer<typeof sessionListSummarySchema>;
@@ -215,6 +230,10 @@ export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 
 export interface Session {
   id: string;
+  ownerTeamId?: string | null;
+  visibility?: "team" | "workspace" | "private";
+  collaborators?: string[];
+  capabilities?: SessionCapabilities;
   title: string | null;
   repoOwner: string | null;
   repoName: string | null;

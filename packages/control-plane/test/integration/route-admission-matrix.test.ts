@@ -662,7 +662,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         (route.path.endsWith("/children") && route.method === "POST")
       )
         continue;
-      const url = `${BASE}${materialize(route, { id: teamSessionId, childId: fixtures.sandboxSessionId })}`;
+      const url = `${BASE}${materialize(route, { id: teamSessionId, childId: fixtures.sandboxSessionId, userId: TEAM_VIEWER })}`;
       const headers = await serviceRequestHeaders(url, {
         method: route.method,
         as: { userId: TEAM_VIEWER, role: "viewer" },
@@ -681,8 +681,18 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           : 403;
       observed.push(`${route.method} ${route.path} same-team-viewer=${response.status}`);
       expect(response.status, `${route.method} ${route.path}`).toBe(expected);
-      if (expected === 403)
-        await expect(response.json()).resolves.toMatchObject({ reason_code: "missing_permission" });
+      if (expected === 403) {
+        const ownershipOnly =
+          route.authorization.kind === "active-user" &&
+          route.authorization.allOf.some(
+            (entry) =>
+              entry.kind === "session" &&
+              (entry.action === "changeVisibility" || entry.action === "manageCollaborators")
+          );
+        await expect(response.json()).resolves.toMatchObject({
+          reason_code: ownershipOnly ? "not_owner_or_lead" : "missing_permission",
+        });
+      }
     }
     expect(observed).toMatchSnapshot();
     const url = `${BASE}/sessions/${privateSessionId}/events`;

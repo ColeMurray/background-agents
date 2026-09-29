@@ -3,13 +3,17 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamMember } from "@/hooks/use-teams";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { TeamsSettings } from "./teams-settings";
 import { TeamDetail } from "./team-detail";
 import { TeamMembersTable } from "./team-members-table";
 
 expect.extend(matchers);
+
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -87,10 +91,19 @@ const member: TeamMember = {
   avatarUrl: null,
 };
 
+function renderTeamsSettings() {
+  return render(
+    <SWRConfig value={{ provider: () => new Map() }}>
+      <TeamsSettings />
+    </SWRConfig>
+  );
+}
+
 beforeEach(() => {
   mocks.hasPermission = true;
   mocks.candidates = [];
   mocks.teams = [];
+  vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ requireTeamOnCreate: false }));
 });
 afterEach(() => {
   cleanup();
@@ -103,13 +116,52 @@ describe("Teams settings", () => {
     mocks.teams = [
       { id: team.id, slug: team.slug, name: team.name, memberCount: 1, archivedAt: null },
     ];
-    render(<TeamsSettings />);
+    renderTeamsSettings();
     expect(screen.getByText("1 member - Active")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Require a team for new sessions" })).toBeNull();
+    expect(browserApiFetch).not.toHaveBeenCalled();
+  });
+
+  it("loads and updates the require-team policy for workspace managers", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ requireTeamOnCreate: false }));
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ requireTeamOnCreate: true }));
+    renderTeamsSettings();
+
+    const toggle = screen.getByRole("switch", { name: "Require a team for new sessions" });
+    expect(toggle).toBeDisabled();
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    expect(browserApiFetch).toHaveBeenNthCalledWith(1, "/api/settings/teams");
+    expect(browserApiFetch).toHaveBeenNthCalledWith(2, "/api/settings/teams", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requireTeamOnCreate: true }),
+    });
+  });
+
+  it("keeps the stored value and reports a failed policy update", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ requireTeamOnCreate: true }));
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json({ error: "Forbidden" }, { status: 403 })
+    );
+    renderTeamsSettings();
+
+    const toggle = screen.getByRole("switch", { name: "Require a team for new sessions" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(screen.getByText("Failed to update team settings")).toBeInTheDocument()
+    );
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).toBeEnabled();
   });
 
   it("validates slug and surfaces the slug_taken conflict", async () => {
     mocks.create.mockRejectedValue(new Error("Team slug already exists (slug_taken)"));
-    render(<TeamsSettings />);
+    renderTeamsSettings();
     fireEvent.click(screen.getByRole("button", { name: "Create team" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "Design" },

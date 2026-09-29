@@ -6,20 +6,16 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Added
 
-`TEAMS_ENFORCEMENT` controls active-user session item routes (`/sessions/:id` and its subpaths)
-using the persisted session row (`off`, `shadow` by default, or `on`). On those routes, private
-visibility applies in every mode; team visibility and the delete ownership rule apply when `on`.
-
-WebSocket subscribe and per-command session checks now follow the current session row. Private
-sessions stay restricted in every enforcement mode; team access follows the resolver when
-`TEAMS_ENFORCEMENT=on`, including lifecycle access after membership or scope changes. Workspace-wide
-session lists and bulk export follow in subsequent changes; routes to change a session's team or
-visibility are not yet available.
-
-Session lists, the inbox, children lists, bulk export, and analytics now filter by persisted row
-visibility. Private sessions remain restricted in every mode; only Owners and administrators receive
-their unattributed, scope-filtered cost total in analytics. The WebSocket path follows in a later
-change; no route can yet make a session private or team-owned.
+**Team-scoped session access.** Teams remain optional: existing sessions stay teamless workspace
+rows, and **Settings > Teams > Require a team for new sessions** is off by default. Operators can
+roll out `TEAMS_ENFORCEMENT=off|shadow|on` (`shadow` by default): `shadow` records would-be team and
+ownership denials without blocking non-private sessions, while `on` enforces them. Private
+visibility is restricted in every mode. Session item routes, lists and aggregates, live connections,
+and sandbox access use the persisted session scope; Owners' private-session break-glass reads are
+audited and do not make those sessions enumerable. Session creation and team moves check membership
+and repository grants; team and visibility changes are available. Team grants do not yet narrow the
+shared source-control installation token in sandboxes. See
+[Authentication and Authorization](docs/AUTH.md).
 
 ## September 28, 2026
 

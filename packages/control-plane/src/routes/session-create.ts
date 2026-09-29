@@ -18,6 +18,10 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
+import { TeamStore } from "../db/teams";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { TeamSettingsStore } from "../db/team-settings";
+import { missingTeamRepository } from "./session-team-grants";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
@@ -162,6 +166,42 @@ export async function handleCreateSession(
   const resolution = requireAdmittedCanonicalUserId(ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution;
+  const teamId = body.teamId ?? null;
+  if (!teamId && (await new TeamSettingsStore(ctx.db).get()).requireTeamOnCreate) {
+    return json({ error: "A team is required", code: "team_required" }, 400);
+  }
+  let team = null;
+  if (teamId) {
+    team = await new TeamStore(ctx.db).getById(teamId);
+    if (!team) return error("Team not found", 404);
+    if (team.archivedAt !== null)
+      return json({ error: "Team archived", code: "team_archived" }, 409);
+    if (
+      !resolvedUserId ||
+      !(await new TeamMembershipStore(ctx.db).listForUser(resolvedUserId)).has(teamId)
+    ) {
+      return json({ error: "Not a team member", code: "not_member" }, 403);
+    }
+    const missing = await missingTeamRepository(
+      ctx.db,
+      teamId,
+      repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName, repoId }] : [])
+    );
+    if (missing)
+      return json(
+        {
+          error: "Target team lacks repository grant",
+          code: "target_team_missing_grant",
+          repository: `${missing.repoOwner}/${missing.repoName}`,
+        },
+        409
+      );
+  }
+  const visibility = body.visibility ?? team?.defaultVisibility ?? "workspace";
+  if (visibility === "team" && !teamId)
+    return json({ error: "A team is required", code: "team_required" }, 400);
+  if (visibility === "private" && !resolvedUserId)
+    return json({ error: "Session owner required", code: "owner_required" }, 400);
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
@@ -245,8 +285,8 @@ export async function handleCreateSession(
   }
 
   const input: SessionInitInput = {
-    ownerTeamId: null,
-    visibility: "workspace",
+    ownerTeamId: teamId,
+    visibility,
     sessionId,
     repoOwner,
     repoName,

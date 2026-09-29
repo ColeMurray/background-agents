@@ -47,7 +47,7 @@ export type RouteAuthorizationRequirement =
       automationIdParam: string;
     }
   | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" }
-  | { kind: "session"; sessionIdParam: string; action: SessionAction };
+  | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
 type BotServiceName = Exclude<ServiceName, "web">;
 const DEFAULT_AUDIT_ALLOWED = false;
@@ -199,18 +199,29 @@ export function requireTeam(
 export function sessionRequirement(
   action: SessionAction,
   sessionIdParam = "id"
-): RouteAuthorizationRequirement {
+): Extract<RouteAuthorizationRequirement, { kind: "session" }> {
   return { kind: "session", sessionIdParam, action };
 }
 
 export function requireSession(
   action: SessionAction,
-  options?: { sessionIdParam?: string; actorlessGrants?: readonly ActorlessServiceGrant[] }
+  options?: {
+    sessionIdParam?: string;
+    actorlessGrants?: readonly ActorlessServiceGrant[];
+    enforceAlways?: boolean;
+  }
 ): RouteAuthorization {
   return {
     kind: "active-user",
-    allOf: [sessionRequirement(action, options?.sessionIdParam)],
-    service: { kind: "actor", actorlessGrants: options?.actorlessGrants },
+    allOf: [
+      {
+        ...sessionRequirement(action, options?.sessionIdParam),
+        enforceAlways: options?.enforceAlways,
+      },
+    ],
+    service: options?.enforceAlways
+      ? { kind: "deny" }
+      : { kind: "actor", actorlessGrants: options?.actorlessGrants },
     auditAllowed: action !== "read",
   };
 }

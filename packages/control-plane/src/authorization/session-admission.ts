@@ -48,9 +48,10 @@ export async function evaluateSessionAdmission(
   env: Env,
   sessionId: string,
   action: SessionAction,
-  slot: "session" | "child" | null = "session"
+  slot: "session" | "child" | null = "session",
+  enforceAlways = false
 ): Promise<SessionAdmissionOutcome> {
-  const mode = teamsEnforcementMode(ctx, env);
+  const mode = enforceAlways ? "on" : teamsEnforcementMode(ctx, env);
   const row = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!row) return { kind: "not_found" };
 

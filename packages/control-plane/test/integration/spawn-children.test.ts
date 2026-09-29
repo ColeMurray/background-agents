@@ -4,7 +4,13 @@ import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
+import {
+  initNamedSessionDO,
+  queryDO,
+  seedActiveUser,
+  seedMessage,
+  seedSandboxAuth,
+} from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -161,6 +167,49 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("inherits private visibility, owner and collaborators when the prompt author is not canonical", async () => {
+    const ownerId = "11111111111111111111111111111111";
+    const collaboratorId = "22222222222222222222222222222222";
+    await seedActiveUser(ownerId);
+    await seedActiveUser(collaboratorId);
+    const { parentName, sandboxToken, store } = await setupParent({
+      visibility: "private",
+      repoId: 12345,
+      userId: "slack:U0123",
+    });
+    await env.DB.prepare("UPDATE sessions SET user_id = ? WHERE id = ?")
+      .bind(ownerId, parentName)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO session_collaborators (session_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)"
+    )
+      .bind(parentName, collaboratorId, ownerId, Date.now())
+      .run();
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Private child", prompt: "Investigate" }),
+    });
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect(await store.get(sessionId)).toMatchObject({
+      visibility: "private",
+      userId: ownerId,
+      ownerTeamId: null,
+    });
+    const collaborator = await env.DB.prepare(
+      "SELECT user_id FROM session_collaborators WHERE session_id = ?"
+    )
+      .bind(sessionId)
+      .first<{ user_id: string }>();
+    expect(collaborator?.user_id).toBe(collaboratorId);
+    const audit = await env.DB.prepare(
+      "SELECT team_id, resource_id FROM authorization_audit_events WHERE action = 'session.created_private'"
+    ).first<{ team_id: string | null; resource_id: string }>();
+    expect(audit).toEqual({ team_id: null, resource_id: sessionId });
   });
 
   it("attributes a child to the active prompt author instead of the parent owner", async () => {

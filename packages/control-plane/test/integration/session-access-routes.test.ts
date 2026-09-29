@@ -234,7 +234,7 @@ describe("HTTP session access by enforcement mode", () => {
     }
   );
 
-  it("does not query memberships in off mode", async () => {
+  it("loads memberships for snapshot capabilities even in off mode", async () => {
     const { sessionName } = await session("team");
     const list = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
     try {
@@ -245,7 +245,7 @@ describe("HTTP session access by enforcement mode", () => {
           })
         ).status
       ).toBe(200);
-      expect(list).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledOnce();
     } finally {
       list.mockRestore();
     }

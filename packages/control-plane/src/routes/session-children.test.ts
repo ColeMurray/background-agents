@@ -176,6 +176,8 @@ describe("handleListChildren", () => {
       children: [
         {
           id: "child",
+          ownerTeamId: null,
+          visibility: "private",
           title: "Child",
           repoOwner: "acme",
           repoName: "web",

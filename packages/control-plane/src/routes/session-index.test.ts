@@ -76,6 +76,8 @@ const USER_PRINCIPAL: Principal = { kind: "user", userId: "user-1" };
 
 const listSession = {
   id: "session-1",
+  ownerTeamId: null,
+  visibility: "workspace" as const,
   title: "Session 1",
   repoOwner: "open-inspect",
   repoName: "background-agents",
@@ -378,7 +380,13 @@ describe("session index routes", () => {
 
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({
-      sessions: [{ ...listSession, readState }],
+      sessions: [
+        {
+          ...listSession,
+          readState,
+          capabilities: expect.objectContaining({ canRead: true, canDelete: true }),
+        },
+      ],
       hasMore: false,
     });
   });
@@ -391,7 +399,12 @@ describe("session index routes", () => {
 
     const response = await listSessions();
     await expect(response.json()).resolves.toEqual({
-      sessions: [listSession],
+      sessions: [
+        {
+          ...listSession,
+          capabilities: expect.objectContaining({ canRead: true, canDelete: false }),
+        },
+      ],
       hasMore: true,
     });
   });

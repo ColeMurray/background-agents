@@ -98,6 +98,11 @@ export async function handlePromptChild(
   if (!childSession || childSession.parentSessionId !== parentId) {
     return error("Child session not found", 404);
   }
+  const parentSession = await sessionStore.get(parentId);
+  if (!parentSession) return error("Parent session not found", 404);
+  if (childSession.ownerTeamId !== parentSession.ownerTeamId) {
+    return json({ error: "Child has moved", code: "child_moved" }, 409);
+  }
 
   const authorResponse = await ctx.sessionRuntime.fetch(
     parentId,
@@ -109,8 +114,6 @@ export async function handlePromptChild(
 
   let admissionLease: ChildAdmissionLease | null = null;
   if (childSession.status === "completed" || childSession.status === "failed") {
-    const parentSession = await sessionStore.get(parentId);
-    if (!parentSession) return error("Parent session not found", 404);
     const parentSettings = await resolveSandboxSettings(
       ctx.db,
       parentSession.repoOwner,

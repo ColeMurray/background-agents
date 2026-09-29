@@ -2,24 +2,64 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
+import useSWR from "swr";
+import { z } from "zod";
 import { createTeamRequestSchema } from "@open-inspect/shared/types/teams";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useTeams } from "@/hooks/use-teams";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+
+const TEAM_SETTINGS_KEY = "/api/settings/teams";
+const teamSettingsSchema = z.object({ requireTeamOnCreate: z.boolean() });
 
 export function TeamsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const { teams, loading, error, createTeam } = useTeams();
   const canCreate = hasPermission("workspace.members.manage");
+  const {
+    data: teamSettings,
+    isLoading: teamSettingsLoading,
+    error: teamSettingsError,
+    mutate: mutateTeamSettings,
+  } = useSWR(canCreate ? TEAM_SETTINGS_KEY : null, async () => {
+    const response = await browserApiFetch(TEAM_SETTINGS_KEY);
+    if (!response.ok) throw new Error("Failed to load team settings");
+    return teamSettingsSchema.parse(await response.json());
+  });
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+
+  async function updateRequireTeamOnCreate(checked: boolean) {
+    if (!canCreate || !teamSettings || settingsSaving) return;
+    setSettingsSaving(true);
+    setSettingsMessage(null);
+    try {
+      const response = await browserApiFetch(TEAM_SETTINGS_KEY, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requireTeamOnCreate: checked }),
+      });
+      if (!response.ok) throw new Error("Failed to update team settings");
+      await mutateTeamSettings(teamSettingsSchema.parse(await response.json()), {
+        revalidate: false,
+      });
+    } catch (cause) {
+      setSettingsMessage(cause instanceof Error ? cause.message : "Failed to update team settings");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -64,6 +104,37 @@ export function TeamsSettings() {
           Create team
         </Button>
       </div>
+      {canCreate && (
+        <section className="space-y-2">
+          <label
+            htmlFor="require-team-on-create"
+            className="flex items-center justify-between gap-4 rounded-lg border border-border p-4"
+          >
+            <span>
+              <span id="require-team-label" className="block text-sm font-medium text-foreground">
+                Require a team for new sessions
+              </span>
+              <span className="block text-sm text-muted-foreground">
+                Members must choose a team when creating a session.
+              </span>
+            </span>
+            <Switch
+              id="require-team-on-create"
+              aria-labelledby="require-team-label"
+              checked={teamSettings?.requireTeamOnCreate ?? false}
+              disabled={
+                !teamSettings || teamSettingsLoading || !!teamSettingsError || settingsSaving
+              }
+              onCheckedChange={(checked) => void updateRequireTeamOnCreate(checked)}
+            />
+          </label>
+          {teamSettingsLoading && (
+            <p className="text-sm text-muted-foreground">Loading team settings...</p>
+          )}
+          {teamSettingsError && <ErrorBanner>Failed to load team settings.</ErrorBanner>}
+          {settingsMessage && <ErrorBanner>{settingsMessage}</ErrorBanner>}
+        </section>
+      )}
       {loading && <p className="text-sm text-muted-foreground">Loading teams...</p>}
       {error && <ErrorBanner>Failed to load teams.</ErrorBanner>}
       {!loading && !error && (

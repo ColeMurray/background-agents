@@ -52,7 +52,13 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "PUT /teams/:id/members/:userId owner=400",
   "DELETE /teams/:id/members/:userId owner=404",
   "POST /teams/:id/join owner=200",
+  "GET /settings/teams owner=200",
+  "PATCH /settings/teams owner=400",
   "POST /sessions owner=201",
+  "PUT /sessions/:id/visibility owner=400",
+  "PUT /sessions/:id/scope owner=400",
+  "PUT /sessions/:id/collaborators/:userId owner=404",
+  "DELETE /sessions/:id/collaborators/:userId owner=404",
   "GET /sessions owner=200",
   "GET /sessions/inbox owner=200",
   "PATCH /sessions/:id/read-state owner=400",
@@ -234,7 +240,13 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "PUT /teams/:id/members/:userId anonymous=401",
   "DELETE /teams/:id/members/:userId anonymous=401",
   "POST /teams/:id/join anonymous=401",
+  "GET /settings/teams anonymous=401",
+  "PATCH /settings/teams anonymous=401",
   "POST /sessions anonymous=401",
+  "PUT /sessions/:id/visibility anonymous=401",
+  "PUT /sessions/:id/scope anonymous=401",
+  "PUT /sessions/:id/collaborators/:userId anonymous=401",
+  "DELETE /sessions/:id/collaborators/:userId anonymous=401",
   "GET /sessions anonymous=401",
   "GET /sessions/inbox anonymous=401",
   "PATCH /sessions/:id/read-state anonymous=401",
@@ -427,6 +439,10 @@ exports[`route admission sentinel > audits one workspace Owner break-glass admis
 
 exports[`route admission sentinel > conceals all team item routes from another team before any handler or DO call 1`] = `
 [
+  "PUT /sessions/:id/visibility other-team=404",
+  "PUT /sessions/:id/scope other-team=404",
+  "PUT /sessions/:id/collaborators/:userId other-team=404",
+  "DELETE /sessions/:id/collaborators/:userId other-team=404",
   "PATCH /sessions/:id/read-state other-team=404",
   "DELETE /sessions/:id other-team=404",
   "GET /sessions/:id/export other-team=404",
@@ -467,6 +483,10 @@ exports[`route admission sentinel > conceals all team item routes from another t
 
 exports[`route admission sentinel > reports action denials for a same-team Viewer and admits a private collaborator 1`] = `
 [
+  "PUT /sessions/:id/visibility same-team-viewer=403",
+  "PUT /sessions/:id/scope same-team-viewer=403",
+  "PUT /sessions/:id/collaborators/:userId same-team-viewer=403",
+  "DELETE /sessions/:id/collaborators/:userId same-team-viewer=200",
   "PATCH /sessions/:id/read-state same-team-viewer=200",
   "DELETE /sessions/:id same-team-viewer=403",
   "GET /sessions/:id/sandbox-access same-team-viewer=403",
