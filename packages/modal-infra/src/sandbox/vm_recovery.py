@@ -140,12 +140,8 @@ async def recover_vm_access(
         },
     )
     urls = await tunnels.resolve(sandbox, sandbox_id, write_env_file=False)
-    if (
-        (launch.code_server_enabled and not urls.code_server_url)
-        or (launch.vnc_enabled and not urls.vnc_url)
-        or (launch.terminal_enabled and not urls.ttyd_url)
-        or any(not (urls.tunnel_urls or {}).get(port) for port in launch.tunnel_ports)
-    ):
+    # Launch returns whatever tunnels Modal published; only retry while none are readable.
+    if tunnels.exposed_ports and not any(urls):
         raise VMAllocationOutcome("race_pending", "VM allocation tunnels are not yet visible")
     return VMAccess(
         code_server_url=urls.code_server_url,

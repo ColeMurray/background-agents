@@ -112,20 +112,13 @@ async def test_resolve_returns_owned_vm_id_access_and_tunnels_without_mutation(m
     tunnels.assert_awaited_once_with(sandbox, GENERATION, write_env_file=False)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("missing_port", [9000, 9001, 9002, 3001])
-async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missing_port):
+def _vm_publishing(monkeypatch, published):
     monkeypatch.setattr(web_api, "require_auth", lambda _token: None)
     sandbox = _sandbox(
         _tags(),
         {
             "CODE_SERVER_PASSWORD": "original-code-password",
             VNC_PASSWORD_ENV_VAR: "original-vnc-password",
-            CODE_SERVER_PORT_ENV_VAR: "9000",
-            NOVNC_PORT_ENV_VAR: "9001",
-            TTYD_PROXY_PORT_ENV_VAR: "9002",
-            EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000,3001",
-            "TERMINAL_ENABLED": "true",
         },
     )
     monkeypatch.setattr(
@@ -135,19 +128,40 @@ async def test_resolve_retries_when_enabled_tunnel_is_missing(monkeypatch, missi
     )
     create = AsyncMock(side_effect=AssertionError("resolve must not create"))
     monkeypatch.setattr(manager_module.modal.Sandbox, "create", SimpleNamespace(aio=create))
-    monkeypatch.setattr(
-        SandboxTunnels,
-        "_resolve_tunnels",
-        AsyncMock(
-            return_value={
-                port: f"https://port-{port}.example"
-                for port in [9000, 9001, 9002, 3000, 3001]
-                if port != missing_port
-            }
-        ),
-    )
+    monkeypatch.setattr(SandboxTunnels, "_resolve_tunnels", AsyncMock(return_value=dict(published)))
     write_env = AsyncMock(side_effect=AssertionError("resolve must not write"))
     monkeypatch.setattr(SandboxTunnels, "_write_tunnel_env_file", write_env)
+    return sandbox, create, write_env
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_port", [9000, 9001, 9002, 3001])
+async def test_resolve_returns_the_partial_tunnels_launch_would_return(monkeypatch, missing_port):
+    published = {
+        port: f"https://port-{port}.example"
+        for port in [9000, 9001, 9002, 3000, 3001]
+        if port != missing_port
+    }
+    sandbox, create, write_env = _vm_publishing(monkeypatch, published)
+
+    result = await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
+
+    data = result["data"]
+    assert data["modal_object_id"] == "sb-real-id"
+    assert [data["code_server_url"], data["vnc_url"], data["ttyd_url"]] == [
+        published.get(port) for port in (9000, 9001, 9002)
+    ]
+    assert data["tunnel_urls"] == {
+        port: url for port, url in published.items() if port in (3000, 3001)
+    }
+    create.assert_not_awaited()
+    sandbox.terminate.aio.assert_not_awaited()
+    write_env.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_retries_while_no_tunnel_is_readable(monkeypatch):
+    sandbox, create, write_env = _vm_publishing(monkeypatch, {})
 
     with pytest.raises(HTTPException) as exc:
         await _call(web_api.api_resolve_vm_sandbox, RESOLVE_REQUEST)
