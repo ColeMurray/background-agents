@@ -372,3 +372,20 @@ async def test_requested_stop_is_not_reported_as_a_crash(processes, tmp_path):
     finally:
         await supervisor._stop_docker_watch()
         await supervisor.shutdown()
+
+
+@pytest.mark.parametrize(
+    "budgets",
+    [
+        {"stop_timeout_seconds": 70},
+        {"start_timeout_seconds": 61},
+    ],
+)
+async def test_control_rejects_service_budgets_beyond_capture_deadline(tmp_path, budgets):
+    service = _service(tmp_path, **budgets)
+    control = DockerControl(service, str(tmp_path / "control.sock"))
+
+    with pytest.raises(ValueError, match="Docker control deadline"):
+        await control.start()
+
+    assert not (tmp_path / "control.sock").exists()

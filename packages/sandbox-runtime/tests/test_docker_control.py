@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from sandbox_runtime.docker_control import DockerControl, request
+from sandbox_runtime.docker_service import DOCKER_START_TIMEOUT_SECONDS, DOCKER_STOP_TIMEOUT_SECONDS
 
 
 @pytest.fixture
@@ -15,7 +16,11 @@ def socket_path():
 
 @pytest.mark.asyncio
 async def test_preparation_is_acknowledged_only_after_clean_stop(socket_path):
-    service = Mock(prepare_for_snapshot=AsyncMock())
+    service = Mock(
+        prepare_for_snapshot=AsyncMock(),
+        start_timeout_seconds=DOCKER_START_TIMEOUT_SECONDS,
+        stop_timeout_seconds=DOCKER_STOP_TIMEOUT_SECONDS,
+    )
     # Short paths also work on macOS's small Unix-domain path limit.
     path = socket_path
     control = DockerControl(service, path)
@@ -34,7 +39,11 @@ async def test_preparation_is_acknowledged_only_after_clean_stop(socket_path):
 
 @pytest.mark.asyncio
 async def test_failed_preparation_never_acknowledges_capture(socket_path):
-    service = Mock(prepare_for_snapshot=AsyncMock(side_effect=RuntimeError("stop failed")))
+    service = Mock(
+        prepare_for_snapshot=AsyncMock(side_effect=RuntimeError("stop failed")),
+        start_timeout_seconds=DOCKER_START_TIMEOUT_SECONDS,
+        stop_timeout_seconds=DOCKER_STOP_TIMEOUT_SECONDS,
+    )
     path = socket_path
     control = DockerControl(service, path)
     await control.start()

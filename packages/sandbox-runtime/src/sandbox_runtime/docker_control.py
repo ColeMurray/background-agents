@@ -40,6 +40,11 @@ class DockerControl:
         self._server: asyncio.Server | None = None
 
     async def start(self) -> None:
+        if (
+            self.service.stop_timeout_seconds > DOCKER_STOP_TIMEOUT_SECONDS
+            or self.service.start_timeout_seconds > DOCKER_START_TIMEOUT_SECONDS
+        ):
+            raise ValueError("Docker control deadline cannot cover configured daemon timeouts")
         Path(self.path).unlink(missing_ok=True)
         self._server = await asyncio.start_unix_server(self._handle, path=self.path)
         Path(self.path).chmod(0o600)
