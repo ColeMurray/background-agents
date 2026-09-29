@@ -16,7 +16,6 @@ import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
 import { checkSessionAccess } from "@open-inspect/shared";
-import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -178,9 +177,7 @@ async function handleSessionSnapshot(
   if (!parsed.success) return error("Invalid session snapshot", 502);
   const admission = ctx.sessionAdmission;
   const sandboxAllowed =
-    admission &&
-    (admission.row.visibility === "private" ||
-      parseTeamsEnforcementMode(_env.TEAMS_ENFORCEMENT) === "on")
+    admission && (admission.row.visibility === "private" || ctx.teamsEnforcementMode === "on")
       ? checkSessionAccess(admission.viewer, admission.row, "sandbox").allowed
       : ctx.authorization?.permissions.includes("sessions.sandbox_access");
   const snapshot = sandboxAllowed ? parsed.data : redactSessionSnapshotSandboxAccess(parsed.data);

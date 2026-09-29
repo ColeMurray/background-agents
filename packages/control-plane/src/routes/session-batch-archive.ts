@@ -7,16 +7,7 @@ import { createLogger } from "../logger";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { archiveSessionBatch } from "../session/batch-archive";
-import {
-  auditPrivateSessionBreakGlass,
-  auditShadowSessionDenial,
-} from "../authorization/request-audit";
-import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
-import {
-  resolveSessionTarget,
-  sessionTargetDenial,
-  shadowSessionDenialReason,
-} from "../routing/route-admission";
+import { evaluateSessionAdmission, teamsEnforcementMode } from "../authorization/session-admission";
 import { parseBody } from "./body";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import { dispatchSession } from "./session-route";
@@ -51,35 +42,27 @@ sessionBatchArchiveRoutes.post(
           trace_id: ctx.trace_id,
           request_id: ctx.request_id,
         });
-        const mode = parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT);
+        try {
+          teamsEnforcementMode(ctx, env);
+        } catch {
+          return json(
+            { error: "Authorization unavailable", code: "authorization_unavailable" },
+            503
+          );
+        }
         const eligible: string[] = [];
         const skipped: SessionBatchArchiveResponse["skipped"] = [];
         for (const sessionId of body.sessionIds) {
-          const target = await resolveSessionTarget(ctx, sessionId, "lifecycle", mode);
-          const denial = sessionTargetDenial(target, mode);
-          if (denial) {
-            skipped.push({ sessionId, reason: denial });
+          const admission = await evaluateSessionAdmission(ctx, env, sessionId, "lifecycle", null);
+          if (admission.kind !== "allowed") {
+            skipped.push({
+              sessionId,
+              reason: admission.kind === "not_found" ? "not_found" : "missing_permission",
+            });
             continue;
-          }
-          if (!target) throw new Error("Unreachable session target");
-          if (mode === "shadow") {
-            const reason = shadowSessionDenialReason(target);
-            if (reason)
-              await auditShadowSessionDenial({
-                ctx,
-                method: request.method,
-                path: new URL(request.url).pathname,
-                teamId: target.row.ownerTeamId,
-                action: "lifecycle",
-                reason,
-              });
-          }
-          if (target.read?.allowed && target.read.audit === "session.private_break_glass") {
-            await auditPrivateSessionBreakGlass(ctx, sessionId, target.row.ownerTeamId);
           }
           eligible.push(sessionId);
         }
-        ctx.sessionAdmission = undefined;
         const results = await archiveSessionBatch(eligible, ctx.sessionRuntime, log);
         log.info("Session batch archive completed", {
           event: "session.batch_archive",

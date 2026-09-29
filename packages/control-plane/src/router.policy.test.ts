@@ -128,6 +128,15 @@ describe("route policy table", () => {
         route.authorization.allOf.some((requirement) => requirement.kind === "session"),
         identity
       ).toBe(true);
+      if (route.path.includes(":childId")) {
+        expect(
+          route.authorization.allOf.some(
+            (requirement) =>
+              requirement.kind === "session" && requirement.sessionIdParam === "childId"
+          ),
+          identity
+        ).toBe(true);
+      }
     }
     expect(exceptions).toEqual([]);
   });
@@ -260,14 +269,26 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [
-        { kind: "permission", permission: "sessions.create" },
         { kind: "session", action: "collaborate" },
+        { kind: "permission", permission: "sessions.create" },
       ],
     });
     expect(routeFor("GET", "/sessions/parent/children/child")?.authorization).toMatchObject({
       kind: "active-user",
-      allOf: [{ kind: "session", action: "read" }],
+      allOf: [
+        { kind: "session", action: "read", sessionIdParam: "id" },
+        { kind: "session", action: "read", sessionIdParam: "childId" },
+      ],
     });
+    expect(routeFor("POST", "/sessions/parent/children/child/cancel")?.authorization).toMatchObject(
+      {
+        kind: "active-user",
+        allOf: [
+          { kind: "session", action: "read", sessionIdParam: "id" },
+          { kind: "session", action: "lifecycle", sessionIdParam: "childId" },
+        ],
+      }
+    );
     expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
       kind: "service",
       services: ["github-bot"],

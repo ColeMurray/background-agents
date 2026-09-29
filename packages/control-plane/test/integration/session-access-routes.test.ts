@@ -19,11 +19,12 @@ const CREATOR = "33333333333333333333333333333333";
 
 async function fetchMode(
   path: string,
-  mode: "off" | "shadow" | "on",
+  mode: string,
   options: {
     method?: string;
     as?: { userId: string; role: "owner" | "member" | "viewer" };
     body?: string;
+    service?: "linear-bot";
   } = {}
 ) {
   const url = `${BASE}${path}`;
@@ -31,7 +32,12 @@ async function fetchMode(
   return routeRequest(
     new Request(url, {
       method,
-      headers: await serviceRequestHeaders(url, { method, body: options.body, as: options.as }),
+      headers: await serviceRequestHeaders(url, {
+        method,
+        body: options.body,
+        as: options.as,
+        service: options.service,
+      }),
       body: options.body,
     }),
     { ...env, TEAMS_ENFORCEMENT: mode },
@@ -121,6 +127,71 @@ describe("HTTP session access by enforcement mode", () => {
     ).toBe(200);
   });
 
+  it("writes one shadow audit row with the real status for reads and mutations", async () => {
+    const { sessionName } = await session("team");
+    for (const [path, method, body] of [
+      [`/sessions/${sessionName}`, "GET", undefined],
+      [`/sessions/${sessionName}/budget`, "PATCH", JSON.stringify({ maxCostUsd: 20 })],
+    ] as const) {
+      const response = await fetchMode(path, "shadow", {
+        method,
+        body,
+        as: { userId: MEMBER, role: "member" },
+      });
+      const rows = (
+        await env.DB.prepare(
+          "SELECT reason_code, metadata_json FROM authorization_audit_events WHERE request_id = ? AND action = 'authorization.request_allowed'"
+        )
+          .bind(response.headers.get("x-request-id"))
+          .all()
+      ).results;
+      expect(response.status).toBe(method === "GET" ? 200 : 403);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].reason_code).toBe("shadow_denied:not_member");
+      expect(JSON.parse(String(rows[0].metadata_json))).toMatchObject({
+        httpStatus: response.status,
+        responseCode: "shadow_denied:not_member",
+      });
+    }
+  });
+
+  it("records batch shadow denials in its one response-time audit row", async () => {
+    const { sessionName } = await session("team");
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO roles (id, key, name, normalized_name, is_system) VALUES ('role_batch_shadow', NULL, 'Batch Shadow', 'batch shadow', 0)"
+      ),
+      env.DB.prepare(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         VALUES ('role_batch_shadow', 'sessions.bulk_archive'),
+                ('role_batch_shadow', 'sessions.read'),
+                ('role_batch_shadow', 'sessions.lifecycle')`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_batch_shadow' WHERE user_id = ?"
+      ).bind(MEMBER),
+    ]);
+    const response = await fetchMode("/sessions/batch-archive", "shadow", {
+      method: "POST",
+      as: { userId: MEMBER, role: "member" },
+      body: JSON.stringify({ sessionIds: [sessionName] }),
+    });
+    const rows = (
+      await env.DB.prepare(
+        "SELECT reason_code, metadata_json FROM authorization_audit_events WHERE request_id = ? AND action = 'authorization.request_allowed'"
+      )
+        .bind(response.headers.get("x-request-id"))
+        .all()
+    ).results;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason_code).toBe("shadow_denied:batch");
+    expect(JSON.parse(String(rows[0].metadata_json))).toMatchObject({
+      httpStatus: response.status,
+      responseCode: "shadow_denied:batch",
+      shadowDenials: [{ sessionId: sessionName, reason: "not_member" }],
+    });
+  });
+
   it("allows legacy deletion in shadow and off while shadow audits the ownership denial", async () => {
     const as = { userId: MEMBER, role: "member" } as const;
     const shadow = await session("team");
@@ -201,6 +272,116 @@ describe("HTTP session access by enforcement mode", () => {
     }
   });
 
+  it("loads collaborators but not memberships for an off-mode private session", async () => {
+    const { sessionName } = await session("private");
+    const members = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
+    const collaborators = vi.spyOn(SessionCollaboratorStore.prototype, "listUserIds");
+    try {
+      expect((await fetchMode(`/sessions/${sessionName}`, "off")).status).toBe(200);
+      expect(members).not.toHaveBeenCalled();
+      expect(collaborators).toHaveBeenCalledOnce();
+    } finally {
+      members.mockRestore();
+      collaborators.mockRestore();
+    }
+  });
+
+  it("admits actorless Linear stop on non-private sessions in every mode, but hides private sessions", async () => {
+    const team = await session("team");
+    const privateSession = await session("private");
+    const workspace = await initSession({ userId: CREATOR });
+    await waitForSandboxStatus(workspace.stub, "failed");
+    for (const mode of ["off", "shadow", "on"] as const) {
+      for (const id of [team.sessionName, workspace.sessionName]) {
+        const response = await fetchMode(`/sessions/${id}/stop`, mode, {
+          method: "POST",
+          service: "linear-bot",
+        });
+        expect(response.status).toBe(200);
+      }
+      expect(
+        (
+          await fetchMode(`/sessions/${privateSession.sessionName}/stop`, mode, {
+            method: "POST",
+            service: "linear-bot",
+          })
+        ).status
+      ).toBe(404);
+    }
+    expect(
+      (await auditRows("authorization.request_allowed")).filter(
+        (row) => row.reason_code === "shadow_denied:missing_permission"
+      )
+    ).toEqual([]);
+  });
+
+  it("conceals an invisible child even when its parent is visible", async () => {
+    const parent = await initSession({ userId: CREATOR });
+    await waitForSandboxStatus(parent.stub, "failed");
+    const child = await session("team");
+    await env.DB.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?")
+      .bind(parent.sessionName, child.sessionName)
+      .run();
+    const as = { userId: MEMBER, role: "member" } as const;
+    expect(
+      (
+        await fetchMode(`/sessions/${parent.sessionName}/children/${child.sessionName}`, "on", {
+          as,
+        })
+      ).status
+    ).toBe(404);
+    expect(
+      (
+        await fetchMode(
+          `/sessions/${parent.sessionName}/children/${child.sessionName}/cancel`,
+          "on",
+          { as, method: "POST" }
+        )
+      ).status
+    ).toBe(404);
+    expect(
+      (await auditRows("authorization.request_denied")).filter(
+        (row) => row.reason_code === "session_not_visible"
+      )
+    ).toMatchObject([{ team_id: child.team.id }, { team_id: child.team.id }]);
+  });
+
+  it("audits both private reads when an Owner accesses a private child", async () => {
+    const parent = await session("private");
+    const child = await session("private");
+    await env.DB.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?")
+      .bind(parent.sessionName, child.sessionName)
+      .run();
+    await fetchMode(`/sessions/${parent.sessionName}/children/${child.sessionName}`, "on");
+    expect(
+      (await auditRows("session.private_break_glass")).map((row) => row.resource_id).sort()
+    ).toEqual([parent.sessionName, child.sessionName].sort());
+  });
+
+  it("audits a permitted private read before a later handler denial", async () => {
+    const { sessionName } = await session("private");
+    const response = await fetchMode(`/sessions/${sessionName}/budget`, "off", {
+      method: "PATCH",
+      body: JSON.stringify({ maxCostUsd: 20 }),
+    });
+    expect(response.status).toBe(403);
+    expect((await auditRows("session.private_break_glass")).map((row) => row.resource_id)).toEqual([
+      sessionName,
+    ]);
+  });
+
+  it("responds 503 to an invalid mode for both item and batch routes", async () => {
+    expect((await fetchMode("/sessions/missing", "invalid")).status).toBe(503);
+    expect(
+      (
+        await fetchMode("/sessions/batch-archive", "invalid", {
+          method: "POST",
+          body: JSON.stringify({ sessionIds: ["missing"] }),
+        })
+      ).status
+    ).toBe(503);
+  });
+
   it("skips hidden and action-denied batch targets independently", async () => {
     const hidden = await session("private");
     const visible = await session("team");
@@ -271,7 +452,7 @@ describe("HTTP session access by enforcement mode", () => {
       if (mode === "shadow") {
         expect(
           (await auditRows("authorization.request_allowed")).some(
-            (row) => row.reason_code === "shadow_denied:missing_permission"
+            (row) => row.reason_code === "shadow_denied:batch"
           )
         ).toBe(true);
       }

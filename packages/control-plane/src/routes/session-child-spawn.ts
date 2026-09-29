@@ -381,8 +381,8 @@ sessionChildSpawnRoutes.post(
   admit({
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
     authorization: requireAll(
-      permissionRequirement("sessions.create"),
-      sessionRequirement("collaborate")
+      sessionRequirement("collaborate"),
+      permissionRequirement("sessions.create")
     ),
   }),
   (c) => dispatchSession(c, handleSpawnChild)

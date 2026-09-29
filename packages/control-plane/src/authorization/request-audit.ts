@@ -1,5 +1,4 @@
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { SessionAction } from "@open-inspect/shared";
 import {
   AUTHORIZATION_DECISION_ACTIONS,
   AUTHORIZATION_DECISION_METADATA_SCHEMA,
@@ -29,6 +28,8 @@ export type RouteAuthorizationDecision =
       kind: "allowed";
       admission: "user" | "service" | "sandbox";
       auditAllowed: boolean;
+      shadowReason?: string;
+      shadowDenials?: readonly { sessionId: string; reason: string }[];
     })
   | (AuthorizationDecisionEvidence & {
       kind: "denied";
@@ -40,7 +41,7 @@ export type RouteAuthorizationDecision =
 export function shouldAuditAllowedDecision(
   decision: Extract<RouteAuthorizationDecision, { kind: "allowed" }>
 ): boolean {
-  return decision.auditAllowed;
+  return decision.auditAllowed || !!decision.shadowReason || !!decision.shadowDenials?.length;
 }
 
 /**
@@ -60,7 +61,6 @@ export async function auditRouteAuthorizationDecision(input: {
   response: Response;
   decision: RouteAuthorizationDecision;
   teamId?: string | null;
-  reasonCode?: string;
 }): Promise<void> {
   const principal = input.ctx.principal;
   if (!principal) return;
@@ -78,6 +78,20 @@ export async function auditRouteAuthorizationDecision(input: {
   const action = allowed
     ? AUTHORIZATION_DECISION_ACTIONS.allowed
     : AUTHORIZATION_DECISION_ACTIONS.denied;
+  const shadowCode =
+    decision.kind === "allowed"
+      ? decision.shadowDenials?.length
+        ? "shadow_denied:batch"
+        : decision.shadowReason
+          ? `shadow_denied:${decision.shadowReason}`
+          : null
+      : null;
+  const teamId =
+    input.teamId !== undefined
+      ? input.teamId
+      : input.ctx.childSessionAdmission
+        ? input.ctx.childSessionAdmission.row.ownerTeamId
+        : (input.ctx.sessionAdmission?.row.ownerTeamId ?? null);
   const metadata = {
     schema: AUTHORIZATION_DECISION_METADATA_SCHEMA,
     httpMethod: input.method,
@@ -88,11 +102,14 @@ export async function auditRouteAuthorizationDecision(input: {
       ? { effectivePermissions: decision.effectivePermissions }
       : {}),
     ...(requiredPermission ? { requiredPermission } : {}),
-    responseCode: decision.kind === "denied" ? decision.reasonCode : null,
+    responseCode: decision.kind === "denied" ? decision.reasonCode : shadowCode,
     responseReason: decision.kind === "denied" ? decision.reason : null,
     requestId: input.ctx.request_id,
     traceId: input.ctx.trace_id,
     ...(decision.kind === "allowed" ? { admission: decision.admission } : {}),
+    ...(decision.kind === "allowed" && decision.shadowDenials?.length
+      ? { shadowDenials: decision.shadowDenials }
+      : {}),
     ...(principal.kind === "service" && principal.actor
       ? {
           actor: {
@@ -123,11 +140,10 @@ export async function auditRouteAuthorizationDecision(input: {
         principal.kind === "service" ? principal.service : null,
         action,
         input.path,
-        input.reasonCode ??
-          (decision.kind === "allowed" ? "authorization_allowed" : decision.reasonCode),
+        decision.kind === "allowed" ? (shadowCode ?? "authorization_allowed") : decision.reasonCode,
         allowed ? "applied" : "denied",
         JSON.stringify(metadata),
-        input.teamId ?? input.ctx.sessionAdmission?.row.ownerTeamId ?? null
+        teamId
       )
       .run();
   } catch (cause) {
@@ -139,28 +155,6 @@ export async function auditRouteAuthorizationDecision(input: {
       trace_id: input.ctx.trace_id,
     });
   }
-}
-
-export async function auditShadowSessionDenial(input: {
-  ctx: RequestContext;
-  method: string;
-  path: string;
-  teamId: string | null;
-  action: SessionAction;
-  reason: string;
-}): Promise<void> {
-  await auditRouteAuthorizationDecision({
-    ...input,
-    response: new Response(null, { status: 200 }),
-    reasonCode: `shadow_denied:${input.reason}`,
-    decision: {
-      kind: "allowed",
-      admission: input.ctx.principal?.kind === "service" ? "service" : "user",
-      auditAllowed: true,
-      requirements: [{ kind: "session", sessionIdParam: "id", action: input.action }],
-      effectivePermissions: [],
-    },
-  });
 }
 
 export async function auditPrivateSessionBreakGlass(

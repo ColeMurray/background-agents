@@ -21,7 +21,9 @@ import {
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   json,
   NO_AUTHORIZATION,
+  requireAll,
   requireSession,
+  sessionRequirement,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
   type RequestContext,
 } from "./shared";
@@ -265,14 +267,20 @@ sessionChildRoutes.get(
 );
 sessionChildRoutes.get(
   "/sessions/:id/children/:childId",
-  admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requireSession("read") }),
+  admit({
+    ...GITHUB_SANDBOX_FALLBACK_ROUTE,
+    authorization: requireAll(sessionRequirement("read"), sessionRequirement("read", "childId")),
+  }),
   (c) => dispatchSession(c, handleGetChild)
 );
 sessionChildRoutes.post(
   "/sessions/:id/children/:childId/cancel",
   admit({
     ...GITHUB_SANDBOX_FALLBACK_ROUTE,
-    authorization: requireSession("lifecycle"),
+    authorization: requireAll(
+      sessionRequirement("read"),
+      sessionRequirement("lifecycle", "childId")
+    ),
   }),
   (c) => dispatchSession(c, handleCancelChild)
 );

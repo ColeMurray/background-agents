@@ -124,6 +124,7 @@ describe("interpretAuditEvent", () => {
   });
 
   it.each([
+    "session.private_break_glass",
     "team.created",
     "team.updated",
     "team.archived",

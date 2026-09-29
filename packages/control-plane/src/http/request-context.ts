@@ -10,6 +10,7 @@ import type { AutomationRow } from "../db/automation-store";
 import type { SessionEntry } from "../db/session-index";
 import type { RequestMetrics } from "../db/instrumented-sql-database";
 import type { BackgroundTasks } from "../platform-ports";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 
 /** Automation resource admitted for the current mutation. */
 export interface AutomationRouteAdmission {
@@ -31,5 +32,9 @@ export type RequestContext = AuthenticationRequestServices & {
   automationAdmission?: AutomationRouteAdmission;
   teamAdmission?: { team: Team; access: TeamCapabilities };
   sessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
+  childSessionAdmission?: { row: SessionEntry & SessionAccessRow; viewer: SessionViewer };
   sessionMemberships?: ReadonlyMap<string, TeamRole>;
+  teamsEnforcementMode?: TeamsEnforcementMode;
+  shadowSessionDenial?: string;
+  shadowBatchDenials?: { sessionId: string; reason: string }[];
 };

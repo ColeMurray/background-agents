@@ -503,6 +503,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           : isAutomationRoute(route)
             ? fixtures.automationId
             : sessionId,
+        childId: fixtures.sandboxSessionId,
       })}`;
       const method = route.method;
       const expectReach = async (
@@ -633,7 +634,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       (item) => isSessionRoute(item) && item.authorization.kind === "active-user"
     )) {
       const identity = `${route.method} ${route.path}`;
-      const url = `${BASE}${materialize(route, { id: teamSessionId })}`;
+      const url = `${BASE}${materialize(route, { id: teamSessionId, childId: fixtures.sandboxSessionId })}`;
       const headers = await serviceRequestHeaders(url, {
         method: route.method,
         as: { userId: OTHER_MEMBER, role: "member" },
@@ -661,7 +662,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         (route.path.endsWith("/children") && route.method === "POST")
       )
         continue;
-      const url = `${BASE}${materialize(route, { id: teamSessionId })}`;
+      const url = `${BASE}${materialize(route, { id: teamSessionId, childId: fixtures.sandboxSessionId })}`;
       const headers = await serviceRequestHeaders(url, {
         method: route.method,
         as: { userId: TEAM_VIEWER, role: "viewer" },
@@ -671,11 +672,13 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
         createExecutionContext()
       );
-      const requirement =
-        route.authorization.kind === "active-user"
-          ? route.authorization.allOf.find((entry) => entry.kind === "session")
-          : null;
-      const expected = requirement?.kind === "session" && requirement.action === "read" ? 200 : 403;
+      const expected =
+        route.authorization.kind === "active-user" &&
+        route.authorization.allOf.every(
+          (entry) => entry.kind !== "session" || entry.action === "read"
+        )
+          ? 200
+          : 403;
       observed.push(`${route.method} ${route.path} same-team-viewer=${response.status}`);
       expect(response.status, `${route.method} ${route.path}`).toBe(expected);
       if (expected === 403)

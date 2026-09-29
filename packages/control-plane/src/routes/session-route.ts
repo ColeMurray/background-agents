@@ -13,7 +13,7 @@ export function withSessionRuntime<Context extends RequestContext>(
   env: Env,
   ctx: Context
 ): Context & { sessionRuntime: SessionRuntimeClient } {
-  return { ...ctx, sessionRuntime: createSessionRuntimeClient(env, ctx) };
+  return Object.assign(ctx, { sessionRuntime: createSessionRuntimeClient(env, ctx) });
 }
 
 /** Run a session handler for an admitted request, with the runtime client bound to it. */

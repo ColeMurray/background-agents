@@ -2,7 +2,7 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## Unreleased
+## September 29, 2026
 
 ### Added
 
