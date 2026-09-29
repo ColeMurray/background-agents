@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from modal.exception import NotFoundError as ModalNotFoundError
 
-from sandbox_runtime.docker_control import CONTROL_TIMEOUT_SECONDS
+from sandbox_runtime.docker_control import CONTROL_TIMEOUT_SECONDS, PREPARATION_TIMEOUT_SECONDS
 from sandbox_runtime.types import SandboxStatus
 from src.sandbox.launch_policy import docker_allocation_tags
 from src.sandbox.manager import (
@@ -265,6 +265,19 @@ async def test_vm_capture_requires_docker_preparation(exit_code):
         "prepare",
     )
     assert execute.aio.call_args.kwargs["timeout"] == CONTROL_TIMEOUT_SECONDS
+
+
+def test_vm_preparation_deadline_fits_capture_budget():
+    from sandbox_runtime.docker_service import (
+        DOCKER_START_TIMEOUT_SECONDS,
+        DOCKER_STOP_TIMEOUT_SECONDS,
+    )
+
+    assert PREPARATION_TIMEOUT_SECONDS > 2 * DOCKER_STOP_TIMEOUT_SECONDS
+    assert CONTROL_TIMEOUT_SECONDS > (
+        PREPARATION_TIMEOUT_SECONDS + DOCKER_STOP_TIMEOUT_SECONDS + DOCKER_START_TIMEOUT_SECONDS
+    )
+    assert SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS > CONTROL_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio

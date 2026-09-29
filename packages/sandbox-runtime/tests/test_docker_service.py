@@ -14,11 +14,15 @@ import asyncio
 import os
 import sys
 from dataclasses import dataclass, field
+from unittest.mock import AsyncMock
 
 import pytest
 
 from sandbox_runtime import docker_service as docker_module
+from sandbox_runtime.docker_control import DockerControl, request
 from sandbox_runtime.docker_service import DockerService
+from sandbox_runtime.runtime_config import BootMode
+from tests.test_supervisor_lifecycle import _supervisor
 
 
 @dataclass
@@ -28,12 +32,16 @@ class FakeProcesses:
     probe_delay: float = 0.0
     fail_probe: bool = False
     ignore_sigterm: bool = False
+    exit_delay: float = 0.0
     children: list[asyncio.subprocess.Process] = field(default_factory=list)
     spawns: list[tuple[str, ...]] = field(default_factory=list)
 
     def daemon_program(self) -> str:
         handler = (
-            "signal.SIG_IGN" if self.ignore_sigterm else f"lambda *_: sys.exit({self.daemon_exit})"
+            "signal.SIG_IGN"
+            if self.ignore_sigterm
+            else "lambda *_: (signal.signal(signal.SIGTERM, signal.SIG_IGN), "
+            f"time.sleep({self.exit_delay}), sys.exit({self.daemon_exit}))"
         )
         return (
             "import signal, sys, time, pathlib; "
@@ -93,6 +101,15 @@ def _service(tmp_path, **kwargs) -> DockerService:
 
     service = DockerService(Log(), log_path=str(tmp_path / "dockerd.log"), **kwargs)
     return service
+
+
+def _session_supervisor(tmp_path, service):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    supervisor.docker_service = service
+    supervisor.docker_control = DockerControl(
+        service, str(tmp_path / "control.sock"), supervisor._recover_docker_after_prepare
+    )
+    return supervisor
 
 
 def _group_gone(process: asyncio.subprocess.Process) -> bool:
@@ -175,7 +192,7 @@ async def test_nonzero_daemon_exit_cannot_be_a_prepared_build(processes, tmp_pat
         await service.prepare_for_snapshot()
 
     assert await watcher == 1
-    assert service.exit_expected is False
+    assert service.exit_expected is True
     await service.stop()
     assert all(child.returncode is not None for child in processes.children)
 
@@ -204,7 +221,7 @@ async def test_daemon_that_ignores_sigterm_is_killed_and_never_a_prepared_build(
     with pytest.raises(RuntimeError, match="clean shutdown deadline"):
         await service.prepare_for_snapshot()
 
-    assert service.exit_expected is False
+    assert service.exit_expected is True
     assert daemon.returncode is not None
     assert _group_gone(daemon)
 
@@ -220,3 +237,138 @@ async def test_preparation_requires_a_running_daemon(processes, tmp_path):
     with pytest.raises(RuntimeError, match="exited before build preparation"):
         await service.prepare_for_snapshot()
     await service.stop()
+
+
+@pytest.mark.parametrize("failure", ["ignored", "late", "nonzero", "cancelled"])
+async def test_failed_session_preparation_recovers_and_can_retry(
+    processes, tmp_path, monkeypatch, failure
+):
+    from sandbox_runtime import docker_control
+
+    processes.ignore_sigterm = failure in ("ignored", "cancelled")
+    processes.exit_delay = 0.15 if failure == "late" else 0
+    processes.daemon_exit = 2 if failure == "nonzero" else 0
+    service = _service(tmp_path, stop_timeout_seconds=0.1, start_timeout_seconds=0.5)
+    supervisor = _session_supervisor(tmp_path, service)
+    supervisor._report_fatal_error = AsyncMock()
+    preparation_timeout = docker_control.PREPARATION_TIMEOUT_SECONDS
+    if failure == "cancelled":
+        monkeypatch.setattr(docker_control, "PREPARATION_TIMEOUT_SECONDS", 0.02)
+    try:
+        await supervisor._start_docker()
+        first_daemon = processes.children[0]
+        processes.ignore_sigterm = False
+        processes.exit_delay = 0
+        processes.daemon_exit = 0
+        with pytest.raises(RuntimeError, match="confirmed shutdown"):
+            await request("prepare", supervisor.docker_control.path)
+        assert first_daemon.returncode is not None
+        if failure == "late":
+            assert first_daemon.returncode == 0
+        assert not supervisor.docker_control.prepared
+        with pytest.raises(RuntimeError):
+            await request("status", supervisor.docker_control.path)
+        assert not supervisor.shutdown_event.is_set()
+        assert supervisor._docker_watch_failure is None
+        supervisor._report_fatal_error.assert_not_awaited()
+        assert service._process is not None and service._process.returncode is None
+        assert not any(
+            call.args == ("docker.exited_unexpectedly",)
+            for call in supervisor.log.error.call_args_list
+        )
+
+        if failure == "cancelled":
+            monkeypatch.setattr(docker_control, "PREPARATION_TIMEOUT_SECONDS", preparation_timeout)
+        await request("prepare", supervisor.docker_control.path)
+        assert supervisor.docker_control.prepared
+        assert not supervisor.shutdown_event.is_set()
+        assert supervisor._docker_watch_failure is None
+        assert len([spawn for spawn in processes.spawns if spawn[0] == "dockerd"]) == 2
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()
+
+
+async def test_failed_preparation_restart_failure_is_reported(processes, tmp_path):
+    processes.daemon_exit = 1
+    service = _service(tmp_path, stop_timeout_seconds=0.1, start_timeout_seconds=0.2)
+    supervisor = _session_supervisor(tmp_path, service)
+    try:
+        await supervisor._start_docker()
+        processes.fail_probe = True
+        with pytest.raises((RuntimeError, TimeoutError)):
+            await request("prepare", supervisor.docker_control.path)
+        await _until(supervisor.shutdown_event.is_set, timeout=2)
+        assert any(
+            call.args == ("docker.exited_unexpectedly",)
+            for call in supervisor.log.error.call_args_list
+        )
+        assert supervisor._docker_watch_failure is not None
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()
+
+
+async def test_clean_session_preparation_does_not_restart(processes, tmp_path):
+    service = _service(tmp_path)
+    supervisor = _session_supervisor(tmp_path, service)
+    supervisor.boot_mode = BootMode.SNAPSHOT_RESTORE
+    try:
+        await supervisor._start_docker()
+        await request("prepare", supervisor.docker_control.path)
+        await request("status", supervisor.docker_control.path)
+        assert supervisor.docker_control.prepared
+        assert not supervisor.shutdown_event.is_set()
+        assert len([spawn for spawn in processes.spawns if spawn[0] == "dockerd"]) == 1
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()
+
+
+async def test_unrequested_exit_before_preparation_remains_fatal(processes, tmp_path):
+    service = _service(tmp_path)
+    supervisor = _session_supervisor(tmp_path, service)
+    try:
+        await supervisor._start_docker()
+        processes.children[0].kill()
+        await processes.children[0].wait()
+        with pytest.raises(RuntimeError):
+            await request("prepare", supervisor.docker_control.path)
+        await _until(supervisor.shutdown_event.is_set)
+        assert supervisor._docker_watch_failure is not None
+        assert len([spawn for spawn in processes.spawns if spawn[0] == "dockerd"]) == 1
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()
+
+
+async def test_restarted_daemon_is_watched_for_crashes(processes, tmp_path):
+    processes.daemon_exit = 1
+    service = _service(tmp_path, stop_timeout_seconds=0.1)
+    supervisor = _session_supervisor(tmp_path, service)
+    try:
+        await supervisor._start_docker()
+        with pytest.raises(RuntimeError):
+            await request("prepare", supervisor.docker_control.path)
+        assert not supervisor.shutdown_event.is_set()
+        assert service._process is not None
+        service._process.kill()
+        await _until(supervisor.shutdown_event.is_set)
+        assert "exited unexpectedly" in str(supervisor._docker_watch_failure)
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()
+
+
+async def test_requested_stop_is_not_reported_as_a_crash(processes, tmp_path):
+    service = _service(tmp_path, stop_timeout_seconds=0.1)
+    supervisor = _session_supervisor(tmp_path, service)
+    try:
+        await supervisor._start_docker()
+        await service.stop()
+        await _until(supervisor._docker_watch_task.done)
+        assert not supervisor.shutdown_event.is_set()
+        assert supervisor._docker_watch_failure is None
+    finally:
+        await supervisor._stop_docker_watch()
+        await supervisor.shutdown()

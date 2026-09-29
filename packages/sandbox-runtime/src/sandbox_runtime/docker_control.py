@@ -1,7 +1,7 @@
-"""Local, terminal Docker preparation owned by the runtime supervisor.
+"""Local Docker snapshot preparation owned by the runtime supervisor.
 
-VM snapshots are terminal: only acknowledged preparation permits capture.
-The provider retires the VM after capture; there is no implicit container restart.
+Only acknowledged preparation permits capture. Failed preparation restores Docker
+in an interactive VM so a later capture can be retried.
 """
 
 from __future__ import annotations
@@ -11,17 +11,30 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .docker_service import DOCKER_START_TIMEOUT_SECONDS, DOCKER_STOP_TIMEOUT_SECONDS
+
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from .docker_service import DockerService
 
 SOCKET_PATH = "/tmp/openinspect-docker-control.sock"
-CONTROL_TIMEOUT_SECONDS = 45
+PREPARATION_TIMEOUT_SECONDS = 2 * DOCKER_STOP_TIMEOUT_SECONDS + 5
+CONTROL_TIMEOUT_SECONDS = (
+    PREPARATION_TIMEOUT_SECONDS + DOCKER_STOP_TIMEOUT_SECONDS + DOCKER_START_TIMEOUT_SECONDS + 10
+)
 
 
 class DockerControl:
-    def __init__(self, service: DockerService, path: str = SOCKET_PATH) -> None:
+    def __init__(
+        self,
+        service: DockerService,
+        path: str = SOCKET_PATH,
+        recover: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self.service = service
         self.path = path
+        self.recover = recover
         self.prepared = False
         self._lock = asyncio.Lock()
         self._server: asyncio.Server | None = None
@@ -43,8 +56,16 @@ class DockerControl:
                 command = await reader.readline()
                 async with self._lock:
                     if command == b"prepare\n" and not self.prepared:
-                        await self.service.prepare_for_snapshot()
-                        self.prepared = True
+                        try:
+                            async with asyncio.timeout(PREPARATION_TIMEOUT_SECONDS):
+                                await self.service.prepare_for_snapshot()
+                        except (Exception, asyncio.CancelledError) as error:
+                            if self.recover is not None:
+                                self.service.log.error("docker.prepare_failed", exc=error)
+                                await self.recover()
+                                self.prepared = False
+                        else:
+                            self.prepared = True
                     result = (
                         b"prepared\n"
                         if self.prepared and command in (b"prepare\n", b"status\n")

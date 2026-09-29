@@ -57,7 +57,7 @@ class DockerService:
 
     @property
     def exit_expected(self) -> bool:
-        """Whether the exit is confirmed preparation or deliberate supervisor teardown."""
+        """Whether the daemon exit was requested by preparation or supervisor teardown."""
         return self._exit_expected
 
     async def start(self) -> None:
@@ -158,6 +158,7 @@ class DockerService:
         self._preparation_finished.clear()
         try:
             process.send_signal(signal.SIGTERM)
+            self._exit_expected = True
             try:
                 async with asyncio.timeout(self.stop_timeout_seconds):
                     if await wait_for_process_exit(process) != 0:
@@ -175,10 +176,6 @@ class DockerService:
             # A reusable image must never include secret-bearing daemon diagnostics.
             Path(self.log_path).write_bytes(b"")
             self.log.info("docker.prepared")
-            self._exit_expected = True
-        except BaseException:
-            self._exit_expected = False
-            raise
         finally:
             self._preparation_finished.set()
 
