@@ -17,6 +17,14 @@ import {
   type ModelCategory,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import {
+  HARNESS_IDS,
+  getHarnessLabel,
+  harnessSupportsModel,
+  isValidHarness,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness } from "@/lib/session-harness";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -144,6 +152,10 @@ function RepoOverrideRow({
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
+  const [harnessMode, setHarnessMode] = useState<"global" | "override">(
+    entry.settings.harness !== undefined ? "override" : "global"
+  );
+  const [harness, setHarness] = useState<HarnessId>(entry.settings.harness ?? "opencode");
   const [triggerUserMode, setTriggerUserMode] = useState<"global" | "override">(
     entry.settings.allowedTriggerUsers !== undefined ? "override" : "global"
   );
@@ -184,6 +196,12 @@ function RepoOverrideRow({
 
   const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
+  // The model picker only offers models the override harness can run.
+  const visibleModelOptions =
+    harnessMode === "override"
+      ? filterModelOptionsForHarness(harness, enabledModelOptions)
+      : enabledModelOptions;
+
   const handleModelChange = (newModel: string) => {
     setModel(newModel);
     setDirty(true);
@@ -191,6 +209,24 @@ function RepoOverrideRow({
     if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
       setEffort("");
     }
+  };
+
+  const handleHarnessModeChange = (newMode: "global" | "override") => {
+    setHarnessMode(newMode);
+    if (newMode === "override" && entry.settings.harness === undefined) {
+      setHarness("opencode");
+    }
+    setDirty(true);
+  };
+
+  const handleHarnessChange = (next: string) => {
+    if (!isValidHarness(next)) return;
+    setHarness(next);
+    if (model && !harnessSupportsModel(next, model)) {
+      setModel("");
+      setEffort("");
+    }
+    setDirty(true);
   };
 
   const handleAutoReviewModeChange = (newMode: "global" | "override") => {
@@ -208,6 +244,7 @@ function RepoOverrideRow({
     const settings: GitHubBotSettings = {};
     if (model) settings.model = model;
     if (effort) settings.reasoningEffort = effort;
+    if (harnessMode === "override") settings.harness = harness;
     if (triggerUserMode === "override") settings.allowedTriggerUsers = allowedTriggerUsers;
     if (codeReviewMode === "override") settings.codeReviewInstructions = codeReviewInstructions;
     if (commentActionMode === "override")
@@ -285,7 +322,7 @@ function RepoOverrideRow({
             <SelectValue placeholder="Default model" />
           </SelectTrigger>
           <SelectContent>
-            {enabledModelOptions.map((group) => (
+            {visibleModelOptions.map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
                 {group.models.map((m) => (
@@ -313,6 +350,31 @@ function RepoOverrideRow({
               {reasoningConfig.efforts.map((value) => (
                 <SelectItem key={value} value={value}>
                   {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        <Select value={harnessMode} onValueChange={handleHarnessModeChange}>
+          <SelectTrigger density="compact" className="w-44" aria-label="Agent harness scope">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="global">Use global harness</SelectItem>
+            <SelectItem value="override">Override harness</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {harnessMode === "override" && (
+          <Select value={harness} onValueChange={handleHarnessChange}>
+            <SelectTrigger density="compact" className="w-44" aria-label="Agent harness">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {HARNESS_IDS.map((id) => (
+                <SelectItem key={id} value={id}>
+                  {getHarnessLabel(id)}
                 </SelectItem>
               ))}
             </SelectContent>

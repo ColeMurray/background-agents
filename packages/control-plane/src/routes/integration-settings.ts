@@ -413,6 +413,7 @@ async function handleGetResolvedConfig(
       repo,
       config: {
         model: githubSettings.model ?? null,
+        harness: githubSettings.harness ?? null,
         reasoningEffort,
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,

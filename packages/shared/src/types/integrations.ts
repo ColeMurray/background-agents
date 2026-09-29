@@ -2,6 +2,7 @@
 
 import { harnessIdSchema } from "../harnesses";
 import { escapeRegExp } from "../regex";
+import { harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
 
@@ -58,6 +59,7 @@ export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
 export const githubBotSettingsSchema = z.strictObject({
   autoReviewOnOpen: z.boolean().optional(),
   model: z.string().optional(),
+  harness: harnessIdSchema.optional(),
   reasoningEffort: z.string().optional(),
   allowedTriggerUsers: z.array(z.string()).optional(),
   codeReviewInstructions: z.string().optional(),

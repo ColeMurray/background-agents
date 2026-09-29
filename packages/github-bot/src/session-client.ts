@@ -2,6 +2,7 @@ import {
   createSessionResponseSchema,
   sendPromptResponseSchema,
 } from "@open-inspect/shared/types/session-api";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";
@@ -21,6 +22,7 @@ export async function createSession(
     teamId: string | null;
     title: string;
     model: string;
+    harness: HarnessId | null;
     reasoningEffort?: string | null;
     scmLogin: string;
     scmUserId: string;
@@ -35,6 +37,11 @@ export async function createSession(
     scmLogin: params.scmLogin,
     scmAvatarUrl: params.scmAvatarUrl,
   };
+  // Absent harness resolves to the built-in default server-side; send it only
+  // when configured so unset behavior stays byte-identical to today.
+  if (params.harness) {
+    body.harness = params.harness;
+  }
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }
