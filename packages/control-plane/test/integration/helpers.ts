@@ -404,7 +404,8 @@ export async function initNamedSession(
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
     providerAuth?: SessionModelProviderAuthInput[];
-  }
+  },
+  beforeInit?: (stub: DurableObjectStub) => Promise<void>
 ) {
   const defaults = {
     sessionName,
@@ -433,6 +434,7 @@ export async function initNamedSession(
     updatedAt: now,
   });
 
+  await beforeInit?.(env.SESSION.get(env.SESSION.idFromName(sessionName)));
   return initNamedSessionDO(sessionName, doDefaults);
 }
 
