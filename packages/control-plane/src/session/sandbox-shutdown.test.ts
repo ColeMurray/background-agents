@@ -1055,6 +1055,45 @@ describe("SandboxShutdownCoordinator", () => {
     );
   });
 
+  it("claims the matching heartbeat inside the shutdown transaction before failing work", async () => {
+    const takeSnapshot = vi.fn(async () => ({
+      success: true as const,
+      imageId: "saved",
+      sourceStopped: false,
+    }));
+    const f = fixture(
+      provider({ takeSnapshot, stopSandbox: vi.fn(async () => ({ success: true })) })
+    );
+    await readyWithoutDeadline(f);
+    vi.mocked(f.deps.session.transaction).mockClear();
+    const before = structuredClone(f.store.value);
+    f.deps.messages.getProcessingMessage.mockReturnValue({ id: "processing" });
+    const claim = { generation: GENERATION, heartbeat: 5000, deadline: 65000 };
+    const attempt = vi.fn(() => false);
+    (
+      f.deps.sandbox as typeof f.deps.sandbox & { claimStaleHeartbeat: typeof attempt }
+    ).claimStaleHeartbeat = attempt;
+
+    expect(await f.shutdown.requestShutdown("heartbeat_timeout", "emergency", claim)).toBe(
+      "superseded"
+    );
+    expect(attempt).toHaveBeenCalledWith(GENERATION, 5000, 65000);
+    expect(f.deps.session.transaction).toHaveBeenCalledOnce();
+    expect(f.store.value).toEqual(before);
+    expect(f.deps.failures.record).not.toHaveBeenCalled();
+    expect(f.deps.retireAccess).not.toHaveBeenCalled();
+    expect(takeSnapshot).not.toHaveBeenCalled();
+
+    attempt.mockImplementation(() => {
+      f.sandboxRow.status = "stale";
+      return true;
+    });
+    expect(await f.shutdown.requestShutdown("heartbeat_timeout", "emergency", claim)).toBe("owned");
+    expect(f.store.value?.phase).toBe("saved");
+    expect(takeSnapshot).toHaveBeenCalledOnce();
+    expect(f.deps.failures.record).toHaveBeenCalledOnce();
+  });
+
   it("stops offering a retry once the window after the shutdown closes", async () => {
     const f = fixture(
       provider({

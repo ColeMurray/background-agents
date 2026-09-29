@@ -345,4 +345,18 @@ describe("createAlarmHandler", () => {
     expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledOnce();
     expect(executionStop.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
   });
+
+  it("uses the contact-loss reason only for confirmed heartbeat failure", async () => {
+    const { handler, repository, messageQueue, lifecycleManager, executionStop } = createHandler();
+    repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+    lifecycleManager.handleAlarm.mockResolvedValue({
+      kind: "heartbeat_lost",
+      reason: "The sandbox stopped responding.",
+    });
+    await handler.handle();
+    expect(messageQueue.failStuckProcessingMessage).toHaveBeenCalledWith(
+      "The sandbox stopped responding."
+    );
+    expect(executionStop.resumeAfterSandboxTermination).toHaveBeenCalledOnce();
+  });
 });

@@ -188,6 +188,8 @@ export const sandboxRowSchema = z.object({
   status: sandboxStatusSchema,
   git_sync_status: gitSyncStatusSchema,
   last_heartbeat: z.number().nullable(),
+  heartbeat_confirmation_heartbeat: z.number().nullable(),
+  heartbeat_confirmation_deadline: z.number().nullable(),
   last_activity: z.number().nullable(), // Last activity timestamp for inactivity-based snapshot
   last_spawn_error: z.string().nullable(),
   last_spawn_error_at: z.number().nullable(),

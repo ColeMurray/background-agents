@@ -83,6 +83,8 @@ export function createMockSandbox(
     status: "ready",
     git_sync_status: "completed",
     last_heartbeat: Date.now() - 10000,
+    heartbeat_confirmation_heartbeat: null,
+    heartbeat_confirmation_deadline: null,
     last_activity: Date.now() - 30000,
     last_spawn_error: null,
     last_spawn_error_at: null,
@@ -145,7 +147,41 @@ export function createMockStorage(
     }),
     updateSandboxStatus: vi.fn((status: SandboxStatus) => {
       calls.push(`updateSandboxStatus:${status}`);
-      if (sandbox) sandbox.status = status;
+      if (sandbox) {
+        sandbox.status = status;
+        sandbox.heartbeat_confirmation_heartbeat = null;
+        sandbox.heartbeat_confirmation_deadline = null;
+      }
+    }),
+    beginHeartbeatConfirmation: vi.fn((generation, heartbeat, deadline) => {
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt ||
+        sandbox.status !== "ready" ||
+        sandbox.last_heartbeat !== heartbeat ||
+        sandbox.heartbeat_confirmation_deadline !== null
+      )
+        return false;
+      sandbox.heartbeat_confirmation_heartbeat = heartbeat;
+      sandbox.heartbeat_confirmation_deadline = deadline;
+      return true;
+    }),
+    claimStaleHeartbeat: vi.fn((generation, heartbeat, deadline) => {
+      if (
+        !sandbox ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt ||
+        sandbox.status !== "ready" ||
+        sandbox.last_heartbeat !== heartbeat ||
+        sandbox.heartbeat_confirmation_heartbeat !== heartbeat ||
+        sandbox.heartbeat_confirmation_deadline !== deadline
+      )
+        return false;
+      sandbox.status = "stale";
+      sandbox.heartbeat_confirmation_heartbeat = null;
+      sandbox.heartbeat_confirmation_deadline = null;
+      return true;
     }),
     markSandboxReady: vi.fn(() => true),
     transitionSandboxStatus: vi.fn(
@@ -208,6 +244,8 @@ export function createMockStorage(
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;
         sandbox.last_heartbeat = null;
+        sandbox.heartbeat_confirmation_heartbeat = null;
+        sandbox.heartbeat_confirmation_deadline = null;
         sandbox.modal_sandbox_id = data.modalSandboxId;
         sandbox.runtime_version = null;
         if (!data.preserveProviderObjectId) sandbox.modal_object_id = null;
@@ -230,6 +268,9 @@ export function createMockStorage(
       if (sandbox) {
         sandbox.status = data.status;
         sandbox.created_at = data.createdAt;
+        sandbox.last_heartbeat = null;
+        sandbox.heartbeat_confirmation_heartbeat = null;
+        sandbox.heartbeat_confirmation_deadline = null;
       }
     }),
     completeProviderResume: vi.fn(async (generation, access) => {
@@ -514,9 +555,9 @@ export function createCheckpointShutdown(
   return {
     ...createUnmanagedShutdown(),
     captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
-    requestShutdown: (reason, mode) =>
+    requestShutdown: (reason, mode, claim) =>
       mode === "emergency"
-        ? coordinator.requestShutdown(reason, mode)
+        ? coordinator.requestShutdown(reason, mode, claim)
         : Promise.resolve("unmanaged"),
     isHolding: () => coordinator.isHolding(),
     admissionDecision: () => coordinator.admissionDecision(),

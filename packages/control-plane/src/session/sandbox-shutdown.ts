@@ -853,19 +853,21 @@ export class SandboxShutdownCoordinator {
   /** Commit termination ownership before any teardown; emergency capture cannot prove quiescence. */
   async requestShutdown(
     reason: string,
-    mode: "graceful" | "emergency" = "graceful"
-  ): Promise<"owned" | "held" | "unmanaged"> {
+    mode: "graceful" | "emergency" = "graceful",
+    heartbeatClaim?: { generation: SandboxGeneration; heartbeat: number; deadline: number }
+  ): Promise<"owned" | "held" | "unmanaged" | "superseded"> {
     const row = this.deps.sandbox.getSandbox();
     const state = this.deps.store.read();
     if (state && (!this.current(state) || !this.providerMatches(state))) return "held";
-    if (!row?.modal_sandbox_id) return state ? "held" : "unmanaged";
+    if (!row?.modal_sandbox_id) return heartbeatClaim ? "superseded" : state ? "held" : "unmanaged";
     const emergency = mode === "emergency";
     const recovering = state?.restoreInvoked === true || state?.phase === "restoring";
     if (state && state.phase !== "running" && !(emergency && recovering)) return "held";
     if (!emergency && (!state || state.lifecyclePolicy === "legacy"))
       return state?.checkpointInFlight ? "held" : "unmanaged";
     if (emergency && state?.checkpointInFlight) return "held";
-    if (emergency && !recovering && row.status !== "ready") return "unmanaged";
+    if (emergency && !recovering && row.status !== "ready")
+      return heartbeatClaim ? "superseded" : "unmanaged";
     // A graceful stop reserves the prompt-stop allowance; an emergency cannot
     // obtain runtime preparation and uses only the bounded capture/retire budget.
     const now = this.now();
@@ -889,14 +891,26 @@ export class SandboxShutdownCoordinator {
       retireByMs: end - MARGIN_MS,
       continuationPaused: emergency || state?.continuationPaused,
     };
+    let superseded = false;
     const failure = this.deps.session.transaction(() => {
+      if (
+        heartbeatClaim &&
+        !this.deps.sandbox.claimStaleHeartbeat(
+          heartbeatClaim.generation,
+          heartbeatClaim.heartbeat,
+          heartbeatClaim.deadline
+        )
+      ) {
+        superseded = true;
+        return null;
+      }
       const message = this.deps.messages.getProcessingMessage();
       if (message) {
         next.messageId = message.id;
         next.continuationPaused = true;
       }
       this.deps.store.write(next);
-      if (emergency) this.deps.sandbox.updateSandboxStatus("stale");
+      if (emergency && !heartbeatClaim) this.deps.sandbox.updateSandboxStatus("stale");
       return message
         ? this.deps.failures.record(
             message.id,
@@ -906,6 +920,7 @@ export class SandboxShutdownCoordinator {
           )
         : null;
     });
+    if (superseded) return "superseded";
     this.announce(next);
     if (failure) this.deps.failures.deliver(failure);
     this.broadcast({ type: "processing_status", isProcessing: false });

@@ -296,11 +296,18 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       return true;
     };
 
-    const now = Date.now();
+    const startedAt = Date.now();
     if (rejectIfReplaced()) return;
     await lifecycleManager.scheduleDisconnectCheck();
     if (rejectIfReplaced()) return;
-    sandboxRepository.updateSandboxHeartbeat(now);
+    if (!isSessionPromptable(this.deps.sessionCoreRepository.getSession()?.status ?? "cancelled")) {
+      wsManager.close(ws, 4003, "Session is terminal");
+      return;
+    }
+    if (!sandboxRepository.updateSandboxHeartbeat(Date.now(), generation)) {
+      wsManager.close(ws, 4003, "Sandbox generation replaced");
+      return;
+    }
 
     // The lifecycle manager publishes access after any pending provider
     // startup has persisted its URLs and credentials.
@@ -319,7 +326,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       outcome: "success",
       sandbox_id: admission.sandboxId,
       replaced_existing: replaced,
-      duration_ms: Date.now() - now,
+      duration_ms: Date.now() - startedAt,
     });
 
     if (wsManager.getSandboxCommandTarget().kind === "dispatch") {
@@ -591,7 +598,9 @@ function matchesAdmission(row: SandboxRow | null, admission: SandboxAdmission): 
     row.modal_sandbox_id === admission.sandboxId &&
     row.created_at === admission.createdAt &&
     row.auth_token_hash === admission.authTokenHash &&
-    row.auth_token === admission.authToken
+    row.auth_token === admission.authToken &&
+    row.fenced !== 1 &&
+    !isSandboxReconnectBlockedStatus(row.status)
   );
 }
 

@@ -9,8 +9,117 @@ import {
   noLifetime,
 } from "./test-helpers";
 
+async function beginReadyConfirmation(
+  h: ReturnType<typeof createAlarmFixture>,
+  sandbox: ReturnType<typeof createMockSandbox>
+): Promise<void> {
+  expect(await h.manager.handleAlarm()).toBe("no_action");
+  expect(sandbox.status).toBe("ready");
+  expect(sandbox.heartbeat_confirmation_heartbeat).toBe(sandbox.last_heartbeat);
+  expect(sandbox.heartbeat_confirmation_deadline).toBeGreaterThan(Date.now());
+  expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+  if (h.provider.stopSandbox) expect(h.provider.stopSandbox).not.toHaveBeenCalled();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(sandbox.heartbeat_confirmation_deadline!);
+}
+
 describe("heartbeat alarm effects", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("holds the first 153173ms observation to one absolute deadline, despite earlier alarms", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    const sandbox = createMockSandbox({
+      status: "ready",
+      last_heartbeat: Date.now() - 153_173,
+      active_socket_id: "socket-1",
+      auth_token_hash: "live",
+    });
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox,
+      })
+    );
+    expect(await h.manager.handleAlarm()).toBe("no_action");
+    expect(sandbox.heartbeat_confirmation_deadline).toBe(1_060_000);
+    expect(sandbox).toMatchObject({
+      status: "ready",
+      active_socket_id: "socket-1",
+      auth_token_hash: "live",
+    });
+    expect(stopSandbox).not.toHaveBeenCalled();
+    vi.setSystemTime(1_030_000);
+    expect(await h.manager.handleAlarm()).toBe("no_action");
+    expect(sandbox.heartbeat_confirmation_deadline).toBe(1_060_000);
+    vi.setSystemTime(1_060_000);
+    expect(await h.manager.handleAlarm()).toEqual({
+      kind: "heartbeat_lost",
+      reason: "The sandbox stopped responding.",
+    });
+    expect(stopSandbox).toHaveBeenCalledOnce();
+    expect(sandbox.status).toBe("stale");
+  });
+
+  it("does not claim a recovered heartbeat after a deferred unmanaged shutdown", async () => {
+    const sandbox = createMockSandbox({ status: "ready", last_heartbeat: Date.now() - 153_173 });
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox,
+      })
+    );
+    await beginReadyConfirmation(h, sandbox);
+    // A managed provider can yield before telling the legacy path it is unmanaged.
+    h.shutdown.requestShutdown = vi.fn(async () => {
+      sandbox.last_heartbeat = Date.now();
+      sandbox.heartbeat_confirmation_heartbeat = null;
+      sandbox.heartbeat_confirmation_deadline = null;
+      return "unmanaged" as const;
+    });
+    // Exercise the unmanaged fallback's post-await conditional claim directly.
+    h.provider.capabilities.snapshotRequiresShutdown = true;
+    expect(await h.manager.handleAlarm()).toBe("no_action");
+    expect(sandbox.status).toBe("ready");
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(h.shutdown.requestShutdown).toHaveBeenCalledOnce();
+  });
+
+  it.each(["replacement", "shutdown owner"] as const)(
+    "does not run legacy preservation when a %s wins during shutdown handoff",
+    async (winner) => {
+      const sandbox = createMockSandbox({ status: "ready", last_heartbeat: Date.now() - 153_173 });
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const h = createAlarmFixture(
+        sandbox,
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true, snapshotRequiresShutdown: true },
+          stopSandbox,
+        })
+      );
+      await beginReadyConfirmation(h, sandbox);
+      h.shutdown.requestShutdown = vi.fn(async () => {
+        if (winner === "replacement") {
+          sandbox.modal_sandbox_id = "replacement";
+          sandbox.created_at += 1;
+        } else {
+          h.shutdown.isHolding = () => true;
+        }
+        return "unmanaged" as const;
+      });
+      expect(await h.manager.handleAlarm()).toBe("no_action");
+      expect(sandbox.status).toBe("ready");
+      expect(stopSandbox).not.toHaveBeenCalled();
+      expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     { status: "spawning", resumable: false, explicitStop: true },
@@ -35,7 +144,12 @@ describe("heartbeat alarm effects", () => {
         })
       );
 
-      await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+      if (status === "ready") await beginReadyConfirmation(h, sandbox);
+      await expect(h.manager.handleAlarm()).resolves.toEqual(
+        status === "ready"
+          ? { kind: "heartbeat_lost", reason: "The sandbox stopped responding." }
+          : "sandbox_terminated"
+      );
 
       if (explicitStop) {
         expect(stopSandbox).toHaveBeenCalledExactlyOnceWith({
@@ -82,6 +196,7 @@ describe("heartbeat alarm effects", () => {
       })
     );
 
+    await beginReadyConfirmation(h, sandbox);
     await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
     expect(takeSnapshot).toHaveBeenCalledExactlyOnceWith(
@@ -120,6 +235,7 @@ describe("heartbeat alarm effects", () => {
       })
     );
 
+    await beginReadyConfirmation(h, sandbox);
     await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
     expect(stopSandbox).not.toHaveBeenCalled();
@@ -156,10 +272,14 @@ describe("heartbeat alarm effects", () => {
       })
     );
     const snapshot = vi.spyOn(h.manager, "triggerSnapshot");
+    await beginReadyConfirmation(h, sandbox);
     const pending = h.manager.handleAlarm();
 
     try {
-      await expect(pending).resolves.toBe("sandbox_terminated");
+      await expect(pending).resolves.toEqual({
+        kind: "heartbeat_lost",
+        reason: "The sandbox stopped responding.",
+      });
       expect(takeSnapshot).toHaveBeenCalledOnce();
       expect(stopSandbox).not.toHaveBeenCalled();
       expect(sandbox.snapshot_image_id).toBeNull();
@@ -205,7 +325,12 @@ describe("heartbeat alarm effects", () => {
         })
       );
 
-      await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+      if (status === "ready") await beginReadyConfirmation(h, sandbox);
+      await expect(h.manager.handleAlarm()).resolves.toEqual(
+        status === "ready"
+          ? { kind: "heartbeat_lost", reason: "The sandbox stopped responding." }
+          : "sandbox_terminated"
+      );
 
       expect(stopSandbox).toHaveBeenCalledOnce();
       expect(stopSandbox).toHaveBeenCalledWith(
@@ -221,7 +346,7 @@ describe("heartbeat alarm effects", () => {
       expect(sandbox.status).toBe("stale");
       expect(h.manager.isSpawning()).toBe(false);
       expect(h.broadcaster.messages).toContainEqual({ type: "sandbox_status", status: "stale" });
-      expect(h.alarmScheduler.schedule).not.toHaveBeenCalled();
+      expect(h.alarmScheduler.schedule).toHaveBeenCalledTimes(status === "ready" ? 1 : 0);
       expect(h.wsManager.detachSandboxWebSocket).toHaveBeenCalledExactlyOnceWith(
         1000,
         "Heartbeat stale"

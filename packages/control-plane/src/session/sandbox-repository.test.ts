@@ -22,6 +22,8 @@ function sandboxRow(overrides: Partial<SandboxRow> = {}): SandboxRow {
     status: "ready",
     git_sync_status: "pending",
     last_heartbeat: null,
+    heartbeat_confirmation_heartbeat: null,
+    heartbeat_confirmation_deadline: null,
     last_activity: null,
     last_spawn_error: null,
     last_spawn_error_at: null,
@@ -107,6 +109,13 @@ describe("SandboxRepository", () => {
       expect(() => repository.getSandbox()).toThrow(SessionStorageIntegrityError);
     });
 
+    it("rejects a partial persisted confirmation episode", () => {
+      mock.setData("SELECT * FROM sandbox LIMIT 1", [
+        sandboxRow({ heartbeat_confirmation_heartbeat: 5000 }),
+      ]);
+      expect(() => repository.getSandbox()).toThrow(SessionStorageIntegrityError);
+    });
+
     // This is the read boundary for the sandbox row: the column is bare TEXT
     // with no CHECK constraint and roughly forty sites consume this status, so
     // validating here is what stops the same row meaning different things to
@@ -187,18 +196,17 @@ describe("SandboxRepository", () => {
   });
 
   describe("transitionSandboxStatus", () => {
-    const query = `UPDATE sandbox SET status = ?
-       WHERE id = (SELECT id FROM sandbox LIMIT 1)
-         AND modal_sandbox_id IS ? AND created_at = ? AND status = ?`;
     const generation = { sandboxId: "modal-sb-1", createdAt: 5000 };
 
     it("moves the row only while it is still the generation's and in the expected status", () => {
+      repository.transitionSandboxStatus(generation, "snapshotting", "ready");
+      const query = mock.calls[0].query;
       mock.setRowsWritten(query, 1);
 
       expect(repository.transitionSandboxStatus(generation, "snapshotting", "ready")).toBe(true);
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toBe(query);
-      expect(mock.calls[0].params).toEqual(["ready", "modal-sb-1", 5000, "snapshotting"]);
+      expect(mock.calls.length).toBe(2);
+      expect(query).toContain("heartbeat_confirmation_deadline = NULL");
+      expect(mock.calls[1].params).toEqual(["ready", "modal-sb-1", 5000, "snapshotting"]);
     });
 
     it("reports a row that another event or attempt moved instead of overwriting it", () => {
@@ -345,11 +353,12 @@ describe("SandboxRepository", () => {
 
   describe("updateSandboxHeartbeat", () => {
     it("updates heartbeat timestamp", () => {
+      mock.setData("SELECT * FROM sandbox LIMIT 1", [sandboxRow()]);
       repository.updateSandboxHeartbeat(5000);
 
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_heartbeat");
-      expect(mock.calls[0].params).toEqual([5000]);
+      expect(mock.calls.length).toBe(2);
+      expect(mock.calls[1].query).toContain("UPDATE sandbox SET last_heartbeat");
+      expect(mock.calls[1].params).toEqual([5000, null, 1000]);
     });
   });
 
@@ -797,6 +806,60 @@ describe("SandboxRepository boot state (SQLite)", () => {
       expect(row?.auth_token).toBeNull();
       expect(row?.active_socket_id).toBe("");
       expect(row?.fenced).toBe(1);
+    });
+  });
+
+  describe("heartbeat confirmation (SQLite)", () => {
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+
+    it("retains one absolute deadline across repository reconstruction and conditionally claims it", () => {
+      const { sql, repository, set } = createSqliteRepository();
+      set(
+        "status = 'ready', modal_sandbox_id = 'sb-1', last_heartbeat = 5000, active_socket_id = 'socket-1'"
+      );
+      expect(repository.beginHeartbeatConfirmation(generation, 5000, 65000)).toBe(true);
+      const restarted = new SandboxRepository(sql, createLog(), TEST_ENCRYPTION_KEY);
+      expect(restarted.getSandbox()).toMatchObject({
+        status: "ready",
+        active_socket_id: "socket-1",
+        heartbeat_confirmation_heartbeat: 5000,
+        heartbeat_confirmation_deadline: 65000,
+      });
+      expect(restarted.beginHeartbeatConfirmation(generation, 5000, 95000)).toBe(false);
+      expect(restarted.getSandbox()?.heartbeat_confirmation_deadline).toBe(65000);
+      expect(restarted.claimStaleHeartbeat(generation, 5001, 65000)).toBe(false);
+      expect(restarted.claimStaleHeartbeat({ ...generation, createdAt: 999 }, 5000, 65000)).toBe(
+        false
+      );
+      expect(restarted.claimStaleHeartbeat(generation, 5000, 65000)).toBe(true);
+      expect(restarted.updateSandboxHeartbeat(66000, generation)).toBe(false);
+      expect(restarted.getSandbox()).toMatchObject({
+        status: "stale",
+        last_heartbeat: 5000,
+        active_socket_id: "socket-1",
+        heartbeat_confirmation_deadline: null,
+      });
+    });
+
+    it("atomically clears an episode on contact or replacement and refuses an old claim", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'ready', modal_sandbox_id = 'sb-1', last_heartbeat = 5000");
+      expect(repository.beginHeartbeatConfirmation(generation, 5000, 65000)).toBe(true);
+      expect(repository.updateSandboxHeartbeat(6000, generation)).toBe(true);
+      expect(repository.getSandbox()?.heartbeat_confirmation_deadline).toBeNull();
+      expect(repository.claimStaleHeartbeat(generation, 5000, 65000)).toBe(false);
+      expect(repository.beginHeartbeatConfirmation(generation, 6000, 66000)).toBe(true);
+      repository.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: 7000,
+        modalSandboxId: "sb-2",
+      });
+      expect(repository.getSandbox()).toMatchObject({
+        last_heartbeat: null,
+        heartbeat_confirmation_heartbeat: null,
+        heartbeat_confirmation_deadline: null,
+      });
+      expect(repository.claimStaleHeartbeat(generation, 6000, 66000)).toBe(false);
     });
   });
 

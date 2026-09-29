@@ -59,6 +59,12 @@ describe("cross-path alarm effects", () => {
       vi.mocked(h.wsManager.detachSandboxWebSocket).mockImplementation(() => {
         order.push("detach");
       });
+      if (trigger === "heartbeat") {
+        expect(await h.manager.handleAlarm()).toBe("no_action");
+        expect(takeSnapshot).not.toHaveBeenCalled();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(sandbox.heartbeat_confirmation_deadline!);
+      }
       const settled = vi.fn();
       const pending = h.manager.handleAlarm().then((result) => {
         settled();
@@ -105,7 +111,11 @@ describe("cross-path alarm effects", () => {
         await pending;
       }
 
-      await expect(pending).resolves.toBe("sandbox_terminated");
+      await expect(pending).resolves.toEqual(
+        trigger === "heartbeat"
+          ? { kind: "heartbeat_lost", reason: "The sandbox stopped responding." }
+          : "sandbox_terminated"
+      );
       expect(takeSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           providerObjectId: sandbox.modal_object_id,
@@ -156,6 +166,11 @@ describe("cross-path alarm effects", () => {
         }
       );
 
+      if (trigger === "heartbeat") {
+        expect(await h.manager.handleAlarm()).toBe("no_action");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(sandbox.heartbeat_confirmation_deadline!);
+      }
       await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
       expect(stopSandbox).not.toHaveBeenCalled();

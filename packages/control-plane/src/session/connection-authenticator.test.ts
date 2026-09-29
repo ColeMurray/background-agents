@@ -103,7 +103,7 @@ function createHarness(opts: {
       return opts.sandbox;
     }),
     updateSandboxStatus: vi.fn(),
-    updateSandboxHeartbeat: vi.fn(),
+    updateSandboxHeartbeat: vi.fn(() => true),
   };
   const wsManager = {
     acceptClientSocket: vi.fn(),
@@ -510,6 +510,68 @@ describe("UpgradeDecision.attach", () => {
       "ws.connect",
       expect.objectContaining({ ws_type: "sandbox", outcome: "generation_replaced" })
     );
+  });
+
+  it.each(["stale", "stopped"] as const)(
+    "rejects a delayed attach after %s claims the same generation",
+    async (status) => {
+      const original = await sandboxRow({
+        status: "ready",
+        last_heartbeat: 1000,
+        active_socket_id: "old",
+      });
+      const h = createHarness({ sandbox: original });
+      const decision = await accepted(h, sandboxUpgrade());
+      let resume!: () => void;
+      h.lifecycleManager.scheduleDisconnectCheck.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resume = resolve;
+          })
+      );
+      const attaching = decision.attach(socket);
+      h.sandboxRepository.getSandbox.mockReturnValue({ ...original, status });
+      resume();
+
+      await attaching;
+
+      expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+      expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
+      expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+      expect(original.last_heartbeat).toBe(1000);
+      expect(original.active_socket_id).toBe("old");
+    }
+  );
+
+  it("takes the reconnect receipt timestamp after the deferred alarm arm", async () => {
+    const h = createHarness({ sandbox: await sandboxRow({ status: "ready" }) });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1000);
+      h.lifecycleManager.scheduleDisconnectCheck.mockImplementation(async () => {
+        vi.setSystemTime(2000);
+      });
+      await (await accepted(h, sandboxUpgrade())).attach(socket);
+      expect(h.sandboxRepository.updateSandboxHeartbeat).toHaveBeenCalledWith(2000, {
+        sandboxId: SANDBOX_ID,
+        createdAt: 5000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not adopt a socket if the session closes while the alarm arm is pending", async () => {
+    const opts = { sandbox: await sandboxRow({ status: "ready" }), session: sessionRow("active") };
+    const h = createHarness(opts);
+    const decision = await accepted(h, sandboxUpgrade());
+    h.lifecycleManager.scheduleDisconnectCheck.mockImplementation(async () => {
+      opts.session = sessionRow("archived");
+    });
+    await decision.attach(socket);
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Session is terminal");
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
   });
 
   it("stamps the heartbeat only once the liveness check is armed", async () => {

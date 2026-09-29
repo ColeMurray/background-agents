@@ -89,10 +89,14 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       // is the one that was waiting when the alarm fired.
       const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
+      const heartbeatLost =
+        typeof lifecycleResult === "object" && lifecycleResult.kind === "heartbeat_lost";
       if (lifecycleResult !== "no_action") {
-        await deps.messageQueue.failStuckProcessingMessage();
+        await deps.messageQueue.failStuckProcessingMessage(
+          heartbeatLost ? lifecycleResult.reason : undefined
+        );
       }
-      if (lifecycleResult === "sandbox_terminated") {
+      if (lifecycleResult === "sandbox_terminated" || heartbeatLost) {
         await deps.executionStop.resumeAfterSandboxTermination();
       }
       if (
