@@ -6,9 +6,11 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Added
 
-`TEAMS_ENFORCEMENT` controls session route access (`off`, `shadow` by default, or `on`). Private
-sessions remain restricted in every mode; with enforcement on, session deletion requires the owner,
-a team lead, or a workspace administrator.
+`TEAMS_ENFORCEMENT` controls active-user session item routes (`/sessions/:id` and its subpaths)
+using the persisted session row (`off`, `shadow` by default, or `on`). On those routes, private
+visibility applies in every mode; team visibility and the delete ownership rule apply when `on`.
+Workspace-wide session lists, bulk export, and WebSocket authorization follow in subsequent changes.
+No route can make a session private or team-owned before those changes land.
 
 ## September 28, 2026
 
