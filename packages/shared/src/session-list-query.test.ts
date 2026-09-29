@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SESSION_LIST_TEAM_IDS,
   MAX_SESSION_LIST_SEARCH_LENGTH,
   normalizeSessionListSearch,
   parseSessionListQuery,
@@ -19,6 +20,20 @@ describe("session list query codec", () => {
       success: true,
       data: query,
     });
+  });
+
+  it("deduplicates team IDs and rejects a filter larger than the query budget", () => {
+    expect(
+      parseSessionListQuery(new URLSearchParams("teamIds[]=team_a&teamIds[]=team_a"))
+    ).toMatchObject({
+      success: true,
+      data: { teamIds: ["team_a"] },
+    });
+    const params = new URLSearchParams();
+    for (let i = 0; i <= MAX_SESSION_LIST_TEAM_IDS; i++) {
+      params.append("teamIds[]", `team_${i}`);
+    }
+    expect(parseSessionListQuery(params)).toEqual({ success: false, invalidParam: "teamIds[]" });
   });
 
   it.each([

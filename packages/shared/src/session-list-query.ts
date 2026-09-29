@@ -11,6 +11,8 @@ export const SESSION_LIST_CURRENT_USER = "me";
 export const DEFAULT_SESSION_LIST_LIMIT = 50;
 export const DEFAULT_SESSION_LIST_OFFSET = 0;
 export const MAX_SESSION_LIST_LIMIT = 100;
+/** Reserve bindings for viewer visibility, pagination and other list filters. */
+export const MAX_SESSION_LIST_TEAM_IDS = 50;
 /** Longest accepted `q` after trimming; longer input is rejected, not truncated. */
 export const MAX_SESSION_LIST_SEARCH_LENGTH = 200;
 /** Longest accepted repository owner/name or environment id filter value. */
@@ -122,6 +124,17 @@ function parseIdentifier(value: string | null): string | null | undefined {
   return trimmed;
 }
 
+export function parseSessionListTeamIds(searchParams: URLSearchParams): string[] | null {
+  const teamIds = [...new Set(searchParams.getAll("teamIds[]"))];
+  if (
+    teamIds.length > MAX_SESSION_LIST_TEAM_IDS ||
+    teamIds.some((id) => !/^team_[a-zA-Z0-9_-]{1,256}$/.test(id))
+  ) {
+    return null;
+  }
+  return teamIds;
+}
+
 export function parseSessionListQuery(searchParams: URLSearchParams): SessionListQueryParseResult {
   const statusParam = searchParams.get("status");
   const excludeStatusParam = searchParams.get("excludeStatus");
@@ -164,8 +177,8 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
   const origin = originParam ? spawnSourceSchema.safeParse(originParam) : undefined;
   if (origin && !origin.success) return { success: false, invalidParam: "origin" };
 
-  const teamIds = searchParams.getAll("teamIds[]");
-  if (teamIds.some((id) => !/^team_[a-zA-Z0-9_-]{1,256}$/.test(id))) {
+  const teamIds = parseSessionListTeamIds(searchParams);
+  if (teamIds === null) {
     return { success: false, invalidParam: "teamIds[]" };
   }
   const ownerFilter = searchParams.get("ownerFilter");
@@ -201,7 +214,7 @@ export function parseSessionListQuery(searchParams: URLSearchParams): SessionLis
       ...(repoOwner !== undefined && repoName !== undefined ? { repoOwner, repoName } : {}),
       ...(environmentId !== undefined ? { environmentId } : {}),
       ...(origin ? { origin: origin.data } : {}),
-      ...(teamIds.length ? { teamIds: [...new Set(teamIds)] } : {}),
+      ...(teamIds.length ? { teamIds } : {}),
       ...(ownerFilter !== null ? { ownerFilter } : {}),
       ...(visibility ? { visibility: visibility.data } : {}),
       ...(scope ? { scope } : {}),

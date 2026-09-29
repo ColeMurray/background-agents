@@ -5,6 +5,7 @@ import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   parseSessionListQuery,
+  parseSessionListTeamIds,
   SESSION_LIST_CURRENT_USER,
 } from "@open-inspect/shared/session-list-query";
 import {
@@ -201,8 +202,8 @@ export async function handleListSessionInbox(
   }
   const parsedCursor = parseSessionInboxCursor(query.cursor);
   if (!parsedCursor.ok) return error(parsedCursor.error, 400);
-  const teamIds = new URL(request.url).searchParams.getAll("teamIds[]");
-  if (teamIds.some((id) => !/^team_[a-zA-Z0-9_-]{1,256}$/.test(id))) {
+  const teamIds = parseSessionListTeamIds(new URL(request.url).searchParams);
+  if (teamIds === null) {
     return error("Invalid teamIds[]", 400);
   }
   const viewer = viewerFromContext(

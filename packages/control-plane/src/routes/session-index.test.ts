@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleListSessionInbox, handleListSessions, handlePatchReadState } from "./session-index";
+import { MAX_SESSION_LIST_TEAM_IDS } from "@open-inspect/shared/session-list-query";
 import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
@@ -287,7 +288,9 @@ describe("session index routes", () => {
   });
 
   it("passes inbox team filters before grouping", async () => {
-    const response = await listInbox("?teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_beta");
+    const response = await listInbox(
+      "?teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_alpha&teamIds%5B%5D=team_beta"
+    );
     expect(response.status).toBe(200);
     expect(mockSessionIndexStore.listInboxSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -295,6 +298,17 @@ describe("session index routes", () => {
         viewer: expect.objectContaining({ userId: "user-1" }),
       })
     );
+  });
+
+  it("rejects inbox team filters that exceed the query budget before reading D1", async () => {
+    const params = new URLSearchParams();
+    for (let i = 0; i <= MAX_SESSION_LIST_TEAM_IDS; i++) {
+      params.append("teamIds[]", `team_${i}`);
+    }
+    const response = await listInbox(`?${params}`);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid teamIds[]" });
+    expect(mockSessionIndexStore.listInboxSnapshot).not.toHaveBeenCalled();
   });
 
   it("does not mark service session lists as private viewer data", async () => {
