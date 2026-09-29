@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from modal.exception import NotFoundError
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT_ENV_VAR,
@@ -13,9 +14,12 @@ from sandbox_runtime.constants import (
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     NOVNC_PORT_ENV_VAR,
     TTYD_PROXY_PORT_ENV_VAR,
+    TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
     VNC_PASSWORD_ENV_VAR,
 )
-from sandbox_runtime.types import SessionConfig
+from sandbox_runtime.types import SandboxStatus, SessionConfig
+from src.sandbox.launch import SandboxLauncher
 from src.sandbox.launch_policy import (
     DockerImageUnavailableError,
     InvalidDockerSettingsError,
@@ -27,13 +31,26 @@ from src.sandbox.manager import (
     SandboxConfig,
     SandboxManager,
 )
+from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
+from src.sandbox.vm_recovery import VMAllocationOutcome, VMServiceLaunch
 
 
 def _fake_create(captured: dict):
     async def create_aio(*args, **kwargs):
         captured["command"] = args
         captured["kwargs"] = kwargs
-        return SimpleNamespace(object_id="modal-object-1", stdout=None)
+        return SimpleNamespace(
+            object_id="modal-object-1",
+            tunnels=Mock(
+                return_value={
+                    9000: SimpleNamespace(url="https://code.example"),
+                    9001: SimpleNamespace(url="https://vnc.example"),
+                    9002: SimpleNamespace(url="https://terminal.example"),
+                    3000: SimpleNamespace(url="https://app.example"),
+                }
+            ),
+            filesystem=SimpleNamespace(write_text=SimpleNamespace(aio=AsyncMock())),
+        )
 
     create_aio.aio = create_aio
     return create_aio
@@ -50,27 +67,14 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         "repo-image-1": object(),
         "snapshot-image-1": object(),
     }
-    monkeypatch.setattr("src.sandbox.manager.base_image", base_image)
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", images.__getitem__)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+    monkeypatch.setattr("src.sandbox.launch.base_image", base_image)
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", images.__getitem__)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
     monkeypatch.delenv("SCM_PROVIDER", raising=False)
-    resolve_tunnels = AsyncMock(
-        return_value=(
-            "https://code.example",
-            "https://vnc.example",
-            "https://terminal.example",
-            {3000: "https://app.example"},
-        )
-    )
     monkeypatch.setattr(
-        SandboxManager,
-        "_resolve_and_setup_tunnels",
-        resolve_tunnels,
+        SandboxLauncher, "_generate_code_server_password", staticmethod(lambda: "code-password")
     )
-    monkeypatch.setattr(
-        SandboxManager, "_generate_code_server_password", staticmethod(lambda: "code-password")
-    )
-    monkeypatch.setattr(SandboxManager, "_generate_vnc_password", staticmethod(lambda: "vnc-pass"))
+    monkeypatch.setattr(SandboxLauncher, "_generate_vnc_password", staticmethod(lambda: "vnc-pass"))
 
     manager = SandboxManager()
     settings = {
@@ -189,23 +193,17 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert handle.vnc_password == "vnc-pass"
     assert handle.ttyd_url == "https://terminal.example"
     assert handle.tunnel_urls == {3000: "https://app.example"}
-    resolve_tunnels.assert_awaited_once_with(
-        handle.modal_sandbox,
-        "sandbox-1",
-        True,
-        True,
-        True,
-        [3000],
-        9000,
-        9001,
-        9002,
+    handle.modal_sandbox.tunnels.assert_called_once_with()
+    handle.modal_sandbox.filesystem.write_text.aio.assert_awaited_once_with(
+        f"{TUNNEL_ENV_SANDBOX_ID_KEY}=sandbox-1\nTUNNEL_3000=https://app.example\n",
+        TUNNEL_ENV_FILE_PATH,
     )
 
 
 @pytest.mark.asyncio
 async def test_repository_image_create_validates_repo_before_image_lookup(monkeypatch):
     from_id = Mock(side_effect=AssertionError("image lookup should not run"))
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", from_id)
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", from_id)
 
     with pytest.raises(ValueError, match="repo_owner and repo_name must be provided together"):
         await SandboxManager().create_sandbox(
@@ -216,25 +214,147 @@ async def test_repository_image_create_validates_repo_before_image_lookup(monkey
 
 
 @pytest.mark.asyncio
-async def test_repository_image_not_found_is_reported_explicitly(monkeypatch, fake_llm_secret):
-    from modal.exception import NotFoundError
+@pytest.mark.parametrize("image_source", ["repository", "snapshot"])
+@pytest.mark.parametrize("failure_stage", ["lookup", "create"])
+@pytest.mark.parametrize("missing", [False, True])
+async def test_launch_preserves_image_error_classification(
+    monkeypatch, image_source, failure_stage, missing
+):
+    error = NotFoundError("missing image") if missing else RuntimeError("transient failure")
+    from_id = Mock(
+        return_value=object(),
+        side_effect=error if failure_stage == "lookup" else None,
+    )
+    create = AsyncMock(side_effect=error)
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", from_id)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", SimpleNamespace(aio=create))
+    expected_error = (
+        RepositoryImageUnavailableError if image_source == "repository" and missing else type(error)
+    )
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _image_id: object())
+    with pytest.raises(expected_error) as raised:
+        if image_source == "snapshot":
+            await SandboxManager().restore_from_snapshot(
+                snapshot_image_id="image-1",
+                session_config={"repo_owner": "acme", "repo_name": "repo"},
+            )
+        else:
+            await SandboxManager().create_sandbox(
+                SandboxConfig(repo_owner="acme", repo_name="repo", repo_image_id="image-1")
+            )
+
+    if expected_error is RepositoryImageUnavailableError:
+        assert raised.value.__cause__ is error
+    else:
+        assert raised.value is error
+    from_id.assert_called_once_with("image-1")
+    if failure_stage == "lookup":
+        create.assert_not_awaited()
+    else:
+        # A spawn error must not silently fall back to a different image or retry.
+        create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [False, True])
+async def test_base_image_spawn_errors_propagate_without_retry(monkeypatch, missing):
+    error = NotFoundError("missing image") if missing else RuntimeError("transient failure")
+    create = AsyncMock(side_effect=error)
+    from_id = Mock()
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", from_id)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", SimpleNamespace(aio=create))
+
+    with pytest.raises(type(error)) as raised:
+        await SandboxManager().create_sandbox(SandboxConfig(repo_owner=None, repo_name=None))
+
+    assert raised.value is error
+    create.assert_awaited_once()
+    from_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
+@pytest.mark.parametrize("failure", ["partial", "unavailable", "write"])
+async def test_launch_returns_handle_despite_tunnel_failures(monkeypatch, image_source, failure):
+    write_text = AsyncMock(side_effect=OSError("write failed") if failure == "write" else None)
+    sandbox = SimpleNamespace(
+        object_id="modal-object-1",
+        tunnels=Mock(
+            side_effect=(
+                [RuntimeError("unavailable")] * 3
+                if failure == "unavailable"
+                else [
+                    {9000: SimpleNamespace(url="https://code.example")},
+                    RuntimeError("not ready"),
+                    {3000: SimpleNamespace(url="https://app.example")},
+                ]
+            )
+        ),
+        filesystem=SimpleNamespace(write_text=SimpleNamespace(aio=write_text)),
+    )
+    create = AsyncMock(return_value=sandbox)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", SimpleNamespace(aio=create))
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _: object())
+    sleep = AsyncMock()
+    monkeypatch.setattr("src.sandbox.tunnels.asyncio.sleep", sleep)
+    common = {
+        "sandbox_id": "sandbox-partial",
+        "code_server_enabled": True,
+        "settings": {"codeServerPort": 9000, "tunnelPorts": [3000, 3001]},
+    }
+    manager = SandboxManager()
+
+    if image_source == "snapshot":
+        handle = await manager.restore_from_snapshot(
+            snapshot_image_id="image-1",
+            session_config={"repo_owner": "acme", "repo_name": "repo"},
+            **common,
+        )
+    else:
+        handle = await manager.create_sandbox(
+            SandboxConfig(
+                repo_owner="acme",
+                repo_name="repo",
+                repo_image_id="image-1" if image_source == "repository" else None,
+                **common,
+            )
+        )
+
+    assert handle.status is SandboxStatus.WARMING
+    assert handle.modal_sandbox is sandbox
+    assert handle.modal_object_id == "modal-object-1"
+    assert handle.code_server_password == create.call_args.kwargs["env"]["CODE_SERVER_PASSWORD"]
+    assert create.call_args.kwargs["encrypted_ports"] == [9000, 3000, 3001]
+    assert sandbox.tunnels.call_count == 3
+    assert [call.args for call in sleep.await_args_list] == [(1.0,), (2.0,)]
+    create.assert_awaited_once()
+    if failure == "unavailable":
+        assert handle.code_server_url is None
+        assert handle.tunnel_urls is None
+        write_text.assert_not_awaited()
+    else:
+        assert handle.code_server_url == "https://code.example"
+        assert handle.tunnel_urls == {3000: "https://app.example"}
+        write_text.assert_awaited_once_with(
+            f"{TUNNEL_ENV_SANDBOX_ID_KEY}=sandbox-partial\nTUNNEL_3000=https://app.example\n",
+            TUNNEL_ENV_FILE_PATH,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repository_image_not_found_is_reported_explicitly(monkeypatch, fake_llm_secret):
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _image_id: object())
 
     async def create_aio(*_args, **_kwargs):
         fake_llm_secret[0].hydrate.aio.assert_awaited_once_with()
         raise NotFoundError("image not found")
 
     create = SimpleNamespace(aio=AsyncMock(side_effect=create_aio))
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", create)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", create)
 
     with pytest.raises(RepositoryImageUnavailableError) as exc_info:
         await SandboxManager().create_sandbox(
-            SandboxConfig(
-                repo_owner="acme",
-                repo_name="repo",
-                repo_image_id="repo-image-missing",
-            )
+            SandboxConfig(repo_owner="acme", repo_name="repo", repo_image_id="image-1")
         )
 
     assert isinstance(exc_info.value.__cause__, NotFoundError)
@@ -243,17 +363,15 @@ async def test_repository_image_not_found_is_reported_explicitly(monkeypatch, fa
 
 @pytest.mark.asyncio
 async def test_missing_secret_does_not_mark_repository_image_unavailable(monkeypatch):
-    from modal.exception import NotFoundError
-
     create = SimpleNamespace(aio=AsyncMock())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", create)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", create)
 
     def missing_secret(_name, **_kwargs):
         secret = Mock()
         secret.hydrate.aio = AsyncMock(side_effect=NotFoundError("secret not found"))
         return secret
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Secret.from_name", missing_secret)
+    monkeypatch.setattr("src.sandbox.launch.modal.Secret.from_name", missing_secret)
 
     with pytest.raises(NotFoundError, match="secret not found"):
         await SandboxManager().create_sandbox(
@@ -265,10 +383,8 @@ async def test_missing_secret_does_not_mark_repository_image_unavailable(monkeyp
 
 @pytest.mark.asyncio
 async def test_base_image_not_found_is_not_classified_as_repository_image(monkeypatch):
-    from modal.exception import NotFoundError
-
     create = SimpleNamespace(aio=AsyncMock(side_effect=NotFoundError("base image not found")))
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", create)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", create)
 
     with pytest.raises(NotFoundError, match="base image not found"):
         await SandboxManager().create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
@@ -282,13 +398,12 @@ DOCKER_SETTINGS = {"cpuCores": 2, "memoryMib": 4096}
 def _docker_manager(monkeypatch) -> tuple[SandboxManager, dict, object]:
     captured: dict = {}
     docker_image = object()
-    monkeypatch.setattr("src.sandbox.manager.base_image", object())
+    monkeypatch.setattr("src.sandbox.launch.base_image", object())
     monkeypatch.setattr("src.images.base.docker_image", docker_image)
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_create(captured))
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
     monkeypatch.setattr(
-        SandboxManager,
-        "_resolve_and_setup_tunnels",
-        AsyncMock(return_value=(None, None, None, {})),
+        "src.sandbox.tunnels.SandboxTunnels.resolve",
+        AsyncMock(return_value=TunnelUrls()),
     )
     return SandboxManager(), captured, docker_image
 
@@ -311,8 +426,6 @@ def _docker_config(**overrides) -> SandboxConfig:
 
 
 def _not_found(*_args, **_kwargs):
-    from modal.exception import NotFoundError
-
     raise NotFoundError("no sandbox")
 
 
@@ -321,9 +434,9 @@ def _not_found(*_args, **_kwargs):
 async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch, image_source):
     manager, captured, docker_image = _docker_manager(monkeypatch)
     artifact = object()
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: artifact)
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _id: artifact)
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name",
+        "src.sandbox.launch.modal.Sandbox.from_name",
         SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
     )
 
@@ -349,19 +462,78 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch
     assert kwargs["cpu"] == (2.0, 2.0)
     assert kwargs["memory"] == 4096
     assert kwargs["name"] == docker_allocation_name("session-1")
-    assert kwargs["tags"] == docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000")
-    # The trusted signal wins over any user-supplied value.
+    assert kwargs["tags"] == {
+        **docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000"),
+        **VMServiceLaunch(False, False, False, 8080, 6080, 7680, []).tags(),
+    }
     assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == "true"
     assert handle.sandbox_backend == "modal-vm"
+
+
+@pytest.mark.asyncio
+async def test_docker_launch_does_not_allow_user_env_to_spoof_resolved_access(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    monkeypatch.setattr(
+        "src.sandbox.launch.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
+    )
+    await manager.create_sandbox(
+        _docker_config(
+            user_env_vars={
+                "CODE_SERVER_PASSWORD": "spoofed",
+                VNC_PASSWORD_ENV_VAR: "spoofed",
+                CODE_SERVER_PORT_ENV_VAR: "9000",
+                EXPECTED_TUNNEL_PORTS_ENV_VAR: "3000",
+            }
+        )
+    )
+
+    for key in (
+        "CODE_SERVER_PASSWORD",
+        VNC_PASSWORD_ENV_VAR,
+        CODE_SERVER_PORT_ENV_VAR,
+        EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    ):
+        assert key not in captured["kwargs"]["env"]
+    assert captured["kwargs"]["tags"]["openinspect_vm_launch"] == "1-000-8080-6080-7680"
+    assert captured["kwargs"]["tags"]["openinspect_vm_ports"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_docker_launch_tags_record_effective_enabled_services_and_ports(monkeypatch):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    monkeypatch.setattr(
+        "src.sandbox.launch.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
+    )
+
+    await manager.create_sandbox(
+        _docker_config(
+            code_server_enabled=True,
+            vnc_enabled=True,
+            settings={
+                **DOCKER_SETTINGS,
+                "terminalEnabled": True,
+                "codeServerPort": 9000,
+                "vncPort": 9001,
+                "terminalPort": 9002,
+                "tunnelPorts": [3000, 3001],
+            },
+        )
+    )
+
+    assert captured["kwargs"]["tags"]["openinspect_vm_launch"] == "1-111-9000-9001-9002"
+    assert captured["kwargs"]["tags"]["openinspect_vm_ports"] == "3000-3001"
+    assert captured["kwargs"]["encrypted_ports"] == [9000, 9001, 9002, 3000, 3001]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "snapshot"])
 async def test_expired_vm_launch_cannot_materialize_after_lookup(monkeypatch, image_source):
     manager, captured, _ = _docker_manager(monkeypatch)
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: object())
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _id: object())
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name",
+        "src.sandbox.launch.modal.Sandbox.from_name",
         SimpleNamespace(aio=AsyncMock(side_effect=_not_found)),
     )
     if image_source == "base":
@@ -375,8 +547,9 @@ async def test_expired_vm_launch_cannot_materialize_after_lookup(monkeypatch, im
             sandbox_backend="modal-vm",
             launch_deadline_at_ms=1,
         )
-    with pytest.raises(RuntimeError, match="launch deadline"):
+    with pytest.raises(VMAllocationOutcome) as exc:
         await launch
+    assert exc.value.detail == "window_closed"
     assert "kwargs" not in captured
 
 
@@ -409,7 +582,7 @@ async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
     existing.get_tags.aio = existing.get_tags
     from_name = AsyncMock(return_value=existing)
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
+        "src.sandbox.launch.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
     )
 
     handle = await manager.create_sandbox(_docker_config())
@@ -425,19 +598,19 @@ async def test_docker_launch_adopts_an_existing_owned_allocation(monkeypatch):
 async def test_docker_retry_returns_the_original_access_credentials(
     monkeypatch, create_race, image_source
 ):
-    from modal.exception import AlreadyExistsError, NotFoundError
+    from modal.exception import AlreadyExistsError
 
     manager, captured, _ = _docker_manager(monkeypatch)
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda _id: object())
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _id: object())
     monkeypatch.setattr(
-        SandboxManager, "_generate_code_server_password", Mock(side_effect=["original", "new"])
+        SandboxLauncher, "_generate_code_server_password", Mock(side_effect=["original", "new"])
     )
     monkeypatch.setattr(
-        SandboxManager, "_generate_vnc_password", Mock(side_effect=["old-vnc", "new-vnc"])
+        SandboxLauncher, "_generate_vnc_password", Mock(side_effect=["old-vnc", "new-vnc"])
     )
     from_name = AsyncMock(side_effect=NotFoundError("not created"))
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
+        "src.sandbox.launch.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
     )
 
     async def launch():
@@ -470,7 +643,7 @@ async def test_docker_retry_returns_the_original_access_credentials(
     )
     from_name.side_effect = [NotFoundError("racing"), existing] if create_race else [existing]
     create = AsyncMock(side_effect=AlreadyExistsError("already created"))
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", SimpleNamespace(aio=create))
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", SimpleNamespace(aio=create))
 
     adopted = await launch()
 
@@ -503,7 +676,7 @@ async def test_docker_adoption_fails_if_original_credentials_cannot_be_recovered
         exec=SimpleNamespace(aio=AsyncMock(return_value=process)),
     )
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name",
+        "src.sandbox.launch.modal.Sandbox.from_name",
         SimpleNamespace(aio=AsyncMock(return_value=existing)),
     )
 
@@ -511,7 +684,7 @@ async def test_docker_adoption_fails_if_original_credentials_cannot_be_recovered
         await manager.create_sandbox(_docker_config(code_server_enabled=True))
 
     assert "kwargs" not in captured
-    manager._resolve_and_setup_tunnels.assert_not_awaited()
+    SandboxTunnels.resolve.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -523,21 +696,25 @@ async def test_docker_launch_refuses_a_same_named_allocation_it_does_not_own(mon
     )
     foreign.get_tags.aio = foreign.get_tags
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name",
+        "src.sandbox.launch.modal.Sandbox.from_name",
         SimpleNamespace(aio=AsyncMock(return_value=foreign)),
     )
 
-    with pytest.raises(RuntimeError, match="ownership mismatch") as exc:
+    with pytest.raises(VMAllocationOutcome, match="ownership mismatch") as exc:
         await manager.create_sandbox(_docker_config())
 
-    assert type(exc.value) is RuntimeError
+    assert exc.value.detail == "other_generation"
     assert "kwargs" not in captured
 
 
 @pytest.mark.asyncio
 async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkeypatch):
     manager, captured, _ = _docker_manager(monkeypatch)
-    prior_tags = docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999")
+    prior_tags = {
+        **docker_allocation_tags("session-1", "sandbox-acme-repo-1699999999999"),
+        "openinspect_vm_launch": "1-000-8080-6080-7680",
+        "openinspect_vm_ports": "none",
+    }
     prior = SimpleNamespace(
         object_id="modal-prior",
         get_tags=AsyncMock(return_value=prior_tags),
@@ -553,7 +730,7 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
         _not_found()
 
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
+        "src.sandbox.launch.modal.Sandbox.from_name", SimpleNamespace(aio=from_name)
     )
 
     await manager.create_sandbox(
@@ -563,11 +740,10 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
     prior.terminate.assert_awaited_once_with(wait=True)
     assert captured["kwargs"]["name"] == docker_allocation_name("session-1")
 
-    # A prior allocation with foreign tags is left alone.
     prior.terminate.reset_mock()
     prior.get_tags = AsyncMock(return_value={"openinspect_kind": "other"})
     prior.get_tags.aio = prior.get_tags
-    with pytest.raises(RuntimeError, match="ownership mismatch"):
+    with pytest.raises(VMAllocationOutcome, match="ownership mismatch"):
         await manager.create_sandbox(
             _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
         )
@@ -576,9 +752,10 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
 
 @pytest.mark.asyncio
 async def test_late_predecessor_cannot_materialize_beside_successor(monkeypatch):
-    from modal.exception import AlreadyExistsError, NotFoundError
+    from modal.exception import AlreadyExistsError
 
-    manager, _, _ = _docker_manager(monkeypatch)
+    _, _, _ = _docker_manager(monkeypatch)
+    launcher = SandboxLauncher()
     predecessor_name = docker_allocation_name("session-1")
     predecessor = SimpleNamespace(
         object_id="late-predecessor",
@@ -589,22 +766,22 @@ async def test_late_predecessor_cannot_materialize_beside_successor(monkeypatch)
     lookup = AsyncMock(
         side_effect=[NotFoundError("still creating"), NotFoundError("still creating"), predecessor]
     )
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_name", SimpleNamespace(aio=lookup))
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.from_name", SimpleNamespace(aio=lookup))
 
     async def create(kwargs, *, repository_image):
-        # Provider-side naming wins the race after both client lookups missed it.
         if kwargs["name"] == predecessor_name:
             raise AlreadyExistsError("predecessor won the name")
         return SimpleNamespace(object_id="duplicate-successor")
 
-    monkeypatch.setattr("src.sandbox.manager._create_sandbox", create)
-    with pytest.raises(RuntimeError, match="ownership mismatch"):
-        await manager._launch_docker_sandbox(
+    monkeypatch.setattr("src.sandbox.launch._create_sandbox", create)
+    with pytest.raises(VMAllocationOutcome, match="ownership mismatch"):
+        await launcher._launch_docker_sandbox(
             session_id="session-1",
             sandbox_id="successor",
             retire_sandbox_id="prior",
             create_kwargs={},
             repository_image=False,
+            service_launch=VMServiceLaunch(False, False, False, 8080, 6080, 7680, []),
         )
 
 
@@ -631,10 +808,8 @@ async def test_docker_successor_waits_for_confirmed_predecessor_retirement(
         ),
         terminate=SimpleNamespace(aio=terminate),
     )
-    from modal.exception import NotFoundError
-
     monkeypatch.setattr(
-        "src.sandbox.manager.modal.Sandbox.from_name",
+        "src.sandbox.launch.modal.Sandbox.from_name",
         SimpleNamespace(aio=AsyncMock(side_effect=[prior, NotFoundError("no successor")])),
     )
     launch = asyncio.create_task(
@@ -656,3 +831,50 @@ async def test_docker_successor_waits_for_confirmed_predecessor_retirement(
     finally:
         launch.cancel()
         await asyncio.gather(launch, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore", [False, True], ids=["create", "restore"])
+@pytest.mark.parametrize(
+    "ports, expected",
+    [
+        ([True, False], []),
+        ([True, False, 0, -1, 65536, "3000", 3.5, None, 1, 3000, 65535], [1, 3000, 65535]),
+        ([True] * 10 + [3000], [3000]),
+    ],
+    ids=["booleans-only", "mixed-with-boundary-ports", "booleans-do-not-consume-limit"],
+)
+async def test_launch_rejects_boolean_tunnel_ports(monkeypatch, restore, ports, expected):
+    """Invalid extras never reach Modal or the runtime's expected-port list."""
+    urls = {port: f"https://port-{port}.example" for port in expected}
+    sandbox = SimpleNamespace(
+        object_id="modal-ports",
+        tunnels=Mock(return_value={port: SimpleNamespace(url=url) for port, url in urls.items()}),
+        filesystem=SimpleNamespace(write_text=SimpleNamespace(aio=AsyncMock())),
+    )
+    create = AsyncMock(return_value=sandbox)
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", SimpleNamespace(aio=create))
+    monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _: object())
+    manager = SandboxManager()
+    settings = {"tunnelPorts": ports}
+
+    if restore:
+        handle = await manager.restore_from_snapshot(
+            snapshot_image_id="image-1",
+            session_config={"repo_owner": "acme", "repo_name": "repo"},
+            settings=settings,
+        )
+    else:
+        handle = await manager.create_sandbox(
+            SandboxConfig(repo_owner="acme", repo_name="repo", settings=settings)
+        )
+
+    kwargs = create.call_args.kwargs
+    assert kwargs.get("encrypted_ports", []) == expected
+    assert all(type(port) is int for port in kwargs.get("encrypted_ports", []))
+    assert kwargs["env"].get(EXPECTED_TUNNEL_PORTS_ENV_VAR) == (
+        ",".join(str(port) for port in expected) if expected else None
+    )
+    assert handle.tunnel_urls == (urls or None)
+    if not expected:
+        sandbox.tunnels.assert_not_called()

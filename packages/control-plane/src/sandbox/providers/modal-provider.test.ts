@@ -94,6 +94,39 @@ const testConfig = {
 // ==================== Tests ====================
 
 describe("ModalSandboxProvider", () => {
+  it.each([
+    [409, "race_pending", true],
+    [409, "other_generation", false],
+    [409, "window_closed", false],
+    [502, undefined, true],
+    [500, undefined, true],
+  ] as const)(
+    "classifies VM launch HTTP %s / %s without matching messages",
+    async (status, detail, unknown) => {
+      const error = new ModalApiError("arbitrary message", status, detail);
+      const provider = new ModalSandboxProvider(
+        createMockModalClient({
+          createSandbox: async () => {
+            throw error;
+          },
+        }),
+        "modal-vm"
+      );
+      let caught: unknown;
+      try {
+        await provider.createSandbox({ ...testConfig, generationCreatedAtMs: Date.now() });
+      } catch (cause) {
+        caught = cause;
+      }
+      expect(caught).toBeInstanceOf(SandboxProviderError);
+      expect((caught as SandboxProviderError).cause).toBe(error);
+      expect(provider.isUnknownStartupError(caught)).toBe(unknown);
+      expect((caught as SandboxProviderError).errorType).toBe(
+        detail === "other_generation" ? "permanent" : "transient"
+      );
+    }
+  );
+
   it("derives a pending VM reference and lifetime from the launch reservation", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

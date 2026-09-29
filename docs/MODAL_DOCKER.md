@@ -69,6 +69,48 @@ its generation is older than the materialization bound: the launch window plus t
 older launch that materializes later may briefly block a replacement, but the single allocation name
 and fenced credentials prevent overlapping work.
 
+The authenticated `POST /api-resolve-vm-sandbox` endpoint is lookup-only. Its body contains exactly
+`{"session_id":"...","sandbox_id":"..."}`; it accepts no launch settings or secrets. It finds the
+running allocation by session name, checks the generation's ownership tags, and returns:
+
+```json
+{
+  "success": true,
+  "data": {
+    "sandbox_id": "generation-id",
+    "modal_object_id": "sb-real-id",
+    "code_server_url": null,
+    "code_server_password": null,
+    "vnc_url": null,
+    "vnc_password": null,
+    "ttyd_url": null,
+    "tunnel_urls": null,
+    "sandbox_backend": "modal-vm"
+  }
+}
+```
+
+New VM allocations record versioned service flags and effective ports in provider-owned launch tags.
+Only services enabled by these tags return URLs/passwords; extra tunnels use port-to-URL mappings.
+Legacy allocations without these tags (or with unknown/incomplete metadata) resolve only the real
+`modal_object_id`, not access credentials or tunnels. Resolve never infers enabled services from
+environment variables, which may have contained user secrets on older allocations. Such VMs need a
+new launch to recover interactive access. Resolve neither creates nor retires an allocation or
+writes tunnel configuration. A stopped VM is not discoverable by name. Resolve does not return a
+terminal access token; the control plane mints that token only when it still holds the generation's
+sandbox auth token in memory.
+
+Create, restore, and resolve report typed HTTP 409 error `detail` values:
+
+- `not_visible`: resolve found no named allocation.
+- `other_generation`: the ownership tags do not match.
+- `window_closed`: create/restore missed the launch deadline with no owned allocation.
+- `race_pending`: create/restore cannot yet see the winner after `AlreadyExistsError`, or resolve
+  found a VM whose enabled tunnel URLs are not all visible yet.
+
+Unexpected provider errors remain 500. The pending-reference stop endpoint retains its separate
+`pending_reference_not_visible` response.
+
 ## Switching backends
 
 Changing `SANDBOX_PROVIDER` is an operator cutover, not session migration. Existing sessions and

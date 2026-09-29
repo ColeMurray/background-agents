@@ -26,6 +26,12 @@ describe("readEnvConfig", () => {
     expect("LOG_LEVEL" in config).toBe(false);
   });
 
+  it("rejects invalid teams enforcement modes at startup", () => {
+    expect(() => readEnvConfig({ ...REQUIRED, TEAMS_ENFORCEMENT: "enabled" })).toThrow(
+      "Invalid TEAMS_ENFORCEMENT"
+    );
+  });
+
   it("names every missing required variable at once", () => {
     expect(() => readEnvConfig({ DEPLOYMENT_NAME: "test", TOKEN_ENCRYPTION_KEY: "" })).toThrow(
       "Missing required configuration: GITHUB_BOT_USERNAME, TOKEN_ENCRYPTION_KEY, PROVIDER_ACCOUNTS_ENCRYPTION_KEY, REPO_SECRETS_ENCRYPTION_KEY"

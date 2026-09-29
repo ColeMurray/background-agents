@@ -2,10 +2,9 @@ import { Hono } from "hono";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { applyIdentityEnforcement } from "../routing/identity-enforcement";
-import { SESSION_WEBSOCKET_CONNECT_PERMISSION } from "@open-inspect/shared/rbac";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import type { Env } from "../types";
-import { error, GITHUB_USER_OR_SERVICE_ROUTE, requirePermission } from "./shared";
+import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
@@ -55,7 +54,7 @@ sessionWsTokenRoutes.post(
   "/sessions/:id/ws-token",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission(SESSION_WEBSOCKET_CONNECT_PERMISSION),
+    authorization: requireSession("read"),
   }),
   (c) => dispatchSession(c, handleSessionWsToken)
 );

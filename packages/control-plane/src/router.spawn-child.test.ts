@@ -660,7 +660,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "title and prompt are required" });
-    expect(SessionIndexStore).not.toHaveBeenCalled();
+    expect(store.get).toHaveBeenCalledWith(parentId);
+    expect(store.create).not.toHaveBeenCalled();
   });
 
   it("returns 400 for a child spawn body that is not JSON", async () => {
@@ -689,7 +690,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
-    expect(SessionIndexStore).not.toHaveBeenCalled();
+    expect(store.get).toHaveBeenCalledWith(parentId);
+    expect(store.create).not.toHaveBeenCalled();
   });
 
   it("returns 500 for a malformed parent spawn context", async () => {

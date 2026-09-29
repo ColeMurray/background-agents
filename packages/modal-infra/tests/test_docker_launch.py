@@ -18,6 +18,7 @@ from src.sandbox.launch_policy import (
     parse_launch,
     parse_pending_vm_reference,
 )
+from src.sandbox.vm_recovery import VMServiceLaunch, parse_vm_service_launch
 
 
 @pytest.mark.parametrize("settings", [None, {}])
@@ -86,6 +87,15 @@ def test_allocation_tags_bind_session_generation_and_backend():
     assert tags["openinspect_kind"] == "session"
     assert tags["openinspect_backend"] == "modal-vm"
     assert tags != docker_allocation_tags("session-1", "sandbox-2")
+    for value in tags.values():
+        assert re.fullmatch(r"[a-zA-Z0-9._-]{1,63}", value)
+
+
+def test_vm_launch_metadata_round_trips_at_max_extra_port_count():
+    launch = VMServiceLaunch(True, False, True, 9000, 6080, 7680, list(range(60000, 60010)))
+    tags = launch.tags()
+
+    assert parse_vm_service_launch(tags) == launch
     for value in tags.values():
         assert re.fullmatch(r"[a-zA-Z0-9._-]{1,63}", value)
 

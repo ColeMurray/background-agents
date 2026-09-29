@@ -11,6 +11,7 @@ import {
   TEST_SERVICE_SECRETS,
   createTestRequestHandler,
   fakeSessionRuntimeDispatch,
+  TEST_SESSION_ROW,
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
@@ -34,6 +35,7 @@ const SANDBOX_TOKEN_HEADERS = { Authorization: "Bearer sandbox-token" };
 type DatabaseOptions = {
   /** Custom-role grants for user-1; omitted means the owner role with every permission. */
   permissions?: PermissionId[];
+  visibility?: "private";
   /** Answers every statement admission and the proxy's own reads do not own. */
   delegate?: SqlDatabase;
 };
@@ -50,9 +52,15 @@ function createDatabase(options: DatabaseOptions = {}): SqlDatabase {
     if (sql.includes("FROM role_permissions")) {
       return (options.permissions ?? []).map((permission_id) => ({ permission_id }));
     }
+    if (sql.includes("FROM team_memberships") || sql.includes("FROM session_collaborators"))
+      return [];
     return null;
   };
   const row = (sql: string): unknown => {
+    if (sql.includes("SELECT * FROM sessions"))
+      return options.visibility === "private"
+        ? { ...TEST_SESSION_ROW, visibility: "private", user_id: "another-user" }
+        : TEST_SESSION_ROW;
     if (sql.includes("FROM users u")) return { user_id: "user-1", suspended_at: null, ...role };
     if (sql.includes("FROM session_model_provider_auth")) {
       return {
@@ -205,54 +213,73 @@ describe("session runtime proxy routes", () => {
   });
 
   it.each([
-    { permissions: ["sessions.read"] as PermissionId[], exposed: false },
+    {
+      permissions: ["sessions.read"] as PermissionId[],
+      exposed: false,
+      mode: "shadow",
+      visibility: "workspace",
+    },
     {
       permissions: ["sessions.read", "sessions.sandbox_access"] as PermissionId[],
       exposed: true,
+      mode: "shadow",
+      visibility: "workspace",
     },
-  ])("scopes snapshot sandbox locations to sandbox access ($exposed)", async (input) => {
-    const fetch = vi.fn(async () =>
-      Response.json({
-        session: {
-          id: "session-1",
-          title: "Session",
-          repoOwner: "acme",
-          repoName: "web",
-          baseBranch: "main",
-          branchName: "feature",
-          status: "active",
-          sandboxStatus: "ready",
-          messageCount: 0,
-          createdAt: 1,
-          codeServerUrl: "https://code.example",
-          vncUrl: "https://vnc.example",
-          ttydUrl: "https://terminal.example",
-          tunnelUrls: { "3000": "https://app.example" },
-          sandboxDashboardUrl: "https://provider.example",
-        },
-        artifacts: [],
-        promptQueue: [],
-        timeline: { events: [], hasMore: false, cursor: null },
-      })
-    );
+    ...(["off", "shadow", "on"] as const).map((mode) => ({
+      permissions: undefined,
+      exposed: false,
+      mode,
+      visibility: "private" as const,
+    })),
+  ])(
+    "scopes $mode $visibility snapshot sandbox locations to sandbox access ($exposed)",
+    async (input) => {
+      const fetch = vi.fn(async () =>
+        Response.json({
+          session: {
+            id: "session-1",
+            title: "Session",
+            repoOwner: "acme",
+            repoName: "web",
+            baseBranch: "main",
+            branchName: "feature",
+            status: "active",
+            sandboxStatus: "ready",
+            messageCount: 0,
+            createdAt: 1,
+            codeServerUrl: "https://code.example",
+            vncUrl: "https://vnc.example",
+            ttydUrl: "https://terminal.example",
+            tunnelUrls: { "3000": "https://app.example" },
+            sandboxDashboardUrl: "https://provider.example",
+          },
+          artifacts: [],
+          promptQueue: [],
+          timeline: { events: [], hasMore: false, cursor: null },
+        })
+      );
 
-    const response = await dispatch(
-      new Request("https://test.local/sessions/session-1"),
-      createEnv(fetch, { permissions: input.permissions })
-    );
-    const snapshot = (await response.json()) as { session: Record<string, unknown> };
+      const response = await dispatch(new Request("https://test.local/sessions/session-1"), {
+        ...createEnv(fetch, {
+          permissions: input.permissions,
+          visibility: input.visibility === "private" ? "private" : undefined,
+        }),
+        TEAMS_ENFORCEMENT: input.mode,
+      });
+      const snapshot = (await response.json()) as { session: Record<string, unknown> };
 
-    expect(response.status).toBe(200);
-    if (input.exposed) {
-      expect(snapshot.session).toHaveProperty("codeServerUrl", "https://code.example");
-    } else {
-      expect(snapshot.session).not.toHaveProperty("codeServerUrl");
-      expect(snapshot.session).not.toHaveProperty("vncUrl");
-      expect(snapshot.session).not.toHaveProperty("ttydUrl");
-      expect(snapshot.session).not.toHaveProperty("tunnelUrls");
-      expect(snapshot.session).not.toHaveProperty("sandboxDashboardUrl");
+      expect(response.status).toBe(200);
+      if (input.exposed) {
+        expect(snapshot.session).toHaveProperty("codeServerUrl", "https://code.example");
+      } else {
+        expect(snapshot.session).not.toHaveProperty("codeServerUrl");
+        expect(snapshot.session).not.toHaveProperty("vncUrl");
+        expect(snapshot.session).not.toHaveProperty("ttydUrl");
+        expect(snapshot.session).not.toHaveProperty("tunnelUrls");
+        expect(snapshot.session).not.toHaveProperty("sandboxDashboardUrl");
+      }
     }
-  });
+  );
 
   it("forwards event query strings through the session runtime dependency", async () => {
     const requests: Request[] = [];
@@ -729,7 +756,12 @@ describe("session runtime proxy routes", () => {
     });
 
     it("rejects a malformed budget body before reading the session", async () => {
-      const get = vi.spyOn(SessionIndexStore.prototype, "get");
+      const get = vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+        id: "session-1",
+        userId: "user-1",
+        ownerTeamId: null,
+        visibility: "workspace",
+      } as Awaited<ReturnType<SessionIndexStore["get"]>>);
       const fetch = vi.fn(async () => Response.json({ maxSessionCostUsd: 20 }));
 
       const response = await dispatch(
@@ -743,7 +775,7 @@ describe("session runtime proxy routes", () => {
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: "Invalid budget request" });
-      expect(get).not.toHaveBeenCalled();
+      expect(get).toHaveBeenCalledOnce();
       expect(fetch).not.toHaveBeenCalled();
     });
   });

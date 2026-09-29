@@ -25,6 +25,7 @@ import {
   json,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   requirePermission,
+  requireSession,
   type RequestContext,
   type UserRouteContext,
 } from "./shared";
@@ -284,11 +285,11 @@ sessionIndexRoutes.get(
 );
 sessionIndexRoutes.patch(
   "/sessions/:id/read-state",
-  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
   (c) => dispatch(c, handlePatchReadState)
 );
 sessionIndexRoutes.delete(
   "/sessions/:id",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.delete") }),
+  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireSession("delete") }),
   (c) => dispatch(c, handleDeleteSession)
 );

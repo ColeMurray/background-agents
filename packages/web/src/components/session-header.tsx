@@ -231,10 +231,10 @@ export function SessionHeader({
 
   return (
     <header className="border-b border-border-muted flex-shrink-0">
-      <div className="flex h-12 items-center justify-between gap-1 px-2 md:h-auto md:gap-0 md:px-4 md:py-3">
-        <div className="flex min-w-0 flex-1 items-center gap-3 md:flex-initial">
+      <div className="flex h-12 items-center justify-between gap-1 px-2 md:h-auto md:gap-4 md:px-4 md:py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
-          <div className="min-w-0 flex-1 md:flex-initial">
+          <div className="min-w-0 flex-1">
             {isRenaming ? (
               <input
                 autoFocus
@@ -252,10 +252,10 @@ export function SessionHeader({
                     setIsRenaming(false);
                   }
                 }}
-                className="w-full truncate bg-transparent text-center text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring md:max-w-40 md:text-left"
+                className="w-full truncate bg-transparent text-center text-sm font-medium text-foreground outline-none focus:ring-inset focus:ring-ring md:text-left"
               />
             ) : (
-              <h1 className="flex min-w-0 items-center justify-center text-sm font-medium text-foreground md:max-w-40 md:justify-start">
+              <h1 className="flex min-w-0 items-center justify-center text-sm font-medium text-foreground md:justify-start">
                 <button
                   type="button"
                   className={`min-w-0 truncate ${capabilities.lifecycle ? "cursor-text" : "cursor-default"}`}
@@ -267,7 +267,7 @@ export function SessionHeader({
                 </button>
               </h1>
             )}
-            <p className="hidden text-sm text-muted-foreground md:block">{repoLabel}</p>
+            <p className="hidden truncate text-sm text-muted-foreground md:block">{repoLabel}</p>
           </div>
         </div>
         <div className="flex items-center gap-1 md:gap-4">

@@ -382,7 +382,8 @@ export class SandboxRepository {
    */
   async completeProviderResume(
     generation: { sandboxId: string | null; createdAt: number },
-    access: ProviderResumeAccessData
+    access: ProviderResumeAccessData,
+    expectedProviderObjectId?: string
   ): Promise<boolean> {
     const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
       access.codeServer ? this.encrypt(access.codeServer.password) : null,
@@ -401,7 +402,8 @@ export class SandboxRepository {
          tunnel_urls = ?
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ?
-         AND status IN ('connecting', 'ready') AND fenced = 0`,
+          AND (status IN ('connecting', 'ready') OR (? IS NOT NULL AND status = 'spawning'))
+          AND fenced = 0 AND (? IS NULL OR modal_object_id = ?)`,
       access.providerObjectId,
       access.codeServer?.url ?? null,
       codeServerPassword,
@@ -411,7 +413,10 @@ export class SandboxRepository {
       ttydToken,
       access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null,
       generation.sandboxId,
-      generation.createdAt
+      generation.createdAt,
+      expectedProviderObjectId ?? null,
+      expectedProviderObjectId ?? null,
+      expectedProviderObjectId ?? null
     );
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;

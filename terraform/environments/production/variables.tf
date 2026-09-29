@@ -699,6 +699,17 @@ variable "sandbox_inactivity_timeout_ms" {
   default     = 600000
 }
 
+variable "teams_enforcement" {
+  description = "Session team authorization mode; private visibility applies in every mode."
+  type        = string
+  default     = "shadow"
+
+  validation {
+    condition     = contains(["off", "shadow", "on"], var.teams_enforcement)
+    error_message = "teams_enforcement must be 'off', 'shadow', or 'on'."
+  }
+}
+
 variable "sandbox_boot_timeout_ms" {
   description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
   type        = number

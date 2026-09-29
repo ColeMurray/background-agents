@@ -202,6 +202,15 @@ export interface CreateSandboxResult {
   tunnelUrls?: Record<string, string>;
 }
 
+export interface ResolveSandboxConfig {
+  sessionId: string;
+  sandboxId: string;
+  generationCreatedAtMs: number;
+  timeoutSeconds?: number;
+}
+
+export type ResolveSandboxResult = Omit<CreateSandboxResult, "createdAt">;
+
 /**
  * Configuration for restoring a sandbox from a snapshot.
  */
@@ -586,6 +595,12 @@ export interface SandboxProvider {
       "sessionId" | "sandboxId" | "generationCreatedAtMs" | "timeoutSeconds"
     >
   ): PendingSandboxAllocation | undefined;
+
+  /** Lookup only, for a VM launch whose response was lost. */
+  resolveSandbox?(config: ResolveSandboxConfig): Promise<ResolveSandboxResult>;
+
+  /** Whether a failed launch could still have created this generation. */
+  isUnknownStartupError?(error: unknown): boolean;
 
   /**
    * Create a new sandbox.

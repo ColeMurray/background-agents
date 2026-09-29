@@ -28,6 +28,8 @@ export type RouteAuthorizationDecision =
       kind: "allowed";
       admission: "user" | "service" | "sandbox";
       auditAllowed: boolean;
+      shadowReason?: string;
+      shadowDenials?: readonly { sessionId: string; reason: string }[];
     })
   | (AuthorizationDecisionEvidence & {
       kind: "denied";
@@ -39,7 +41,7 @@ export type RouteAuthorizationDecision =
 export function shouldAuditAllowedDecision(
   decision: Extract<RouteAuthorizationDecision, { kind: "allowed" }>
 ): boolean {
-  return decision.auditAllowed;
+  return decision.auditAllowed || !!decision.shadowReason || !!decision.shadowDenials?.length;
 }
 
 /**
@@ -58,6 +60,7 @@ export async function auditRouteAuthorizationDecision(input: {
   path: string;
   response: Response;
   decision: RouteAuthorizationDecision;
+  teamId?: string | null;
 }): Promise<void> {
   const principal = input.ctx.principal;
   if (!principal) return;
@@ -75,6 +78,20 @@ export async function auditRouteAuthorizationDecision(input: {
   const action = allowed
     ? AUTHORIZATION_DECISION_ACTIONS.allowed
     : AUTHORIZATION_DECISION_ACTIONS.denied;
+  const shadowCode =
+    decision.kind === "allowed"
+      ? decision.shadowDenials?.length
+        ? "shadow_denied:batch"
+        : decision.shadowReason
+          ? `shadow_denied:${decision.shadowReason}`
+          : null
+      : null;
+  const teamId =
+    input.teamId !== undefined
+      ? input.teamId
+      : input.ctx.childSessionAdmission
+        ? input.ctx.childSessionAdmission.row.ownerTeamId
+        : (input.ctx.sessionAdmission?.row.ownerTeamId ?? null);
   const metadata = {
     schema: AUTHORIZATION_DECISION_METADATA_SCHEMA,
     httpMethod: input.method,
@@ -85,11 +102,14 @@ export async function auditRouteAuthorizationDecision(input: {
       ? { effectivePermissions: decision.effectivePermissions }
       : {}),
     ...(requiredPermission ? { requiredPermission } : {}),
-    responseCode: decision.kind === "denied" ? decision.reasonCode : null,
+    responseCode: decision.kind === "denied" ? decision.reasonCode : shadowCode,
     responseReason: decision.kind === "denied" ? decision.reason : null,
     requestId: input.ctx.request_id,
     traceId: input.ctx.trace_id,
     ...(decision.kind === "allowed" ? { admission: decision.admission } : {}),
+    ...(decision.kind === "allowed" && decision.shadowDenials?.length
+      ? { shadowDenials: decision.shadowDenials }
+      : {}),
     ...(principal.kind === "service" && principal.actor
       ? {
           actor: {
@@ -108,8 +128,8 @@ export async function auditRouteAuthorizationDecision(input: {
         `INSERT INTO authorization_audit_events
           (id, occurred_at, request_id, principal_kind,
            actor_user_id_snapshot, actor_service_snapshot, action, resource_type, resource_id,
-           reason_code, operation_result, metadata_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'http_route', ?, ?, ?, ?)`
+            reason_code, operation_result, metadata_json, team_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'http_route', ?, ?, ?, ?, ?)`
       )
       .bind(
         crypto.randomUUID(),
@@ -120,9 +140,10 @@ export async function auditRouteAuthorizationDecision(input: {
         principal.kind === "service" ? principal.service : null,
         action,
         input.path,
-        decision.kind === "allowed" ? "authorization_allowed" : decision.reasonCode,
+        decision.kind === "allowed" ? (shadowCode ?? "authorization_allowed") : decision.reasonCode,
         allowed ? "applied" : "denied",
-        JSON.stringify(metadata)
+        JSON.stringify(metadata),
+        teamId
       )
       .run();
   } catch (cause) {
@@ -134,4 +155,35 @@ export async function auditRouteAuthorizationDecision(input: {
       trace_id: input.ctx.trace_id,
     });
   }
+}
+
+export async function auditPrivateSessionBreakGlass(
+  ctx: RequestContext,
+  sessionId: string,
+  teamId: string | null
+): Promise<void> {
+  const principal = ctx.principal;
+  const actorUserId = ctx.authorization?.userId;
+  if (!principal || !actorUserId) throw new Error("Missing private session break-glass actor");
+  await ctx.db
+    .prepare(
+      `INSERT INTO authorization_audit_events
+          (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
+           actor_service_snapshot, action, resource_type, resource_id, team_id,
+           reason_code, operation_result, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, 'session.private_break_glass', 'session', ?, ?, ?, 'applied', ?)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      Date.now(),
+      ctx.request_id,
+      principal.kind,
+      actorUserId,
+      principal.kind === "service" ? principal.service : null,
+      sessionId,
+      teamId,
+      "session.private_break_glass",
+      JSON.stringify({ before: {}, requested: {}, after: {} })
+    )
+    .run();
 }

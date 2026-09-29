@@ -8,6 +8,7 @@ import {
   queryDO,
   seedMessage,
   seedSandboxAuth,
+  waitForSandboxStatus,
 } from "./helpers";
 import { runInSessionDO } from "./session-do-access";
 
@@ -449,6 +450,162 @@ describe("POST /internal/sandbox-event", () => {
         cacheReadTokens: 1600,
         cacheWriteTokens: 120,
       });
+    });
+  });
+
+  it("projects a step that finishes after a stop settled the session", async () => {
+    const { stub, sessionName } = await initSession();
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    const msgId = "msg-late-step";
+    await seedMessage(stub, {
+      id: msgId,
+      authorId: participants[0].id,
+      content: "Test prompt",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+    const postEvent = (event: Record<string, unknown>) =>
+      stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sandboxId: "sb-1", messageId: msgId, ...event }),
+      });
+    const stepFinish = (stepId: string, input: number) =>
+      postEvent({
+        type: "step_finish",
+        stepId,
+        timestamp: Date.now() / 1000,
+        tokens: { input, output: 40, reasoning: 5, cache: { read: 800, write: 60 } },
+      });
+    const index = new SessionIndexStore(env.DB);
+
+    expect((await stepFinish("step-1", 100)).status).toBe(200);
+    // Stop settles the session before the sandbox has seen the stop command.
+    expect((await stub.fetch("http://internal/internal/stop", { method: "POST" })).status).toBe(
+      200
+    );
+    await vi.waitFor(async () => {
+      expect(await index.get(sessionName)).toMatchObject({ status: "failed", inputTokens: 100 });
+    });
+
+    // A step already in flight lands after the settle; its terminal is then a no-op.
+    expect((await stepFinish("step-2", 250)).status).toBe(200);
+    const res = await postEvent({
+      type: "execution_complete",
+      success: false,
+      error: "Task was cancelled",
+      timestamp: Date.now() / 1000,
+    });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(async () => {
+      expect(await index.get(sessionName)).toMatchObject({
+        inputTokens: 350,
+        outputTokens: 80,
+        reasoningTokens: 10,
+        cacheReadTokens: 1600,
+        cacheWriteTokens: 120,
+      });
+    });
+  });
+
+  it("projects a budget-stopped turn's steps while a queued prompt waits on the budget", async () => {
+    const { stub, sessionName } = await initSession({ sandboxSettings: { maxSessionCostUsd: 1 } });
+    await waitForSandboxStatus(stub, "failed");
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    const stoppedId = "msg-budget-stopped";
+    const queuedId = "msg-budget-queued";
+    await seedMessage(stub, {
+      id: stoppedId,
+      authorId,
+      content: "Running prompt",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+    await seedMessage(stub, {
+      id: queuedId,
+      authorId,
+      content: "Queued prompt",
+      source: "web",
+      status: "pending",
+      createdAt: Date.now() - 900,
+    });
+    await queryDO(stub, "UPDATE session SET status = 'active'");
+    const postEvent = (event: Record<string, unknown>) =>
+      stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sandboxId: "sb-1", messageId: stoppedId, ...event }),
+      });
+    const stepFinish = (stepId: string, input: number, messageCostUsd: number) =>
+      postEvent({
+        type: "step_finish",
+        stepId,
+        timestamp: Date.now() / 1000,
+        tokens: { input, output: 40, reasoning: 5, cache: { read: 800, write: 60 } },
+        messageCostUsd,
+      });
+    const index = new SessionIndexStore(env.DB);
+
+    expect((await stepFinish("step-1", 100, 0.4)).status).toBe(200);
+    // This step reaches the limit: the budget stops the turn, and the queued
+    // prompt keeps the session active but cannot dispatch. The stopped turn is
+    // projected anyway, since no settle is coming.
+    expect((await stepFinish("step-2", 200, 1.2)).status).toBe(200);
+    await vi.waitFor(async () => {
+      expect(await index.get(sessionName)).toMatchObject({ inputTokens: 300 });
+    });
+    // A step already in flight lands after the stop, then the sandbox's own terminal.
+    expect((await stepFinish("step-3", 250, 1.5)).status).toBe(200);
+    const terminal = await postEvent({
+      type: "execution_complete",
+      success: false,
+      error: "Task was cancelled",
+      timestamp: Date.now() / 1000,
+    });
+    expect(terminal.status).toBe(200);
+
+    expect(await queryDO(stub, "SELECT status, budget_exhausted FROM session")).toEqual([
+      { status: "active", budget_exhausted: 1 },
+    ]);
+    expect(await queryDO(stub, "SELECT id, status FROM messages ORDER BY created_at")).toEqual([
+      { id: stoppedId, status: "failed" },
+      { id: queuedId, status: "pending" },
+    ]);
+    const tokenKinds = [
+      "inputTokens",
+      "outputTokens",
+      "reasoningTokens",
+      "cacheReadTokens",
+      "cacheWriteTokens",
+    ] as const;
+    const exported = await stub.fetch("http://internal/internal/trace-export?include=usage");
+    expect(exported.status).toBe(200);
+    const { trace } = await exported.json<{
+      trace: { usage: Array<Record<(typeof tokenKinds)[number], number | null>> };
+    }>();
+    const usageTotals = Object.fromEntries(
+      tokenKinds.map((kind) => [kind, trace.usage.reduce((sum, row) => sum + (row[kind] ?? 0), 0)])
+    );
+    expect(usageTotals).toEqual({
+      inputTokens: 550,
+      outputTokens: 120,
+      reasoningTokens: 15,
+      cacheReadTokens: 2400,
+      cacheWriteTokens: 180,
+    });
+    await vi.waitFor(async () => {
+      expect(await index.get(sessionName)).toMatchObject(usageTotals);
     });
   });
 

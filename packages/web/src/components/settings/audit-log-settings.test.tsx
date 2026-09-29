@@ -110,6 +110,12 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
 
+  it("labels private session break-glass reads as operations", () => {
+    const article = renderSingle(createEvent("applied", { action: "session.private_break_glass" }));
+    expect(article.getByText("Private session break-glass read")).toBeInTheDocument();
+    expect(article.getByText("Applied")).toBeInTheDocument();
+  });
+
   it("renders outcomes, stable summaries, timestamps, and expandable structured details", async () => {
     hook.events = [
       createEvent("applied"),

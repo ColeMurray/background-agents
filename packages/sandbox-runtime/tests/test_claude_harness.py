@@ -325,14 +325,14 @@ class TestOptions:
             HarnessPrompt(
                 message_id="m1",
                 text="hi",
-                model="anthropic/claude-opus-4-6",
+                model="anthropic/claude-sonnet-5-5",
                 reasoning_effort="high",
             ),
         )
         options = h.client.options
         assert options["cwd"] == str(tmp_path / "repo")
         assert options["cli_path"] == str(h.harness.wrapper_path)
-        assert options["model"] == "claude-opus-4-6"
+        assert options["model"] == "claude-sonnet-5-5"
         assert options["effort"] == "high"
         assert options["permission_mode"] == "dontAsk"
         assert options["disallowed_tools"] == ["AskUserQuestion"]

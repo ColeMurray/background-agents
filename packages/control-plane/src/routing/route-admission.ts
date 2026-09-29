@@ -13,6 +13,8 @@ import type {
 } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
+import { evaluateSessionAdmission, viewerFromContext } from "../authorization/session-admission";
+import { legacyPermissionForAction } from "../authorization/teams-enforcement";
 import { AutomationStore } from "../db/automation-store";
 import { TeamStore } from "../db/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -343,7 +345,12 @@ function enforceStaticServicePermissionCeiling(
   if (policy.authorization.kind !== "active-user") return null;
 
   for (const requirement of policy.authorization.allOf) {
-    const permission = requirement.kind === "permission" ? requirement.permission : null;
+    const permission =
+      requirement.kind === "permission"
+        ? requirement.permission
+        : requirement.kind === "session"
+          ? legacyPermissionForAction(requirement.action)
+          : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -602,23 +609,24 @@ async function enforceTeamRequirement(
   const teamId = params[requirement.teamIdParam];
   if (!teamId) return { response: json({ error: "Invalid team route" }, 400) };
   try {
-    const authorization = ctx.authorization;
-    if (!authorization) throw new Error("Missing request authorization");
     const team = await new TeamStore(ctx.db).getById(teamId);
     if (!team) return { response: error("Team not found", 404) };
     const memberships = new TeamMembershipStore(ctx.db);
-    const viewerMemberships = await memberships.listForUser(ctx.principal.userId);
+    const viewer = viewerFromContext(
+      ctx,
+      (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
+    );
+    if (viewer.kind !== "user") throw new Error("Missing team viewer");
     const access = resolveTeamAccess(
       {
-        userId: ctx.principal.userId,
-        roleKey: authorization.role.key,
-        memberships: viewerMemberships,
+        userId: viewer.userId,
+        roleKey: viewer.roleKey,
+        memberships: viewer.memberships,
       },
       { ...team, leadCount: await memberships.countLeads(teamId) }
     );
-    const isAdmin =
-      authorization.role.key === "owner" || authorization.role.key === "administrator";
-    const visible = isAdmin || viewerMemberships.has(teamId);
+    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+    const visible = isAdmin || viewer.memberships.has(teamId);
     if (!visible && requirement.need !== "canJoin")
       return { response: error("Team not found", 404) };
     if (requirement.need !== "read" && !access[requirement.need]) {
@@ -640,6 +648,59 @@ async function enforceTeamRequirement(
     }
     evidence.requirements.push(requirement);
     ctx.teamAdmission = { team, access };
+    return null;
+  } catch {
+    return authorizationUnavailable();
+  }
+}
+
+async function enforceSessionRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "session" }>,
+  params: RouteParams,
+  env: Env,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  const sessionId = params[requirement.sessionIdParam];
+  if (!sessionId) return { response: json({ error: "Invalid session route" }, 400) };
+  try {
+    const result = await evaluateSessionAdmission(
+      ctx,
+      env,
+      sessionId,
+      requirement.action,
+      requirement.sessionIdParam === "childId" ? "child" : "session"
+    );
+    if (result.kind === "not_found") {
+      return authorizationDenial(
+        error("Session not found", 404),
+        evidence,
+        requirement,
+        "session_not_visible",
+        "Session not found"
+      );
+    }
+    if (result.kind === "action_denied") {
+      return authorizationDenial(
+        json(
+          { error: "Forbidden", code: "session_action_denied", reason_code: result.reason },
+          403
+        ),
+        evidence,
+        requirement,
+        result.reason,
+        "Forbidden"
+      );
+    }
+    if (result.legacyPermission) {
+      const legacy = await enforcePermissionRequirement(
+        { kind: "permission", permission: result.legacyPermission },
+        ctx,
+        evidence
+      );
+      if (legacy) return legacy;
+    }
+    evidence.requirements.push(requirement);
     return null;
   } catch {
     return authorizationUnavailable();
@@ -720,6 +781,9 @@ async function enforceRouteAuthorization(
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);
+          break;
+        case "session":
+          failure = await enforceSessionRequirement(requirement, params, env, ctx, evidence);
           break;
       }
       if (failure) return resultForFailure(failure);

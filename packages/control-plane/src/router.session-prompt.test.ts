@@ -9,6 +9,7 @@ import {
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  TEST_SESSION_ROW,
 } from "./router.test-support";
 
 vi.mock("./db/user-store", () => ({
@@ -73,11 +74,27 @@ function createEnv(sessionFetch: (request: Request) => Promise<Response>): Recor
     })),
     run: vi.fn(async () => ({ meta: { changes: 0 } })),
   };
+  const sessionStatement = {
+    ...statement,
+    bind: vi.fn(() => sessionStatement),
+    first: vi.fn(async () => TEST_SESSION_ROW),
+  };
+  const membershipStatement = {
+    ...statement,
+    bind: vi.fn(() => membershipStatement),
+    all: vi.fn(async () => ({ results: [] })),
+  };
   return {
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
     DB: {
-      prepare: vi.fn(() => statement),
+      prepare: vi.fn((sql: string) =>
+        sql.includes("SELECT * FROM sessions")
+          ? sessionStatement
+          : sql.includes("FROM team_memberships") || sql.includes("FROM session_collaborators")
+            ? membershipStatement
+            : statement
+      ),
       batch: vi.fn(),
       exec: vi.fn(),
       dump: vi.fn(),

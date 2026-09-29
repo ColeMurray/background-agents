@@ -20,6 +20,8 @@ import {
   createTestRequestHandler,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
+  sessionAdmissionStatement,
+  emptyStatement,
 } from "../router.test-support";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ListSessionsForExportOptions, SessionExportRow } from "../db/session-export-store";
@@ -76,7 +78,10 @@ vi.mock("../logger", () => ({
 const USER_PRINCIPAL: Principal = { kind: "user", userId: "user-1" };
 
 function createEnv(permissions?: readonly PermissionId[]): Env {
-  const db = permissions ? authorizationDatabase({ permissions }) : authorizationDatabase();
+  const db = authorizationDatabase({
+    permissions,
+    statement: (sql) => sessionAdmissionStatement(sql) ?? emptyStatement(),
+  });
   return createTestEnv({
     ...TEST_SERVICE_SECRETS,
     DB: db,
@@ -114,7 +119,7 @@ describe("GET /sessions/:id/export", () => {
     mocks.runtimeFetch.mockReset();
   });
 
-  it("refuses viewers before looking up the session", async () => {
+  it("refuses viewers without sessions.export after session admission", async () => {
     const response = await callExport(
       {},
       { sessionId: "session-1", permissions: ["sessions.read"] }

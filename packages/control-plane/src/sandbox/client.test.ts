@@ -137,6 +137,87 @@ describe("ModalClient", () => {
     });
   });
 
+  it("resolves a VM using only generation identity and preserves typed errors", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          success: true,
+          data: {
+            sandbox_id: "generation",
+            modal_object_id: "sb-real",
+            sandbox_backend: "modal-vm",
+            code_server_url: "https://editor.example",
+            code_server_password: "password",
+          },
+        })
+      )
+      .mockResolvedValueOnce(Response.json({ detail: "not_visible" }, { status: 409 }));
+    const client = createModalClient("secret", "acme");
+    expect(
+      await client.resolveVmSandbox({ sessionId: "session", sandboxId: "generation" })
+    ).toMatchObject({
+      sandboxId: "generation",
+      modalObjectId: "sb-real",
+      codeServerPassword: "password",
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://acme--open-inspect-api-resolve-vm-sandbox.modal.run"
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      session_id: "session",
+      sandbox_id: "generation",
+    });
+    await expect(
+      client.resolveVmSandbox({ sessionId: "session", sandboxId: "generation" })
+    ).rejects.toMatchObject({
+      status: 409,
+      detail: "not_visible",
+    });
+  });
+
+  it.each([
+    ["server error", Response.json({ detail: "Internal server error" }, { status: 500 })],
+    ["invalid success", Response.json({ success: true, data: {} })],
+    ["truncated success", new Response("{", { status: 200 })],
+  ])("types a VM startup %s as an unknown outcome after dispatch", async (_case, response) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const client = createModalClient("secret", "acme");
+    await expect(
+      client.createSandbox({
+        sessionId: "session",
+        sandboxId: "generation",
+        sandboxBackend: "modal-vm",
+        repoOwner: null,
+        repoName: null,
+        controlPlaneUrl: "https://control.test",
+        sandboxAuthToken: "token",
+        harness: "opencode",
+      })
+    ).rejects.toMatchObject({ name: "ModalVmStartupError", outcome: "unknown" });
+  });
+
+  it("types a VM launch-window rejection without treating it as unknown", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ detail: "window_closed" }, { status: 409 })
+    );
+    await expect(
+      createModalClient("secret", "acme").restoreSandbox({
+        snapshotImageId: "image",
+        sessionId: "session",
+        sandboxId: "generation",
+        sandboxBackend: "modal-vm",
+        sandboxAuthToken: "token",
+        controlPlaneUrl: "https://control.test",
+        repoOwner: null,
+        repoName: null,
+        harness: "opencode",
+        provider: "anthropic",
+        model: "test",
+      })
+    ).rejects.toMatchObject({ name: "ModalVmStartupError", outcome: "window_closed" });
+  });
+
   it("times out image-build creation when response headers stall", async () => {
     vi.useFakeTimers();
     let markFetchStarted!: () => void;

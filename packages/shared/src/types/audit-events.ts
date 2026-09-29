@@ -71,6 +71,7 @@ export const AUTHORIZATION_DECISION_ACTIONS = {
 
 /** Actions written by the operation owner alongside the change; their result is the domain outcome. */
 export const AUDIT_OPERATION_ACTIONS = [
+  "session.private_break_glass",
   "workspace.member_role_updated",
   "workspace.member_status_updated",
   "workspace.default_role_assigned",

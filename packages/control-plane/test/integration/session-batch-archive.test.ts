@@ -46,7 +46,8 @@ describe("session batch archive", () => {
     const allowed = await member();
     expect(allowed.status).toBe(200);
     expect(await allowed.json()).toEqual({
-      results: [{ sessionId: "missing", outcome: "not_found" }],
+      results: [],
+      skipped: [{ sessionId: "missing", reason: "not_found" }],
     });
     await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
       .bind("role_builtin_member", USER_ID)
@@ -91,13 +92,14 @@ describe("session batch archive", () => {
     expect(sessionBatchArchiveResponseSchema.parse(await response.json())).toEqual({
       results: [
         { sessionId: ready.sessionName, outcome: "archived" },
-        { sessionId: "missing", outcome: "not_found" },
         { sessionId: cancelled.sessionName, outcome: "skipped_cancelled" },
         { sessionId: queued.sessionName, outcome: "skipped_queued_work" },
       ],
+      skipped: [{ sessionId: "missing", reason: "not_found" }],
     });
     expect(await (await post([ready.sessionName])).json()).toEqual({
       results: [{ sessionId: ready.sessionName, outcome: "already_archived" }],
+      skipped: [],
     });
   });
 
@@ -120,6 +122,7 @@ describe("session batch archive", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         results: [{ sessionId: sessionName, outcome: "already_archived" }],
+        skipped: [],
       });
       expect(
         await env.DB.prepare("SELECT status, updated_at FROM sessions WHERE id = ?")
@@ -134,7 +137,8 @@ describe("session batch archive", () => {
     await waitForSandboxStatus(stub, "failed");
     await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(sessionName).run();
     expect(await (await post([sessionName])).json()).toEqual({
-      results: [{ sessionId: sessionName, outcome: "failed" }],
+      results: [],
+      skipped: [{ sessionId: sessionName, reason: "not_found" }],
     });
   });
 

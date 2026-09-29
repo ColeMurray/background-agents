@@ -2,9 +2,23 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 29, 2026
+
+### Added
+
+`TEAMS_ENFORCEMENT` controls active-user session item routes (`/sessions/:id` and its subpaths)
+using the persisted session row (`off`, `shadow` by default, or `on`). On those routes, private
+visibility applies in every mode; team visibility and the delete ownership rule apply when `on`.
+Workspace-wide session lists, bulk export, and WebSocket authorization follow in subsequent changes.
+No route can make a session private or team-owned before those changes land.
+
 ## September 28, 2026
 
 ### Added
+
+**Claude Sonnet 5.5.** Adds `anthropic/claude-sonnet-5-5` to the model picker and integrations, with
+adaptive thinking controls from low through max. Claude Agent SDK 0.2.161 bundles Claude Code
+2.1.284, which supports the new model.
 
 OpenCode sessions using a connected ChatGPT subscription now report estimated model costs through
 the existing session cost display and spending limit. These are API-price equivalents, not

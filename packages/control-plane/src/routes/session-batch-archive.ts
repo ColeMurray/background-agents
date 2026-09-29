@@ -7,6 +7,7 @@ import { createLogger } from "../logger";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { archiveSessionBatch } from "../session/batch-archive";
+import { evaluateSessionAdmission, teamsEnforcementMode } from "../authorization/session-admission";
 import { parseBody } from "./body";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import { dispatchSession } from "./session-route";
@@ -31,7 +32,7 @@ sessionBatchArchiveRoutes.post(
       c,
       async (
         request,
-        _env,
+        env,
         _params,
         ctx: UserRouteContext & { sessionRuntime: SessionRuntimeClient }
       ) => {
@@ -41,13 +42,34 @@ sessionBatchArchiveRoutes.post(
           trace_id: ctx.trace_id,
           request_id: ctx.request_id,
         });
-        const results = await archiveSessionBatch(body.sessionIds, ctx.sessionRuntime, log);
+        try {
+          teamsEnforcementMode(ctx, env);
+        } catch {
+          return json(
+            { error: "Authorization unavailable", code: "authorization_unavailable" },
+            503
+          );
+        }
+        const eligible: string[] = [];
+        const skipped: SessionBatchArchiveResponse["skipped"] = [];
+        for (const sessionId of body.sessionIds) {
+          const admission = await evaluateSessionAdmission(ctx, env, sessionId, "lifecycle", null);
+          if (admission.kind !== "allowed") {
+            skipped.push({
+              sessionId,
+              reason: admission.kind === "not_found" ? "not_found" : "missing_permission",
+            });
+            continue;
+          }
+          eligible.push(sessionId);
+        }
+        const results = await archiveSessionBatch(eligible, ctx.sessionRuntime, log);
         log.info("Session batch archive completed", {
           event: "session.batch_archive",
           user_id: ctx.principal.userId,
           results,
         });
-        return json({ results } satisfies SessionBatchArchiveResponse);
+        return json({ results, skipped } satisfies SessionBatchArchiveResponse);
       }
     )
 );

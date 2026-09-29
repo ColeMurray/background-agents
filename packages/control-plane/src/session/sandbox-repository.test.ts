@@ -575,6 +575,30 @@ describe("SandboxRepository boot state (SQLite)", () => {
     });
   });
 
+  it("resolves a VM only while its generation and pending handle still match", async () => {
+    const { repository, set } = createSqliteRepository();
+    const generation = { sandboxId: "sb-1", createdAt: 1000 };
+    const access = {
+      providerObjectId: "sb-real",
+      codeServer: { url: "https://editor.example", password: "secret" },
+      vnc: null,
+      ttyd: null,
+      tunnelUrls: { "8080": "https://port.example" },
+    };
+    set("status = 'connecting', modal_sandbox_id = 'sb-1', modal_object_id = 'pending'");
+    expect(await repository.completeProviderResume(generation, access, "other")).toBe(false);
+    expect(repository.getSandbox()?.modal_object_id).toBe("pending");
+    expect(await repository.completeProviderResume(generation, access, "pending")).toBe(true);
+    expect(repository.getSandbox()).toMatchObject({
+      modal_object_id: "sb-real",
+      code_server_url: "https://editor.example",
+    });
+    expect(await repository.getSandboxAccessSecret("codeServer")).toBe("secret");
+    set("modal_sandbox_id = 'sb-2', created_at = 2000, modal_object_id = 'pending'");
+    expect(await repository.completeProviderResume(generation, access, "pending")).toBe(false);
+    expect(repository.getSandbox()?.modal_object_id).toBe("pending");
+  });
+
   describe("markSandboxReady", () => {
     const generation = { sandboxId: "sb-1", createdAt: 1000 };
 

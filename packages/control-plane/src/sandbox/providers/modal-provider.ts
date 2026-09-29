@@ -5,7 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import { ModalApiError } from "../client";
+import { ModalApiError, ModalVmStartupError } from "../client";
 import { formatPendingVmReference, parsePendingVmReference } from "./pending-vm-reference";
 import {
   PENDING_VM_REFERENCE_LAUNCH_WINDOW_MS,
@@ -31,6 +31,8 @@ import {
   type CreateSandboxResult,
   type RestoreConfig,
   type RestoreResult,
+  type ResolveSandboxConfig,
+  type ResolveSandboxResult,
   type SnapshotConfig,
   type SnapshotResult,
   type StopConfig,
@@ -113,6 +115,45 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       reference: formatPendingVmReference(config.sessionId, config.sandboxId),
       lifetime: this.launchLifetime(config),
     };
+  }
+
+  isUnknownStartupError(error: unknown): boolean {
+    if (this.name !== "modal-vm") return false;
+    const cause = error instanceof SandboxProviderError ? error.cause : error;
+    if (cause instanceof ModalVmStartupError)
+      return cause.outcome === "unknown" || cause.outcome === "race_pending";
+    if (cause instanceof ModalApiError)
+      return cause.detail === "race_pending" || cause.status >= 500;
+    return cause instanceof TypeError || SandboxProviderError.isTransientNetworkError(cause);
+  }
+
+  async resolveSandbox(config: ResolveSandboxConfig): Promise<ResolveSandboxResult> {
+    if (this.name !== "modal-vm")
+      throw new SandboxProviderError("VM resolution requires modal-vm", "permanent");
+    try {
+      const result = await this.client.resolveVmSandbox({
+        sessionId: config.sessionId,
+        sandboxId: config.sandboxId,
+      });
+      this.confirmSessionLaunch(result);
+      if (result.sandboxId !== config.sandboxId || !result.modalObjectId)
+        throw new SandboxProviderError(
+          "Modal VM resolution returned a different generation",
+          "permanent"
+        );
+      return {
+        sandboxId: result.sandboxId,
+        providerObjectId: result.modalObjectId,
+        lifetime: this.launchLifetime(config),
+        codeServerUrl: result.codeServerUrl,
+        codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
+        ttydUrl: result.ttydUrl,
+        tunnelUrls: result.tunnelUrls,
+      };
+    } catch (error) {
+      throw this.classifyError("Failed to resolve Modal VM", error);
+    }
   }
 
   private launchLifetime(
@@ -262,15 +303,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         tunnelUrls: result.tunnelUrls,
       };
     } catch (error) {
-      if (error instanceof ModalApiError) {
-        throw this.classifyErrorWithStatus(
-          `Restore failed with HTTP ${error.status}`,
-          error.status
-        );
-      }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
       throw this.classifyError("Failed to restore sandbox from snapshot", error);
     }
   }
@@ -520,6 +552,30 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   private classifyError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
+    if (error instanceof ModalVmStartupError)
+      return new SandboxProviderError(
+        `${message}: ${error.message}`,
+        error.outcome === "other_generation" ? "permanent" : "transient",
+        error
+      );
+    if (error instanceof ModalApiError) {
+      const context = `${message} with HTTP ${error.status}`;
+      if (this.name === "modal-vm") {
+        if (
+          error.detail === "not_visible" ||
+          error.detail === "window_closed" ||
+          error.detail === "race_pending" ||
+          error.detail === "other_generation"
+        )
+          return new SandboxProviderError(
+            context,
+            error.detail === "other_generation" ? "permanent" : "transient",
+            error
+          );
+        if (error.status >= 500) return new SandboxProviderError(context, "transient", error);
+      }
+      return this.classifyErrorWithStatus(context, error.status, error);
+    }
     if (SandboxProviderError.isTransientNetworkError(error)) {
       return new SandboxProviderError(
         `${message}: ${error instanceof Error ? error.message : String(error)}`,

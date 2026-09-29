@@ -63,6 +63,7 @@ function harness(options: { session?: SessionRow | null } = {}) {
     updateSessionStatus: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getLatestTerminalMessage: vi.fn(() => null as MessageRow | null),
+    getMessageStatus: vi.fn((_messageId: string): MessageRow["status"] | null => "failed"),
     getMessageCount: vi.fn(() => 3),
     getActiveDurationMs: vi.fn(() => 4500),
   };
@@ -290,6 +291,82 @@ describe("SessionStatusService.transition", () => {
     await h.service.transition("active");
 
     expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
+  });
+
+  it("defers a step of the processing turn but projects one whose turn has ended", () => {
+    // A budget stop leaves a queued prompt that keeps the session active.
+    const h = harness({ session: createSession({ status: "active" }) });
+    h.repository.getMessageStatus.mockReturnValueOnce("processing");
+
+    h.service.refreshMetricsAfterStep("msg-running");
+    expect(h.sessionIndex.updateMetrics).not.toHaveBeenCalled();
+
+    h.service.refreshMetricsAfterStep("msg-stopped");
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledWith(
+      "public-session-1",
+      expect.objectContaining({ inputTokens: 1200 })
+    );
+  });
+
+  it("writes usage that lands during a metrics write after it, never beside it", async () => {
+    const h = harness({ session: createSession({ status: "failed" }) });
+    let releaseFirstWrite!: () => void;
+    h.sessionIndex.updateMetrics.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (releaseFirstWrite = () => resolve(true)))
+    );
+
+    expect(await h.service.transition("failed")).toBe(false);
+    h.usageRepository.getSessionTotals.mockReturnValue(createUsageTotals({ inputTokens: 1500 }));
+    h.service.refreshMetricsAfterStep("msg-1");
+    h.service.refreshMetricsAfterStep("msg-1");
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(1);
+    releaseFirstWrite();
+    await h.backgroundTasks.settle();
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(2);
+    expect(h.sessionIndex.updateMetrics).toHaveBeenLastCalledWith(
+      "public-session-1",
+      expect.objectContaining({ inputTokens: 1500 })
+    );
+  });
+
+  it("still writes usage that landed during a metrics write that failed", async () => {
+    const h = harness({ session: createSession({ status: "failed" }) });
+    const error = new Error("d1 down");
+    let failFirstWrite!: () => void;
+    h.sessionIndex.updateMetrics.mockImplementationOnce(
+      () => new Promise<boolean>((_resolve, reject) => (failFirstWrite = () => reject(error)))
+    );
+
+    expect(await h.service.transition("failed")).toBe(false);
+    h.usageRepository.getSessionTotals.mockReturnValue(createUsageTotals({ inputTokens: 1500 }));
+    h.service.refreshMetricsAfterStep("msg-1");
+    failFirstWrite();
+    await h.backgroundTasks.settle();
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(2);
+    expect(h.sessionIndex.updateMetrics).toHaveBeenLastCalledWith(
+      "public-session-1",
+      expect.objectContaining({ inputTokens: 1500 })
+    );
+    expect(h.backgroundTasks.failures).toEqual([error]);
+  });
+
+  it("does not retry a failed metrics write when nothing newer is pending", async () => {
+    const h = harness({ session: createSession({ status: "failed" }) });
+    const error = new Error("d1 down");
+    h.sessionIndex.updateMetrics.mockRejectedValueOnce(error);
+
+    expect(await h.service.transition("failed")).toBe(false);
+    await h.backgroundTasks.settle();
+
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(1);
+    expect(h.backgroundTasks.failures).toEqual([error]);
+
+    h.service.refreshMetricsAfterStep("msg-1");
+    await h.backgroundTasks.settle();
+    expect(h.sessionIndex.updateMetrics).toHaveBeenCalledTimes(2);
   });
 
   it("logs index sync failures without throwing", async () => {
