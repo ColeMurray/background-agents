@@ -33,6 +33,7 @@ from .launch_policy import (
     parse_launch,
 )
 from .models import SandboxConfig, SandboxHandle
+from .termination import terminate_and_wait
 from .tunnels import SandboxTunnels
 from .vcs_env import inject_vcs_env_vars
 from .vm_recovery import VMAllocationOutcome, VMServiceLaunch, find_owned_vm, owned_vm_tags_match
@@ -355,7 +356,7 @@ class SandboxLauncher:
         ):
             log.warn("sandbox.docker_allocation_retire_mismatch", sandbox_id=sandbox_id)
             return
-        await sandbox.terminate.aio(wait=True)
+        await terminate_and_wait(sandbox)
         log.info(
             "sandbox.docker_allocation_retired",
             sandbox_id=sandbox_id,

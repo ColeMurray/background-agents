@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from modal.exception import SandboxTimeoutError
 
 from sandbox_runtime.constants import (
     DOCKER_ENABLED_ENV_VAR,
@@ -365,6 +366,31 @@ async def test_terminate_build_sandbox_verifies_tags(monkeypatch):
     )
 
     sandbox.terminate.aio.assert_awaited_once_with(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_terminate_build_sandbox_logs_exit_code_when_timed_out(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = SandboxTimeoutError()
+    sandbox = SimpleNamespace(
+        returncode=124,
+        get_tags=_async_method(
+            {"openinspect_kind": "image-build", "openinspect_build_id": "build-1"}
+        ),
+        terminate=terminate,
+    )
+    _mock_sandbox_lookup(monkeypatch, sandbox)
+    info = MagicMock()
+    monkeypatch.setattr("src.sandbox.build_session.log.info", info)
+
+    await ModalBuildSessionService().terminate(
+        build_id="build-1", provider_session_id="modal-session-1", reason="image_build_complete"
+    )
+
+    terminate.aio.assert_awaited_once_with(wait=True)
+    info.assert_called_once()
+    assert info.call_args.args == ("sandbox.terminate_build",)
+    assert info.call_args.kwargs["exit_code"] == 124
 
 
 @pytest.mark.asyncio

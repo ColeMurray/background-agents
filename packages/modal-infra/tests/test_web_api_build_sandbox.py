@@ -5,6 +5,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from modal.exception import NotFoundError as ModalNotFoundError
+from modal.exception import SandboxTimeoutError
 from modal.exception import TimeoutError as ModalTimeoutError
 
 from sandbox_runtime.types import SandboxStatus
@@ -852,6 +853,22 @@ async def test_generic_stop_succeeds_when_provider_object_is_already_absent(monk
 
     assert result == {"success": True, "data": {"terminated": True}}
     from_id.aio.assert_awaited_once_with("modal-session-1")
+
+
+@pytest.mark.asyncio
+async def test_generic_stop_succeeds_when_provider_sandbox_timed_out(monkeypatch):
+    terminate = AsyncMock(side_effect=SandboxTimeoutError())
+    from_id = MagicMock()
+    from_id.aio = AsyncMock(
+        return_value=SimpleNamespace(terminate=SimpleNamespace(aio=terminate), returncode=124)
+    )
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    result = await _call_generic_stop({"sandbox_id": "modal-session-1"})
+
+    assert result == {"success": True, "data": {"terminated": True}}
+    terminate.assert_awaited_once_with(wait=True)
 
 
 @pytest.mark.asyncio

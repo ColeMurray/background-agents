@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from modal.exception import NotFoundError
+from modal.exception import NotFoundError, SandboxTimeoutError
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT_ENV_VAR,
@@ -748,6 +748,27 @@ async def test_docker_launch_retires_the_prior_generation_only_when_owned(monkey
             _docker_config(retire_sandbox_id="sandbox-acme-repo-1699999999999")
         )
     prior.terminate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retire_docker_allocation_succeeds_when_owned_vm_timed_out(monkeypatch):
+    terminate = AsyncMock(side_effect=SandboxTimeoutError())
+    sandbox = SimpleNamespace(
+        object_id="modal-prior",
+        returncode=124,
+        get_tags=SimpleNamespace(
+            aio=AsyncMock(return_value=docker_allocation_tags("session-1", "sandbox-prior"))
+        ),
+        terminate=SimpleNamespace(aio=terminate),
+    )
+    monkeypatch.setattr(
+        "src.sandbox.launch.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+
+    await SandboxLauncher()._retire_docker_allocation("session-1", "sandbox-prior")
+
+    terminate.assert_awaited_once_with(wait=True)
 
 
 @pytest.mark.asyncio

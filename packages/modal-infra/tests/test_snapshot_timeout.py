@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from modal.exception import NotFoundError as ModalNotFoundError
+from modal.exception import SandboxTimeoutError
+from modal.exception import TimeoutError as ModalTimeoutError
+from modal_proto.task_command_router_pb2 import TaskExecStartRequest
 
 from sandbox_runtime.docker_control import CONTROL_TIMEOUT_SECONDS, PREPARATION_TIMEOUT_SECONDS
 from sandbox_runtime.types import SandboxStatus
@@ -194,6 +197,33 @@ async def test_stop_sandbox_waits_for_provider_termination(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stop_sandbox_succeeds_when_sandbox_already_timed_out(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = SandboxTimeoutError()
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_id",
+        _async_method(SimpleNamespace(terminate=terminate, returncode=124)),
+    )
+
+    await SandboxManager().stop_sandbox("sandbox-1")
+
+    terminate.aio.assert_awaited_once_with(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_sandbox_propagates_other_modal_timeout(monkeypatch):
+    terminate = _async_method()
+    terminate.aio.side_effect = ModalTimeoutError()
+    monkeypatch.setattr(
+        "src.sandbox.manager.modal.Sandbox.from_id",
+        _async_method(SimpleNamespace(terminate=terminate)),
+    )
+
+    with pytest.raises(ModalTimeoutError):
+        await SandboxManager().stop_sandbox("sandbox-1")
+
+
+@pytest.mark.asyncio
 async def test_stop_sandbox_succeeds_when_provider_object_is_already_absent(monkeypatch):
     from_id = _async_method()
     from_id.aio.side_effect = ModalNotFoundError("sandbox not found")
@@ -264,7 +294,32 @@ async def test_vm_capture_requires_docker_preparation(exit_code):
         "sandbox_runtime.docker_control",
         "prepare",
     )
-    assert execute.aio.call_args.kwargs["timeout"] == CONTROL_TIMEOUT_SECONDS
+    assert type(execute.aio.call_args.kwargs["timeout"]) is int
+    assert execute.aio.call_args.kwargs["timeout"] == int(CONTROL_TIMEOUT_SECONDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [300, 166, 165.5, 10])
+async def test_vm_capture_exec_timeout_is_sdk_compatible_and_within_budget(budget):
+    execute = _async_method(SimpleNamespace(wait=_async_method(0)))
+    handle = SandboxHandle(
+        sandbox_id="sb-vm",
+        sandbox_backend="modal-vm",
+        status=SandboxStatus.READY,
+        created_at=0,
+        modal_sandbox=SimpleNamespace(
+            exec=execute,
+            snapshot_filesystem=_async_method(SimpleNamespace(object_id="im-vm")),
+        ),
+    )
+
+    await SandboxManager().take_snapshot(handle, timeout_seconds=budget)
+
+    args = execute.aio.call_args.args
+    timeout = execute.aio.call_args.kwargs["timeout"]
+    TaskExecStartRequest(command_args=list(args), timeout_secs=timeout)
+    assert type(timeout) is int
+    assert timeout == min(int(budget), int(CONTROL_TIMEOUT_SECONDS))
 
 
 def test_vm_preparation_deadline_fits_capture_budget():

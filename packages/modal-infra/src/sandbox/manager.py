@@ -45,6 +45,7 @@ from .launch_policy import (
     parse_pending_vm_reference,
 )
 from .models import DEFAULT_VNC_ENABLED, SandboxConfig, SandboxHandle
+from .termination import terminate_and_wait
 from .tunnels import MAX_TUNNEL_PORTS
 from .vm_recovery import (
     VMAllocationOutcome,
@@ -190,7 +191,7 @@ class SandboxManager:
                 "-m",
                 "sandbox_runtime.docker_control",
                 "prepare",
-                timeout=min(snapshot_timeout_seconds, CONTROL_TIMEOUT_SECONDS),
+                timeout=min(snapshot_timeout_seconds, int(CONTROL_TIMEOUT_SECONDS)),
             )
             if await probe.wait.aio() != 0:
                 raise RuntimeError("Modal VM Docker shutdown preparation was not confirmed")
@@ -225,7 +226,7 @@ class SandboxManager:
             sandbox_id = handle.modal_object_id
         try:
             sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
-            await sandbox.terminate.aio(wait=True)
+            await terminate_and_wait(sandbox)
         except modal.exception.NotFoundError:
             # Already absent is the terminal state requested by stop.
             return

@@ -34,6 +34,7 @@ from .launch_policy import (
     parse_launch,
 )
 from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from .termination import terminate_and_wait
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("build_session")
@@ -220,7 +221,7 @@ class ModalBuildSessionService:
         try:
             sandbox, _tags = await self._resolve(build_id, provider_session_id)
             termination_start = time.time()
-            exit_code = await sandbox.terminate.aio(wait=True)
+            exit_code = await terminate_and_wait(sandbox)
         except BuildSessionNotFoundError:
             log.info(
                 "sandbox.terminate_build_not_found",
