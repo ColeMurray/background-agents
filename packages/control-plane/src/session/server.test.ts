@@ -60,7 +60,7 @@ function createHarness() {
     notifyTyping: vi.fn(async () => undefined),
     updatePresence: vi.fn(),
     getHistoryPage: vi.fn(() => ({ items: [], hasMore: false, cursor: null })),
-    authorize: vi.fn(async () => "allowed" as const),
+    authorize: vi.fn(async () => ({ kind: "allowed" as const })),
   };
   const sandbox: SandboxDisconnectMonitor = {
     getStatus: vi.fn((): "ready" => "ready"),
@@ -403,7 +403,10 @@ describe("SessionServer", () => {
     );
 
     const denied = createHarness();
-    vi.mocked(denied.clientCommands.authorize).mockResolvedValue("denied");
+    vi.mocked(denied.clientCommands.authorize).mockResolvedValue({
+      kind: "denied",
+      reason: "missing_permission",
+    });
     await denied.server.onMessage(
       "client",
       JSON.stringify({
@@ -422,7 +425,7 @@ describe("SessionServer", () => {
     );
 
     const unavailable = createHarness();
-    vi.mocked(unavailable.clientCommands.authorize).mockResolvedValue("unavailable");
+    vi.mocked(unavailable.clientCommands.authorize).mockResolvedValue({ kind: "unavailable" });
     await unavailable.server.onMessage(
       "client",
       JSON.stringify({
@@ -470,32 +473,27 @@ describe("SessionServer", () => {
   });
 
   it.each([
-    [
-      { type: "prompt", content: "work", clientRequestId: "request-1" },
-      "collaborate",
-      "sessions.collaborate",
-    ],
-    [
-      { type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" },
-      "lifecycle",
-      "sessions.lifecycle",
-    ],
-    [{ type: "stop" }, "lifecycle", "sessions.lifecycle"],
-    [{ type: "recover_preservation", action: "restore_saved" }, "lifecycle", "sessions.lifecycle"],
-    [{ type: "typing" }, "collaborate", "sessions.collaborate"],
-    [{ type: "fetch_history", cursor: { timestamp: 10, id: "event-1" } }, "read", "sessions.read"],
-    [{ type: "presence", status: "idle" }, "read", "sessions.read"],
-  ] as const)("rejects %s without its command action", async (message, action, permission) => {
+    [{ type: "prompt", content: "work", clientRequestId: "request-1" }, "collaborate"],
+    [{ type: "cancel_prompt", messageId: "message-1", clientRequestId: "request-1" }, "lifecycle"],
+    [{ type: "stop" }, "lifecycle"],
+    [{ type: "recover_preservation", action: "restore_saved" }, "lifecycle"],
+    [{ type: "typing" }, "collaborate"],
+    [{ type: "fetch_history", cursor: { timestamp: 10, id: "event-1" } }, "read"],
+    [{ type: "presence", status: "idle" }, "read"],
+  ] as const)("rejects %s without its command action", async (message, action) => {
     const { server, sockets, clientCommands, client } = createHarness();
-    vi.mocked(clientCommands.authorize).mockResolvedValue("denied");
+    vi.mocked(clientCommands.authorize).mockResolvedValue({
+      kind: "denied",
+      reason: "missing_permission",
+    });
 
     await server.onMessage("client", JSON.stringify(message));
 
-    expect(clientCommands.authorize).toHaveBeenCalledWith(client, action);
+    expect(clientCommands.authorize).toHaveBeenCalledWith("client", client, action);
     expect(sockets.send).toHaveBeenCalledWith("client", {
       type: "error",
       code: "PERMISSION_REQUIRED",
-      message: `Permission required: ${permission}`,
+      message: "Access denied: missing_permission",
     });
     expect(clientCommands.submitPrompt).not.toHaveBeenCalled();
     expect(clientCommands.cancelPrompt).not.toHaveBeenCalled();
@@ -517,6 +515,7 @@ describe("SessionServer", () => {
 
     expect(clientCommands.getHistoryPage).toHaveBeenCalledOnce();
     expect(clientCommands.authorize).toHaveBeenCalledExactlyOnceWith(
+      "client",
       expect.objectContaining({ userId: "user-1" }),
       "read"
     );
@@ -556,18 +555,45 @@ describe("SessionServer", () => {
     });
   });
 
-  it("does not throttle a history request denied by the read check", async () => {
-    const { server, clientCommands, setNow } = createHarness();
+  it("reserves the history throttle window before authorization even when read is denied", async () => {
+    const { server, sockets, clientCommands, setNow } = createHarness();
     const cursor = { timestamp: 10, id: "event-1" };
-    vi.mocked(clientCommands.authorize).mockResolvedValueOnce("denied");
+    vi.mocked(clientCommands.authorize).mockResolvedValueOnce({
+      kind: "denied",
+      reason: "missing_permission",
+    });
 
     setNow(0);
     await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
     setNow(100);
     await server.onMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
 
-    expect(clientCommands.authorize).toHaveBeenCalledTimes(2);
+    expect(clientCommands.authorize).toHaveBeenCalledOnce();
+    expect(clientCommands.getHistoryPage).not.toHaveBeenCalled();
+    expect(sockets.send).toHaveBeenCalledWith("client", {
+      type: "error",
+      code: "RATE_LIMITED",
+      message: "Too many requests",
+    });
+  });
+
+  it("reserves one window for a simultaneous burst of history frames", async () => {
+    const { server, sockets, clientCommands, setNow } = createHarness();
+    setNow(0);
+    await Promise.all(
+      Array.from({ length: 5 }, () =>
+        server.onMessage(
+          "client",
+          JSON.stringify({ type: "fetch_history", cursor: { timestamp: 10, id: "event-1" } })
+        )
+      )
+    );
+
+    expect(clientCommands.authorize).toHaveBeenCalledOnce();
     expect(clientCommands.getHistoryPage).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(sockets.send).mock.calls.filter(([, message]) => message.type === "error")
+    ).toHaveLength(4);
   });
 
   it("parses and routes sandbox events without exposing a socket type", async () => {

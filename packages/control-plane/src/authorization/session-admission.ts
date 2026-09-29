@@ -86,7 +86,7 @@ export async function evaluateSessionAdmission(
 
   // The signed route grant authorizes actorless actions; the service resolver only checks visibility.
   const decision = viewer.kind === "service" ? null : checkSessionAccess(viewer, accessRow, action);
-  if (mode === "on" && decision && !decision.allowed) {
+  if ((mode === "on" || row.visibility === "private") && decision && !decision.allowed) {
     return { kind: "action_denied", reason: decision.reason };
   }
   if (mode === "shadow") {
@@ -102,6 +102,7 @@ export async function evaluateSessionAdmission(
   }
   return {
     kind: "allowed",
-    legacyPermission: mode === "on" ? null : legacyPermissionForAction(action),
+    legacyPermission:
+      mode === "on" || row.visibility === "private" ? null : legacyPermissionForAction(action),
   };
 }

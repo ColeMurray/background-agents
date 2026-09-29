@@ -44,7 +44,7 @@ export function componentsOf(instance: SessionDO): SessionRuntime["internals"] {
 /** Set the real DO's mode before its first request initializes the runtime. */
 export function setSessionTeamsEnforcementMode(
   stub: DurableObjectStub,
-  mode: "off" | "shadow" | "on"
+  mode: string
 ): Promise<void> {
   return runInSessionDO(stub, (instance) => {
     (instance as unknown as SessionDOInternals).appEnv.TEAMS_ENFORCEMENT = mode;

@@ -3,7 +3,7 @@ import { clientRequestIdSchema, promptValidationError } from "@open-inspect/shar
 import type { ZodError } from "zod";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { SessionAction } from "@open-inspect/shared";
-import { legacyPermissionForAction } from "../authorization/teams-enforcement";
+import type { AccessDenialReason } from "@open-inspect/shared";
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { Logger } from "../logger";
 import type { SessionHistoryPage } from "./event-stream";
@@ -18,6 +18,12 @@ export type ClientSubscribe = Extract<ClientMessage, { type: "subscribe" }>;
 export type FetchHistory = Extract<ClientMessage, { type: "fetch_history" }>;
 type ValidHistoryRequest = FetchHistory & { cursor: NonNullable<FetchHistory["cursor"]> };
 export type RecoverShutdownCommand = Extract<ClientMessage, { type: "recover_preservation" }>;
+
+export type ClientCommandAuthorization =
+  | { kind: "allowed" }
+  | { kind: "denied"; reason: AccessDenialReason }
+  | { kind: "unavailable" }
+  | { kind: "revoked" };
 
 type BoundarySchema<T> = {
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: ZodError };
@@ -41,9 +47,10 @@ export interface SessionClientCommands<Connection, Client extends ConnectedClien
     limit?: number;
   }) => SessionHistoryPage;
   authorize: (
+    connection: Connection,
     client: Client,
     action: SessionAction
-  ) => Promise<"allowed" | "denied" | "unavailable">;
+  ) => Promise<ClientCommandAuthorization>;
 }
 
 export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
@@ -208,15 +215,16 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     action: SessionAction,
     clientRequestId?: string
   ): Promise<boolean> {
-    const result = await this.deps.clientCommands.authorize(client, action);
-    if (result === "allowed") return true;
+    const result = await this.deps.clientCommands.authorize(connection, client, action);
+    if (result.kind === "allowed") return true;
+    if (result.kind === "revoked") return false;
     this.deps.sockets.send(connection, {
       type: "error",
-      code: result === "unavailable" ? "AUTHORIZATION_UNAVAILABLE" : "PERMISSION_REQUIRED",
+      code: result.kind === "unavailable" ? "AUTHORIZATION_UNAVAILABLE" : "PERMISSION_REQUIRED",
       message:
-        result === "unavailable"
+        result.kind === "unavailable"
           ? "Authorization is temporarily unavailable"
-          : `Permission required: ${legacyPermissionForAction(action)}`,
+          : `Access denied: ${result.reason}`,
       ...(clientRequestId ? { clientRequestId } : {}),
     });
     return false;
@@ -254,6 +262,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
       });
       return false;
     }
+    client.lastFetchHistoryAtMs = now;
     return true;
   }
 
@@ -262,7 +271,6 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
     client: Client,
     data: ValidHistoryRequest
   ): void {
-    client.lastFetchHistoryAtMs = this.deps.clock.nowMs();
     const page = this.deps.clientCommands.getHistoryPage({
       cursor: data.cursor,
       limit: data.limit,

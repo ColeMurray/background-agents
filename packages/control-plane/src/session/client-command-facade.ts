@@ -14,6 +14,7 @@ import type {
   ClientPresence,
   ClientPrompt,
   ClientSubscribe,
+  ClientCommandAuthorization,
   FetchHistory,
 } from "./message-router";
 import type { SessionEventStream, SessionHistoryPage } from "./event-stream";
@@ -80,9 +81,10 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   }
 
   authorize(
+    connection: SessionWebSocket,
     client: ClientInfo,
     action: SessionAction
-  ): Promise<"allowed" | "denied" | "unavailable"> {
-    return this.authenticator.authorizeClientCommand(client.userId, action);
+  ): Promise<ClientCommandAuthorization> {
+    return this.authenticator.authorizeClientCommand(connection, client.userId, action);
   }
 }

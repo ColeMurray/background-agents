@@ -157,6 +157,8 @@ import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
+import { auditSocketPrivateBreakGlass } from "../authorization/session-socket-audit";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
 
 /**
@@ -815,7 +817,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   const connectionAuthenticator = new SessionConnectionAuthenticator({
-    teamsEnforcementMode: parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT),
     wsManager,
     sessionCoreRepository,
     sandboxRepository,
@@ -830,16 +831,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     scmProviderName,
     resolveSessionViewer: async (userId) => {
       try {
-        const authorization = await new AuthorizationService(db).getEffectiveAuthorization(userId);
-        if (authorization.suspendedAt !== null) return { kind: "rejected" };
-        const session = await sessionIndexStore.get(getPublicSessionId());
-        if (!session) return { kind: "rejected" };
-        const [memberships, collaboratorIds] = await Promise.all([
-          teamMembershipStore.listForUser(userId),
-          sessionCollaboratorStore.listUserIds(session.id),
+        const mode = parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT);
+        const [authorization, session] = await Promise.all([
+          new AuthorizationService(db).getEffectiveAuthorization(userId),
+          sessionIndexStore.get(getPublicSessionId()),
         ]);
+        if (authorization.suspendedAt !== null) return { kind: "rejected" };
+        if (!session) return { kind: "rejected" };
+        const [memberships, collaboratorIds] =
+          mode === "on" || session.visibility === "private"
+            ? await Promise.all([
+                teamMembershipStore.listForUser(userId),
+                sessionCollaboratorStore.listUserIds(session.id),
+              ])
+            : [new Map<string, TeamRole>(), []];
         return {
           kind: "valid",
+          mode,
           authorization,
           viewer: {
             kind: "user",
@@ -866,6 +874,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         return { kind: "unavailable" };
       }
     },
+    auditPrivateBreakGlass: (userId, row) => auditSocketPrivateBreakGlass(db, userId, row),
     log,
   });
 

@@ -255,6 +255,22 @@ describe("HTTP session access by enforcement mode", () => {
     expect(await auditRows("session.private_break_glass")).toHaveLength(1);
   });
 
+  it.each(["off", "shadow", "on"] as const)(
+    "refuses an Owner break-glass prompt on a private session in %s mode",
+    async (mode) => {
+      const { sessionName } = await session("private");
+      const response = await fetchMode(`/sessions/${sessionName}/prompt`, mode, {
+        method: "POST",
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "Forbidden",
+        code: "session_action_denied",
+        reason_code: "not_collaborator",
+      });
+    }
+  );
+
   it("does not query memberships in off mode", async () => {
     const { sessionName } = await session("team");
     const list = vi.spyOn(TeamMembershipStore.prototype, "listForUser");
