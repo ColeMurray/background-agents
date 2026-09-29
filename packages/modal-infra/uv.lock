@@ -925,7 +925,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "modal", specifier = ">=1.4.3" },
+    { name = "modal", specifier = "==1.4.3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.0" },
     { name = "open-inspect-sandbox-runtime", editable = "../sandbox-runtime" },
     { name = "pydantic", specifier = ">=2.0" },
