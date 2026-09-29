@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
+import type * as SessionAdmissionModule from "../authorization/session-admission";
 import { SessionIndexStore } from "../db/session-index";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import type { SessionRuntimeClient } from "../session/runtime-client";
@@ -11,6 +13,11 @@ import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 vi.mock("../session/integration-settings-resolution", () => ({
   resolveSandboxSettings: vi.fn(),
+}));
+
+vi.mock("../authorization/session-admission", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionAdmissionModule>()),
+  evaluateSessionAdmission: vi.fn(),
 }));
 
 function routeMatch(path: string, pattern: string): { id: string; childId: string } {
@@ -53,6 +60,10 @@ describe("handleListChildren", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("projects viewer-neutral child summaries through the shared schema", async () => {
+    vi.mocked(evaluateSessionAdmission).mockResolvedValue({
+      kind: "allowed",
+      legacyPermission: "sessions.read",
+    });
     vi.spyOn(SessionIndexStore.prototype, "listByParent").mockResolvedValue([
       {
         id: "child",
@@ -119,6 +130,13 @@ describe("handleListChildren", () => {
         },
       ],
     });
+    expect(evaluateSessionAdmission).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "child",
+      "read",
+      null
+    );
   });
 });
 
