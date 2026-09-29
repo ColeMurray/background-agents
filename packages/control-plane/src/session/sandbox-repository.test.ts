@@ -812,6 +812,16 @@ describe("SandboxRepository boot state (SQLite)", () => {
   describe("heartbeat confirmation (SQLite)", () => {
     const generation = { sandboxId: "sb-1", createdAt: 1000 };
 
+    it("records heartbeat contact during a checkpoint that returns to ready", () => {
+      const { repository, set } = createSqliteRepository();
+      set("status = 'ready', modal_sandbox_id = 'sb-1', last_heartbeat = 5000");
+      expect(repository.transitionSandboxStatus(generation, "ready", "snapshotting")).toBe(true);
+      expect(repository.updateSandboxHeartbeat(7000, generation)).toBe(true);
+      expect(repository.transitionSandboxStatus(generation, "snapshotting", "ready")).toBe(true);
+      expect(repository.getSandbox()?.last_heartbeat).toBe(7000);
+      expect(repository.beginHeartbeatConfirmation(generation, 5000, 65000)).toBe(false);
+    });
+
     it("retains one absolute deadline across repository reconstruction and conditionally claims it", () => {
       const { sql, repository, set } = createSqliteRepository();
       set(

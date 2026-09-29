@@ -564,7 +564,7 @@ export class SandboxRepository {
          heartbeat_confirmation_deadline = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ? AND fenced = 0
-         AND status IN ('spawning', 'connecting', 'ready', 'failed')`,
+         AND status IN ('spawning', 'connecting', 'ready', 'snapshotting', 'failed')`,
       timestamp,
       generation ? generation.sandboxId : (row?.modal_sandbox_id ?? null),
       generation ? generation.createdAt : (row?.created_at ?? -1)
