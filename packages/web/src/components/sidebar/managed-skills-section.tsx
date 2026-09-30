@@ -17,7 +17,7 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
   if (error) return null;
   if (loading) {
     return (
-      <div className="border-b border-border-muted px-4 py-3 text-xs text-muted-foreground">
+      <div className="border-t border-border-muted py-3 text-xs text-muted-foreground">
         Loading managed skills...
       </div>
     );
@@ -38,7 +38,7 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
           <span className="max-w-[11rem] truncate text-foreground">{profileLabel}</span>
         </div>
         {provenance.skills.map((skill) => (
-          <div key={skill.skillId} className="rounded border border-border-muted p-2.5">
+          <div key={skill.skillId} className="border-l border-border pl-3">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate font-mono text-xs font-medium text-foreground">
                 {skill.name}

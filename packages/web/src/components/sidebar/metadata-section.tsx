@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
+import { formatModelName, copyToClipboard } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 import { prBadgeVariant } from "@/components/ui/badge-variants";
+import { PullRequestStateIcon } from "@/components/pr-state-icon";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
@@ -139,11 +140,15 @@ export function MetadataSection({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold">Run information</h3>
       {/* Timestamp */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <ClockIcon className="w-4 h-4" />
-        <span>{formatRelativeTime(createdAt)}</span>
+      <div className="border-b border-border-muted pb-4">
+        <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <ClockIcon className="h-3 w-3" />
+          Started
+        </span>
+        <span className="mt-1 block text-sm font-medium">{formatRelativeTime(createdAt)}</span>
       </div>
 
       {/* Parent session */}
@@ -158,9 +163,10 @@ export function MetadataSection({
 
       {/* Model */}
       {model && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <SparkleIcon className="w-4 h-4" />
-          <span>
+        <div className="flex items-start gap-2 text-xs text-foreground">
+          <SparkleIcon className="mt-0.5 w-4 h-4 shrink-0 text-accent" />
+          <span className="min-w-0 [overflow-wrap:anywhere]">
+            <span className="mb-1 block text-[11px] text-muted-foreground">Model</span>
             {formatModelName(model)}
             {reasoningEffort && <span> · {reasoningEffort}</span>}
           </span>
@@ -169,10 +175,13 @@ export function MetadataSection({
 
       {/* Environment provenance */}
       {environmentId && (
-        <div className="flex items-center gap-2 text-sm">
-          <FolderIcon className="w-4 h-4 text-muted-foreground" />
+        <div className="flex items-start gap-2 text-xs">
+          <FolderIcon className="mt-0.5 w-4 h-4 shrink-0 text-muted-foreground" />
           {environmentName ? (
-            <span className="text-foreground truncate max-w-[180px]" title={environmentName}>
+            <span
+              className="min-w-0 text-foreground [overflow-wrap:anywhere]"
+              title={environmentName}
+            >
               {environmentName}
             </span>
           ) : (
@@ -181,16 +190,16 @@ export function MetadataSection({
         </div>
       )}
 
-      {/* Scalar repo/PR/branch rows — single-repo (and scalar-era) sessions
-          render exactly as before. Multi-repo sessions use the member list. */}
+      {/* Single-repository context. Multi-repo sessions use the member list. */}
       {!isMultiRepo && (
         <>
-          {/* PR rows — one per pull request, oldest first. A lone PR keeps
-              the sync button inline; several move it to a section header so
-              it clearly refreshes them all. */}
-          {prArtifacts.length > 1 && (
-            <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              <span>Pull requests</span>
+          {/* One row per PR; the section action refreshes all tracked PRs. */}
+          {prArtifacts.length > 0 && (
+            <div className="flex items-center justify-between gap-2 border-t border-border-muted pt-4 text-xs font-semibold">
+              <span>
+                Pull requests{" "}
+                <span className="ml-1 text-muted-foreground">{prArtifacts.length}</span>
+              </span>
               {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
             </div>
           )}
@@ -200,8 +209,12 @@ export function MetadataSection({
             const prHead = artifact.metadata?.head;
             const prUrl = getSafeExternalUrl(artifact.url ?? undefined);
             return (
-              <div key={artifact.id} className="flex items-center gap-2 text-sm">
-                <RepoIcon className="w-4 h-4 text-muted-foreground" />
+              <div key={artifact.id} className="flex flex-wrap items-center gap-2 text-xs">
+                {prState ? (
+                  <PullRequestStateIcon state={prState} label={`PR ${prState}`} />
+                ) : (
+                  <GitPrIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                )}
                 {prUrl ? (
                   <a
                     href={prUrl}
@@ -216,10 +229,10 @@ export function MetadataSection({
                 )}
                 {prArtifacts.length > 1 && prHead && (
                   <span
-                    className="min-w-0 truncate max-w-[120px] text-muted-foreground"
+                    className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]"
                     title={prHead}
                   >
-                    {truncateBranch(prHead)}
+                    {prHead}
                   </span>
                 )}
                 {prState && (
@@ -227,17 +240,14 @@ export function MetadataSection({
                     {prState}
                   </Badge>
                 )}
-                {prArtifacts.length === 1 && showSyncButton && sessionId && (
-                  <PullRequestSyncButton sessionId={sessionId} />
-                )}
               </div>
             );
           })}
 
           {/* Manual-PR fallback link (legacy sessions without a PR artifact) */}
           {manualPrUrl && (
-            <div className="flex items-center gap-2 text-sm">
-              <RepoIcon className="w-4 h-4 text-muted-foreground" />
+            <div className="flex items-center gap-2 text-xs">
+              <GitPrIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
               <a
                 href={manualPrUrl}
                 target="_blank"
@@ -251,21 +261,22 @@ export function MetadataSection({
 
           {/* Base Branch */}
           {baseBranch && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <BranchIcon className="w-4 h-4" />
+            <div className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
+              <BranchIcon className="mt-px w-3.5 h-3.5 shrink-0" />
+              <span className="w-10 shrink-0 text-[11px]">Base</span>
               {repoOwner && repoName ? (
                 <a
                   href={getScmBranchUrl(repoOwner, repoName, baseBranch)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-accent truncate max-w-[180px] hover:underline"
+                  className="min-w-0 text-accent [overflow-wrap:anywhere] hover:underline"
                   title={baseBranch}
                 >
-                  {truncateBranch(baseBranch)}
+                  {baseBranch}
                 </a>
               ) : (
-                <span className="truncate max-w-[180px]" title={baseBranch}>
-                  {truncateBranch(baseBranch)}
+                <span className="min-w-0 [overflow-wrap:anywhere]" title={baseBranch}>
+                  {baseBranch}
                 </span>
               )}
             </div>
@@ -273,27 +284,31 @@ export function MetadataSection({
 
           {/* Working Branch */}
           {branchName && (
-            <div className="flex items-center gap-2 text-sm">
-              <GitPrIcon className="w-4 h-4 text-muted-foreground" />
+            <div className="flex min-w-0 items-start gap-2 text-xs">
+              <GitPrIcon className="mt-px w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+              <span className="w-10 shrink-0 text-[11px] text-muted-foreground">Branch</span>
               {branchUrl ? (
                 <a
                   href={branchUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-accent truncate max-w-[180px] hover:underline"
+                  className="min-w-0 flex-1 text-accent [overflow-wrap:anywhere] hover:underline"
                   title={branchName}
                 >
-                  {truncateBranch(branchName)}
+                  {branchName}
                 </a>
               ) : (
-                <span className="text-foreground truncate max-w-[180px]" title={branchName}>
-                  {truncateBranch(branchName)}
+                <span
+                  className="min-w-0 flex-1 text-foreground [overflow-wrap:anywhere]"
+                  title={branchName}
+                >
+                  {branchName}
                 </span>
               )}
               <button
                 type="button"
                 onClick={handleCopyBranch}
-                className="p-1 hover:bg-muted transition-colors"
+                className="-mt-1 shrink-0 rounded p-1 hover:bg-muted transition-colors"
                 title={copied ? "Copied!" : "Copy branch name"}
               >
                 {copied ? (
@@ -307,14 +322,15 @@ export function MetadataSection({
 
           {/* Repository tag */}
           {hasRepositoryMetadata && (
-            <div className="flex items-center gap-2 text-sm">
-              <RepoIcon className="w-4 h-4 text-muted-foreground" />
+            <div className="flex items-start gap-2 border-t border-border-muted pt-3 text-xs">
+              <RepoIcon className="mt-0.5 w-4 h-4 shrink-0 text-muted-foreground" />
               {repoOwner && repoName ? (
                 <a
                   href={getScmRepoUrl(repoOwner, repoName)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-accent hover:underline"
+                  className="min-w-0 text-accent [overflow-wrap:anywhere] hover:underline"
+                  title={`${repoOwner}/${repoName}`}
                 >
                   {repoOwner}/{repoName}
                 </a>
@@ -328,8 +344,8 @@ export function MetadataSection({
 
       {/* Repository member list (multi-repo sessions) */}
       {isMultiRepo && repositories && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <div className="space-y-3 border-t border-border-muted pt-3">
+          <div className="flex items-center justify-between gap-1 text-xs font-semibold">
             <span>Repositories</span>
             {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
           </div>
@@ -343,20 +359,23 @@ export function MetadataSection({
               ? getScmBranchUrl(repo.repoOwner, repo.repoName, repo.branchName)
               : null;
             return (
-              <div key={`${repo.repoOwner}/${repo.repoName}`} className="space-y-1">
-                <div className="flex items-center gap-2 text-sm">
-                  <RepoIcon className="w-4 h-4 text-muted-foreground" />
+              <div
+                key={`${repo.repoOwner}/${repo.repoName}`}
+                className="space-y-3 border-b border-border-muted py-3 last:border-0"
+              >
+                <div className="flex items-start gap-2 text-xs">
+                  <RepoIcon className="mt-0.5 w-3.5 h-3.5 shrink-0 text-muted-foreground" />
                   <a
                     href={getScmRepoUrl(repo.repoOwner, repo.repoName)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-accent hover:underline truncate max-w-[170px]"
+                    className="min-w-0 flex-1 text-accent hover:underline [overflow-wrap:anywhere]"
                     title={`${repo.repoOwner}/${repo.repoName}`}
                   >
                     {repo.repoOwner}/{repo.repoName}
                   </a>
                   {index === 0 && (
-                    <Badge variant="info" className="text-[10px]">
+                    <Badge variant="info" className="shrink-0 text-[10px]">
                       primary
                     </Badge>
                   )}
@@ -364,21 +383,24 @@ export function MetadataSection({
                 {(repo.branchName || repoPrArtifacts.length > 0 || repoFallbackPrUrl) && (
                   <div className="ml-6 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     {repo.branchName && (
-                      <span className="inline-flex min-w-0 items-center gap-1">
-                        <GitPrIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span className="inline-flex min-w-0 items-start gap-1">
+                        <GitPrIcon className="mt-px w-3.5 h-3.5 flex-shrink-0" />
                         {repoBranchUrl ? (
                           <a
                             href={repoBranchUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-accent truncate max-w-[120px] hover:underline"
+                            className="min-w-0 text-accent [overflow-wrap:anywhere] hover:underline"
                             title={repo.branchName}
                           >
-                            {truncateBranch(repo.branchName)}
+                            {repo.branchName}
                           </a>
                         ) : (
-                          <span className="truncate max-w-[120px]" title={repo.branchName}>
-                            {truncateBranch(repo.branchName)}
+                          <span
+                            className="min-w-0 [overflow-wrap:anywhere]"
+                            title={repo.branchName}
+                          >
+                            {repo.branchName}
                           </span>
                         )}
                       </span>
@@ -388,7 +410,10 @@ export function MetadataSection({
                       const repoPrState = artifact.metadata?.prState;
                       const repoPrUrl = getSafeExternalUrl(artifact.url ?? undefined);
                       return (
-                        <span key={artifact.id} className="inline-flex items-center gap-1">
+                        <span key={artifact.id} className="inline-flex items-center gap-1.5">
+                          {repoPrState && (
+                            <PullRequestStateIcon state={repoPrState} label={`PR ${repoPrState}`} />
+                          )}
                           {repoPrUrl ? (
                             <a
                               href={repoPrUrl}

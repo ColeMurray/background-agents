@@ -63,7 +63,7 @@ export function BudgetSection({
   };
 
   return (
-    <div className="space-y-2 text-sm">
+    <div className="space-y-2 border-t border-border-muted pt-4 text-xs">
       <div className="flex items-center justify-between gap-2 text-muted-foreground">
         <span>
           {maxSessionCostUsd != null

@@ -32,6 +32,51 @@ vi.mock("next/link", () => ({
 }));
 
 describe("MetadataSection", () => {
+  it("labels run information and keeps full repository and branch names", () => {
+    const repoOwner = "northstar-engineering/developer-platform/documentation";
+    const repoName = "internal-developer-portal";
+    const branchName = "feature/improve-session-observability-and-investigation";
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        model="anthropic/claude-opus-4-6"
+        baseBranch="main"
+        branchName={branchName}
+        repoOwner={repoOwner}
+        repoName={repoName}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Run information" })).toBeVisible();
+    expect(screen.getByText("Started")).toBeVisible();
+    expect(screen.getByText("Model")).toBeVisible();
+    expect(screen.getByText("Base", { exact: true })).toBeVisible();
+    expect(screen.getByText("Branch", { exact: true })).toBeVisible();
+    expect(screen.getByTitle(`${repoOwner}/${repoName}`)).toHaveTextContent(
+      `${repoOwner}/${repoName}`
+    );
+    expect(screen.getByRole("link", { name: branchName })).toHaveAttribute("title", branchName);
+    expect(screen.getByRole("button", { name: "Copy branch name" })).toBeVisible();
+  });
+
+  it("keeps full member branch names in multi-repository sessions", () => {
+    const branchName = "feature/shared-component-rollout-across-repositories";
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        repositories={[
+          { ...member("acme", "web", 0), branchName },
+          { ...member("acme", "api", 1), branchName },
+        ]}
+      />
+    );
+
+    expect(screen.getAllByRole("link", { name: branchName })).toHaveLength(2);
+  });
+
   it("renders PR badge data from artifact metadata keys", () => {
     render(
       <MetadataSection
