@@ -26,11 +26,11 @@ export class SessionScopeStore {
   }
 
   async listRepositoryIds(
-    id: string
+    sessionId: string
   ): Promise<Array<{ repoOwner: string; repoName: string; repoId: number | null }>> {
     const rows = await this.db
       .prepare("SELECT * FROM session_repositories WHERE session_id = ? ORDER BY position")
-      .bind(id)
+      .bind(sessionId)
       .all();
     const repositories = rows.results.map((row) => {
       const parsed = sessionRepositoryRowSchema.parse(row);
@@ -39,7 +39,7 @@ export class SessionScopeStore {
     if (repositories.length) return repositories;
     const row = await this.db
       .prepare("SELECT repo_owner, repo_name FROM sessions WHERE id = ?")
-      .bind(id)
+      .bind(sessionId)
       .first();
     const session = row
       ? z.object({ repo_owner: z.string().nullable(), repo_name: z.string().nullable() }).parse(row)
