@@ -9,6 +9,8 @@ import {
 } from "@open-inspect/shared/types/session-diffs";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 
 export function sessionDiffKey(sessionId: string): BrowserApiPath {
   return `/api/sessions/${sessionId}/diff`;
@@ -48,6 +50,15 @@ export function useSessionDiffRetry(sessionId: string): {
         method: "POST",
       });
       if (!response.ok) {
+        if (response.status === 403) {
+          const message = await sessionActionErrorMessage(
+            response,
+            "Changes could not be retried."
+          );
+          setRetryError(message);
+          toast.error(message);
+          return false;
+        }
         const body = parseDiffErrorBody(await response.json().catch(() => null));
         setRetryError(body.error ?? "Changes could not be retried.");
         return false;

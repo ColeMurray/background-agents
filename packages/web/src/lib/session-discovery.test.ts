@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { serializeSessionListQuery } from "@open-inspect/shared/session-list-query";
 import {
   buildSessionsHref,
   DEFAULT_SESSION_DISCOVERY_QUERY,
@@ -10,6 +11,7 @@ import {
 } from "./session-discovery";
 
 const fullQuery: SessionDiscoveryQuery = {
+  ...DEFAULT_SESSION_DISCOVERY_QUERY,
   q: "login",
   creator: "mine",
   repository: { repoOwner: "group/subgroup", repoName: "service" },
@@ -120,6 +122,110 @@ describe("session discovery URL state", () => {
       toSessionListQuery({ ...fullQuery, lifecycle: "all" }, { limit: 50, offset: 0 })
     ).toEqual(
       expect.not.objectContaining({ status: expect.anything(), excludeStatus: expect.anything() })
+    );
+  });
+
+  it("round-trips repeated teams, owner and visibility without replacing Creator Mine", () => {
+    const query: SessionDiscoveryQuery = {
+      ...fullQuery,
+      teamIds: ["team_alpha", "team_beta"],
+      scope: "all",
+      ownerFilter: "participating",
+      visibility: "private",
+    };
+    const params = serializeSessionDiscoveryQuery(query);
+    expect(params.getAll("teamIds[]")).toEqual(["team_alpha", "team_beta"]);
+    expect(params.get("ownerFilter")).toBe("participating");
+    expect(params.get("visibility")).toBe("private");
+    expect(params.get("scope")).toBe("all");
+    expect(params.get("createdBy")).toBe("me");
+    expect(parseSessionDiscoveryQuery(params)).toEqual({ success: true, data: query });
+    expect(toSessionListQuery(query, { limit: 50, offset: 50 })).toMatchObject({
+      teamIds: ["team_alpha", "team_beta"],
+      ownerFilter: "participating",
+      visibility: "private",
+      scope: "all",
+      createdBy: ["me"],
+      offset: 50,
+    });
+    expect(buildSessionsHref(query)).toBe(`/sessions?${params}`);
+  });
+
+  it("keeps explicit Owner Anyone from overriding Creator Mine's started-by-me API semantics", () => {
+    const parsed = parseSessionDiscoveryQuery(
+      new URLSearchParams("createdBy=me&ownerFilter=anyone")
+    );
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error("Expected a valid Mine link");
+    const params = serializeSessionListQuery(
+      toSessionListQuery(parsed.data, { limit: 50, offset: 0 })
+    );
+    expect(params.getAll("createdBy")).toEqual(["me"]);
+    expect(params.has("ownerFilter")).toBe(false);
+  });
+
+  it.each(["started", "participating", "anyone"] as const)("accepts Owner %s", (ownerFilter) => {
+    expect(parseSessionDiscoveryQuery(new URLSearchParams({ ownerFilter }))).toEqual({
+      success: true,
+      data: { ...DEFAULT_SESSION_DISCOVERY_QUERY, ownerFilter },
+    });
+  });
+
+  it.each(["team", "workspace", "private"] as const)("accepts Visibility %s", (visibility) => {
+    expect(parseSessionDiscoveryQuery(new URLSearchParams({ visibility }))).toEqual({
+      success: true,
+      data: { ...DEFAULT_SESSION_DISCOVERY_QUERY, visibility },
+    });
+  });
+
+  it("uses the shared team-ID validation and deduplicates at most 50 selected teams", () => {
+    const teamIds = Array.from({ length: 50 }, (_, index) => `team_${index}`);
+    const params = new URLSearchParams(teamIds.map((id) => ["teamIds[]", id]));
+    params.append("teamIds[]", "team_0");
+    expect(parseSessionDiscoveryQuery(params)).toEqual({
+      success: true,
+      data: { ...DEFAULT_SESSION_DISCOVERY_QUERY, teamIds },
+    });
+    params.append("teamIds[]", "team_50");
+    expect(parseSessionDiscoveryQuery(params)).toEqual({
+      success: false,
+      invalidParams: ["teamIds[]"],
+    });
+  });
+
+  it.each([
+    ["teamIds[]=unknown", "teamIds[]"],
+    ["teamIds[]=", "teamIds[]"],
+    ["teamIds[]=team_good&teamIds[]=bad", "teamIds[]"],
+    ["ownerFilter=mine", "ownerFilter"],
+    ["ownerFilter=started&ownerFilter=participating", "ownerFilter"],
+    ["visibility=public", "visibility"],
+    ["visibility=", "visibility"],
+    ["visibility=team&visibility=private", "visibility"],
+    ["scope=mine", "scope"],
+    ["scope=", "scope"],
+    ["scope=workspace&scope=all", "scope"],
+  ])("refuses invalid or repeated team filters: %s", (url, invalidParam) => {
+    expect(parseSessionDiscoveryQuery(new URLSearchParams(url))).toEqual({
+      success: false,
+      invalidParams: [invalidParam],
+    });
+  });
+
+  it.each([
+    [null, { teamIds: undefined, scope: "workspace" }],
+    ["all-my-teams", { teamIds: undefined, scope: undefined }],
+    ["all-teams", { teamIds: undefined, scope: "all" }],
+    ["team_alpha", { teamIds: ["team_alpha"], scope: undefined }],
+  ])("maps active context %s onto the shared team predicate", (activeTeamId, predicate) => {
+    expect(buildSessionsHref(predicate as Partial<SessionDiscoveryQuery>)).toBe(
+      activeTeamId === null
+        ? "/sessions?scope=workspace"
+        : activeTeamId === "all-teams"
+          ? "/sessions?scope=all"
+          : activeTeamId === "all-my-teams"
+            ? "/sessions"
+            : "/sessions?teamIds%5B%5D=team_alpha"
     );
   });
 });

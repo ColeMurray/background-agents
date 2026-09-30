@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/ui/icons";
 import { useAuthSession } from "@/lib/auth-session";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useActiveTeam } from "@/hooks/use-active-team";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
 import { useSessionDiscovery } from "@/hooks/use-session-discovery";
@@ -39,14 +40,44 @@ function SessionsContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const {
+    activeTeamId,
+    scope: activeTeamScope,
+    setActiveTeam,
+    teams,
+    loading: teamLoading,
+    error: teamError,
+  } = useActiveTeam();
+  const activeTeamSelection =
+    activeTeamId ??
+    (activeTeamScope === "workspace"
+      ? null
+      : activeTeamScope === "all"
+        ? "all-teams"
+        : "all-my-teams");
+  const teamContext = useMemo(
+    () => ({ teamIds: activeTeamId ? [activeTeamId] : undefined, scope: activeTeamScope }),
+    [activeTeamId, activeTeamScope]
+  );
   const parsed = useMemo(
     () => parseSessionDiscoveryQuery(new URLSearchParams(searchParams.toString())),
     [searchParams]
   );
-  const query = parsed.success ? parsed.data : DEFAULT_SESSION_DISCOVERY_QUERY;
+  const query = useMemo(() => {
+    if (!parsed.success) return DEFAULT_SESSION_DISCOVERY_QUERY;
+    return parsed.data.teamIds || parsed.data.scope
+      ? parsed.data
+      : { ...parsed.data, ...teamContext };
+  }, [parsed, teamContext]);
   const invalidParams = parsed.success ? [] : parsed.invalidParams;
-  const hasFilters = hasSessionDiscoveryFilters(query);
-  const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
+  const hasFilters = hasSessionDiscoveryFilters(query, teamContext);
+  const {
+    authorization,
+    hasPermission,
+    loading: authorizationLoading,
+  } = useCurrentUserAuthorization();
+  const canViewAllTeams =
+    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
   const canReadSessions = hasPermission("sessions.read");
   const canCreateSession = hasPermission("sessions.create");
   const { data: authSession } = useAuthSession();
@@ -60,10 +91,13 @@ function SessionsContent() {
   // catches up. Controlled selects ignore picking the value they already
   // show, so rendering the URL here would swallow a quick reversal.
   const [controlsQuery, setControlsQuery] = useState(query);
+  const previousParsedQuery = useRef(parsed);
   useEffect(() => {
+    if (previousParsedQuery.current === parsed) return;
+    previousParsedQuery.current = parsed;
     latestQuery.current = query;
     setControlsQuery(query);
-  }, [query]);
+  }, [parsed, query]);
 
   // Search text the user has typed but the URL does not show yet. Null means
   // the box mirrors the URL and may be overwritten by back/forward navigation.
@@ -99,13 +133,55 @@ function SessionsContent() {
     },
     [router]
   );
+  // An explicit shared link wins on entry; a later switcher action changes
+  // only its team predicate, including search text still waiting to debounce.
+  const previousActiveTeam = useRef(teamLoading ? undefined : activeTeamSelection);
+  useEffect(() => {
+    if (teamLoading || teamError) return;
+    if (previousActiveTeam.current === undefined) {
+      previousActiveTeam.current = activeTeamSelection;
+      latestQuery.current = query;
+      setControlsQuery(query);
+      return;
+    }
+    if (previousActiveTeam.current === activeTeamSelection) return;
+    previousActiveTeam.current = activeTeamSelection;
+    if (parsed.success) updateQuery(teamContext);
+  }, [
+    activeTeamSelection,
+    teamContext,
+    teamLoading,
+    teamError,
+    parsed.success,
+    query,
+    updateQuery,
+  ]);
+
+  const changeFilters = useCallback(
+    (patch: Partial<SessionDiscoveryQuery>) => {
+      updateQuery(patch);
+      if ("teamIds" in patch || "scope" in patch) {
+        setActiveTeam(
+          patch.teamIds?.[0] ??
+            (patch.scope === "workspace"
+              ? null
+              : patch.scope === "all"
+                ? "all-teams"
+                : "all-my-teams")
+        );
+      }
+    },
+    [setActiveTeam, updateQuery]
+  );
+
   const clearFilters = useCallback(() => {
     pendingSearch.current = null;
     setSearchText("");
-    latestQuery.current = DEFAULT_SESSION_DISCOVERY_QUERY;
-    setControlsQuery(DEFAULT_SESSION_DISCOVERY_QUERY);
-    router.replace(buildSessionsHref(), { scroll: false });
-  }, [router]);
+    const next = { ...DEFAULT_SESSION_DISCOVERY_QUERY, ...teamContext };
+    latestQuery.current = next;
+    setControlsQuery(next);
+    router.replace(buildSessionsHref(next), { scroll: false });
+  }, [router, teamContext]);
   const resetSearch = useCallback(() => {
     setSearchText("");
     updateQuery({ q: "" });
@@ -130,7 +206,7 @@ function SessionsContent() {
     return () => window.clearTimeout(timeoutId);
   }, [router, searchText]);
 
-  const canQuery = canReadSessions && parsed.success;
+  const canQuery = canReadSessions && parsed.success && !teamLoading && !teamError;
   const { sessions, loading, loadingMore, error, hasMore, loadMore, retry } = useSessionDiscovery(
     query,
     { enabled: canQuery }
@@ -148,9 +224,9 @@ function SessionsContent() {
 
   const showEmptyState = !loading && !error && sessions.length === 0;
   const statusText =
-    invalidParams.length > 0
+    invalidParams.length > 0 || teamError
       ? "No sessions shown"
-      : loading
+      : loading || teamLoading
         ? "Loading sessions"
         : showEmptyState
           ? hasFilters
@@ -230,8 +306,10 @@ function SessionsContent() {
                   query={controlsQuery}
                   repositories={repositoryOptions}
                   environments={environments}
-                  hasFilters={hasSessionDiscoveryFilters(controlsQuery)}
-                  onChange={updateQuery}
+                  teams={teams}
+                  canViewAllTeams={canViewAllTeams}
+                  hasFilters={hasSessionDiscoveryFilters(controlsQuery, teamContext)}
+                  onChange={changeFilters}
                   onClear={clearFilters}
                 />
               </div>
@@ -287,7 +365,13 @@ function SessionsContent() {
                 </ErrorBanner>
               )}
 
-              {invalidParams.length > 0 ? null : loading ? (
+              {teamError ? (
+                <ErrorBanner className="mb-4" role="alert">
+                  Couldn&apos;t load teams.
+                </ErrorBanner>
+              ) : null}
+
+              {invalidParams.length > 0 || teamError ? null : loading || teamLoading ? (
                 <div aria-hidden="true" className="flex justify-center py-12">
                   <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
                 </div>

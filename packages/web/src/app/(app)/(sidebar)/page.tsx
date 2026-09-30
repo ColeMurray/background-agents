@@ -2,6 +2,8 @@
 
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { toast } from "sonner";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -65,6 +67,8 @@ import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-warm-draft-session";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useActiveTeam } from "@/hooks/use-active-team";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import {
   buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
@@ -101,8 +105,41 @@ export default function Home() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canCreateSession = hasPermission("sessions.create");
   const router = useRouter();
-  const picker = useSessionTargetPicker();
+  const teamContext = useActiveTeam();
+  const {
+    activeTeamId,
+    setActiveTeam,
+    teams,
+    requireTeamOnCreate,
+    loading: loadingTeams,
+    error: teamError,
+  } = teamContext;
+  const selectedTeam = teams.find((team) => team.id === activeTeamId);
+  const teamCreationReady =
+    !loadingTeams && !teamError && (activeTeamId === null ? !requireTeamOnCreate : !!selectedTeam);
+  const [visibilityDraft, setVisibilityDraft] = useState<{
+    teamId: string | null;
+    value: SessionVisibility;
+  } | null>(null);
+  const visibility =
+    visibilityDraft && visibilityDraft.teamId === activeTeamId
+      ? visibilityDraft.value
+      : (selectedTeam?.defaultVisibility ?? "workspace");
+  const picker = useSessionTargetPicker({
+    teamId: activeTeamId,
+    defaultEnvironmentId: selectedTeam?.defaultEnvironmentId,
+  });
   const { sessionTarget, buildRequestFields, isLaunchable } = picker;
+
+  useEffect(() => {
+    if (!loadingTeams && !teamError && requireTeamOnCreate && activeTeamId === null && teams[0]) {
+      setActiveTeam(teams[0].id);
+    }
+  }, [activeTeamId, loadingTeams, requireTeamOnCreate, setActiveTeam, teamError, teams]);
+
+  useEffect(() => {
+    setVisibilityDraft(null);
+  }, [activeTeamId]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
@@ -221,6 +258,7 @@ export default function Home() {
 
   const warmRequest: WarmDraftSessionRequest | null =
     canCreateSession &&
+    teamCreationReady &&
     session &&
     providerSelectionsHydrated &&
     !providerAccounts.loading &&
@@ -234,6 +272,8 @@ export default function Home() {
           reasoningEffort,
           skillSelection,
           providerSelections: availableProviderSelections,
+          teamId: activeTeamId,
+          visibility,
         }
       : null;
   const warmRoutingIdentity = buildInteractiveProviderRoutingIdentity(
@@ -242,11 +282,17 @@ export default function Home() {
     providerAccounts.accounts
   );
   const {
+    identity: warmIdentity,
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
+    error: creationError,
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
+  const hasDraftContent = prompt.length > 0 || sessionAttachments.attachments.length > 0;
+  useEffect(() => {
+    if (hasDraftContent && warmIdentity) void createSessionForWarming();
+  }, [createSessionForWarming, hasDraftContent, warmIdentity]);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -286,32 +332,12 @@ export default function Home() {
     [availableProviderSelections]
   );
 
-  const handlePromptChange = (value: string) => {
-    const wasEmpty = prompt.length === 0;
-    setPrompt(value);
-    if (
-      wasEmpty &&
-      value.length > 0 &&
-      !pendingSessionId &&
-      !isCreatingSession &&
-      !loadingEnabledModels &&
-      isLaunchable
-    ) {
-      createSessionForWarming();
-    }
-  };
-
-  const handleAddFiles = (files: Iterable<File>) => {
-    sessionAttachments.addFiles(files);
-    if (!pendingSessionId && !isCreatingSession && isLaunchable) {
-      createSessionForWarming();
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (
       !canCreateSession ||
+      !teamCreationReady ||
+      creationError?.terminal ||
       submitInFlightRef.current ||
       sessionAttachments.isUploading ||
       !providerSelectionsHydrated ||
@@ -377,8 +403,14 @@ export default function Home() {
         mutate(isSessionInboxKey);
         router.push(`/session/${sessionId}`);
       } else {
-        const data = await res.json();
-        setError(data.error || "Failed to send prompt");
+        if (res.status === 403) {
+          const message = await sessionActionErrorMessage(res, "Failed to send prompt");
+          toast.error(message);
+          setError(message);
+        } else {
+          const data = await res.json();
+          setError(data.error || "Failed to send prompt");
+        }
         setCreating(false);
       }
     } catch (_error) {
@@ -394,6 +426,13 @@ export default function Home() {
       isAuthenticated={!!session}
       canCreateSession={canCreateSession}
       picker={picker}
+      teamContext={teamContext}
+      teamCreationReady={teamCreationReady}
+      visibility={visibility}
+      onVisibilityChange={(value) => {
+        if (activeTeamId !== null || value !== "team")
+          setVisibilityDraft({ teamId: activeTeamId, value });
+      }}
       selectedModel={selectedModel}
       setSelectedModel={handleModelChange}
       reasoningEffort={reasoningEffort}
@@ -401,18 +440,18 @@ export default function Home() {
       harness={harness}
       setHarness={handleHarnessChange}
       prompt={prompt}
-      handlePromptChange={handlePromptChange}
+      handlePromptChange={setPrompt}
       attachments={{
         items: sessionAttachments.attachments,
         error: sessionAttachments.attachmentError,
         isUploading: sessionAttachments.isUploading,
-        onAdd: handleAddFiles,
+        onAdd: sessionAttachments.addFiles,
         onRemove: sessionAttachments.removeAttachment,
       }}
       creating={creating}
       isCreatingSession={isCreatingSession}
       providerSelectionsHydrated={providerSelectionsHydrated}
-      error={error}
+      error={creationError?.message ?? error}
       handleSubmit={handleSubmit}
       modelOptions={modelSelection.options}
       skillSelection={skillSelection}
@@ -432,6 +471,10 @@ function HomeContent({
   isAuthenticated,
   canCreateSession,
   picker,
+  teamContext,
+  teamCreationReady,
+  visibility,
+  onVisibilityChange,
   selectedModel,
   setSelectedModel,
   reasoningEffort,
@@ -460,6 +503,10 @@ function HomeContent({
   isAuthenticated: boolean;
   canCreateSession: boolean;
   picker: SessionTargetSelection;
+  teamContext: ReturnType<typeof useActiveTeam>;
+  teamCreationReady: boolean;
+  visibility: SessionVisibility;
+  onVisibilityChange: (value: SessionVisibility) => void;
   selectedModel: ValidModel;
   setSelectedModel: (value: ValidModel) => void;
   reasoningEffort: ReasoningEffort | undefined;
@@ -509,6 +556,7 @@ function HomeContent({
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
   const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
+  const selectedTeam = teamContext.teams.find((team) => team.id === teamContext.activeTeamId);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -552,6 +600,17 @@ function HomeContent({
           {isAuthenticated && canCreateSession && (
             <form onSubmit={handleSubmit}>
               {error && <ErrorBanner className="mb-4">{error}</ErrorBanner>}
+              {teamContext.error ? (
+                <ErrorBanner className="mb-4">
+                  Unable to load team memberships and settings.
+                </ErrorBanner>
+              ) : !teamContext.loading &&
+                teamContext.requireTeamOnCreate &&
+                teamContext.teams.length === 0 ? (
+                <p role="status" className="mb-4 text-sm text-muted-foreground">
+                  Join a team to create a session.
+                </p>
+              ) : null}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
                 <SessionTargetPicker {...picker.pickerProps} disabled={creating} />
@@ -618,7 +677,8 @@ function HomeContent({
                         attachmentsLocked ||
                         !providerSelectionsHydrated ||
                         providerAccounts.loading ||
-                        !isLaunchable
+                        !isLaunchable ||
+                        !teamCreationReady
                       }
                       className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
                       title={`Send (${labels["send-prompt"]})`}
@@ -636,6 +696,41 @@ function HomeContent({
                 {/* Footer row with session controls */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                    {teamContext.teams.length === 1 && !teamContext.requireTeamOnCreate ? (
+                      <select
+                        aria-label="Session team"
+                        value={teamContext.activeTeamId ?? ""}
+                        onChange={(event) => teamContext.setActiveTeam(event.target.value || null)}
+                        disabled={creating || teamContext.loading || !!teamContext.error}
+                        className="max-w-[12rem] bg-transparent text-sm text-muted-foreground disabled:opacity-50"
+                      >
+                        <option value="">Workspace</option>
+                        <option value={teamContext.teams[0].id}>{teamContext.teams[0].name}</option>
+                      </select>
+                    ) : (
+                      <span className="max-w-[12rem] truncate text-sm text-muted-foreground">
+                        {selectedTeam?.name ?? "Workspace"}
+                      </span>
+                    )}
+                    <select
+                      aria-label="Session visibility"
+                      value={visibility}
+                      onChange={(event) =>
+                        onVisibilityChange(
+                          event.target.value === "team"
+                            ? "team"
+                            : event.target.value === "private"
+                              ? "private"
+                              : "workspace"
+                        )
+                      }
+                      disabled={creating || !teamCreationReady}
+                      className="bg-transparent text-sm text-muted-foreground disabled:opacity-50"
+                    >
+                      <option value="workspace">Workspace</option>
+                      {selectedTeam && <option value="team">Team</option>}
+                      <option value="private">Private</option>
+                    </select>
                     <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}

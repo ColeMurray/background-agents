@@ -16,6 +16,7 @@ test("new consumers and platform adapters cannot import sandbox implementations"
       ["SandboxRepository", "../session/sandbox-repository"],
       ["SandboxLifecycleManager", "../sandbox/lifecycle/manager"],
       ["SandboxAccess", "../sandbox/lifecycle/sandbox-access"],
+      ["VmStartupReconciliation", "../sandbox/lifecycle/vm-startup-reconciliation"],
     ]) {
       const [result] = await eslint.lintText(
         `import type { ${name} } from "${source}"; export type Dependency = ${name};`,
@@ -45,4 +46,9 @@ test("focused ports remain usable by consumers and extracted lifecycle modules",
     { filePath: "packages/control-plane/src/sandbox/lifecycle/reconciliation.ts" }
   );
   assert.equal(access.errorCount, 0, JSON.stringify(access.messages));
+  const [reconciliation] = await eslint.lintText(
+    'import type { VmStartupReconciliation } from "./vm-startup-reconciliation"; export type Dependency = VmStartupReconciliation;',
+    { filePath: "packages/control-plane/src/sandbox/lifecycle/manager.ts" }
+  );
+  assert.equal(reconciliation.errorCount, 0, JSON.stringify(reconciliation.messages));
 });

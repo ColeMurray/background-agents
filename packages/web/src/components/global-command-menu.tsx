@@ -8,7 +8,7 @@ import { formatRepoLabel } from "@/lib/repo-label";
 import { buildSessionSearchValue, type SessionListItem } from "@/lib/session-list";
 import { matchesSearchTerms } from "@/lib/search";
 import { BranchIcon, PlusIcon, SearchIcon } from "@/components/ui/icons";
-import { buildSessionsHref } from "@/lib/session-discovery";
+import { buildSessionsHref, type SessionDiscoveryQuery } from "@/lib/session-discovery";
 import { MAX_SESSION_LIST_SEARCH_LENGTH } from "@open-inspect/shared/session-list-query";
 import { AppIcon } from "@/components/ui/app-icon";
 import { APP_DESTINATIONS } from "@/components/app-destinations";
@@ -33,6 +33,7 @@ interface GlobalCommandMenuProps {
   onNavigate: (href: string) => void;
   onNewSession: () => void;
   sessions: SessionListItem[];
+  teamContext?: Pick<SessionDiscoveryQuery, "teamIds" | "scope">;
 }
 
 function buildSessionUrl(session: SessionListItem): string {
@@ -67,9 +68,15 @@ function filterCommandItem(value: string, search: string, keywords?: string[]): 
  * page, which searches full history server-side. The page defaults to
  * non-archived sessions, so the handoff asks for every lifecycle.
  */
-function SearchAllSessionsItem({ onSelect }: { onSelect: (href: string) => void }) {
+function SearchAllSessionsItem({
+  onSelect,
+  teamContext,
+}: {
+  onSelect: (href: string) => void;
+  teamContext: GlobalCommandMenuProps["teamContext"];
+}) {
   const search = useCommandState((state) => state.search);
-  const href = buildSessionsHref({ q: search, lifecycle: "all" });
+  const href = buildSessionsHref({ ...teamContext, q: search, lifecycle: "all" });
 
   return (
     <CommandItem
@@ -122,6 +129,7 @@ export function GlobalCommandMenu({
   onNavigate,
   onNewSession,
   sessions,
+  teamContext,
 }: GlobalCommandMenuProps) {
   const { labels } = useKeyboardShortcuts();
   const { hasPermission } = useCurrentUserAuthorization();
@@ -261,7 +269,10 @@ export function GlobalCommandMenu({
             <>
               <CommandSeparator />
               <CommandGroup heading="All sessions">
-                <SearchAllSessionsItem onSelect={(href) => handleSelect(() => onNavigate(href))} />
+                <SearchAllSessionsItem
+                  teamContext={teamContext}
+                  onSelect={(href) => handleSelect(() => onNavigate(href))}
+                />
               </CommandGroup>
             </>
           )}

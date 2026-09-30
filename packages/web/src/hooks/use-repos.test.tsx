@@ -28,4 +28,19 @@ describe("useRepos", () => {
 
     expect(mocks.useSWR).toHaveBeenCalledWith("/api/repos");
   });
+
+  it("keys repository requests by team and returns to the workspace key", () => {
+    const initialProps: { teamId: string | null } = { teamId: "team/one" };
+    const { rerender } = renderHook(
+      ({ teamId }: { teamId: string | null }) => useRepos(true, teamId),
+      {
+        initialProps,
+      }
+    );
+    expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/repos?teamId=team%2Fone");
+    rerender({ teamId: "team-2" });
+    expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/repos?teamId=team-2");
+    rerender({ teamId: null });
+    expect(mocks.useSWR).toHaveBeenLastCalledWith("/api/repos");
+  });
 });

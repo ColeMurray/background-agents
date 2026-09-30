@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { hashToken } from "../auth/crypto";
-import { permissionsForBuiltInRole } from "@open-inspect/shared/rbac";
+import { permissionsForBuiltInRole, type PermissionId } from "@open-inspect/shared/rbac";
 import type { SessionAccessRow, SessionViewer } from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
@@ -682,6 +682,76 @@ describe("client session access", () => {
     expect(removeClient).not.toHaveBeenCalled();
   });
 
+  it.each(["off", "shadow", "on"] as const)(
+    "sends fresh effective capabilities on each authenticated subscription in %s mode",
+    async (mode) => {
+      const permissions: PermissionId[] = [
+        "sessions.read",
+        "sessions.collaborate",
+        "sessions.lifecycle",
+        "sessions.delete",
+        "sessions.sandbox_access",
+      ];
+      const viewer: UserViewer = {
+        ...member,
+        memberships: new Map([["team-b", "member"]]),
+        permissions,
+      };
+      const { authenticator, send, close } = accessHarness(mode, viewer, teamRow);
+      const subscribe = () =>
+        authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
+      const expectedCapabilities = {
+        canRead: true,
+        canCollaborate: true,
+        canManageLifecycle: true,
+        canDelete: mode !== "on",
+        canMove: false,
+        canSandbox: true,
+        canManageCollaborators: false,
+        canChangeVisibility: false,
+      };
+
+      await subscribe();
+      expect(send).toHaveBeenLastCalledWith(
+        {},
+        expect.objectContaining({
+          type: "subscribed",
+          session: expect.objectContaining({ capabilities: expectedCapabilities }),
+        })
+      );
+
+      const originalPermissions = [...permissions];
+      permissions.splice(0, permissions.length, "sessions.read");
+      await subscribe();
+      expect(send).toHaveBeenLastCalledWith(
+        {},
+        expect.objectContaining({
+          type: "subscribed",
+          session: expect.objectContaining({
+            capabilities: {
+              ...expectedCapabilities,
+              canCollaborate: false,
+              canManageLifecycle: false,
+              canDelete: false,
+              canSandbox: false,
+            },
+          }),
+        })
+      );
+
+      permissions.push(...originalPermissions.slice(1));
+      await subscribe();
+      expect(send).toHaveBeenLastCalledWith(
+        {},
+        expect.objectContaining({
+          type: "subscribed",
+          session: expect.objectContaining({ capabilities: expectedCapabilities }),
+        })
+      );
+      expect(close).not.toHaveBeenCalled();
+    }
+  );
+
   it("closes on lost read access but not on a collaboration-only denial", async () => {
     const memberships = new Map([["team-b", "member"]] as const);
     const row = { ...teamRow };
@@ -752,6 +822,16 @@ describe("client session access", () => {
       expect(subscribed).not.toHaveProperty("session.ttydUrl");
       expect(subscribed).not.toHaveProperty("session.vncUrl");
       expect(subscribed).not.toHaveProperty("session.tunnelUrls");
+      expect(subscribed).toHaveProperty("session.capabilities", {
+        canRead: true,
+        canCollaborate: false,
+        canManageLifecycle: true,
+        canDelete: true,
+        canMove: true,
+        canSandbox: false,
+        canManageCollaborators: true,
+        canChangeVisibility: true,
+      });
       expect(auditPrivateBreakGlass).toHaveBeenCalledExactlyOnceWith(
         owner.userId,
         expect.objectContaining({ id: "session", visibility: "private" })

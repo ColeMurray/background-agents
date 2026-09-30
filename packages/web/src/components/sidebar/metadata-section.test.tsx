@@ -6,13 +6,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { MetadataSection as MetadataSectionComponent } from "./metadata-section";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 expect.extend(matchers);
 
 // This suite renders into a shared document.body without vitest globals/auto-
 // cleanup, so unmount between cases to keep queries (e.g. PR state badges) from
 // matching leftover DOM from earlier renders.
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 function MetadataSection({
   canManageLifecycle = true,
@@ -90,6 +97,25 @@ describe("MetadataSection", () => {
     );
 
     expect(screen.getAllByRole("link", { name: branchName })).toHaveLength(2);
+  });
+
+  it("toasts the server reason_code when PR sync is denied", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ reason_code: "session_read_only" }, { status: 403 }))
+    );
+    render(
+      <MetadataSection
+        sessionId="session-1"
+        createdAt={1}
+        baseBranch={null}
+        artifacts={[{ id: "pr-1", type: "pr", url: "https://example.com/pr", createdAt: 1 }]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sync PR status" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("Failed to sync PR status (session_read_only)")
+    );
   });
 
   it("renders PR badge data from artifact metadata keys", () => {

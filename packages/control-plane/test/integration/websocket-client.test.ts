@@ -94,6 +94,12 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const state = subscribed.session as Record<string, unknown>;
     expect(state.id).toBe(name);
     expect(state.repoOwner).toBe("acme");
+    expect(state.capabilities).toMatchObject({
+      canRead: true,
+      canCollaborate: true,
+      canManageLifecycle: true,
+      canSandbox: true,
+    });
 
     ws.close();
   });

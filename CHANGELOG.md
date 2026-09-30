@@ -2,6 +2,18 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 30, 2026
+
+### Added
+
+**Team-aware session discovery and creation.** Following the team and visibility APIs, the web app
+now supports team selection and scoped session discovery. Inbox snapshot and paged reads accept
+ownership, visibility, and workspace scope filters and return effective server capabilities for
+roots and descendants. The current user's team response includes the require-team creation setting
+without requiring settings-management permissions. Bot team selection and automation team ownership
+remain later phases; repository-backed team sessions still require existing grants, with no grant
+creation API or UI yet.
+
 ## September 29, 2026
 
 ### Added
@@ -13,9 +25,13 @@ ownership denials without blocking non-private sessions, while `on` enforces the
 visibility is restricted in every mode. Session item routes, lists and aggregates, live connections,
 and sandbox access use the persisted session scope; Owners' private-session break-glass reads are
 audited and do not make those sessions enumerable. Session creation and team moves check membership
-and repository grants; team and visibility changes are available. Team grants do not yet narrow the
-shared source-control installation token in sandboxes. See
-[Authentication and Authorization](docs/AUTH.md).
+and repository grants; team and visibility change APIs have landed, with discovery UI following in
+the next entry. Visibility, scope, and collaborator mutations enforce the resolver in every mode and
+cascades refuse inaccessible descendants. The require-team setting refuses teamless session creation
+API requests; automation runs remain exempt until team ownership is supported. Repository grant
+creation is not yet available, so missing grants refuse repository-backed team sessions with
+`target_team_missing_grant`. Team grants do not yet narrow the shared source-control installation
+token in sandboxes. See [Authentication and Authorization](docs/AUTH.md).
 
 ## September 28, 2026
 
