@@ -12,7 +12,8 @@ remains restricted to members and administrators. Workspace audit readers can fi
 Session details show the owning team and visibility, with server-authorized controls to move
 sessions, change visibility, and manage private-session collaborators, including child-session
 cascades. Archived team metadata and member lists remain visible only to team members and workspace
-administrators.
+administrators. Team activity shows domain operations; HTTP authorization decisions remain in the
+permission-gated workspace audit log.
 
 ## September 29, 2026
 

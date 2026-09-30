@@ -67,9 +67,9 @@ describe("AuditEventStore integration", () => {
     await env.DB.prepare(
       "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_alpha', 'alpha', 'Alpha', 1, 1)"
     ).run();
-    await insertEvent("team-http-no-resource", 100);
+    await insertEvent("team-no-resource", 100);
     await env.DB.prepare(
-      "UPDATE authorization_audit_events SET team_id = 'team_alpha', resource_type = 'http_route', resource_id = NULL WHERE id = 'team-http-no-resource'"
+      "UPDATE authorization_audit_events SET team_id = 'team_alpha', resource_type = 'team', resource_id = NULL WHERE id = 'team-no-resource'"
     ).run();
     const result = await new AuditEventStore(sqlDatabase(env.DB)).list({
       limit: 1,
@@ -87,8 +87,60 @@ describe("AuditEventStore integration", () => {
         mode: "on",
       },
     });
-    expect(result.rows.map(({ id }) => id)).toEqual(["team-http-no-resource"]);
+    expect(result.rows.map(({ id }) => id)).toEqual(["team-no-resource"]);
     expect(result).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("omits all HTTP decisions from scoped activity before pagination but preserves workspace audit", async () => {
+    await env.DB.prepare(
+      "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_alpha', 'alpha', 'Alpha', 1, 1)"
+    ).run();
+    await insertEvent("team-event", 1);
+    await env.DB.prepare(
+      "UPDATE authorization_audit_events SET team_id = 'team_alpha', resource_type = 'team', action = 'team.updated' WHERE id = 'team-event'"
+    ).run();
+    const paths = [
+      "/sessions",
+      "/sessions/private/scope",
+      "/teams/team_alpha/members",
+      "/repos",
+      "/future/alias",
+      null,
+    ];
+    for (const [index, path] of paths.entries()) {
+      const id = `http-${index}`;
+      await insertEvent(id, index + 2);
+      await env.DB.prepare(
+        "UPDATE authorization_audit_events SET team_id = 'team_alpha', resource_type = 'http_route', resource_id = ?, action = 'authorization.request_denied' WHERE id = ?"
+      )
+        .bind(path, id)
+        .run();
+    }
+    const store = new AuditEventStore(sqlDatabase(env.DB));
+    const options = { limit: 1, cursor: null, teamId: "team_alpha" };
+    const visibilityScope = {
+      viewer: {
+        kind: "user",
+        userId: "viewer",
+        roleKey: "member",
+        permissions: ["sessions.read"],
+        suspended: false,
+        memberships: new Map(),
+      } satisfies SessionViewer,
+      mode: "on" as const,
+    };
+    const scoped = await store.list({ ...options, visibilityScope });
+    expect(scoped.rows.map(({ id }) => id)).toEqual(["team-event"]);
+    expect(scoped).toMatchObject({ hasMore: false, nextCursor: null });
+    expect(
+      (await store.list({ ...options, visibilityScope, action: "authorization.request_denied" }))
+        .rows
+    ).toEqual([]);
+    const workspace = await store.list({ ...options, limit: 100 });
+    expect(workspace.rows).toHaveLength(paths.length + 1);
+    expect(
+      workspace.rows.filter(({ resource_type }) => resource_type === "http_route")
+    ).toHaveLength(paths.length);
   });
 
   it.each(["off", "shadow", "on"] as const)(
@@ -159,7 +211,6 @@ describe("AuditEventStore integration", () => {
         page = await store.list({ ...options, cursor: page.nextCursor });
       }
       expect(ids).toEqual([
-        "team-http-event",
         ...(mode === "on" ? [] : ["moved-event"]),
         "team-event",
         "owned-event",

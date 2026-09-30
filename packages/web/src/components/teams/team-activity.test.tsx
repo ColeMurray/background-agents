@@ -42,6 +42,10 @@ describe("Team activity", () => {
       retry: vi.fn(),
     });
     render(<TeamActivity teamId="team_one" />);
+    const types = within(screen.getByRole("combobox", { name: "Event type" }));
+    expect(types.getByRole("option", { name: "Session moved" })).toBeInTheDocument();
+    expect(types.queryByRole("option", { name: "Authorization allowed" })).not.toBeInTheDocument();
+    expect(types.queryByRole("option", { name: "Authorization denied" })).not.toBeInTheDocument();
     const cards = screen.getAllByRole("article");
     expect(within(cards[0]).getByText("Team member joined")).toBeInTheDocument();
     expect(within(cards[1]).getByText("Session moved")).toBeInTheDocument();

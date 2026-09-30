@@ -69,7 +69,7 @@ const ACTION_LABELS = new Map<string, string>([
   ...Object.entries(OPERATION_LABELS),
 ]);
 
-export const AUDIT_ACTION_OPTIONS = Array.from(ACTION_LABELS, ([value, label]) => ({
+export const AUDIT_OPERATION_OPTIONS = Object.entries(OPERATION_LABELS).map(([value, label]) => ({
   value,
   label,
 }));

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AUDIT_ACTION_OPTIONS, AuditEventCard } from "@/components/settings/audit-log-settings";
+import { AUDIT_OPERATION_OPTIONS, AuditEventCard } from "@/components/settings/audit-log-settings";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { useAuditEvents } from "@/hooks/use-audit-events";
@@ -17,7 +17,7 @@ export function TeamActivity({ teamId }: { teamId: string }) {
       <h2 id="team-activity-heading" className="text-lg font-semibold text-foreground">
         Activity
       </h2>
-      <p className="mt-1 text-sm text-muted-foreground">Team events are shown newest first.</p>
+      <p className="mt-1 text-sm text-muted-foreground">Team operations are shown newest first.</p>
       <div className="my-4 flex flex-wrap items-center gap-3">
         <label htmlFor="team-activity-action" className="text-sm font-medium">
           Event type
@@ -29,7 +29,7 @@ export function TeamActivity({ teamId }: { teamId: string }) {
           className="max-w-full rounded border border-border bg-background px-2 py-2 text-sm"
         >
           <option value="">All event types</option>
-          {AUDIT_ACTION_OPTIONS.map((option) => (
+          {AUDIT_OPERATION_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>

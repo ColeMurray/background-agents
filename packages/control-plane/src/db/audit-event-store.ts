@@ -65,20 +65,14 @@ export class AuditEventStore {
       const visible = visibleSessionsPredicate("session", viewer, {
         mode: options.visibilityScope.mode,
       });
-      // Session HTTP decisions can reference additional sessions in metadata. Without
-      // structured resource IDs for every reference, omit them from the team feed.
-      conditions.push(`(
-        (audit.resource_type != 'session' AND (
-          audit.resource_type != 'http_route' OR audit.resource_id IS NULL OR NOT (
-            audit.resource_id = '/sessions' OR audit.resource_id LIKE '/sessions/%'
-          )
-        )) OR (
-          audit.resource_type = 'session' AND EXISTS (
+      // Scoped activity contains domain events; HTTP decisions stay in workspace audit.
+      conditions.push(
+        "audit.resource_type != 'http_route'",
+        `(audit.resource_type != 'session' OR EXISTS (
             SELECT 1 FROM sessions session
             WHERE session.id = audit.resource_id AND ? = 1 AND ${visible.sql}
-          )
-        )
-      )`);
+          ))`
+      );
       params.push(
         viewer.kind === "service" ||
           (!viewer.suspended && viewer.permissions.includes("sessions.read"))
