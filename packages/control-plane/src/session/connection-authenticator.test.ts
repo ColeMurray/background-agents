@@ -68,6 +68,7 @@ interface Harness {
     acceptClientSocket: ReturnType<typeof vi.fn>;
     acceptAndSetSandboxSocket: ReturnType<typeof vi.fn>;
     enforceAuthTimeout: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
   };
   lifecycleManager: {
     isProviderStartupPending: ReturnType<typeof vi.fn>;
@@ -101,6 +102,7 @@ function createHarness(opts: {
     acceptClientSocket: vi.fn(),
     acceptAndSetSandboxSocket: vi.fn(() => ({ replaced: false })),
     enforceAuthTimeout: vi.fn(async () => undefined),
+    close: vi.fn(),
   };
   const lifecycleManager = {
     isProviderStartupPending: vi.fn(() => false),
@@ -352,6 +354,47 @@ describe("UpgradeDecision.attach", () => {
     expect(h.sandboxRepository.updateSandboxStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.submitted).toEqual([]);
+  });
+
+  it.each([
+    ["replacement", { created_at: 2 }],
+    ["credential rotation", { auth_token_hash: "rotated" }],
+    ["stop", { status: "stopped" }],
+  ] as const)("rejects %s after admission without publishing the socket", async (_name, change) => {
+    const row = await sandboxRow({ created_at: 1 });
+    const h = createHarness({ sandbox: row });
+    const decision = await accepted(h, sandboxUpgrade());
+    h.sandboxRepository.getSandbox.mockReturnValue({ ...row, ...change });
+
+    await decision.attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.lifecycleManager.scheduleInactivityCheck).not.toHaveBeenCalled();
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["replacement", { created_at: 2 }],
+    ["credential rotation", { auth_token_hash: "rotated" }],
+    ["pending cancellation", { status: "stale" }],
+  ] as const)("rejects %s while the alarm is being scheduled", async (_name, change) => {
+    const row = await sandboxRow({ created_at: 1 });
+    const h = createHarness({ sandbox: row });
+    h.lifecycleManager.scheduleInactivityCheck.mockImplementation(async () => {
+      h.sandboxRepository.getSandbox.mockReturnValue({ ...row, ...change });
+    });
+
+    await (await accepted(h, sandboxUpgrade())).attach(socket);
+
+    expect(h.wsManager.close).toHaveBeenCalledWith(socket, 4003, "Sandbox generation replaced");
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+    expect(h.sandboxRepository.updateSandboxHeartbeat).not.toHaveBeenCalled();
+    expect(h.lifecycleManager.updateLastActivity).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
   });
 
   it("withholds the access broadcast while provider startup is still persisting", async () => {

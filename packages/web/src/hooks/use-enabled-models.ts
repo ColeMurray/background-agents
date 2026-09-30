@@ -19,10 +19,19 @@ export function useEnabledModels() {
   const { cache } = useSWRConfig();
   const { data, error, isLoading, mutate } =
     useSWR<ModelPreferencesResponse>(MODEL_PREFERENCES_KEY);
-  // Share the write lock across consumers and settings-panel remounts.
+  // Share the write lock across consumers and settings-panel remounts. The lock
+  // is local state, not a request: SWR falls back to the global fetcher when the
+  // fetcher argument is null, which would dispatch the key as a URL, so it gets
+  // its own no-op fetcher and never revalidates.
   const { data: saving = false, mutate: setSaving } = useSWR<boolean>(
     MODEL_PREFERENCES_SAVING_KEY,
-    null
+    () => false,
+    {
+      revalidateOnMount: false,
+      revalidateIfStale: false,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    }
   );
 
   const saveEnabledModels = async (next: string[]) => {

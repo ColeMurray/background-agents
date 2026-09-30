@@ -34,6 +34,64 @@ describe("POST /internal/sandbox-event", () => {
     expect(tokenEvents.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("retains distinct text parts and their original ordering when snapshots update", async () => {
+    const { stub } = await initSession();
+    const snapshots = [
+      { partId: "part-1", content: "Checking", timestamp: 1 },
+      { partId: "part-2", content: "Answer", timestamp: 2 },
+      { partId: "part-1", content: "Checking the repository", timestamp: 3 },
+    ];
+    for (const snapshot of snapshots) {
+      const response = await stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "token",
+          messageId: "multi-part-message",
+          sandboxId: "sb-1",
+          ...snapshot,
+        }),
+      });
+      expect(response.status).toBe(200);
+    }
+    const events = await queryDO<{ data: string; timeline_sequence: number }>(
+      stub,
+      "SELECT data, timeline_sequence FROM events WHERE type = 'token' AND message_id = ? ORDER BY timeline_sequence",
+      "multi-part-message"
+    );
+    expect(events.map((event) => JSON.parse(event.data))).toMatchObject([
+      { partId: "part-1", content: "Checking the repository" },
+      { partId: "part-2", content: "Answer" },
+    ]);
+  });
+
+  it("stores a tool-call truncation marker without losing file identity", async () => {
+    const { stub } = await initSession();
+    const event = {
+      type: "tool_call",
+      tool: "Write",
+      callId: "truncated-call",
+      messageId: "truncated-message",
+      sandboxId: "sb-1",
+      timestamp: 1,
+      args: { filePath: "/workspace/report.txt", content: "partial" },
+      truncated: { fields: ["args.content"], originalBytes: 1_100_000 },
+    };
+    const response = await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    expect(response.status).toBe(200);
+    const events = await queryDO<{ data: string }>(
+      stub,
+      "SELECT data FROM events WHERE type = 'tool_call' AND message_id = ?",
+      "truncated-message"
+    );
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0].data)).toMatchObject(event);
+  });
+
   it("stores tool_call with messageId", async () => {
     const { stub } = await initSession();
 

@@ -30,10 +30,10 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@types/ws": "^8.18.1",
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.0",
+    "vitest": "^4.1.11",
     "wrangler": "^4.103.0"
   }
 }

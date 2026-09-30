@@ -792,7 +792,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     checkpoint: (request) => checkpoints.handle(request),
     checkpointStatus: () => checkpoints.status(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
-    sandboxError: (request) => sandboxHandler.sandboxError(request),
+    sandboxError: (request, _url, requestLog) => sandboxHandler.sandboxError(request, requestLog),
     createMediaArtifact: (request) => sandboxHandler.createMediaArtifact(request),
     recordAttachment: (request) => {
       const session = sessionCoreRepository.getSession();

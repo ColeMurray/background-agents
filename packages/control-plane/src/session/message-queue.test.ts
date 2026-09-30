@@ -224,6 +224,7 @@ function buildQueue() {
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
+    onPromptDispatched: vi.fn(() => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     terminateFailedSandbox: vi.fn(async () => true),
     reportSandboxError: vi.fn((_reason: string) => {}),
@@ -1258,6 +1259,27 @@ describe("SessionMessageQueue", () => {
     });
   });
 
+  it("tells the sandbox lifecycle a prompt was dispatched only once the send succeeds", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-42" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.onPromptDispatched).toHaveBeenCalledOnce();
+  });
+
+  it("does not report a dispatch when the sandbox send fails", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage({ id: "msg-unsent" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.wsManager.send.mockReturnValue(false);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.sandboxLifecycle.onPromptDispatched).not.toHaveBeenCalled();
+  });
+
   it("leaves the prompt pending and timeline untouched when sandbox send fails", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage({ id: "msg-unsent" }));
@@ -1942,6 +1964,18 @@ describe("SessionMessageQueue", () => {
 
     expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a pending prompt alone when the fatal report terminated nothing", async () => {
+    const h = buildQueue();
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue(false);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
+
+    await h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
   });
 
   describe("enqueuePromptFromApi", () => {
