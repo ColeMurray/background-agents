@@ -277,8 +277,8 @@ interface ExecutionPrincipal {
 type StartInvocationResult =
   /** Invocation inserted; children launched (some may have pre-failed). */
   | { outcome: "started"; invocationId: string; runs: AutomationRunRow[]; launched: number }
-  /** Overlap — a childless skipped invocation was recorded (schedule/event). */
-  | { outcome: "skipped" }
+  /** Overlap — a childless skipped invocation may be recorded (schedule/event). */
+  | { outcome: "skipped"; invocationId: string | null }
   /** Overlap on a manual firing — nothing recorded; the caller answers 409. */
   | { outcome: "blocked" }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
@@ -696,9 +696,10 @@ export class Scheduler {
     if (params.source === "manual") return { outcome: "blocked" };
 
     const now = Date.now();
-    await store.insertSkippedInvocation(
+    const invocationId = generateId();
+    const { inserted } = await store.insertSkippedInvocation(
       {
-        id: generateId(),
+        id: invocationId,
         automation_id: params.automation.id,
         source: params.source,
         scheduled_at: params.scheduledAt ?? null,
@@ -717,7 +718,7 @@ export class Scheduler {
         ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
         : undefined
     );
-    return { outcome: "skipped" };
+    return { outcome: "skipped", invocationId: inserted ? invocationId : null };
   }
 
   // ─── Tick handler ────────────────────────────────────────────────────────
@@ -1184,6 +1185,9 @@ export class Scheduler {
           }
           break;
         case "skipped":
+          if (event.source === "webhook") {
+            webhookInvocationId = result.invocationId;
+          }
           if (event.source === "slack") {
             concurrencySkipped = true;
           }

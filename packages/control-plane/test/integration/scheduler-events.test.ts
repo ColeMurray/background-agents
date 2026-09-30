@@ -159,11 +159,37 @@ describe("Scheduler event handling (integration)", () => {
       expect(result.invocationId).toBe(run.invocation_id);
       const invocation = await store.getInvocationById(run.invocation_id);
       expect(invocation!.trigger_key).toBe(event.triggerKey);
+    });
 
-      const retry = await sendEvent(event);
-      expect(retry.invocationId).toBeNull();
-      expect(retry.triggered).toBe(0);
-      expect(await fetchRuns(automationId)).toHaveLength(1);
+    it("returns the ID of a recorded webhook overlap skip", async () => {
+      const store = new AutomationStore(env.DB);
+      const automationId = `auto-webhook-overlap-${Date.now()}`;
+      await store.create(
+        makeAutomation({
+          id: automationId,
+          trigger_type: "webhook",
+          event_type: "webhook.received",
+          schedule_cron: null,
+          next_run_at: null,
+        })
+      );
+      const event = makeWebhookEvent(automationId);
+      await seedRun(
+        makeRunRow(automationId, {
+          status: "running",
+          session_id: "sess-existing",
+          started_at: Date.now(),
+        }),
+        { concurrencyKey: event.concurrencyKey }
+      );
+
+      const result = await sendEvent(event);
+
+      expect(result.triggered).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(result.invocationId).toEqual(expect.any(String));
+      const invocation = await store.getWebhookInvocationStatus(automationId, result.invocationId!);
+      expect(invocation).toMatchObject({ status: "skipped", runs: [] });
     });
   });
 
