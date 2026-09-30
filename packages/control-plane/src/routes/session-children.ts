@@ -1,6 +1,6 @@
 import { parseBody } from "./body";
 import { Hono } from "hono";
-import { admit, dispatch } from "../routing/admit";
+import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   cancelChildSessionRequestSchema,
@@ -10,16 +10,24 @@ import {
 } from "@open-inspect/shared/types/session-api";
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
 import { childSessionListResponseSchema } from "@open-inspect/shared/types/sessions";
-import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
+import {
+  SessionIndexStore,
+  type ChildAdmissionLease,
+  type SessionEntry,
+} from "../db/session-index";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import { checkSessionAccess } from "@open-inspect/shared";
-import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
+import { checkSessionAccess, type SessionAction, type SessionViewer } from "@open-inspect/shared";
+import {
+  evaluateSessionAdmission,
+  teamsEnforcementMode,
+  viewerFromContext,
+} from "../authorization/session-admission";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
-import { activePromptAuthorSchema } from "../session/active-prompt-author";
+import { activePromptAuthorSchema, type ActivePromptAuthor } from "../session/active-prompt-author";
 import type { Env } from "../types";
 import {
   error,
@@ -30,17 +38,84 @@ import {
   requireSession,
   sessionRequirement,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
-  type RequestContext,
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 
 const logger = createLogger("router:session-children");
 
+function sandboxChildAccess(
+  ctx: SessionRouteContext,
+  parent: SessionEntry,
+  activeAuthor?: ActivePromptAuthor
+) {
+  let viewerPromise: Promise<SessionViewer | null> | undefined;
+  return async (child: SessionEntry, action: SessionAction): Promise<boolean> => {
+    if (ctx.principal?.kind !== "sandbox" || ctx.principal.sessionId !== parent.id) return false;
+    if (child.ownerTeamId !== parent.ownerTeamId) return false;
+    if (
+      child.visibility === "workspace" ||
+      (child.visibility === "team" && parent.visibility === "team")
+    )
+      return true;
+
+    viewerPromise ??= (async () => {
+      let author = activeAuthor;
+      if (!author) {
+        const response = await ctx.sessionRuntime.fetch(
+          parent.id,
+          SessionInternalPaths.activePromptAuthor
+        );
+        if (!response.ok) return null;
+        const parsed = activePromptAuthorSchema.safeParse(await response.json());
+        if (!parsed.success) return null;
+        author = parsed.data;
+      }
+      const userId = author.canonicalUserId;
+      if (!userId) return null;
+      let authorization;
+      try {
+        authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
+      } catch (cause) {
+        if (cause instanceof AuthorizationError) return null;
+        throw cause;
+      }
+      return {
+        kind: "user" as const,
+        userId,
+        roleKey: authorization.role.key,
+        permissions: authorization.permissions,
+        suspended: authorization.suspendedAt !== null,
+        memberships: await new TeamMembershipStore(ctx.db).listForUser(userId),
+      };
+    })();
+    const viewer = await viewerPromise;
+    if (!viewer || viewer.kind !== "user") return false;
+    const collaboratorIds = await new SessionCollaboratorStore(ctx.db).listUserIds(child.id);
+    if (
+      child.visibility === "private" &&
+      child.userId !== viewer.userId &&
+      !collaboratorIds.includes(viewer.userId)
+    )
+      return false;
+    return checkSessionAccess(
+      viewer,
+      {
+        id: child.id,
+        ownerUserId: child.userId ?? null,
+        ownerTeamId: child.ownerTeamId,
+        visibility: child.visibility,
+        collaboratorIds,
+      },
+      action
+    ).allowed;
+  };
+}
+
 export async function handleListChildren(
   _request: Request,
   env: Env,
   params: { id: string },
-  ctx: RequestContext
+  ctx: SessionRouteContext
 ): Promise<Response> {
   const parentId = params.id;
 
@@ -55,6 +130,17 @@ export async function handleListChildren(
     readScope,
     teamsEnforcementMode(ctx, env)
   );
+
+  if (ctx.principal?.kind === "sandbox" && children.length) {
+    const parent = await sessionStore.get(parentId);
+    if (!parent) return error("Session not found", 404);
+    const canAccess = sandboxChildAccess(ctx, parent);
+    const visible: SessionEntry[] = [];
+    for (const child of children) {
+      if (await canAccess(child, "read")) visible.push(child);
+    }
+    return json(childSessionListResponseSchema.parse({ children: visible }));
+  }
 
   return json(childSessionListResponseSchema.parse({ children }));
 }
@@ -73,6 +159,15 @@ export async function handleGetChild(
   const isChild = await sessionStore.isChildOf(childId, parentId);
   if (!isChild) {
     return error("Child session not found", 404);
+  }
+  if (ctx.principal?.kind === "sandbox") {
+    const [parent, child] = await Promise.all([
+      sessionStore.get(parentId),
+      sessionStore.get(childId),
+    ]);
+    if (!parent || !child || !(await sandboxChildAccess(ctx, parent)(child, "read"))) {
+      return error("Child session not found", 404);
+    }
   }
 
   const url = new URL(request.url);
@@ -115,36 +210,11 @@ export async function handlePromptChild(
   if (!authorResponse.ok) return authorResponse;
   const author = activePromptAuthorSchema.safeParse(await authorResponse.json());
   if (!author.success) return error("Failed to get active prompt author", 500);
-  if (childSession.visibility === "private") {
-    const userId = author.data.canonicalUserId;
-    if (!userId) return error("Child session not found", 404);
-    let authorization;
-    try {
-      authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
-    } catch (cause) {
-      if (cause instanceof AuthorizationError) return error("Child session not found", 404);
-      throw cause;
-    }
-    const access = checkSessionAccess(
-      {
-        kind: "user",
-        userId,
-        roleKey: authorization.role.key,
-        permissions: authorization.permissions,
-        suspended: authorization.suspendedAt !== null,
-        memberships: await new TeamMembershipStore(ctx.db).listForUser(userId),
-      },
-      {
-        id: childId,
-        ownerUserId: childSession.userId ?? null,
-        ownerTeamId: childSession.ownerTeamId,
-        visibility: childSession.visibility,
-        collaboratorIds: await new SessionCollaboratorStore(ctx.db).listUserIds(childId),
-      },
-      "collaborate"
-    );
-    if (!access.allowed) return error("Child session not found", 404);
-  }
+  if (
+    childSession.visibility === "private" &&
+    !(await sandboxChildAccess(ctx, parentSession, author.data)(childSession, "collaborate"))
+  )
+    return error("Child session not found", 404);
 
   let admissionLease: ChildAdmissionLease | null = null;
   if (childSession.status === "completed" || childSession.status === "failed") {
@@ -245,6 +315,16 @@ export async function handleCancelChild(
   if (!isChild) {
     return error("Child session not found", 404);
   }
+  let canAccess: ReturnType<typeof sandboxChildAccess> | null = null;
+  if (ctx.principal?.kind === "sandbox") {
+    const [parent, child] = await Promise.all([
+      sessionStore.get(parentId),
+      sessionStore.get(childId),
+    ]);
+    if (!parent || !child) return error("Child session not found", 404);
+    canAccess = sandboxChildAccess(ctx, parent);
+    if (!(await canAccess(child, "lifecycle"))) return error("Child session not found", 404);
+  }
 
   // An empty body means "no options"; older clients POST without one.
   let body: CancelChildSessionRequest = {};
@@ -264,13 +344,31 @@ export async function handleCancelChild(
   }
   const cancelNested = body.cancelNested ?? true;
 
+  const descendantIds = cancelNested ? await sessionStore.listActiveDescendantIds(childId) : [];
+  for (const descendantId of descendantIds) {
+    if (canAccess) {
+      const descendant = await sessionStore.get(descendantId);
+      if (!descendant || !(await canAccess(descendant, "lifecycle"))) {
+        return error("Child session not found", 404);
+      }
+    } else {
+      const result = await evaluateSessionAdmission(ctx, env, descendantId, "lifecycle", null);
+      if (result.kind === "not_found") return error("Child session not found", 404);
+      if (result.kind === "action_denied") {
+        return json(
+          { error: "Forbidden", code: "session_action_denied", reason_code: result.reason },
+          403
+        );
+      }
+    }
+  }
+
   const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.cancel, {
     method: "POST",
   });
   if (!response.ok && response.status !== 409) return response;
   if (!cancelNested) return response;
 
-  const descendantIds = await sessionStore.listActiveDescendantIds(childId);
   const cancelledDescendantIds: string[] = [];
   const failedDescendantIds: string[] = [];
   for (const descendantId of descendantIds) {
@@ -310,7 +408,7 @@ export const sessionChildRoutes = new Hono<ControlPlaneHonoEnv>();
 sessionChildRoutes.get(
   "/sessions/:id/children",
   admit({ ...GITHUB_SANDBOX_FALLBACK_ROUTE, authorization: requireSession("read") }),
-  (c) => dispatch(c, handleListChildren)
+  (c) => dispatchSession(c, handleListChildren)
 );
 sessionChildRoutes.get(
   "/sessions/:id/children/:childId",

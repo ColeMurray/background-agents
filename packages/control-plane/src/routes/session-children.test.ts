@@ -132,6 +132,11 @@ describe("handleListChildren", () => {
   });
 
   it("projects viewer-neutral child summaries through the shared schema", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+      id: "parent",
+      ownerTeamId: null,
+      visibility: "workspace",
+    } as never);
     vi.spyOn(SessionIndexStore.prototype, "listByParent").mockResolvedValue([
       {
         id: "child",
@@ -144,7 +149,7 @@ describe("handleListChildren", () => {
         baseBranch: "main",
         status: "active",
         ownerTeamId: null,
-        visibility: "private",
+        visibility: "workspace",
         parentSessionId: "parent",
         spawnSource: "agent",
         spawnDepth: 1,
@@ -177,7 +182,7 @@ describe("handleListChildren", () => {
         {
           id: "child",
           ownerTeamId: null,
-          visibility: "private",
+          visibility: "workspace",
           title: "Child",
           repoOwner: "acme",
           repoName: "web",
@@ -466,6 +471,9 @@ describe("handleCancelChild", () => {
 
   it("attempts every descendant and aggregates non-conflict failures", async () => {
     vi.spyOn(SessionIndexStore.prototype, "isChildOf").mockResolvedValue(true);
+    vi.spyOn(SessionIndexStore.prototype, "get").mockImplementation(
+      async (id) => ({ id, ownerTeamId: null, visibility: "workspace" }) as never
+    );
     vi.spyOn(SessionIndexStore.prototype, "listActiveDescendantIds").mockResolvedValue([
       "deep-failure",
       "later-success",
@@ -484,11 +492,13 @@ describe("handleCancelChild", () => {
       "/sessions/:id/children/:childId/cancel"
     );
 
+    const ctx = routeContext(fetch);
+    ctx.principal = { kind: "sandbox", sessionId: "parent" };
     const response = await handleCancelChild(
       new Request("https://test.local/sessions/parent/children/child/cancel", { method: "POST" }),
       {} as Env,
       match,
-      routeContext(fetch)
+      ctx
     );
 
     expect(fetch.mock.calls.map(([sessionId]) => sessionId)).toEqual([
