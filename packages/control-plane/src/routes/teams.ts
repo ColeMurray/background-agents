@@ -132,6 +132,7 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
   const query = parseQuery(request, querySchema);
   if (query instanceof Response) return query;
   const subject = viewer(ctx);
+  const isAdmin = subject.roleKey === "owner" || subject.roleKey === "administrator";
   const membershipStore = new TeamMembershipStore(ctx.db);
   const memberships = await membershipStore.listForUser(subject.userId);
   const teams = await new TeamStore(ctx.db).list({
@@ -143,15 +144,17 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
   const memberCounts = await membershipStore.listMemberCounts();
   return json({
     teams: await Promise.all(
-      teams.map((team) =>
-        responseTeam(
-          ctx,
-          team,
-          memberships,
-          leadCounts.get(team.id) ?? 0,
-          memberCounts.get(team.id) ?? 0
+      teams
+        .filter((team) => team.archivedAt === null || isAdmin || memberships.has(team.id))
+        .map((team) =>
+          responseTeam(
+            ctx,
+            team,
+            memberships,
+            leadCounts.get(team.id) ?? 0,
+            memberCounts.get(team.id) ?? 0
+          )
         )
-      )
     ),
   });
 }

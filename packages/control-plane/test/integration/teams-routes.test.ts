@@ -295,6 +295,123 @@ describe("team routes", () => {
     }
   );
 
+  describe("archived directory access", () => {
+    it.each(["off", "shadow", "on"] as const)(
+      "lists active teams and only the caller's archived memberships in %s",
+      async (mode) => {
+        const teams = new TeamStore(env.DB);
+        const active = await teams.create({ slug: "active", name: "Active", joinPolicy: "open" });
+        const own = await teams.create({ slug: "own-archived", name: "Own", joinPolicy: "open" });
+        const other = await teams.create({
+          slug: "other-archived",
+          name: "Other",
+          joinPolicy: "open",
+        });
+        await new TeamMembershipStore(env.DB).add(own.id, OWNER, "lead");
+        await teams.archive(own.id);
+        await teams.archive(other.id);
+
+        for (const role of ["member", "viewer"] as const) {
+          await setRole(OWNER, role);
+          const all = await modeRequest("/teams?membership=all&includeArchived=true", mode, role);
+          expect(all.status).toBe(200);
+          const result = await all.json<{ teams: Team[] }>();
+          expect(result.teams.map(({ id }) => id).sort()).toEqual([active.id, own.id].sort());
+          expect(
+            await (
+              await modeRequest(
+                "/teams?membership=all&includeArchived=true&search=other",
+                mode,
+                role
+              )
+            ).json()
+          ).toEqual({ teams: [] });
+          expect(
+            await (await modeRequest("/teams?membership=all", mode, role)).json()
+          ).toMatchObject({ teams: [{ id: active.id }] });
+          expect(
+            await (
+              await modeRequest("/teams?membership=mine&includeArchived=true", mode, role)
+            ).json()
+          ).toMatchObject({ teams: [{ id: own.id }] });
+          const mine = await (
+            await modeRequest("/me/teams", mode, role)
+          ).json<{ teams: Array<Team & { role: string }> }>();
+          expect(mine.teams).toHaveLength(1);
+          expect(mine.teams[0]).toMatchObject({ id: own.id, role: "lead" });
+          expect(mine.teams[0].archivedAt).not.toBeNull();
+        }
+      }
+    );
+
+    it.each(["off", "shadow", "on"] as const)(
+      "conceals archived detail and member reads with the missing-team 404 in %s",
+      async (mode) => {
+        const teams = new TeamStore(env.DB);
+        const archived = await teams.create({
+          slug: "hidden-archived",
+          name: "Hidden",
+          joinPolicy: "open",
+        });
+        await new TeamMembershipStore(env.DB).add(archived.id, MEMBER, "lead");
+        await teams.archive(archived.id);
+
+        for (const role of ["member", "viewer"] as const) {
+          await setRole(OWNER, role);
+          for (const suffix of ["", "/members"]) {
+            const hidden = await modeRequest(`/teams/${archived.id}${suffix}`, mode, role);
+            const missing = await modeRequest(`/teams/team_missing${suffix}`, mode, role);
+            expect(hidden.status, `${role}${suffix}`).toBe(404);
+            expect(missing.status).toBe(404);
+            expect(await hidden.json()).toEqual(await missing.json());
+          }
+        }
+      }
+    );
+
+    it.each([
+      { role: "member", teamRole: "member", canRestore: false },
+      { role: "member", teamRole: "lead", canRestore: true },
+      { role: "owner", teamRole: null, canRestore: true },
+      { role: "administrator", teamRole: null, canRestore: true },
+    ] as const)(
+      "preserves archived reads and restore capabilities for $role / $teamRole",
+      async ({ role, teamRole, canRestore }) => {
+        await setRole(OWNER, role);
+        const teams = new TeamStore(env.DB);
+        const archived = await teams.create({
+          slug: "readable-archived",
+          name: "Readable",
+          joinPolicy: "invite_only",
+        });
+        const memberships = new TeamMembershipStore(env.DB);
+        await memberships.add(archived.id, MEMBER, "lead");
+        if (teamRole) await memberships.add(archived.id, OWNER, teamRole);
+        await teams.archive(archived.id);
+
+        const detail = await request(`/teams/${archived.id}`);
+        expect(detail.status).toBe(200);
+        expect(await detail.json()).toMatchObject({
+          id: archived.id,
+          capabilities: { canArchive: canRestore },
+        });
+        const members = await request(`/teams/${archived.id}/members`);
+        expect(members.status).toBe(200);
+        expect(await members.json()).toMatchObject({
+          members: expect.arrayContaining([
+            expect.objectContaining({ userId: MEMBER, role: "lead" }),
+          ]),
+        });
+        const all = await request("/teams?membership=all&includeArchived=true");
+        expect(await all.json()).toMatchObject({ teams: [{ id: archived.id }] });
+        expect((await request(`/teams/${archived.id}/restore`, "POST")).status).toBe(
+          canRestore ? 200 : 403
+        );
+        expect((await teams.getById(archived.id))?.archivedAt === null).toBe(canRestore);
+      }
+    );
+  });
+
   it.each(["off", "shadow", "on"] as const)(
     "returns scoped inbox buckets with effective capabilities and never lists unshared private rows in %s",
     async (mode) => {

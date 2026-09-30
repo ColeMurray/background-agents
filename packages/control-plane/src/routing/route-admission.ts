@@ -617,6 +617,13 @@ async function enforceTeamRequirement(
       (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
     );
     if (viewer.kind !== "user") throw new Error("Missing team viewer");
+    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+    const isMember = isAdmin || viewer.memberships.has(teamId);
+    if (
+      !isMember &&
+      (requirement.need === "member" || (requirement.need === "read" && team.archivedAt !== null))
+    )
+      return { response: error("Team not found", 404) };
     const access = resolveTeamAccess(
       {
         userId: viewer.userId,
@@ -625,10 +632,6 @@ async function enforceTeamRequirement(
       },
       { ...team, leadCount: await memberships.countLeads(teamId) }
     );
-    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-    const isMember = isAdmin || viewer.memberships.has(teamId);
-    if (!isMember && requirement.need === "member")
-      return { response: error("Team not found", 404) };
     if (requirement.need !== "read" && requirement.need !== "member" && !access[requirement.need]) {
       const reasonCode =
         requirement.need === "canJoin"

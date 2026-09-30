@@ -11,7 +11,8 @@ visibility-filtered activity. Active users can browse team names and memberships
 remains restricted to members and administrators. Workspace audit readers can filter events by team.
 Session details show the owning team and visibility, with server-authorized controls to move
 sessions, change visibility, and manage private-session collaborators, including child-session
-cascades.
+cascades. Archived team metadata and member lists remain visible only to team members and workspace
+administrators.
 
 ## September 29, 2026
 
