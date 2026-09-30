@@ -244,6 +244,18 @@ describe("GitHub browser attribution availability", () => {
       );
     }
   );
+  it("does not pair a trusted subject with caller display fields when the grant is empty", async () => {
+    vi.mocked(api.getAccessToken).mockResolvedValue({ accessToken: "" });
+    expect(
+      (await join({ scmLogin: "unrelated", scmName: "Caller", scmEmail: "caller@test.local" }))
+        .status
+    ).toBe(200);
+    const body = (await (fetch.mock.calls[0][0] as Request).json()) as Record<string, unknown>;
+    expect(body.scmUserId).toBe(subject);
+    expect(body.scmLogin ?? null).toBeNull();
+    expect(body.scmName ?? null).toBeNull();
+    expect(body.scmEmail ?? null).toBeNull();
+  });
   it("rejects a mismatched verified profile", async () => {
     vi.mocked(api.accountInfo).mockResolvedValue({
       user: { id: "other" },

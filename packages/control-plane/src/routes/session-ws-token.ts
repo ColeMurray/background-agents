@@ -39,8 +39,9 @@ export async function handleSessionWsToken(
   if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = authorization.userId;
+  const isGitHub = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let enrichment: GitHubEnrichment | null = null;
-  if (resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github") {
+  if (isGitHub) {
     try {
       enrichment = await resolveGitHubEnrichmentForRequest(
         new UserStore(ctx.db),
@@ -60,9 +61,9 @@ export async function handleSessionWsToken(
         userId,
         canonicalUserId,
         scmUserId: enrichment?.scmUserId,
-        scmLogin: enrichment?.scmLogin ?? body.scmLogin,
-        scmName: enrichment?.displayName ?? body.scmName,
-        scmEmail: enrichment?.email ?? body.scmEmail,
+        scmLogin: isGitHub ? (enrichment?.scmLogin ?? null) : body.scmLogin,
+        scmName: isGitHub ? (enrichment?.displayName ?? null) : body.scmName,
+        scmEmail: isGitHub ? (enrichment?.email ?? null) : body.scmEmail,
       }),
     })
   );
