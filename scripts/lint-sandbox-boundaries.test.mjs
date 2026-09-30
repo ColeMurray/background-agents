@@ -15,6 +15,7 @@ test("new consumers and platform adapters cannot import sandbox implementations"
     for (const [name, source] of [
       ["SandboxRepository", "../session/sandbox-repository"],
       ["SandboxLifecycleManager", "../sandbox/lifecycle/manager"],
+      ["SandboxAccess", "../sandbox/lifecycle/sandbox-access"],
     ]) {
       const [result] = await eslint.lintText(
         `import type { ${name} } from "${source}"; export type Dependency = ${name};`,
@@ -39,4 +40,9 @@ test("focused ports remain usable by consumers and extracted lifecycle modules",
     );
     assert.equal(result.errorCount, 0, JSON.stringify(result.messages));
   }
+  const [access] = await eslint.lintText(
+    'import type { SandboxAccess } from "./sandbox-access"; export type Dependency = SandboxAccess;',
+    { filePath: "packages/control-plane/src/sandbox/lifecycle/reconciliation.ts" }
+  );
+  assert.equal(access.errorCount, 0, JSON.stringify(access.messages));
 });

@@ -54,7 +54,6 @@ import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
 import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
-import { isJwtUnexpired, mintJwt } from "../../auth/jwt";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import type { ImageBuildLookup } from "./image-selection";
 import {
@@ -82,14 +81,13 @@ import { shutdownPolicyForLaunch, type ShutdownLifecyclePolicy } from "./shutdow
 import { parsePendingVmReference } from "../providers/pending-vm-reference";
 import { ModalApiError, ModalVmStartupError } from "../client";
 import type { ResolveSandboxResult } from "../provider";
+import type { SandboxAccess } from "./sandbox-access";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { AlarmScheduler } from "../../platform-ports";
 
 const log = createLogger("lifecycle-manager");
 
-/** TTL for terminal auth JWTs (24 hours, matching typical sandbox lifetime). */
-const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 const REJECTED_ALLOCATION_CLEANUP_RETRY_MS = 30_000;
 const VM_RESOLVE_RETRY_MS = 10_000;
@@ -300,18 +298,8 @@ export interface SandboxStorage {
   resetCircuitBreaker(): void;
   /** Persist last spawn error */
   setLastSpawnError(error: string | null, timestamp: number | null): void;
-  /** Set one access artifact's URL and (encrypted) secret on the sandbox row */
-  updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
   /** Read and decrypt one access artifact's stored secret */
   getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null>;
-  /** Clear one access artifact's URL and secret (e.g. on sandbox teardown) */
-  clearSandboxAccess(kind: SandboxAccessKind): void;
-  /** Clear one access artifact's URL while preserving its stored secret */
-  clearSandboxAccessUrl?(kind: SandboxAccessKind): void;
-  /** Update tunnel URLs for extra ports on the sandbox row */
-  updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
-  /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
-  clearSandboxTunnelUrls(): void;
 }
 
 /**
@@ -381,8 +369,6 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
    * row (and its public id) exists.
    */
   getSessionId?: () => string;
-  /** Builds a provider dashboard URL for a persisted provider object ID. */
-  sandboxDashboardUrlBuilder?: (providerObjectId: string) => string | null;
 }
 
 /**
@@ -483,10 +469,6 @@ export class SandboxLifecycleManager
     sessionId: string;
     token: string;
   } | null = null;
-  retireShutdownAccess(): void {
-    this.clearSandboxAccessState();
-    this.wsManager.detachSandboxWebSocket(1000, "Sandbox state preserved");
-  }
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
@@ -519,6 +501,7 @@ export class SandboxLifecycleManager
     private readonly alarmScheduler: AlarmScheduler,
     private readonly idGenerator: IdGenerator,
     private readonly shutdown: SandboxShutdownLifecycle,
+    private readonly access: SandboxAccess,
     private readonly config: SandboxLifecycleConfig,
     imageBuildLookup?: ImageBuildLookup,
     private readonly backgroundTasks?: BackgroundTasks
@@ -875,17 +858,17 @@ export class SandboxLifecycleManager
       if (!(await this.claimProviderStartup(generation, result.providerObjectId, result.lifetime)))
         return;
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.access.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       if (result.vncAccess) {
-        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+        await this.access.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
-      await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+      await this.access.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
-        await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
+        await this.access.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
       }
 
-      this.broadcastProviderAccessIfConnected();
+      this.access.broadcastProviderAccessIfConnected();
 
       this.log.info("Sandbox spawn completed", {
         event: "sandbox.spawn",
@@ -1148,14 +1131,14 @@ export class SandboxLifecycleManager
           return;
         startupClaimed = true;
         if (result.codeServerUrl && result.codeServerPassword) {
-          await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+          await this.access.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
         if (result.vncAccess) {
-          await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
+          await this.access.storeVnc(result.vncAccess.url, result.vncAccess.password);
         }
-        await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
+        await this.access.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
-          await this.storeTtyd(
+          await this.access.storeTtyd(
             result.ttydUrl,
             sandboxAuthToken,
             session.session_name || session.id,
@@ -1163,7 +1146,7 @@ export class SandboxLifecycleManager
           );
         }
 
-        this.broadcastProviderAccessIfConnected();
+        this.access.broadcastProviderAccessIfConnected();
 
         this.broadcaster.broadcast({
           type: "sandbox_restored",
@@ -1310,17 +1293,11 @@ export class SandboxLifecycleManager
       const ttydToken = sandboxSettings.terminalEnabled
         ? await this.storage.getSandboxAccessSecret("ttyd")
         : null;
-      const validTtydToken = ttydToken && isJwtUnexpired(ttydToken) ? ttydToken : null;
-      if (result.ttydUrl && !validTtydToken) {
-        // Terminal tokens are signed with the sandbox auth token, which is kept
-        // only as a hash, so an expired or missing one cannot be renewed. The
-        // resumed sandbox holds the workspace; keep it without terminal access.
-        this.log.warn("Terminal credential unavailable; resuming without terminal access", {
-          event: "sandbox.resume_terminal_credential_unavailable",
-          provider_object_id: finalProviderObjectId,
-          reason: ttydToken ? "invalid_or_expired" : "missing",
-        });
-      }
+      const validTtydToken = this.access.reusableTtydToken(
+        ttydToken,
+        result.ttydUrl,
+        finalProviderObjectId
+      );
       let completed: boolean;
       try {
         completed = await this.storage.completeProviderResume(generation, {
@@ -1354,7 +1331,7 @@ export class SandboxLifecycleManager
       await this.shutdown.recordProviderStartup(generation, result.lifetime);
       startupClaimed = true;
 
-      if (!this.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
+      if (!this.access.broadcastSandboxDashboardUrl(finalProviderObjectId)) {
         this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       }
     } catch (error) {
@@ -1484,27 +1461,6 @@ export class SandboxLifecycleManager
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
-  }
-
-  /**
-   * Clear preview URLs after a sandbox is no longer reachable.
-   *
-   * Persistent resumes preserve code-server and VNC passwords plus the ttyd
-   * token, so only their URLs are cleared. Snapshot restores rotate access
-   * secrets, so both values are removed.
-   */
-  private clearSandboxAccessState(): void {
-    if (this.usesProviderManagedStop() && this.storage.clearSandboxAccessUrl) {
-      this.storage.clearSandboxAccessUrl("codeServer");
-      this.storage.clearSandboxAccessUrl("vnc");
-      this.storage.clearSandboxAccessUrl("ttyd");
-    } else {
-      this.storage.clearSandboxAccess("codeServer");
-      this.storage.clearSandboxAccess("vnc");
-      this.storage.clearSandboxAccess("ttyd");
-    }
-    this.storage.clearSandboxTunnelUrls();
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
@@ -1683,7 +1639,7 @@ export class SandboxLifecycleManager
     });
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     const held = this.holdFailedRetainedBoot(
       ctx.sandbox,
       "Sandbox failed to connect within the allowed time"
@@ -1741,7 +1697,7 @@ export class SandboxLifecycleManager
     // like any other; the termination re-drives the queue, and the breaker
     // is what bounds a boot that dies the same way every time.
     if (isBooting) this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
 
     const preservesProviderState = this.usesProviderManagedStop();
@@ -1840,7 +1796,7 @@ export class SandboxLifecycleManager
     }
     this.storage.updateSandboxStatus("failed");
     this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
     this.reportSandboxError(reason);
     if (held) return { kind: "boot_budget_exceeded", reason };
@@ -1878,7 +1834,7 @@ export class SandboxLifecycleManager
     });
     // Set status to stopped FIRST to block reconnection attempts
     this.storage.updateSandboxStatus("stopped");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stopped" });
 
     const preservesProviderState = this.usesProviderManagedStop();
@@ -1940,7 +1896,7 @@ export class SandboxLifecycleManager
     const canStopProvider = this.canStopProviderSandbox();
     if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
     this.storage.updateSandboxStatus("stale");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
     const closeReason = {
       prompt_dispatch_send_failed: "Prompt dispatch send failed",
@@ -1998,7 +1954,7 @@ export class SandboxLifecycleManager
       this.recordSpawnFailure(Date.now(), sandbox.created_at);
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(reason);
-      this.clearSandboxAccessState();
+      this.access.clearAccess();
       if (held) return false;
 
       const canStopProvider = this.canStopProviderSandbox();
@@ -2188,72 +2144,6 @@ export class SandboxLifecycleManager
    */
   private getConnectedClientCount(): number {
     return this.wsManager.getConnectedClientCount();
-  }
-
-  private broadcastSandboxDashboardUrl(providerObjectId: string): boolean {
-    const url = this.config.sandboxDashboardUrlBuilder?.(providerObjectId);
-    if (url) {
-      this.log.debug("Broadcasting sandbox dashboard URL", {
-        provider_object_id: providerObjectId,
-      });
-      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-      return true;
-    }
-    return false;
-  }
-
-  private broadcastProviderAccessIfConnected(): void {
-    if (this.wsManager.getSandboxWebSocket()) {
-      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-    }
-  }
-
-  private async storeCodeServer(url: string, password: string): Promise<void> {
-    this.log.info("Storing code-server info", { url });
-    await this.storage.updateSandboxAccess("codeServer", url, password);
-  }
-
-  private async storeVnc(url: string, password: string): Promise<void> {
-    this.log.info("Storing VNC info", { url });
-    await this.storage.updateSandboxAccess("vnc", url, password);
-  }
-
-  private async storeAndBroadcastTunnelUrls(
-    urls: Record<string, string> | undefined
-  ): Promise<void> {
-    if (!urls || Object.keys(urls).length === 0) return;
-    this.log.info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
-    await this.storage.updateSandboxTunnelUrls(urls);
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
-  }
-
-  /** Mint and persist terminal access. */
-  private async storeTtyd(
-    url: string,
-    sandboxAuthToken: string,
-    sessionId: string,
-    sandboxId: string
-  ): Promise<void> {
-    const token = await this.mintTtydToken(sandboxAuthToken, sessionId, sandboxId);
-
-    this.log.info("Storing ttyd info", { url });
-    await this.storage.updateSandboxAccess("ttyd", url, token);
-  }
-
-  private mintTtydToken(
-    sandboxAuthToken: string,
-    sessionId: string,
-    sandboxId: string
-  ): Promise<string> {
-    return mintJwt(
-      {
-        sub: sessionId,
-        sid: sandboxId,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
-      },
-      sandboxAuthToken
-    );
   }
 
   private async recordPendingProviderReference(
@@ -2475,7 +2365,7 @@ export class SandboxLifecycleManager
           auth &&
           auth.generation.sandboxId === generation.sandboxId &&
           auth.generation.createdAt === generation.createdAt
-            ? await this.mintTtydToken(auth.token, auth.sessionId, generation.sandboxId!)
+            ? await this.access.mintTtydToken(auth.token, auth.sessionId, generation.sandboxId!)
             : null;
         const committed = await this.storage.completeProviderResume(
           generation,
@@ -2524,7 +2414,7 @@ export class SandboxLifecycleManager
             result.providerObjectId
           );
         }
-        this.broadcastProviderAccessIfConnected();
+        this.access.broadcastProviderAccessIfConnected();
       })()
         .catch((error) => {
           this.log.warn("Bridge VM resolution failed", {
@@ -2556,7 +2446,7 @@ export class SandboxLifecycleManager
       return;
     }
     this.wsManager.detachSandboxWebSocket(1008, "Provider allocation rejected");
-    this.clearSandboxAccessState();
+    this.access.clearAccess();
     if (rejection === "failed") {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(error.message);
@@ -2623,7 +2513,7 @@ export class SandboxLifecycleManager
     await this.shutdown.recordProviderStartup(generation, lifetime);
     if (announce) {
       try {
-        if (providerObjectId) this.broadcastSandboxDashboardUrl(providerObjectId);
+        if (providerObjectId) this.access.broadcastSandboxDashboardUrl(providerObjectId);
         if (!this.wsManager.getSandboxWebSocket() && status === "connecting") {
           this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
         }

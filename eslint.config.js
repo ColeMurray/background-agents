@@ -17,6 +17,11 @@ const sandboxImplementationImports = [
     message:
       "Only session composition constructs the lifecycle manager. Consumers depend on focused lifecycle ports.",
   },
+  {
+    regex: "(?:^|/)lifecycle/sandbox-access(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Access mechanics are internal to lifecycle composition. Consumers use lifecycle ports and session access readers.",
+  },
 ];
 
 export default tseslint.config(

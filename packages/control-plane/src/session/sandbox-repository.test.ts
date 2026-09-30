@@ -470,6 +470,46 @@ describe("SandboxRepository boot state (SQLite)", () => {
     return { db, sql, repository, set };
   }
 
+  it("characterizes the unguarded fresh/restore artifact write across replacement", async () => {
+    const { repository } = createSqliteRepository();
+    const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+    let beginEncryption!: () => void;
+    let releaseEncryption!: () => void;
+    const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+    const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+    const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+      const encrypted = await encrypt(...args);
+      beginEncryption();
+      await gate;
+      return encrypted;
+    });
+    try {
+      const writing = repository.updateSandboxAccess(
+        "codeServer",
+        "https://old.test",
+        "old-secret"
+      );
+      await encrypting;
+      repository.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: 3000,
+        modalSandboxId: "replacement",
+      });
+      releaseEncryption();
+      await writing;
+      // This is an existing gap, not an atomicity guarantee granted by the extraction.
+      expect(repository.getSandbox()).toMatchObject({
+        modal_sandbox_id: "replacement",
+        created_at: 3000,
+        code_server_url: "https://old.test",
+      });
+      await expect(repository.getSandboxAccessSecret("codeServer")).resolves.toBe("old-secret");
+    } finally {
+      releaseEncryption();
+      spy.mockRestore();
+    }
+  });
+
   describe("rejectProviderStartup", () => {
     const generation = { sandboxId: "sb-1", createdAt: 1000 };
 
@@ -730,6 +770,10 @@ describe("SandboxRepository boot state (SQLite)", () => {
 
     it.each([
       ["replaced", "modal_sandbox_id = 'sb-2', created_at = 3000"],
+      ["timestamp-only supersession", "created_at = 3000"],
+      ["stopped", "status = 'stopped'"],
+      ["stale", "status = 'stale'"],
+      ["failed", "status = 'failed'"],
       ["fenced", "fenced = 1"],
       ["bridge reference changed", "modal_object_id = 'another-pending'"],
     ])("rejects access encrypted across a %s row", async (_case, change) => {
@@ -743,21 +787,28 @@ describe("SandboxRepository boot state (SQLite)", () => {
       const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
       const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
       const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+        const encrypted = await encrypt(...args);
         beginEncryption();
         await gate;
-        return encrypt(...args);
+        return encrypted;
       });
       try {
         const completion = repository.completeProviderResume(generation, access, "pending");
         await encrypting;
         set(change);
+        const superseded = repository.getSandbox();
         releaseEncryption();
         await expect(completion).resolves.toBe(false);
+        expect(repository.getSandbox()).toEqual(superseded);
         expect(repository.getSandbox()).toMatchObject({
           modal_object_id: change.includes("modal_object_id") ? "another-pending" : "pending",
           code_server_url: null,
+          code_server_password: null,
           vnc_url: null,
+          vnc_password: null,
           ttyd_url: null,
+          ttyd_token: null,
+          tunnel_urls: null,
         });
       } finally {
         releaseEncryption();

@@ -1,10 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
+import { SandboxLifecycleManager } from "../../src/sandbox/lifecycle/manager";
+import { SessionMessageQueue } from "../../src/session/message-queue";
+import { SessionMessengerImpl } from "../../src/session/messenger";
+import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
+import { SessionStatusService } from "../../src/session/session-status-service";
+import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
 /**
@@ -38,6 +44,57 @@ describe("createSessionRuntime", () => {
 
   it("builds the whole graph on a correctly configured deployment", async () => {
     expect(await buildWithEnv({})).toBeNull();
+  });
+
+  it("does not invoke runtime operations during construction", async () => {
+    const stub = env.SESSION.get(env.SESSION.idFromName(`components-inert-${crypto.randomUUID()}`));
+    await runInSessionDO(stub, (instance, state) => {
+      componentsOf(instance);
+      const platform = createDurableObjectSessionPlatform(state, env.DB);
+      const runtimeOperation = vi.fn(() => {
+        throw new Error("Runtime operation invoked during construction");
+      });
+      const autoResponse = vi.spyOn(platform.sockets, "setAutoResponse");
+      platform.sockets.adopt = runtimeOperation;
+      platform.sockets.tags = runtimeOperation;
+      platform.sockets.sockets = runtimeOperation;
+      platform.alarmStore = {
+        getAlarm: runtimeOperation,
+        setAlarm: runtimeOperation,
+        deleteAlarm: runtimeOperation,
+      };
+      platform.createBackgroundTasks = () => ({ submit: runtimeOperation });
+      const prototypes = [
+        SandboxLifecycleManager.prototype,
+        SandboxShutdownCoordinator.prototype,
+        SessionMessageQueue.prototype,
+        SessionMessengerImpl.prototype,
+        SessionStatusService.prototype,
+        SessionWebSocketManagerImpl.prototype,
+      ];
+      try {
+        for (const prototype of prototypes) {
+          for (const [name, descriptor] of Object.entries(
+            Object.getOwnPropertyDescriptors(prototype)
+          )) {
+            if (name === "constructor" || typeof descriptor.value !== "function") continue;
+            vi.spyOn(
+              prototype as unknown as Record<string, () => unknown>,
+              name
+            ).mockImplementation(runtimeOperation);
+          }
+        }
+        const runtime = createSessionRuntime(
+          platform,
+          createCloudflareEnv((instance as unknown as { env: WorkerBindings }).env)
+        );
+        expect(runtime.internals.lifecycleManager).toBeInstanceOf(SandboxLifecycleManager);
+        expect(autoResponse).toHaveBeenCalledOnce();
+        expect(runtimeOperation).not.toHaveBeenCalled();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
   });
 
   it("fails at graph build on an unsupported SANDBOX_PROVIDER", async () => {

@@ -8,7 +8,7 @@ import {
   formatPendingVmReference,
   parsePendingVmReference,
 } from "../providers/pending-vm-reference";
-import { DEFAULT_LIFECYCLE_CONFIG, SandboxLifecycleManager } from "./manager";
+import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
 import { SandboxShutdownCoordinator } from "../../session/sandbox-shutdown";
 import type { ShutdownRecord } from "../../session/sandbox-shutdown-repository";
 import {
@@ -26,6 +26,7 @@ import {
   createMockAlarmScheduler,
   createMockIdGenerator,
   createTestConfig,
+  createTestLifecycleManager,
 } from "./test-helpers";
 
 describe("pending VM reference recovery", () => {
@@ -130,7 +131,7 @@ describe("pending VM reference recovery", () => {
         retireAccess: vi.fn(),
       };
       const shutdown = new SandboxShutdownCoordinator(deps as never);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,

@@ -13,6 +13,8 @@ import {
 } from "./manager";
 import type { McpServerLookup, SlackAgentNotifyLookup } from "./launch-context";
 import type { ImageBuildLookup, ImageBuildSpawnRow } from "./image-selection";
+import { createSandboxAccess, TERMINAL_TOKEN_TTL_SECONDS } from "./sandbox-access";
+import { createLogger } from "../../logger";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import { MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION } from "../runtime-manifest";
@@ -45,6 +47,7 @@ import {
   createMockIdGenerator,
   createMockProvider,
   createTestConfig,
+  createTestLifecycleManager,
   createUnmanagedShutdown,
   createCheckpointShutdown,
   noLifetime,
@@ -151,7 +154,7 @@ async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void
       return { success: true as const, lifetime: noLifetime(), ...access };
     }),
   });
-  const manager = new SandboxLifecycleManager(
+  const manager = createTestLifecycleManager(
     provider,
     storage,
     storage,
@@ -205,22 +208,23 @@ describe("final graceful shutdown lifecycle integration", () => {
   ) {
     const storage = createMockStorage(session, sandbox);
     const sockets = createMockWebSocketManager();
+    const broadcaster = createMockBroadcaster();
     const shutdown = {
       ...createUnmanagedShutdown(),
       requestShutdown: vi.fn<SandboxShutdownLifecycle["requestShutdown"]>(async () => "owned"),
     };
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
-      createMockBroadcaster(),
+      broadcaster,
       sockets,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
       shutdown,
       createTestConfig()
     );
-    return { manager, shutdown, storage, provider, sockets };
+    return { manager, shutdown, storage, provider, sockets, broadcaster };
   }
 
   function withSavedState(f: ReturnType<typeof fixture>, kind: "snapshot" | "retained") {
@@ -255,17 +259,17 @@ describe("final graceful shutdown lifecycle integration", () => {
         getSession: () => f.storage.getSession(),
         transaction: <T>(operation: () => T): T => operation(),
       },
-      messenger: createMockBroadcaster(),
+      messenger: f.broadcaster,
       sockets: { getSandboxSocket: () => null },
       alarm: createMockAlarmScheduler(),
       background: { submit: vi.fn() },
       retireAccess: vi.fn(),
     } as never);
-    f.manager = new SandboxLifecycleManager(
+    f.manager = createTestLifecycleManager(
       f.provider,
       f.storage,
       f.storage,
-      createMockBroadcaster(),
+      f.broadcaster,
       f.sockets,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
@@ -274,6 +278,211 @@ describe("final graceful shutdown lifecycle integration", () => {
     );
     return { shutdown, read: () => state };
   }
+
+  describe.each(["restore", "resume"] as const)("committed saved %s", (kind) => {
+    it.each([
+      ["access", "connecting"],
+      ["access", "ready"],
+      ["publication", "connecting"],
+      ["publication", "ready"],
+    ] as const)(
+      "retains %s failures on a %s sandbox without a recovery hold",
+      async (failure, status) => {
+        const sandbox = createMockSandbox({
+          status: "stopped",
+          ttyd_token: await mintJwt({ exp: Math.floor(Date.now() / 1000) + 60 }, "saved-auth-key"),
+        });
+        const result = {
+          providerObjectId: "committed-source",
+          lifetime: noLifetime(),
+          codeServerUrl: "https://code.test/committed",
+          codeServerPassword: "committed-code-secret",
+          vncAccess: { url: "https://vnc.test/committed", password: "committed-vnc-secret" },
+          tunnelUrls: { "3000": "https://preview.test/committed" },
+          ttydUrl: "https://terminal.test/committed",
+        };
+        const provider = createMockProvider({
+          capabilities: { supportsPersistentResume: kind === "resume" },
+          restoreFromSnapshot: vi.fn(async (config) => {
+            if (status === "ready") sandbox.status = "ready";
+            return { success: true as const, sandboxId: config.sandboxId, ...result };
+          }),
+          resumeSandbox: vi.fn(async () => {
+            if (status === "ready") sandbox.status = "ready";
+            return { success: true as const, ...result };
+          }),
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        });
+        const f = fixture(
+          provider,
+          sandbox,
+          createMockSession({
+            code_server_enabled: 1,
+            vnc_enabled: 1,
+            sandbox_settings: JSON.stringify({ terminalEnabled: true }),
+          })
+        );
+        vi.mocked(f.sockets.getSandboxWebSocket).mockImplementation(() =>
+          sandbox.status === "ready" ? ({} as WebSocket) : null
+        );
+        const saved = withSavedState(f, kind === "restore" ? "snapshot" : "retained");
+        const holdFailedRecovery = vi.spyOn(saved.shutdown, "holdFailedRecovery");
+        const recordProviderStartup = vi.spyOn(saved.shutdown, "recordProviderStartup");
+        const error = new Error(`committed ${failure} failed`);
+        let rejectAccess: ((error: Error) => void) | undefined;
+        if (failure === "access") {
+          const write = new Promise<never>((_resolve, reject) => {
+            rejectAccess = reject;
+          });
+          if (kind === "restore") {
+            const persist = vi.mocked(f.storage.updateSandboxAccess).getMockImplementation()!;
+            vi.mocked(f.storage.updateSandboxAccess).mockImplementation(
+              async (artifact, url, secret) => {
+                if (artifact === "ttyd") return write;
+                await persist(artifact, url, secret);
+              }
+            );
+          } else {
+            vi.mocked(f.storage.completeProviderResume).mockReturnValueOnce(write);
+          }
+        } else {
+          const broadcast = vi.mocked(f.broadcaster.broadcast).getMockImplementation()!;
+          vi.mocked(f.broadcaster.broadcast).mockImplementation((message) => {
+            if (message.type === "sandbox_access_changed" && saved.read().phase === "running")
+              throw error;
+            broadcast(message);
+          });
+        }
+        const info = vi.spyOn(console, "log").mockImplementation(() => {});
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const spawning = f.manager.spawnSandbox();
+        try {
+          if (failure === "access") {
+            await vi.waitFor(() => {
+              if (kind === "restore")
+                expect(f.storage.updateSandboxAccess).toHaveBeenCalledWith(
+                  "ttyd",
+                  result.ttydUrl,
+                  expect.any(String)
+                );
+              else expect(f.storage.completeProviderResume).toHaveBeenCalledOnce();
+            });
+            expect(f.manager.isSpawning()).toBe(true);
+            expect(sandbox.status).toBe(status);
+            expect(saved.read().phase).toBe(kind === "restore" ? "running" : "restoring");
+            expect(holdFailedRecovery).not.toHaveBeenCalled();
+            rejectAccess!(error);
+          }
+          await expect(spawning).resolves.toBeUndefined();
+
+          expect(sandbox.status).toBe(status);
+          expect(sandbox.modal_object_id).toBe(result.providerObjectId);
+          expect(saved.read()).toMatchObject({
+            phase: "running",
+            sourceRetired: false,
+            providerObjectId: result.providerObjectId,
+            generation: { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at },
+            receipt: { kind: kind === "restore" ? "snapshot" : "retained" },
+          });
+          expect(saved.shutdown.isHolding()).toBe(false);
+          expect(recordProviderStartup).toHaveBeenCalledExactlyOnceWith(
+            { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at },
+            result.lifetime
+          );
+          expect(holdFailedRecovery).not.toHaveBeenCalled();
+          expect(f.storage.incrementCircuitBreakerFailure).not.toHaveBeenCalled();
+          expect(f.storage.setLastSpawnError).toHaveBeenCalledExactlyOnceWith(null, null);
+          expect(f.storage.transitionSandboxStatus).not.toHaveBeenCalled();
+          expect(f.provider.createSandbox).not.toHaveBeenCalled();
+          expect(f.provider.stopSandbox).not.toHaveBeenCalled();
+          expect(f.broadcaster.messages).not.toContainEqual({
+            type: "sandbox_status",
+            status: "failed",
+          });
+          expect(f.broadcaster.messages).not.toContainEqual({
+            type: "sandbox_error",
+            error: error.message,
+          });
+          expect(f.broadcaster.messages).not.toContainEqual({
+            type: "sandbox_restored",
+            message: "Session restored from snapshot",
+          });
+          expect(parseStructuredLogs(info)).not.toContainEqual(
+            expect.objectContaining({ event: "sandbox.restore" })
+          );
+          expect(errors).not.toHaveBeenCalled();
+          expect(parseStructuredLogs(warn)).toContainEqual(
+            expect.objectContaining({
+              event: "sandbox.recovery_access_failed",
+              msg:
+                kind === "restore"
+                  ? "Restored sandbox access/publication failed"
+                  : "Resumed sandbox access/publication failed",
+            })
+          );
+          expect(f.manager.isSpawning()).toBe(false);
+          expect(f.manager.isProviderStartupPending()).toBe(false);
+        } finally {
+          rejectAccess?.(error);
+          await spawning;
+          info.mockRestore();
+          errors.mockRestore();
+          warn.mockRestore();
+          holdFailedRecovery.mockRestore();
+          recordProviderStartup.mockRestore();
+        }
+      }
+    );
+  });
+
+  it("holds saved resume when its terminal secret read fails before startup is committed", async () => {
+    const f = fixture(
+      createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({
+          success: true as const,
+          lifetime: noLifetime(),
+          ttydUrl: "https://terminal.test/resumed",
+        })),
+      }),
+      createMockSandbox({ status: "stopped", modal_object_id: "retained-source" }),
+      createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) })
+    );
+    const saved = withSavedState(f, "retained");
+    const holdFailedRecovery = vi.spyOn(saved.shutdown, "holdFailedRecovery");
+    const recordProviderStartup = vi.spyOn(saved.shutdown, "recordProviderStartup");
+    vi.mocked(f.storage.getSandboxAccessSecret).mockRejectedValue(new Error("secret read failed"));
+    try {
+      await expect(f.manager.spawnSandbox()).resolves.toBeUndefined();
+
+      expect(f.provider.resumeSandbox).toHaveBeenCalledOnce();
+      expect(f.storage.completeProviderResume).not.toHaveBeenCalled();
+      expect(recordProviderStartup).not.toHaveBeenCalled();
+      expect(holdFailedRecovery).toHaveBeenCalledExactlyOnceWith("secret read failed", {
+        sandboxId: f.storage.getSandbox()!.modal_sandbox_id,
+        createdAt: f.storage.getSandbox()!.created_at,
+      });
+      expect(f.storage.getSandbox()).toMatchObject({
+        status: "failed",
+        modal_object_id: "retained-source",
+        last_spawn_error: "secret read failed",
+      });
+      expect(saved.read()).toMatchObject({
+        phase: "unknown",
+        sourceRetired: false,
+        receipt: { kind: "retained", artifactId: "retained-source" },
+      });
+      expect(saved.shutdown.isHolding()).toBe(true);
+      expect(f.storage.incrementCircuitBreakerFailure).not.toHaveBeenCalled();
+      await f.manager.spawnSandbox();
+      expect(f.provider.resumeSandbox).toHaveBeenCalledOnce();
+      expect(f.provider.createSandbox).not.toHaveBeenCalled();
+    } finally {
+      holdFailedRecovery.mockRestore();
+      recordProviderStartup.mockRestore();
+    }
+  });
 
   it("allows explicit saved-state retry after restore preflight fails without provider I/O", async () => {
     const f = fixture();
@@ -828,7 +1037,7 @@ describe("lifecycle-owned runtime readiness and cancellation", () => {
       },
     });
     const alarms = createMockAlarmScheduler();
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
@@ -971,19 +1180,26 @@ describe("SandboxLifecycleManager", () => {
       broadcast: vi.fn(),
       schedule: vi.fn(async () => undefined),
     };
+    const wsManager = createMockWebSocketManager(false);
+    const idGenerator = createMockIdGenerator();
+    const getSessionId = vi.fn(() => "construction-session");
 
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
       { broadcast: callbacks.broadcast },
-      createMockWebSocketManager(false),
+      wsManager,
       { ...createMockAlarmScheduler(), schedule: callbacks.schedule },
-      createMockIdGenerator(),
+      idGenerator,
       shutdown,
-      createTestConfig()
+      { ...createTestConfig(), getSessionId }
     );
 
+    expect(storage.calls).toEqual([]);
+    expect(getSessionId).not.toHaveBeenCalled();
+    expect(wsManager.getSandboxWebSocket).not.toHaveBeenCalled();
+    expect(idGenerator.generateId).not.toHaveBeenCalled();
     expect(shutdown.startupDecision).not.toHaveBeenCalled();
     expect(callbacks.broadcast).not.toHaveBeenCalled();
     expect(callbacks.schedule).not.toHaveBeenCalled();
@@ -991,6 +1207,8 @@ describe("SandboxLifecycleManager", () => {
     await manager.spawnSandbox();
 
     expect(shutdown.startupDecision).toHaveBeenCalledOnce();
+    expect(storage.calls).toEqual([]);
+    expect(getSessionId).not.toHaveBeenCalled();
     expect(provider.createSandbox).not.toHaveBeenCalled();
     expect(callbacks.broadcast).not.toHaveBeenCalled();
     expect(callbacks.schedule).not.toHaveBeenCalled();
@@ -1006,7 +1224,7 @@ describe("SandboxLifecycleManager", () => {
       const idGenerator = createMockIdGenerator();
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1063,7 +1281,7 @@ describe("SandboxLifecycleManager", () => {
           capabilities: { supportsExplicitStop: true },
           stopSandbox,
         });
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -1125,7 +1343,7 @@ describe("SandboxLifecycleManager", () => {
             throw new Error("provider unavailable");
           }),
         });
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -1180,7 +1398,7 @@ describe("SandboxLifecycleManager", () => {
           }),
           stopSandbox: vi.fn(() => new Promise<StopResult>(() => {})),
         });
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -1231,7 +1449,7 @@ describe("SandboxLifecycleManager", () => {
           vncAccess: { url: "https://vnc.test", password: "secret" },
         })),
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1258,10 +1476,98 @@ describe("SandboxLifecycleManager", () => {
       expectEarlyBridgeStartup
     );
 
+    it.each([
+      ["spawn", "public-session-name"],
+      ["restore", null],
+    ] as const)("signs %s terminal claims with the launch auth key", async (kind, sessionName) => {
+      const nowMs = 1_700_000_000_123;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+      try {
+        const session = createMockSession({
+          session_name: sessionName,
+          sandbox_settings: JSON.stringify({ terminalEnabled: true }),
+        });
+        const sandbox = createMockSandbox({
+          status: kind === "spawn" ? "pending" : "stopped",
+          snapshot_image_id: kind === "restore" ? "saved-image" : null,
+          snapshot_runtime_version: kind === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
+        });
+        const storage = createMockStorage(session, sandbox);
+        const ttydUrl = `https://terminal.test/${kind}`;
+        const provider = createMockProvider({
+          createSandbox: vi.fn(async (config) => ({
+            sandboxId: config.sandboxId,
+            providerObjectId: "fresh-source",
+            createdAt: nowMs,
+            lifetime: noLifetime(),
+            ttydUrl,
+          })),
+          restoreFromSnapshot: vi.fn(async (config) => ({
+            success: true as const,
+            sandboxId: config.sandboxId,
+            providerObjectId: "restored-source",
+            lifetime: noLifetime(),
+            ttydUrl,
+          })),
+        });
+        const manager = createTestLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createUnmanagedShutdown(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        const launch =
+          kind === "spawn"
+            ? vi.mocked(provider.createSandbox).mock.calls[0][0]
+            : vi.mocked(provider.restoreFromSnapshot!).mock.calls[0][0];
+        const token = sandbox.ttyd_token;
+        expect(token).toEqual(expect.any(String));
+        const [header, body, signature] = token!.split(".");
+        expect(JSON.parse(atob(header))).toEqual({ alg: "HS256", typ: "JWT" });
+        expect(JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/")))).toEqual({
+          sub: session.session_name || session.id,
+          sid: launch.sandboxId,
+          iat: Math.floor(nowMs / 1000),
+          exp: Math.floor(nowMs / 1000) + TERMINAL_TOKEN_TTL_SECONDS,
+        });
+        const key = await crypto.subtle.importKey(
+          "raw",
+          new TextEncoder().encode(launch.sandboxAuthToken),
+          { name: "HMAC", hash: "SHA-256" },
+          false,
+          ["verify"]
+        );
+        expect(
+          await crypto.subtle.verify(
+            "HMAC",
+            key,
+            Uint8Array.from(atob(signature.replace(/-/g, "+").replace(/_/g, "/")), (character) =>
+              character.charCodeAt(0)
+            ),
+            new TextEncoder().encode(`${header}.${body}`)
+          )
+        ).toBe(true);
+        expect(launch.sessionId).toBe(session.session_name || session.id);
+        expect(storage.updateSandboxAccess).toHaveBeenCalledExactlyOnceWith("ttyd", ttydUrl, token);
+        expect(storage.completeProviderResume).not.toHaveBeenCalled();
+        expect(sandbox.ttyd_url).toBe(ttydUrl);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
     it("logs one terminal sandbox.spawn event for success", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1301,7 +1607,7 @@ describe("SandboxLifecycleManager", () => {
           throw new Error("spawn exploded");
         }),
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1336,7 +1642,7 @@ describe("SandboxLifecycleManager", () => {
       vi.mocked(storage.updateSandboxModalObjectId).mockImplementation(() => {
         throw new Error("storage unavailable");
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1372,7 +1678,7 @@ describe("SandboxLifecycleManager", () => {
         sandboxDashboardUrlBuilder: (id: string) => `https://provider.example/${id}`,
       };
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1399,7 +1705,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1425,7 +1731,7 @@ describe("SandboxLifecycleManager", () => {
       const alarmScheduler = createMockAlarmScheduler();
       const config = createTestConfig();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1454,7 +1760,7 @@ describe("SandboxLifecycleManager", () => {
       const idGenerator = createMockIdGenerator();
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1495,7 +1801,7 @@ describe("SandboxLifecycleManager", () => {
         markRestoreFailed: vi.fn(async () => true),
       };
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1542,7 +1848,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1569,7 +1875,7 @@ describe("SandboxLifecycleManager", () => {
         last_spawn_failure: now - 60000,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1606,7 +1912,7 @@ describe("SandboxLifecycleManager", () => {
         throw new Error("storage unavailable");
       });
       const broadcaster = createMockBroadcaster();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -1639,7 +1945,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1668,7 +1974,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1698,7 +2004,7 @@ describe("SandboxLifecycleManager", () => {
       };
       const storage = createMockStorage(createMockSession(), sandbox, userEnvVars);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1725,7 +2031,7 @@ describe("SandboxLifecycleManager", () => {
         snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
       });
       const mockStorage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         mockStorage,
         mockStorage,
@@ -1770,7 +2076,7 @@ describe("SandboxLifecycleManager", () => {
         ),
       });
       const mockStorage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -1819,7 +2125,7 @@ describe("SandboxLifecycleManager", () => {
           lifetime: noLifetime(),
         })),
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1864,7 +2170,7 @@ describe("SandboxLifecycleManager", () => {
         })),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1903,7 +2209,7 @@ describe("SandboxLifecycleManager", () => {
         sandboxDashboardUrlBuilder: (id: string) => `https://provider.example/${id}`,
       };
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1946,7 +2252,7 @@ describe("SandboxLifecycleManager", () => {
         sandboxDashboardUrlBuilder: (id: string) => `https://provider.example/${id}`,
       };
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -1991,7 +2297,7 @@ describe("SandboxLifecycleManager", () => {
         sandboxDashboardUrlBuilder: (id: string) => `https://provider.example/${id}`,
       };
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2028,9 +2334,19 @@ describe("SandboxLifecycleManager", () => {
         ttyd_token: ttydToken,
       });
       const storage = createMockStorage(
-        createMockSession({ sandbox_settings: JSON.stringify({ terminalEnabled: true }) }),
+        createMockSession({
+          code_server_enabled: 1,
+          vnc_enabled: 1,
+          sandbox_settings: JSON.stringify({ terminalEnabled: true }),
+        }),
         sandbox
       );
+      const access = {
+        codeServerUrl: "https://code.test/resumed",
+        codeServerPassword: "resumed-code-secret",
+        vncAccess: { url: "https://vnc.test/resumed", password: "resumed-vnc-secret" },
+        tunnelUrls: { "3000": "https://preview.test/resumed" },
+      };
       const provider = createMockProvider({
         capabilities: { supportsPersistentResume: true },
         resumeSandbox: vi.fn(async () => ({
@@ -2038,9 +2354,10 @@ describe("SandboxLifecycleManager", () => {
           providerObjectId: "same-provider-obj",
           lifetime: noLifetime(),
           ttydUrl: "https://terminal.test/refreshed",
+          ...access,
         })),
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2056,7 +2373,27 @@ describe("SandboxLifecycleManager", () => {
 
       expect(sandbox.ttyd_url).toBe("https://terminal.test/refreshed");
       expect(sandbox.ttyd_token).toBe(ttydToken);
-      expect(storage.calls).toContain("completeProviderResume");
+      expect(storage.completeProviderResume).toHaveBeenCalledExactlyOnceWith(
+        { sandboxId: sandbox.modal_sandbox_id, createdAt: sandbox.created_at },
+        {
+          providerObjectId: "same-provider-obj",
+          codeServer: { url: access.codeServerUrl, password: access.codeServerPassword },
+          vnc: access.vncAccess,
+          ttyd: { url: "https://terminal.test/refreshed", token: ttydToken },
+          tunnelUrls: access.tunnelUrls,
+        }
+      );
+      expect(vi.mocked(storage.completeProviderResume).mock.calls[0]).toHaveLength(2);
+      expect(storage.getSandboxAccessSecret).toHaveBeenCalledExactlyOnceWith("ttyd");
+      expect(storage.updateSandboxAccess).not.toHaveBeenCalled();
+      expect(storage.updateSandboxTunnelUrls).not.toHaveBeenCalled();
+      expect(sandbox).toMatchObject({
+        code_server_url: access.codeServerUrl,
+        code_server_password: access.codeServerPassword,
+        vnc_url: access.vncAccess.url,
+        vnc_password: access.vncAccess.password,
+        tunnel_urls: JSON.stringify(access.tunnelUrls),
+      });
     });
 
     it("does not publish access when a resume is cancelled during the provider request", async () => {
@@ -2075,7 +2412,7 @@ describe("SandboxLifecycleManager", () => {
         capabilities: { supportsPersistentResume: true },
         resumeSandbox: vi.fn(async () => resumeResult),
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2140,7 +2477,7 @@ describe("SandboxLifecycleManager", () => {
           resumeSandbox,
           stopSandbox,
         });
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -2197,7 +2534,7 @@ describe("SandboxLifecycleManager", () => {
         resumeSandbox,
         stopSandbox,
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2247,7 +2584,7 @@ describe("SandboxLifecycleManager", () => {
         providerObjectId: "retained-source",
         runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2279,7 +2616,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
       const broadcaster = createMockBroadcaster();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2311,7 +2648,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2338,7 +2675,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2365,7 +2702,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2399,7 +2736,7 @@ describe("SandboxLifecycleManager", () => {
         }),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2439,7 +2776,7 @@ describe("SandboxLifecycleManager", () => {
         ),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2473,7 +2810,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2503,7 +2840,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2535,7 +2872,7 @@ describe("SandboxLifecycleManager", () => {
         last_spawn_failure: now - 60000,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2563,7 +2900,7 @@ describe("SandboxLifecycleManager", () => {
         last_spawn_failure: now - 60000,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2590,7 +2927,7 @@ describe("SandboxLifecycleManager", () => {
       alarmScheduler.schedule = vi.fn(async () => {
         throw new Error("alarm storage unavailable");
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2624,7 +2961,7 @@ describe("SandboxLifecycleManager", () => {
         }),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2653,7 +2990,7 @@ describe("SandboxLifecycleManager", () => {
         }),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2681,7 +3018,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2707,7 +3044,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2730,7 +3067,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "spawning", created_at: 7000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2755,7 +3092,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "failed", fenced: 0, created_at: 7000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2777,7 +3114,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "failed", fenced: 1, created_at: 7000 });
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2801,7 +3138,7 @@ describe("SandboxLifecycleManager", () => {
         const sandbox = createMockSandbox({ status, created_at: 7000 });
         const storage = createMockStorage(createMockSession(), sandbox);
         const broadcaster = createMockBroadcaster();
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           createMockProvider(),
           storage,
           storage,
@@ -2823,7 +3160,7 @@ describe("SandboxLifecycleManager", () => {
     it("does not move a row a newer reservation owns", () => {
       const sandbox = createMockSandbox({ status: "spawning", created_at: 9000 });
       const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -2852,7 +3189,7 @@ describe("SandboxLifecycleManager", () => {
         const sandbox = createMockSandbox({ status: "connecting", spawn_failure_count: 0 });
         const storage = createMockStorage(createMockSession(), sandbox);
         const provider = createMockProvider();
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -2890,7 +3227,7 @@ describe("SandboxLifecycleManager", () => {
           last_spawn_failure: Date.now(),
         });
         const storage = createMockStorage(createMockSession(), sandbox);
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           createMockProvider(),
           storage,
           storage,
@@ -2922,7 +3259,7 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2964,7 +3301,7 @@ describe("SandboxLifecycleManager", () => {
         // No takeSnapshot method
       };
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -2993,7 +3330,7 @@ describe("SandboxLifecycleManager", () => {
         })),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3025,7 +3362,7 @@ describe("SandboxLifecycleManager", () => {
         }),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3060,7 +3397,7 @@ describe("SandboxLifecycleManager", () => {
         }),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3092,7 +3429,7 @@ describe("SandboxLifecycleManager", () => {
         })),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3119,7 +3456,7 @@ describe("SandboxLifecycleManager", () => {
         takeSnapshot: vi.fn(async () => ({ success: false, error: "capture failed" })),
       });
       const shutdown = createCheckpointShutdown(provider, storage, broadcaster);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3157,7 +3494,7 @@ describe("SandboxLifecycleManager", () => {
           sourceStopped: false,
         })),
       } satisfies SandboxShutdownLifecycle;
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3196,7 +3533,7 @@ describe("SandboxLifecycleManager", () => {
           capabilities: { supportsExplicitStop: true },
           stopSandbox: vi.fn(async () => ({ success: true })),
         });
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -3231,7 +3568,7 @@ describe("SandboxLifecycleManager", () => {
           capabilities: { supportsExplicitStop: true },
           stopSandbox,
         });
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -3262,7 +3599,7 @@ describe("SandboxLifecycleManager", () => {
         createMockSession(),
         createMockSandbox({ status: "connecting" })
       );
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider({
           capabilities: { supportsExplicitStop: true },
           stopSandbox: vi.fn(() => providerStop),
@@ -3307,22 +3644,36 @@ describe("SandboxLifecycleManager", () => {
       const createSandbox = vi.fn();
       const storage = createMockStorage();
       const wsManager = createMockWebSocketManager(true);
+      const broadcaster = createMockBroadcaster();
       const provider = createMockProvider({
         capabilities: { supportsExplicitStop: true },
         stopSandbox,
         createSandbox,
       });
+      const access = createSandboxAccess({
+        storage,
+        broadcaster,
+        sockets: wsManager,
+        canResumeAfterStop: () => false,
+        getLogger: () => createLogger("lifecycle-manager"),
+      });
+      const shutdown = createCheckpointShutdown(
+        provider,
+        storage,
+        broadcaster,
+        undefined,
+        access.retireShutdownAccess
+      );
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
         storage,
-        createMockBroadcaster(),
+        broadcaster,
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createCheckpointShutdown(provider, storage, createMockBroadcaster(), undefined, () =>
-          manager.retireShutdownAccess()
-        ),
+        shutdown,
+        access,
         createTestConfig()
       );
 
@@ -3351,7 +3702,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({ status: "ready" as SandboxStatus });
       const storage = createMockStorage(createMockSession(), sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -3380,7 +3731,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(createMockSession(), sandbox);
       const broadcaster = createMockBroadcaster();
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3417,7 +3768,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3452,7 +3803,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "failed" as SandboxStatus });
       const storage = createMockStorage(createMockSession(), sandbox);
       const provider = createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3483,7 +3834,7 @@ describe("SandboxLifecycleManager", () => {
       async (status) => {
         const storage = createMockStorage(createMockSession(), createMockSandbox({ status }));
         const wsManager = createMockWebSocketManager(true);
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           createMockProvider(),
           storage,
           storage,
@@ -3515,7 +3866,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const wsManager = createMockWebSocketManager();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider({ capabilities: { supportsExplicitStop: false } }),
         storage,
         storage,
@@ -3548,7 +3899,7 @@ describe("SandboxLifecycleManager", () => {
       const alarmScheduler = createMockAlarmScheduler();
       const config = createTestConfig();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -3580,7 +3931,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(true); // Has WebSocket
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3604,7 +3955,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3628,7 +3979,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -3654,7 +4005,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox();
       const storage = createMockStorage(createMockSession(), sandbox);
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -3680,7 +4031,7 @@ describe("SandboxLifecycleManager", () => {
       const alarmScheduler = createMockAlarmScheduler();
       const config = createTestConfig();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -3737,7 +4088,7 @@ describe("SandboxLifecycleManager", () => {
         overrides?.sessionRepositories ?? REPO_MEMBER
       );
       const provider = overrides?.provider ?? createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4048,7 +4399,7 @@ describe("SandboxLifecycleManager", () => {
         overrides?.sessionRepositories ?? ENV_MEMBERS
       );
       const provider = overrides?.provider ?? createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4287,7 +4638,7 @@ describe("SandboxLifecycleManager", () => {
         overrides?.sessionRepositories ?? MULTI_REPO_MEMBERS
       );
       const provider = overrides?.provider ?? createMockProvider();
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4408,7 +4759,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const provider = createMockProvider();
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4438,7 +4789,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const provider = createMockProvider();
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4471,7 +4822,7 @@ describe("SandboxLifecycleManager", () => {
         resumeSandbox: vi.fn(async () => ({ success: true as const, lifetime: noLifetime() })),
       });
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4498,7 +4849,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const provider = createMockProvider();
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4522,7 +4873,7 @@ describe("SandboxLifecycleManager", () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const provider = createMockProvider();
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4552,7 +4903,7 @@ describe("SandboxLifecycleManager", () => {
       });
       const broadcaster = createMockBroadcaster();
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4585,7 +4936,7 @@ describe("SandboxLifecycleManager", () => {
         name: "daytona",
       };
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4614,7 +4965,7 @@ describe("SandboxLifecycleManager", () => {
         capabilities: { supportsSandboxTimeout: false },
       });
       const mockStorage = createMockStorage(session, sandbox);
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         mockStorage,
         mockStorage,
@@ -4641,7 +4992,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4668,7 +5019,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4697,7 +5048,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4726,7 +5077,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4755,7 +5106,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4794,7 +5145,7 @@ describe("SandboxLifecycleManager", () => {
         })),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4826,7 +5177,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4858,7 +5209,7 @@ describe("SandboxLifecycleManager", () => {
         });
         const storage = createMockStorage(session, sandbox);
         const provider = createMockProvider();
-        const manager = new SandboxLifecycleManager(
+        const manager = createTestLifecycleManager(
           provider,
           storage,
           storage,
@@ -4889,7 +5240,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(session, sandbox);
       const provider = createMockProvider();
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4930,7 +5281,7 @@ describe("SandboxLifecycleManager", () => {
         })),
       });
 
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -4963,7 +5314,7 @@ describe("SandboxLifecycleManager", () => {
       const storage = createMockStorage(opts.session ?? createMockSession(), sandbox);
       const provider = opts.provider ?? createMockProvider();
       const config = { ...createTestConfig(), slackAgentNotifyLookup: opts.lookup };
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         provider,
         storage,
         storage,
@@ -5144,7 +5495,7 @@ describe("status writes after a provider await (COL-99)", () => {
   ) {
     const storage = createMockStorage(createMockSession(), sandbox);
     const broadcaster = createMockBroadcaster();
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       createMockProvider({ createSandbox }),
       storage,
       storage,
@@ -5207,7 +5558,7 @@ describe("status writes after a provider await (COL-99)", () => {
         reserveStartup: vi.fn((_createdAt, _policy, persist) => persist()),
         requestShutdown: vi.fn(async () => "owned" as const),
       } satisfies SandboxShutdownLifecycle;
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider({
           capabilities: { supportsExplicitStop: true },
           createSandbox,
@@ -5303,7 +5654,7 @@ describe("status writes after a provider await (COL-99)", () => {
     const storage = createMockStorage(createMockSession(), sandbox);
     const broadcaster = createMockBroadcaster();
     const wsManager = createMockWebSocketManager(false);
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       createMockProvider({
         createSandbox: vi.fn(async () => {
           sandbox.status = "connecting";
@@ -5362,7 +5713,7 @@ describe("status writes after a provider await (COL-99)", () => {
       // stops the sandbox without changing its reserved identity.
       sandbox.status = "stopped";
     });
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
@@ -5409,7 +5760,7 @@ describe("status writes after a provider await (COL-99)", () => {
         };
       }),
     });
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
@@ -5453,7 +5804,7 @@ describe("status writes after a provider await (COL-99)", () => {
         return { success: true, imageId: "snapshot-of-A" };
       }),
     });
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
@@ -5491,7 +5842,8 @@ describe("SandboxLifecycleManager log context", () => {
   it("derives session_id from getSessionId per use, upgrading once the id changes", async () => {
     let currentId = "do-fallback-id";
     const mockStorage = createMockStorage(null);
-    const manager = new SandboxLifecycleManager(
+    const getSessionId = vi.fn(() => currentId);
+    const manager = createTestLifecycleManager(
       createMockProvider(),
       mockStorage,
       mockStorage,
@@ -5500,8 +5852,9 @@ describe("SandboxLifecycleManager log context", () => {
       createMockAlarmScheduler(),
       createMockIdGenerator(),
       createUnmanagedShutdown(),
-      { ...createTestConfig(), getSessionId: () => currentId }
+      { ...createTestConfig(), getSessionId }
     );
+    expect(getSessionId).not.toHaveBeenCalled();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     // The no-session spawn guard is the cheapest this.log-emitting operation.
@@ -5521,9 +5874,54 @@ describe("SandboxLifecycleManager log context", () => {
     expect(contexts).toEqual(["do-fallback-id", "public-session-name"]);
   });
 
+  it("resolves the extracted access logger's session_id only when access is used", async () => {
+    let currentId = "do-fallback-id";
+    const getSessionId = vi.fn(() => currentId);
+    const sandbox = createMockSandbox({ status: "pending" });
+    const storage = createMockStorage(createMockSession({ code_server_enabled: 1 }), sandbox);
+    const provider = createMockProvider({
+      createSandbox: vi.fn(async (config) => ({
+        sandboxId: config.sandboxId,
+        providerObjectId: "logged-source",
+        createdAt: Date.now(),
+        lifetime: noLifetime(),
+        codeServerUrl: "https://code.test/logged",
+        codeServerPassword: "logged-secret",
+      })),
+    });
+    const manager = createTestLifecycleManager(
+      provider,
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(false),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createUnmanagedShutdown(),
+      { ...createTestConfig(), getSessionId }
+    );
+    expect(getSessionId).not.toHaveBeenCalled();
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await manager.spawnSandbox();
+      currentId = "public-session-name";
+      sandbox.status = "failed";
+      sandbox.last_heartbeat = null;
+      await manager.spawnSandbox();
+
+      expect(
+        parseStructuredLogs(info)
+          .filter((entry) => entry.msg === "Storing code-server info")
+          .map((entry) => entry.session_id)
+      ).toEqual(["do-fallback-id", "public-session-name"]);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("omits session_id entirely when no getSessionId is configured", async () => {
     const mockStorage = createMockStorage(null);
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       createMockProvider(),
       mockStorage,
       mockStorage,
@@ -5554,7 +5952,7 @@ describe("spawn admission race (#1589)", () => {
   // identity, with credentials invalidated, must already be persisted.
   function raceHarness(sandbox: ReturnType<typeof createMockSandbox>) {
     const storage = createMockStorage(createMockSession(), sandbox);
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       createMockProvider(),
       storage,
       storage,

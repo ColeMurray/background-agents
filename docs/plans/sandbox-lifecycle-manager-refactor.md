@@ -19,15 +19,18 @@ Paths are relative to `packages/control-plane/src/`.
   scope selection, lookup/logging and explicitly requested best-effort invalidation.
 - `sandbox/lifecycle/image-selection.ts` remains the pure fingerprint, harness/runtime compatibility
   and provenance evaluator. Launch context reuses it rather than reimplementing policy.
+- `sandbox/lifecycle/sandbox-access.ts` owns artifact-write mechanics, terminal JWT signing/reuse,
+  retirement and access notifications. It has no lifecycle state or eligibility authority.
 - `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
   `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
   shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
 - `session/components.ts` and `sandbox-lifecycle-adapters.ts` compose the existing graph. Consumer
-  ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch or shutdown internals.
+  ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch, access or shutdown
+  internals. Session access readers retain authentication/read eligibility and decryption rechecks.
 
-Access, VM reconciliation, allocation cleanup and watchdog effects remain manager responsibilities
-until their serial extraction increments land. Each increment must integrate before its successor;
-the manager is not intended to become a tiny facade or lose lifecycle arbitration.
+VM reconciliation, allocation cleanup and watchdog effects remain manager responsibilities until
+their serial extraction increments land. Each increment must integrate before its successor; the
+manager is not intended to become a tiny facade or lose lifecycle arbitration.
 
 ## Launch Contract
 
@@ -71,6 +74,35 @@ There is no universal startup pipeline. Independently landed context injection, 
 or provider recovery behavior must be preserved, not implemented or removed as incidental cleanup.
 No schema, wire/runtime/provider-backend contract, timeout or retry policy changes are authorized.
 
+## Access Contract
+
+`createSandboxAccess` binds only an artifact storage port, broadcast, socket observation/detachment,
+the provider's resumable-stop capability check, dashboard URL builder and lazy logger. It owns no
+mutable lifecycle flags, generation checks, signing-key retention, encryption key or full-manager
+reference. Its factory performs no dependency work.
+
+Composition constructs repository/socket/messenger leaves, then access, then shutdown, then manager.
+Shutdown receives `access.retireShutdownAccess` directly; retirement clears access, notifies
+clients, then detaches with the unchanged close code and reason. There is no manager retirement
+forwarding method. URL-only retirement preserves credentials on resumable providers when supported,
+falls back to full clearing otherwise, and always clears tunnels and notifies. Other termination
+paths keep their own existing clear/detach order.
+
+The manager calls individual `storeCodeServer`, `storeVnc`, `storeAndBroadcastTunnelUrls`,
+`storeTtyd` operations for fresh/restore at their original await points. It still orchestrates
+secret reads and atomic `completeProviderResume` writes for resume/bridge; these operations are
+intentionally not unified. `reusableTtydToken` validates an already-read JWT synchronously so
+disabled terminal access does not acquire a new await. `mintTtydToken` uses the transient launch
+key, existing session/sandbox claims and the single terminal TTL. A hash-only restart or
+expired/missing JWT cannot renew access.
+
+`broadcastSandboxDashboardUrl` and `broadcastProviderAccessIfConnected` preserve separate,
+repeatable notifications, alongside tunnel notifications. The manager retains publication fallbacks
+and caller-specific catches, including committed recovery's access failure treatment. Atomic
+repository completion rechecks generation, status and fence after encryption; only bridge supplies
+an expected pending reference. Fresh/restore per-artifact writes remain unguarded, as characterized
+separately in the baseline gap notes, not silently hardened here.
+
 ## Verification
 
 Keep direct narrow-dependency tests for input resolution and lookup effects. Keep assembled tests
@@ -79,12 +111,17 @@ ordering, the no-await boundary for ineligible images, retry identity rotation a
 settings. Image compatibility policy belongs to `image-selection.test.ts`; real-storage and Workerd
 tests retain generation, shutdown and early-connect coverage.
 
+Access coverage includes direct retirement/fallback/notification-order tests, assembled JWT and
+resume/restart/bridge tests, committed recovery failure boundaries, real encryption interleavings
+and real composition retirement/construction checks. Existing session access-reader and repository
+tests remain independent; collaborator mocks do not replace assembled coverage.
+
 Build shared first, then run sequentially from the repository root:
 
 ```bash
 npm run build -w @open-inspect/shared
-npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle
-npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown
+npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle src/session/sandbox-access src/session/sandbox-repository src/session/sandbox-shutdown
+npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown sandbox-state-retention session-components
 npm run typecheck -w @open-inspect/control-plane
 npm run lint -w @open-inspect/control-plane
 npm run test:lint-sandbox-boundaries

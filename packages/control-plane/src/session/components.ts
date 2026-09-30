@@ -46,6 +46,9 @@ import {
 } from "../sandbox/lifecycle/manager";
 import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
 import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
+// The composition root shares the internal access collaborator with shutdown and lifecycle only.
+// eslint-disable-next-line no-restricted-imports
+import { createSandboxAccess, type SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
@@ -430,11 +433,29 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const diffsHandler = new SessionDiffsHandler(diffService);
   const eventStream = new SessionEventStream(eventRepository);
 
-  // Tier 5 — the lifecycle manager.
-  const sandboxProvider = createSandboxProviderFromEnv(
-    env,
-    resolveSandboxBackendName(env.SANDBOX_PROVIDER)
+  // Tier 5: access precedes shutdown and the lifecycle manager, so retirement has no manager cycle.
+  const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
+  const sandboxProvider = createSandboxProviderFromEnv(env, sandboxBackend);
+  const lifecycleSockets = new LifecycleSocketAdapter(wsManager);
+  const accessLog = createSessionScopedLogger(
+    createLogger("lifecycle-manager"),
+    getPublicSessionId
   );
+  const access = createSandboxAccess({
+    storage: sandboxRepository,
+    broadcaster: messenger,
+    sockets: lifecycleSockets,
+    canResumeAfterStop: () =>
+      !!sandboxProvider.capabilities.supportsExplicitStop &&
+      !!sandboxProvider.stopSandbox &&
+      !!sandboxProvider.capabilities.supportsPersistentResume,
+    getLogger: () => accessLog,
+    sandboxDashboardUrlBuilder:
+      sandboxBackend === "modal" || sandboxBackend === "modal-vm"
+        ? (providerObjectId) =>
+            resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
+        : undefined,
+  });
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
   const messageFailures = new MessageFailureService(
@@ -461,11 +482,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // composition function has constructed and returned the complete graph.
     onLifecycleChange: () => messageQueue.processMessageQueue(),
     reconcileStatusFromMessages: () => statusService.reconcileFromMessageState(),
-    retireAccess: () => lifecycleManager.retireShutdownAccess(),
+    retireAccess: access.retireShutdownAccess,
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
     shutdown,
+    access,
     env,
     db,
     getSessionId: getPublicSessionId,
@@ -473,9 +495,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
     repoSecretsEncryptionKey,
     messenger,
-    wsManager,
+    lifecycleSockets,
     alarmScheduler,
-    sandboxDashboardSettings,
     backgroundTasks,
     recordWarning: (message, eventId) =>
       recordSessionWarning(eventRepository, messenger, message, eventId),
@@ -1036,6 +1057,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 interface LifecycleManagerDeps {
   recordWarning: (message: string, eventId: string) => void;
   shutdown: SandboxShutdownLifecycle;
+  access: SandboxAccess;
   provider: SandboxProvider;
   env: Env;
   db: SqlDatabase;
@@ -1046,9 +1068,8 @@ interface LifecycleManagerDeps {
   sessionContext: SessionContextReader;
   repoSecretsEncryptionKey: string;
   messenger: SessionMessenger;
-  wsManager: SessionWebSocketManager;
+  lifecycleSockets: LifecycleSocketAdapter;
   alarmScheduler: RehydratableAlarmScheduler;
-  sandboxDashboardSettings: SandboxDashboardSettings;
   backgroundTasks: BackgroundTasks;
 }
 
@@ -1057,6 +1078,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const {
     provider,
     shutdown,
+    access,
     env,
     db,
     getSessionId,
@@ -1064,18 +1086,10 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     sessionContext,
     repoSecretsEncryptionKey,
     messenger,
-    wsManager,
+    lifecycleSockets,
     alarmScheduler,
-    sandboxDashboardSettings,
     backgroundTasks,
   } = deps;
-  // Both throw on a misconfigured deployment — deliberately at graph
-  // construction, so every session request fails at initialization instead of
-  // the error surfacing later at the first spawn.
-  const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
-
-  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
-
   // ID generator adapter
   const idGenerator: IdGenerator = {
     generateId: () => generateId(),
@@ -1107,12 +1121,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       return resolveSlackSettings(settings).agentNotificationsEnabled;
     },
   };
-
-  const sandboxDashboardUrlBuilder =
-    sandboxBackend === "modal" || sandboxBackend === "modal-vm"
-      ? (providerObjectId: string) =>
-          resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
-      : undefined;
 
   // A malformed budget must not take every session down at construction the
   // way a missing provider does; it falls back to the default and says so.
@@ -1147,7 +1155,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
-    sandboxDashboardUrlBuilder,
     recordWarning: deps.recordWarning,
   };
 
@@ -1166,10 +1173,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     storage,
     sessionContext,
     messenger,
-    lifecycleWsManager,
+    lifecycleSockets,
     alarmScheduler,
     idGenerator,
     shutdown,
+    access,
     config,
     imageBuildLookup,
     backgroundTasks

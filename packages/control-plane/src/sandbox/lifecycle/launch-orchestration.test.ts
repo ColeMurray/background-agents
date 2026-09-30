@@ -3,7 +3,6 @@ import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { hashToken } from "../../auth/crypto";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import type { PendingSandboxAllocation, SessionRepositoryInfo } from "../provider";
-import { SandboxLifecycleManager } from "./manager";
 import {
   createMockAlarmScheduler,
   createMockBroadcaster,
@@ -14,6 +13,7 @@ import {
   createMockStorage,
   createMockWebSocketManager,
   createTestConfig,
+  createTestLifecycleManager,
   createUnmanagedShutdown,
   noLifetime,
 } from "./test-helpers";
@@ -117,7 +117,7 @@ function createLaunchFixture() {
       },
     })
   );
-  const manager = new SandboxLifecycleManager(
+  const manager = createTestLifecycleManager(
     provider,
     storage,
     sessionContext,
@@ -405,7 +405,7 @@ describe("launch input orchestration", () => {
         });
         return repositories;
       });
-      const manager = new SandboxLifecycleManager(
+      const manager = createTestLifecycleManager(
         createMockProvider(),
         storage,
         storage,
@@ -446,7 +446,7 @@ describe("launch input orchestration", () => {
       getLatestReady: vi.fn(async () => null),
       markRestoreFailed: vi.fn(async () => true),
     };
-    const manager = new SandboxLifecycleManager(
+    const manager = createTestLifecycleManager(
       provider,
       storage,
       storage,
