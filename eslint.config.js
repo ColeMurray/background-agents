@@ -27,6 +27,11 @@ const sandboxImplementationImports = [
     message:
       "VM startup reconciliation is internal to the lifecycle manager. Consumers use lifecycle ports.",
   },
+  {
+    regex: "(?:^|/)lifecycle/allocation-cleanup(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Allocation cleanup is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
 ];
 
 export default tseslint.config(

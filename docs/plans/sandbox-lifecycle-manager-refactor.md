@@ -25,6 +25,9 @@ Paths are relative to `packages/control-plane/src/`.
   lost-response lookup recovery and bridge lookup, including all five interleaving-sensitive
   bridge/auth fields. It reconciles an authorized attempt without owning startup admission or
   shutdown/recovery policy.
+- `sandbox/lifecycle/allocation-cleanup.ts` owns stateless bounded late-result destruction,
+  rejected-cleanup retry rearming and matching-handle completion. Rejection/claim authority,
+  admission flags and prior-generation replacement retirement remain in the manager.
 - `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
   `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
   shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
@@ -32,9 +35,9 @@ Paths are relative to `packages/control-plane/src/`.
   ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch, access or shutdown
   internals. Session access readers retain authentication/read eligibility and decryption rechecks.
 
-Allocation cleanup and watchdog effects remain manager responsibilities until their serial
-extraction increments land. Each increment must integrate before its successor; the manager is not
-intended to become a tiny facade or lose lifecycle arbitration.
+Watchdog effects remain manager responsibilities until their serial extraction increment lands. Each
+increment must integrate before its successor; the manager is not intended to become a tiny facade
+or lose lifecycle arbitration.
 
 ## Launch Contract
 
@@ -157,6 +160,45 @@ and lifecycle acceptance atomic. Pending sandbox/shutdown registration also reta
 without a cross-record transaction (the shutdown write precedes its alarm await). Failure atomicity
 and unified acceptance require separately scoped safety work; neither is claimed fixed here.
 
+## Allocation Cleanup Contract
+
+`destroyLateProviderResult`, `rearmRejectedStartupCleanupAlarm` and `attemptRejectedStartupCleanup`
+are stateless functions. Their narrow dependencies are a two-method repository port (`getSandbox`,
+`updateSandboxModalObjectId`), the shared scheduler's `schedule`, explicit-stop eligibility, a stop
+operation requiring a supplied handle and signal, and a lazy warning logger. Rearming and late
+destruction each accept only their dependency subset. The manager constructs the readonly dependency
+wiring without invoking it; no manager reference, local ownership flag, shutdown policy, new
+persisted record or raw platform alarm belongs to cleanup.
+
+Rejection ordering remains manager-owned: recognize `SandboxLaunchRejectedError`, synchronously
+`rejectProviderStartup` to fence credentials/socket authority and retain the handle, detach with the
+existing code/reason, then clear/notify access. Only the repository result `failed` authorizes
+failed-status/error publication and breaker accounting. `retained` preserves terminal status/error;
+`superseded` does not touch the current row or access and only attempts bounded late destruction.
+Generic `claimProviderStartup` still clears the pending admission flag and refuses a current held
+generation without destroying its potentially unique recovery copy.
+
+Rejected cleanup awaits retry scheduling before provider I/O. It stops the explicit target with
+`startup_superseded`, `destroy`, the public session name/internal ID fallback and a bounded signal,
+retaining the existing **undefined** `generationCreatedAtMs`. The provider adapter still interprets
+absence; row age does not change pending-reference retirement classification on this path. The
+original stop bound is defined once in cleanup and also imported by the manager's separate
+replacement-retirement operation. Its require-confirmation/handle-clearing behavior is not merged.
+
+Failed, unsupported or locally timed-out cleanup retains the handle and scheduled retry. Abort
+bounds local waiting only; eventual completion of a timed-out stop does not clear the handle. A
+confirmed result clears only when sandbox ID, reservation timestamp and handle still match, without
+retargeting to a newly read row. It does not clear the fence or `startup_rejected` marker. Manager
+shutdown-alarm dispatch still prioritizes rejected cleanup over ordinary shutdown processing,
+including holds, and production runtime reconstruction retains its existing rearm hook.
+
+Generic superseded-result destruction remains bounded best effort rather than a new durable cleanup
+record. The assembled alarm handler can retry a failed rejected cleanup twice per delivery because
+it invokes shutdown processing before and after terminal-projection I/O, before generic watchdogs.
+These inherited semantics, along with prior-generation unscoped clearing and access-retirement
+failure boundaries recorded in the baseline, are unchanged; no stronger retirement/exactly-once
+guarantee is claimed.
+
 ## Verification
 
 Keep direct narrow-dependency tests for input resolution and lookup effects. Keep assembled tests
@@ -179,6 +221,15 @@ launch tests pin both successful restore marker order and absence of invocation 
 pending registration. Real repository encryption-race tests retain reference/generation rechecks;
 direct commit substitutes do not replace them. ESLint prevents public consumers from importing VM
 reconciliation internals.
+
+Allocation cleanup coverage retains assembled rejection/repository tests and adds controlled
+schedule/stop gates, local timeout followed by late completion, exact stop arguments, unsuccessful
+provider results, capability/method absence, generation-ID/timestamp/handle replacement isolation,
+terminal failure-accounting ownership and superseded results against a held successor. Existing
+real-storage held-current claim tests remain. Workerd now reconstructs the production runtime over a
+persisted rejected row and durable shutdown hold, exercises the actual rehydration hook/shared
+deadline storage, and confirms failed/successful/repeated cleanup preserves the hold and recovery
+receipt. ESLint keeps cleanup internals unavailable to public consumers.
 
 `manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
 access/publication failure matrix, from the manager's orchestration suite. It retains real
