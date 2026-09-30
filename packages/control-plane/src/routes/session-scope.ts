@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { checkSessionAccess, type SessionAction } from "@open-inspect/shared";
-import { sessionCollaboratorCandidatesResponseSchema } from "@open-inspect/shared/types/sessions";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { TeamAuditStore } from "../db/team-audit";
@@ -11,6 +10,7 @@ import { SessionScopeStore } from "../db/session-scope-store";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamStore } from "../db/teams";
+import { UserStore } from "../db/user-store";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
@@ -287,17 +287,7 @@ async function listCollaboratorCandidates(
   _params: { id: string },
   ctx: RequestContext
 ) {
-  const { results } = await ctx.db
-    .prepare(
-      `SELECT users.id AS userId, users.display_name AS displayName,
-              users.email, users.avatar_url AS avatarUrl
-       FROM users
-       JOIN user_role_assignments assignment ON assignment.user_id = users.id
-       WHERE users.suspended_at IS NULL AND assignment.role_id IS NOT NULL
-       ORDER BY LOWER(COALESCE(users.display_name, users.email, users.id)), users.id`
-    )
-    .all();
-  return json(sessionCollaboratorCandidatesResponseSchema.parse(results));
+  return json(await new UserStore(ctx.db).listCollaboratorCandidates());
 }
 
 export const sessionScopeRoutes = new Hono<ControlPlaneHonoEnv>();

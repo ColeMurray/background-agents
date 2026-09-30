@@ -111,7 +111,7 @@ describe("session collaborator candidates", () => {
     "denies a readable nonowner collaborator before the directory handler in %s mode",
     async (mode) => {
       await new SessionCollaboratorStore(env.DB).add("private-session", candidate.id, OWNER);
-      const directory = vi.spyOn(env.DB, "prepare");
+      const directory = vi.spyOn(UserStore.prototype, "listCollaboratorCandidates");
       const response = await request(
         "/sessions/private-session/collaborator-candidates",
         { as: { userId: candidate.id, role: "member" } },
@@ -122,7 +122,7 @@ describe("session collaborator candidates", () => {
         code: "session_action_denied",
         reason_code: "not_owner_or_lead",
       });
-      expect(directory).not.toHaveBeenCalledWith(expect.stringContaining("users.id AS userId"));
+      expect(directory).not.toHaveBeenCalled();
       expect(
         (
           await request(`/sessions/private-session/collaborators/${OWNER}`, {
@@ -137,7 +137,7 @@ describe("session collaborator candidates", () => {
   it.each(["off", "shadow", "on"])(
     "conceals invisible and missing sessions with identical 404s and no directory handler in %s mode",
     async (mode) => {
-      const directory = vi.spyOn(env.DB, "prepare");
+      const directory = vi.spyOn(UserStore.prototype, "listCollaboratorCandidates");
       const bodies = [];
       for (const id of ["private-session", "missing-session"]) {
         const response = await request(
@@ -149,7 +149,7 @@ describe("session collaborator candidates", () => {
         bodies.push(await response.json());
       }
       expect(bodies).toEqual([{ error: "Session not found" }, { error: "Session not found" }]);
-      expect(directory).not.toHaveBeenCalledWith(expect.stringContaining("users.id AS userId"));
+      expect(directory).not.toHaveBeenCalled();
     }
   );
 
@@ -175,13 +175,13 @@ describe("session collaborator candidates", () => {
       provider: "slack",
       providerUserId: "U-OWNER",
     });
-    const directory = vi.spyOn(env.DB, "prepare");
+    const directory = vi.spyOn(UserStore.prototype, "listCollaboratorCandidates");
     const response = await request("/sessions/private-session/collaborator-candidates", {
       service: "slack-bot",
       actor: "slack:U-OWNER",
     });
     expect(response.status).toBe(403);
-    expect(directory).not.toHaveBeenCalledWith(expect.stringContaining("users.id AS userId"));
+    expect(directory).not.toHaveBeenCalled();
   });
 
   it.each(["suspended", "unassigned"])("refuses an %s session owner", async (state) => {
@@ -192,9 +192,9 @@ describe("session collaborator candidates", () => {
     )
       .bind(OWNER)
       .run();
-    const directory = vi.spyOn(env.DB, "prepare");
+    const directory = vi.spyOn(UserStore.prototype, "listCollaboratorCandidates");
     const response = await request("/sessions/private-session/collaborator-candidates");
     expect(response.status).toBe(403);
-    expect(directory).not.toHaveBeenCalledWith(expect.stringContaining("users.id AS userId"));
+    expect(directory).not.toHaveBeenCalled();
   });
 });

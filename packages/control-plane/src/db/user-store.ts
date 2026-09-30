@@ -1,4 +1,8 @@
 import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
+import {
+  sessionCollaboratorCandidatesResponseSchema,
+  type SessionCollaboratorCandidate,
+} from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
@@ -137,6 +141,20 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
 
 export class UserStore {
   constructor(private readonly db: SqlDatabase) {}
+
+  async listCollaboratorCandidates(): Promise<SessionCollaboratorCandidate[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT users.id AS userId, users.display_name AS displayName,
+                users.email, users.avatar_url AS avatarUrl
+         FROM users
+         JOIN user_role_assignments assignment ON assignment.user_id = users.id
+         WHERE users.suspended_at IS NULL AND assignment.role_id IS NOT NULL
+         ORDER BY LOWER(COALESCE(users.display_name, users.email, users.id)), users.id`
+      )
+      .all();
+    return sessionCollaboratorCandidatesResponseSchema.parse(results);
+  }
 
   async getUsersByIds(userIds: readonly string[]): Promise<User[]> {
     const uniqueIds = [...new Set(userIds)];
