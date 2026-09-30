@@ -418,6 +418,7 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "PUT /members/:id/status anonymous=401",
   "POST /webhooks/sentry/:id anonymous=404",
   "POST /webhooks/automation/:id anonymous=415",
+  "GET /webhooks/automation/:id/invocations/:invocationId anonymous=401",
   "POST /internal/github-event anonymous=401",
   "POST /internal/slack-event anonymous=401",
 ]

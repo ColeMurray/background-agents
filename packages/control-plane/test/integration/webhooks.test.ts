@@ -537,4 +537,69 @@ describe("POST /webhooks/automation/:id", () => {
 
     expect(response.status).toBe(413);
   });
+
+  it("exposes only the status of an invocation under its webhook automation", async () => {
+    const automation = await createWebhookAutomation();
+    const otherAutomation = await createWebhookAutomation();
+    const trigger = await SELF.fetch(`https://test.local/webhooks/automation/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${TEST_API_KEY}`,
+      },
+      body: JSON.stringify({ action: "deploy" }),
+    });
+    const { invocationId } = await trigger.json<{ invocationId: string }>();
+    const url = `https://test.local/webhooks/automation/${automation.id}/invocations/${invocationId}`;
+
+    expect((await SELF.fetch(url)).status).toBe(401);
+    expect((await SELF.fetch(url, { headers: { Authorization: "Bearer wrong-key" } })).status).toBe(
+      401
+    );
+    expect(
+      (
+        await SELF.fetch(
+          `https://test.local/webhooks/automation/${otherAutomation.id}/invocations/${invocationId}`,
+          { headers: { Authorization: `Bearer ${TEST_API_KEY}` } }
+        )
+      ).status
+    ).toBe(404);
+    expect(
+      (
+        await SELF.fetch(`${url}-missing`, {
+          headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+        })
+      ).status
+    ).toBe(404);
+
+    const authorized = { headers: { Authorization: `Bearer ${TEST_API_KEY}` } };
+    await env.DB.prepare(`UPDATE automation_invocations SET source = 'manual' WHERE id = ?`)
+      .bind(invocationId)
+      .run();
+    expect((await SELF.fetch(url, authorized)).status).toBe(404);
+    await env.DB.prepare(`UPDATE automation_invocations SET source = 'event' WHERE id = ?`)
+      .bind(invocationId)
+      .run();
+
+    const response = await SELF.fetch(url, authorized);
+    expect(response.status).toBe(200);
+    const result = await response.json<{
+      status: string;
+      runs: Array<{ id: string; status: string; sessionId: string | null }>;
+    }>();
+    expect(result.runs).toHaveLength(1);
+    expect(result.runs[0]?.status).toBe(result.status);
+    expect(Object.keys(result.runs[0]!).sort()).toEqual(["id", "sessionId", "status"]);
+
+    await env.DB.prepare(
+      `UPDATE automation_runs SET status = 'running', session_id = ? WHERE invocation_id = ?`
+    )
+      .bind("test-session", invocationId)
+      .run();
+    const running = await SELF.fetch(url, authorized);
+    expect(await running.json()).toMatchObject({
+      status: "running",
+      runs: [{ status: "running", sessionId: "test-session" }],
+    });
+  });
 });

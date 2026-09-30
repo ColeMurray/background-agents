@@ -1247,6 +1247,45 @@ export class AutomationStore {
       .first<AutomationInvocationRow>();
   }
 
+  async getWebhookInvocationStatus(
+    automationId: string,
+    invocationId: string
+  ): Promise<{
+    status: AutomationInvocationStatus;
+    runs: Array<{ id: string; status: AutomationRunStatus; sessionId: string | null }>;
+  } | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT ${DERIVED_INVOCATION_STATUS_SQL} AS status
+         FROM automation_invocations i
+         LEFT JOIN automation_runs r ON r.invocation_id = i.id
+         WHERE i.id = ? AND i.automation_id = ? AND i.source = 'event'
+         GROUP BY i.id`
+      )
+      .bind(invocationId, automationId)
+      .first<{ status: AutomationInvocationStatus }>();
+    if (!row) return null;
+
+    const children = await this.db
+      .prepare(
+        `SELECT id, status, session_id
+         FROM automation_runs
+         WHERE invocation_id = ? AND automation_id = ?
+         ORDER BY created_at ASC`
+      )
+      .bind(invocationId, automationId)
+      .all<{ id: string; status: AutomationRunStatus; session_id: string | null }>();
+
+    return {
+      status: row.status,
+      runs: (children.results ?? []).map((run) => ({
+        id: run.id,
+        status: run.status,
+        sessionId: run.session_id,
+      })),
+    };
+  }
+
   /** Sibling-run aggregate for finalization decisions (one query, no stored status). */
   async getInvocationRunAggregate(invocationId: string): Promise<InvocationRunAggregate> {
     const row = await this.db

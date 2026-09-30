@@ -16,11 +16,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(199);
+    expect(routes).toHaveLength(200);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(151);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(199);
+    expect(new Set(paths).size).toBe(152);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(200);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -337,6 +337,7 @@ describe("route policy table", () => {
     ["GET", "/health", "public"],
     ["POST", "/webhooks/sentry/automation-1", "handler-authenticated"],
     ["POST", "/webhooks/automation/automation-1", "handler-authenticated"],
+    ["GET", "/webhooks/automation/automation-1/invocations/invocation-1", "handler-authenticated"],
     ["POST", "/image-builds/build-complete", "handler-authenticated"],
     ["POST", "/image-builds/build-failed", "handler-authenticated"],
     ["GET", "/api/auth/get-session", "web-service"],
