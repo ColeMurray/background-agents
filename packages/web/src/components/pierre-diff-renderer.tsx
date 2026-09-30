@@ -1,6 +1,6 @@
 "use client";
 
-import { isHighlighterLoaded, preloadHighlighter } from "@pierre/diffs";
+import { areThemesAttached, isHighlighterLoaded, preloadHighlighter } from "@pierre/diffs";
 import { PatchDiff, type VirtualFileMetrics } from "@pierre/diffs/react";
 import { useEffect, useState, type CSSProperties } from "react";
 import type { DiffStyle } from "@/hooks/use-session-diff-preferences";
@@ -27,6 +27,11 @@ const REVIEW_DIFF_STYLE: CSSProperties & Record<`--${string}`, string> = {
   "--diffs-modified-color-override": "var(--info)",
 };
 
+// The shared highlighter reports itself loaded before its themes attach, so check both.
+function reviewThemesReady(): boolean {
+  return isHighlighterLoaded() && areThemesAttached(REVIEW_THEMES);
+}
+
 export default function PierreDiffRenderer({
   patch,
   diffStyle,
@@ -38,8 +43,8 @@ export default function PierreDiffRenderer({
   wrap: boolean;
   themeType: "light" | "dark";
 }) {
-  // Once the shared highlighter is up, later renderers mount highlighted straight away.
-  const [highlighterReady, setHighlighterReady] = useState(isHighlighterLoaded);
+  // Once the review themes are attached, later renderers mount highlighted straight away.
+  const [highlighterReady, setHighlighterReady] = useState(reviewThemesReady);
 
   useEffect(() => {
     if (highlighterReady) return;

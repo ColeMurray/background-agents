@@ -336,6 +336,16 @@ describe("SessionChangesPanel", () => {
     expect(screen.queryByRole("complementary", { name: "Changed files" })).not.toBeInTheDocument();
   });
 
+  it("shows its own file list once the sidebar stops listing the files", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    const view = render(patchPanel({ sidebarShowsFileList: true }));
+    expect(screen.queryByRole("complementary", { name: "Changed files" })).not.toBeInTheDocument();
+
+    // For example, the viewer switches the sidebar to Info while the diff stays open.
+    view.rerender(patchPanel({ sidebarShowsFileList: false }));
+    expect(screen.getByRole("complementary", { name: "Changed files" })).toBeVisible();
+  });
+
   it("shows a loading state while the patch is pending", () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
     render(patchPanel());

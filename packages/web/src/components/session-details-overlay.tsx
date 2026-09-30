@@ -49,6 +49,8 @@ export function SessionDetailsOverlay({
   onOpenDiff,
   canManageBudget,
   capabilities,
+  activeTab,
+  onTabChange,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -179,6 +181,8 @@ export function SessionDetailsOverlay({
       onOpenDiff={onOpenDiff}
       canManageBudget={canManageBudget}
       capabilities={capabilities}
+      activeTab={activeTab}
+      onTabChange={onTabChange}
     />
   );
 

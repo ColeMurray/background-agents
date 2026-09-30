@@ -37,7 +37,7 @@ import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
-import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
+import { resolveDiffSelection } from "@/lib/session-diffs";
 import { SessionFileLinksProvider } from "@/lib/session-file-links";
 import type {
   SessionDiffFile,
@@ -49,6 +49,8 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
+import { useSessionDiffSelection } from "@/hooks/use-session-diff-selection";
+import { useSessionInspectorTab } from "@/hooks/use-session-inspector-tab";
 import { findLatestTerminalMessageId } from "@/lib/session-read-state";
 import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
@@ -197,9 +199,6 @@ function SessionContent({
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
-  const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
-  const diffReturnFocusRef = useRef<DiffSelection | null>(null);
-  const diffOpenerRef = useRef<HTMLElement | null>(null);
   const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -209,6 +208,12 @@ function SessionContent({
   const { isOpen: isDesktopDetailsOpen, toggle: toggleDesktopDetails } = useSessionDetailsSidebar();
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
+  const desktopDetailsButtonRef = useRef<HTMLButtonElement>(null);
+  const {
+    tab: inspectorTab,
+    selectTab: selectInspectorTab,
+    showTab: showInspectorTab,
+  } = useSessionInspectorTab();
 
   // Terminal panel state. Starts closed so the server and the client render the
   // same markup, then adopts the stored preference after hydration.
@@ -254,6 +259,22 @@ function SessionContent({
     () => focusSessionDetailsTrigger(isPhone, actionsButtonRef.current, detailsButtonRef.current),
     [isPhone]
   );
+  const handleDiffOpen = useCallback(() => {
+    setIsDetailsOpen(false);
+    // The diff is navigated from the Changes list. Showing it is navigation, so the
+    // viewer's remembered tab stays as it was.
+    showInspectorTab("changes");
+  }, [showInspectorTab]);
+  const focusAfterDiff = useCallback(() => {
+    if (isBelowLg) focusDetailsTrigger();
+    else desktopDetailsButtonRef.current?.focus();
+  }, [focusDetailsTrigger, isBelowLg]);
+  const {
+    selectedDiff,
+    openDiff: openDiffSelection,
+    selectDiff,
+    closeDiff,
+  } = useSessionDiffSelection({ onOpen: handleDiffOpen, focusFallback: focusAfterDiff });
 
   useEffect(() => {
     if (isBelowLg) return;
@@ -282,45 +303,11 @@ function SessionContent({
         : null,
     [diffState, selectedDiff]
   );
-  const openDiffSelection = useCallback((selection: DiffSelection) => {
-    diffReturnFocusRef.current = selection;
-    diffOpenerRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setSelectedDiff(selection);
-    setIsDetailsOpen(false);
-  }, []);
   const openDiff = useCallback(
     (repository: SessionDiffRepository, file: SessionDiffFile) =>
       openDiffSelection({ repositoryPosition: repository.position, path: file.path }),
     [openDiffSelection]
   );
-  const closeDiff = useCallback(() => {
-    const returnSelection = diffReturnFocusRef.current;
-    const opener = diffOpenerRef.current;
-    setSelectedDiff(null);
-    requestAnimationFrame(() => {
-      const isVisible = (element: HTMLElement | null | undefined): element is HTMLElement =>
-        Boolean(element?.isConnected && element.offsetParent !== null);
-      if (!isBelowLg && returnSelection) {
-        const row = Array.from(
-          document.querySelectorAll<HTMLButtonElement>("button[data-diff-path]")
-        ).find(
-          (candidate) =>
-            candidate.dataset.diffRepositoryPosition ===
-              String(returnSelection.repositoryPosition) &&
-            candidate.dataset.diffPath === returnSelection.path &&
-            isVisible(candidate)
-        );
-        // With the details sidebar closed, return to whatever opened the diff instead.
-        const target = row ?? (isVisible(opener) ? opener : null);
-        if (target) {
-          target.focus();
-          return;
-        }
-      }
-      focusDetailsTrigger();
-    });
-  }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-clip">
@@ -435,6 +422,7 @@ function SessionContent({
         isDesktopDetailsOpen={isDesktopDetailsOpen}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
+        desktopDetailsButtonRef={desktopDetailsButtonRef}
         onToggleDetails={toggleDetails}
         onToggleDesktopDetails={toggleDesktopDetails}
         onOpenMobileDetails={openMobileDetails}
@@ -495,6 +483,8 @@ function SessionContent({
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
                 canManageBudget={canManageBudget}
+                activeTab={inspectorTab}
+                onTabChange={selectInspectorTab}
                 capabilities={capabilities}
               />
             }
@@ -505,8 +495,8 @@ function SessionContent({
                   state={diffState}
                   resolved={resolvedDiff}
                   onClose={closeDiff}
-                  onSelect={setSelectedDiff}
-                  sidebarShowsFileList={isDesktopDetailsOpen}
+                  onSelect={selectDiff}
+                  sidebarShowsFileList={isDesktopDetailsOpen && inspectorTab === "changes"}
                   capabilities={capabilities}
                 />
               ) : null
@@ -530,6 +520,8 @@ function SessionContent({
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
               canManageBudget={canManageBudget}
+              activeTab={inspectorTab}
+              onTabChange={selectInspectorTab}
               capabilities={capabilities}
             />
           </>
@@ -556,6 +548,8 @@ function SessionContent({
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
           canManageBudget={canManageBudget}
+          activeTab={inspectorTab}
+          onTabChange={selectInspectorTab}
           capabilities={capabilities}
         />
       )}
@@ -574,7 +568,7 @@ function SessionContent({
                 state={diffState}
                 resolved={resolvedDiff}
                 onClose={closeDiff}
-                onSelect={setSelectedDiff}
+                onSelect={selectDiff}
                 capabilities={capabilities}
               />
             )}

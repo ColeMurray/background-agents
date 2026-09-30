@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
+import type { ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,8 @@ import type { SessionState } from "@open-inspect/shared/types/server-messages";
 import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { SessionDetailsOverlay } from "./session-details-overlay";
-import { SessionRightSidebar, type SessionRightSidebarContentProps } from "./session-right-sidebar";
+import { SessionRightSidebar } from "./session-right-sidebar";
+import { useSessionInspectorTab } from "@/hooks/use-session-inspector-tab";
 import { resolveSessionCapabilities, type SessionCapabilities } from "@/lib/session-capabilities";
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -47,6 +49,20 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   sandboxAccess: true,
   exportTrace: true,
 };
+
+type SidebarProps = Omit<ComponentProps<typeof SessionRightSidebar>, "activeTab" | "onTabChange">;
+type OverlayProps = Omit<ComponentProps<typeof SessionDetailsOverlay>, "activeTab" | "onTabChange">;
+
+// The session page owns the inspector tab; these stand in for it.
+function Sidebar(props: SidebarProps) {
+  const { tab, selectTab } = useSessionInspectorTab();
+  return <SessionRightSidebar {...props} activeTab={tab} onTabChange={selectTab} />;
+}
+
+function Overlay(props: OverlayProps) {
+  const { tab, selectTab } = useSessionInspectorTab();
+  return <SessionDetailsOverlay {...props} activeTab={tab} onTabChange={selectTab} />;
+}
 
 // Radix tabs activate on mousedown (or focus), not on click.
 function selectTab(name: string | RegExp) {
@@ -104,9 +120,9 @@ const READY_DIFF: SessionDiffState = {
   },
 };
 
-function inspector(overrides: Partial<SessionRightSidebarContentProps> = {}) {
+function inspector(overrides: Partial<SidebarProps> = {}) {
   return (
-    <SessionRightSidebar
+    <Sidebar
       sessionId="session-1"
       sessionState={SESSION}
       participants={[]}
@@ -151,15 +167,15 @@ describe("SessionRightSidebar", () => {
       capabilities: FULL_CAPABILITIES,
     };
     const { rerender } = render(
-      <SessionRightSidebar {...props} capabilities={{ ...FULL_CAPABILITIES, exportTrace: false }} />
+      <Sidebar {...props} capabilities={{ ...FULL_CAPABILITIES, exportTrace: false }} />
     );
     selectTab("Info");
     expect(screen.queryByRole("button", { name: "Download trace" })).not.toBeInTheDocument();
 
-    rerender(<SessionRightSidebar {...props} />);
+    rerender(<Sidebar {...props} />);
     expect(screen.getByRole("button", { name: "Download trace" })).toBeInTheDocument();
 
-    rerender(<SessionDetailsOverlay {...props} open isPhone onOpenChange={vi.fn()} />);
+    rerender(<Overlay {...props} open isPhone onOpenChange={vi.fn()} />);
     selectTab("Info");
     expect(screen.getByRole("button", { name: "Download trace" })).toBeInTheDocument();
   });
@@ -169,7 +185,7 @@ describe("SessionRightSidebar", () => {
       Response.json({ error: "Forbidden", reason_code: "session_read_only" }, { status: 403 })
     );
     render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={sessionState}
         participants={[]}
@@ -198,7 +214,7 @@ describe("SessionRightSidebar", () => {
     );
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={sessionState}
         participants={[]}
@@ -227,7 +243,7 @@ describe("SessionRightSidebar", () => {
       );
       const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
       render(
-        <SessionRightSidebar
+        <Sidebar
           sessionId="session-1"
           sessionState={sessionState}
           participants={[]}
@@ -264,7 +280,7 @@ describe("SessionRightSidebar", () => {
       );
     });
     render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={sessionState}
         participants={[]}
@@ -297,7 +313,7 @@ describe("SessionRightSidebar", () => {
     });
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={sessionState}
         participants={[]}
@@ -343,7 +359,7 @@ describe("SessionRightSidebar", () => {
     };
 
     render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={sandboxSessionState}
         participants={[]}
@@ -369,7 +385,7 @@ describe("SessionRightSidebar", () => {
 
   it("keeps its ARIA target mounted when closed", () => {
     render(
-      <SessionRightSidebar
+      <Sidebar
         isOpen={false}
         sessionId="session-1"
         sessionState={null}
@@ -391,7 +407,7 @@ describe("SessionRightSidebar", () => {
 
   it("forwards budget management to the desktop sidebar", () => {
     render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={sessionState}
         participants={[]}
@@ -410,7 +426,7 @@ describe("SessionRightSidebar", () => {
 
   it("does not render budget spacing when the budget section is hidden", () => {
     const { container } = render(
-      <SessionRightSidebar
+      <Sidebar
         sessionId="session-1"
         sessionState={{ ...sessionState, totalCost: 0, maxSessionCostUsd: null }}
         participants={[]}
@@ -430,7 +446,7 @@ describe("SessionRightSidebar", () => {
 
   it("forwards budget management to the mobile overlay", () => {
     render(
-      <SessionDetailsOverlay
+      <Overlay
         open
         isPhone
         onOpenChange={vi.fn()}
@@ -539,7 +555,7 @@ describe("SessionRightSidebar", () => {
       { diffState: { ...EMPTY_DIFF, lastError: { message: "Capture failed", occurredAt: 1 } } },
       "Capture failed",
     ],
-  ] satisfies [Partial<SessionRightSidebarContentProps>, string][])(
+  ] satisfies [Partial<SidebarProps>, string][])(
     "preserves diff lifecycle state %#",
     (props, message) => {
       render(inspector(props));
@@ -624,40 +640,6 @@ describe("SessionRightSidebar", () => {
     expect(onToggleTerminal).toHaveBeenCalledOnce();
   });
 
-  it("returns to Changes when a diff opens, so closing it can focus the file row", () => {
-    const view = render(inspector({ diffState: READY_DIFF }));
-    selectTab("Info");
-    expect(screen.getByRole("tab", { name: "Info" })).toHaveAttribute("aria-selected", "true");
-
-    view.rerender(
-      inspector({
-        diffState: READY_DIFF,
-        selectedDiff: { repositoryPosition: 0, path: "src/components/navigation.tsx" },
-      })
-    );
-
-    expect(screen.getByRole("tab", { name: "Changes 1" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("button", { name: /navigation.tsx modified/ })).toBeVisible();
-  });
-
-  it("keeps the viewer's tab choice when opening a diff shows Changes", async () => {
-    const view = render(inspector({ diffState: READY_DIFF }));
-    selectTab("Info");
-    view.rerender(
-      inspector({
-        diffState: READY_DIFF,
-        selectedDiff: { repositoryPosition: 0, path: "src/components/navigation.tsx" },
-      })
-    );
-    expect(screen.getByRole("tab", { name: "Changes 1" })).toHaveAttribute("aria-selected", "true");
-    view.unmount();
-
-    render(inspector({ diffState: READY_DIFF }));
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Info" })).toHaveAttribute("aria-selected", "true")
-    );
-  });
-
   it("scrolls each tab panel on its own", () => {
     render(inspector({ diffState: READY_DIFF }));
     selectTab("Info");
@@ -671,6 +653,31 @@ describe("SessionRightSidebar", () => {
     expect(info).toHaveClass("overflow-y-auto");
     expect(changes.scrollTop).toBe(0);
     expect(document.getElementById("session-details-sidebar")).not.toHaveClass("overflow-y-auto");
+  });
+
+  it("shows the tab its owner chooses and reports the viewer's choices", () => {
+    const onTabChange = vi.fn();
+    render(
+      <SessionRightSidebar
+        sessionId="session-1"
+        sessionState={SESSION}
+        participants={[]}
+        presenceSynced
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        diffState={READY_DIFF}
+        capabilities={FULL_CAPABILITIES}
+        activeTab="info"
+        onTabChange={onTabChange}
+      />
+    );
+    expect(screen.getByRole("tab", { name: "Info" })).toHaveAttribute("aria-selected", "true");
+
+    selectTab("Tasks");
+    expect(onTabChange).toHaveBeenCalledWith("tasks");
+    // The owner decides; until it updates the tab, Info stays selected.
+    expect(screen.getByRole("tab", { name: "Info" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("reopens on the tab the viewer chose last", async () => {

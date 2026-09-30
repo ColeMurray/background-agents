@@ -135,6 +135,8 @@ export type SessionHeaderProps = {
   isDesktopDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
+  /** The desktop sidebar toggle; focus returns here when a closed diff has no other target. */
+  desktopDetailsButtonRef?: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
@@ -156,6 +158,7 @@ export function SessionHeader({
   isDesktopDetailsOpen,
   detailsButtonRef,
   actionsButtonRef,
+  desktopDetailsButtonRef,
   onToggleDetails,
   onToggleDesktopDetails,
   onOpenMobileDetails,
@@ -307,6 +310,7 @@ export function SessionHeader({
           </div>
           <button
             type="button"
+            ref={desktopDetailsButtonRef}
             onClick={onToggleDesktopDetails}
             className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
             aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}

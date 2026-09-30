@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { CollapsibleSection } from "./sidebar/collapsible-section";
 import { ParticipantsSection } from "./sidebar/participants-section";
 import { MetadataSection } from "./sidebar/metadata-section";
@@ -33,7 +33,6 @@ import type { SessionCapabilities } from "@/lib/session-capabilities";
 import {
   SESSION_INSPECTOR_TABS,
   isSessionInspectorTab,
-  useSessionInspectorTab,
   type SessionInspectorTab,
 } from "@/hooks/use-session-inspector-tab";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -57,6 +56,9 @@ interface SessionRightSidebarProps {
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
   capabilities: SessionCapabilities;
   canManageBudget?: boolean;
+  /** The session page owns the tab so the diff view can tell whether the file list is showing. */
+  activeTab: SessionInspectorTab;
+  onTabChange: (tab: SessionInspectorTab) => void;
 }
 
 export type SessionRightSidebarContentProps = SessionRightSidebarProps;
@@ -112,9 +114,10 @@ export function SessionRightSidebarContent({
   onOpenDiff,
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
+  activeTab,
+  onTabChange,
 }: SessionRightSidebarContentProps) {
   const [downloading, setDownloading] = useState(false);
-  const { tab: activeTab, selectTab, showTab } = useSessionInspectorTab();
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
     () =>
@@ -155,12 +158,6 @@ export function SessionRightSidebarContent({
       terminalUrl ||
       Object.keys(sessionState?.tunnelUrls ?? {}).length
     );
-
-  // An open diff is navigated from the Changes list, and closing it returns focus to that
-  // list. This is navigation, not the viewer's choice, so the remembered tab stays as it was.
-  useEffect(() => {
-    if (selectedDiff) showTab("changes");
-  }, [selectedDiff, showTab]);
 
   const downloadTrace = async () => {
     setDownloading(true);
@@ -206,7 +203,7 @@ export function SessionRightSidebarContent({
     <Tabs
       value={activeTab}
       onValueChange={(value) => {
-        if (isSessionInspectorTab(value)) selectTab(value);
+        if (isSessionInspectorTab(value)) onTabChange(value);
       }}
       className="flex min-h-0 flex-1 flex-col"
     >

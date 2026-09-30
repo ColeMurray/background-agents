@@ -2,11 +2,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isHighlighterLoaded, preloadHighlighter } from "@pierre/diffs";
+import { areThemesAttached, isHighlighterLoaded, preloadHighlighter } from "@pierre/diffs";
 import { PatchDiff } from "@pierre/diffs/react";
 import PierreDiffRenderer from "./pierre-diff-renderer";
 
 vi.mock("@pierre/diffs", () => ({
+  areThemesAttached: vi.fn(),
   isHighlighterLoaded: vi.fn(),
   preloadHighlighter: vi.fn(),
 }));
@@ -18,6 +19,7 @@ vi.mock("@pierre/diffs/react", () => ({
 
 beforeEach(() => {
   vi.mocked(isHighlighterLoaded).mockReturnValue(false);
+  vi.mocked(areThemesAttached).mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -84,11 +86,28 @@ describe("PierreDiffRenderer", () => {
     expect(screen.queryByTestId("highlighted-diff")).not.toBeInTheDocument();
   });
 
-  it("mounts highlighted straight away when the highlighter is already loaded", () => {
+  it("mounts highlighted straight away once the review themes are attached", () => {
     vi.mocked(isHighlighterLoaded).mockReturnValue(true);
+    vi.mocked(areThemesAttached).mockReturnValue(true);
     render(<PierreDiffRenderer patch="+warm" diffStyle="unified" wrap themeType="light" />);
 
     expect(screen.getByTestId("highlighted-diff")).toHaveTextContent("+warm");
+    expect(areThemesAttached).toHaveBeenCalledWith({ light: "github-light", dark: "github-dark" });
     expect(preloadHighlighter).not.toHaveBeenCalled();
+  });
+
+  it("waits for the review themes when the highlighter is loaded without them", async () => {
+    vi.mocked(isHighlighterLoaded).mockReturnValue(true);
+    let resolve!: () => void;
+    vi.mocked(preloadHighlighter).mockReturnValue(new Promise<void>((done) => (resolve = done)));
+    render(
+      <PierreDiffRenderer patch="+themes loading" diffStyle="unified" wrap themeType="dark" />
+    );
+
+    expect(screen.getByLabelText("Raw diff")).toHaveTextContent("+themes loading");
+    expect(preloadHighlighter).toHaveBeenCalledOnce();
+
+    await act(async () => resolve());
+    expect(screen.getByTestId("highlighted-diff")).toHaveTextContent("+themes loading");
   });
 });

@@ -30,6 +30,8 @@ it.each([true, false])("hides closed details from assistive technology (phone=%s
       sandboxAccess: false,
       exportTrace: false,
     },
+    activeTab: "changes" as const,
+    onTabChange: vi.fn(),
   };
   const view = render(<SessionDetailsOverlay {...props} open={false} />);
   expect(screen.queryByRole("dialog", { name: "Session details" })).not.toBeInTheDocument();
