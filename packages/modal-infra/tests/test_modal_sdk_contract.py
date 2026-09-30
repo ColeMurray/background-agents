@@ -1,5 +1,8 @@
 """Guard the test helpers against silently accepting invalid protobuf arguments."""
 
+from unittest.mock import Mock
+
+import modal
 import pytest
 
 from tests.modal_sdk_contract import (
@@ -21,6 +24,32 @@ from tests.modal_sdk_contract import (
 def test_integer_timeout_fields_reject_floats(build_request, args, kwargs):
     with pytest.raises(TypeError, match="'float' object cannot be interpreted as an integer"):
         build_request(*args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "build_request, sdk_method, kwargs, unexpected",
+    [
+        (sandbox_exec_request, "exec", {"timeuot": 30}, "timeuot"),
+        (
+            sandbox_create_request,
+            "create",
+            {"timeout": 30, "encrypted_port": [8080]},
+            "encrypted_port",
+        ),
+    ],
+    ids=["exec", "create"],
+)
+def test_request_rejects_unknown_sdk_keywords(
+    monkeypatch, build_request, sdk_method, kwargs, unexpected
+):
+    monkeypatch.setattr(modal.Sandbox, sdk_method, Mock())
+    with pytest.raises(TypeError, match=f"unexpected keyword argument '{unexpected}'"):
+        build_request("python", **kwargs)
+
+
+def test_exec_accepts_unmodeled_sdk_keywords():
+    request = sandbox_exec_request("python", timeout=30, text=False)
+    assert request.timeout_secs == 30
 
 
 def test_exec_serializes_recorded_arguments_without_coercion():
