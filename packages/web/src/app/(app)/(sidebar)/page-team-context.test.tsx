@@ -1,12 +1,28 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { TeamResponse } from "@/hooks/use-teams";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { environment, mocks, repo, sessionCreateBody } from "./page.test-fixture";
 import Home from "./page";
+
+// Radix Select uses pointer-capture APIs that jsdom doesn't implement.
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+});
+
+async function selectOption(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+  option: string
+) {
+  await user.click(screen.getByRole("combobox", { name: label }));
+  await user.click(await screen.findByRole("option", { name: option }));
+}
 
 function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: TeamRole } {
   return {
@@ -29,14 +45,15 @@ function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: Tea
 
 describe("Home team context", () => {
   it("defaults workspace drafts to workspace visibility without offering team visibility", async () => {
+    const user = userEvent.setup();
     render(<Home />);
     const visibility = screen.getByRole("combobox", { name: "Session visibility" });
     expect(visibility.tagName).toBe("BUTTON");
     expect(visibility).toHaveTextContent("Workspace");
-    fireEvent.keyDown(visibility, { key: " " });
+    await user.click(visibility);
     const menu = await screen.findByRole("listbox");
     expect(within(menu).queryByRole("option", { name: "Team" })).not.toBeInTheDocument();
-    fireEvent.keyDown(menu, { key: "Escape" });
+    await user.keyboard("{Escape}");
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Ship it" },
     });
@@ -46,6 +63,7 @@ describe("Home team context", () => {
   });
 
   it("uses the active team's defaults and archives the warm draft on visibility and team changes", async () => {
+    const user = userEvent.setup();
     mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "private" })];
     mocks.activeTeamId = "team-1";
     const view = render(<Home />);
@@ -55,8 +73,7 @@ describe("Home team context", () => {
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
     );
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "Session visibility" }), { key: " " });
-    fireEvent.click(await screen.findByRole("option", { name: "Workspace" }));
+    await selectOption(user, "Session visibility", "Workspace");
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
     );
@@ -81,20 +98,36 @@ describe("Home team context", () => {
   });
 
   it("offers a custom composer team choice and maps Workspace back to no team", async () => {
+    const user = userEvent.setup();
     mocks.teams = [team()];
     const view = render(<Home />);
     const trigger = screen.getByRole("combobox", { name: "Session team" });
     expect(trigger.tagName).toBe("BUTTON");
     expect(trigger).toHaveTextContent("Workspace");
-    fireEvent.keyDown(trigger, { key: " " });
-    fireEvent.click(await screen.findByRole("option", { name: "Engineering" }));
+    await selectOption(user, "Session team", "Engineering");
     expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
     mocks.activeTeamId = "team-1";
     view.rerender(<Home />);
     expect(trigger).toHaveTextContent("Engineering");
-    fireEvent.keyDown(trigger, { key: " " });
-    fireEvent.click(await screen.findByRole("option", { name: "Workspace" }));
+    await selectOption(user, "Session team", "Workspace");
     expect(mocks.setActiveTeam).toHaveBeenLastCalledWith(null);
+  });
+
+  it("selects visibility with the keyboard and restores focus to its trigger", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+    const trigger = screen.getByRole("combobox", { name: "Session visibility" });
+    await user.tab();
+    await user.tab();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("[Space]");
+    await waitFor(() => expect(screen.getByRole("option", { name: "Workspace" })).toHaveFocus());
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("option", { name: "Private" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(trigger).toHaveTextContent("Private");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("waits for membership and settings reconciliation before warming or sending", async () => {
@@ -160,6 +193,7 @@ describe("Home team context", () => {
   });
 
   it("can correct visibility after a terminal denial and recreate the draft", async () => {
+    const user = userEvent.setup();
     vi.mocked(fetch)
       .mockResolvedValueOnce(
         Response.json({ error: "Visibility denied", code: "visibility_denied" }, { status: 403 })
@@ -172,8 +206,7 @@ describe("Home team context", () => {
     await screen.findByText("Visibility denied (visibility_denied)");
     const visibility = screen.getByRole("combobox", { name: "Session visibility" });
     expect(visibility).not.toBeDisabled();
-    fireEvent.keyDown(visibility, { key: " " });
-    fireEvent.click(await screen.findByRole("option", { name: "Private" }));
+    await selectOption(user, "Session visibility", "Private");
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
       expect(calls).toHaveLength(2);
