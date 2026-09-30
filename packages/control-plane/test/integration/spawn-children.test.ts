@@ -212,6 +212,48 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(audit).toEqual({ team_id: null, resource_id: sessionId });
   });
 
+  it.each([null, "22"])(
+    "does not borrow the private owner's credential identity for an unresolved author (SCM %s)",
+    async (scmUserId) => {
+      const ownerId = "11111111111111111111111111111111";
+      await seedActiveUser(ownerId);
+      const { parentName, stub, sandboxToken, store } = await setupParent({
+        visibility: "private",
+        repoId: 12345,
+        canonicalUserId: ownerId,
+      });
+      await runInSessionDO(stub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "INSERT INTO participants (id, user_id, scm_user_id, scm_login, role, joined_at) VALUES (?, ?, ?, ?, 'member', ?)",
+          "reviewer-participant",
+          "github:22",
+          scmUserId,
+          scmUserId ? "reviewer" : null,
+          Date.now()
+        );
+        state.storage.sql.exec(
+          "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+          "reviewer-participant"
+        );
+      });
+      const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+        body: JSON.stringify({ title: "Review follow-up", prompt: "Investigate the review" }),
+      });
+      expect(response.status).toBe(201);
+      const { sessionId } = await response.json<{ sessionId: string }>();
+      expect((await store.get(sessionId))?.userId).toBe(ownerId);
+      const childStub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+      await markChildPromptProcessing(childStub);
+      const authorResponse = await childStub.fetch("http://internal/internal/active-prompt-author");
+      expect(authorResponse.status).toBe(200);
+      const author = await authorResponse.json<{ canonicalUserId?: string | null }>();
+      expect(author).toMatchObject({ userId: "github:22", scmUserId });
+      expect(author.canonicalUserId ?? null).toBeNull();
+    }
+  );
+
   it("retains the private parent's owner as a child collaborator when another user authors it", async () => {
     const ownerId = "11111111111111111111111111111111";
     const authorId = "22222222222222222222222222222222";

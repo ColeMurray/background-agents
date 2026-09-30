@@ -88,7 +88,8 @@ import {
 } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
-import type { GitHubEnrichment } from "../session/identity";
+import { resolveGitHubEnrichment, type GitHubEnrichment } from "../session/identity";
+import { resolveScmProviderFromEnv } from "../source-control/config";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -287,7 +288,7 @@ type StartInvocationResult =
 
 type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source"
+  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment"
 > & {
   callbackContext: AutomationCallbackContext | SlackCallbackContext;
 };
@@ -1595,6 +1596,12 @@ export class Scheduler {
       executionPrincipal.platformUserId
     );
 
+    const scmEnrichment =
+      executionPrincipal.scmEnrichment ??
+      (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
+        ? await resolveGitHubEnrichment(new UserStore(this.db), executionPrincipal.platformUserId)
+        : null);
+
     const sessionInput: SessionInitInput = {
       ownerTeamId: null,
       visibility: "workspace",
@@ -1606,10 +1613,10 @@ export class Scheduler {
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,
       platformUserId: executionPrincipal.platformUserId,
-      scmUserId: executionPrincipal.scmEnrichment?.scmUserId,
-      scmLogin: executionPrincipal.scmEnrichment?.scmLogin,
-      scmName: executionPrincipal.scmEnrichment?.displayName,
-      scmEmail: executionPrincipal.scmEnrichment?.email,
+      scmUserId: scmEnrichment?.scmUserId,
+      scmLogin: scmEnrichment?.scmLogin,
+      scmName: scmEnrichment?.displayName,
+      scmEmail: scmEnrichment?.email,
       codeServerEnabled,
       vncEnabled,
       sandboxSettings,
@@ -1684,12 +1691,24 @@ export class Scheduler {
     };
 
     try {
+      const enrichment =
+        resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
+          ? await resolveGitHubEnrichment(new UserStore(this.db), actorUserId)
+          : null;
       await this.enqueueSessionPrompt(
         sessionId,
         {
           content: event.text,
           authorId: `slack:${event.actorUserId}`,
           canonicalUserId: actorUserId,
+          scmEnrichment: enrichment
+            ? {
+                userId: enrichment.scmUserId,
+                login: enrichment.scmLogin ?? null,
+                name: enrichment.displayName ?? null,
+                email: enrichment.email ?? null,
+              }
+            : undefined,
           source: "slack",
           callbackContext,
         },

@@ -95,27 +95,6 @@ export class ParticipantRepository {
     );
   }
 
-  updateParticipantTokens(
-    participantId: string,
-    data: {
-      scmAccessTokenEncrypted: string;
-      scmRefreshTokenEncrypted?: string | null;
-      scmTokenExpiresAt: number;
-    }
-  ): void {
-    this.sql.exec(
-      `UPDATE participants SET
-         scm_access_token_encrypted = ?,
-         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
-         scm_token_expires_at = ?
-       WHERE id = ?`,
-      data.scmAccessTokenEncrypted,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt,
-      participantId
-    );
-  }
-
   updateParticipantWsToken(participantId: string, tokenHash: string, createdAt: number): void {
     this.sql.exec(
       `UPDATE participants

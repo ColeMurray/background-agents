@@ -3,6 +3,10 @@ import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { applyIdentityEnforcement } from "../routing/identity-enforcement";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
+import { UserStore } from "../db/user-store";
+import { resolveGitHubEnrichmentForRequest } from "../session/identity";
+import { resolveScmProviderFromEnv } from "../source-control/config";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
@@ -10,7 +14,7 @@ import { dispatchSession, type SessionRouteContext } from "./session-route";
 
 export async function handleSessionWsToken(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
@@ -32,6 +36,14 @@ export async function handleSessionWsToken(
   if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = authorization.userId;
+  const enrichment =
+    resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github"
+      ? await resolveGitHubEnrichmentForRequest(
+          new UserStore(ctx.db),
+          canonicalUserId,
+          await resolveGitHubCredentialAuthority(ctx, request.headers)
+        )
+      : null;
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -40,9 +52,10 @@ export async function handleSessionWsToken(
       body: JSON.stringify({
         userId,
         canonicalUserId,
-        scmLogin: body.scmLogin,
-        scmName: body.scmName,
-        scmEmail: body.scmEmail,
+        scmUserId: enrichment?.scmUserId,
+        scmLogin: enrichment?.scmLogin ?? body.scmLogin,
+        scmName: enrichment?.displayName ?? body.scmName,
+        scmEmail: enrichment?.email ?? body.scmEmail,
       }),
     })
   );

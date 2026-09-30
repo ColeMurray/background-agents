@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { initSession, queryDO } from "./helpers";
+import { env } from "cloudflare:test";
+import {
+  collectMessages,
+  initNamedSession,
+  initSession,
+  openClientWs,
+  openSandboxWs,
+  queryDO,
+  seedSandboxAuth,
+  serviceFetch,
+  serviceRequestHeaders,
+  waitForSandboxStatus,
+} from "./helpers";
 
 function wsTokenBody(body: Record<string, unknown>): string {
   return JSON.stringify({ canonicalUserId: "user-1", ...body });
@@ -136,4 +148,84 @@ describe("GET /internal/participants", () => {
     expect(userIds).toContain("user-1");
     expect(userIds).toContain("user-2");
   });
+});
+
+describe("browser Git author attribution", () => {
+  it.each(["join", "reconnect"])(
+    "dispatches the linked GitHub author after an empty-body browser %s",
+    async (scenario) => {
+      const userId = "11111111111111111111111111111111";
+      const name = `browser-author-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(name, {
+        userId: "linear:creator",
+        canonicalUserId: userId,
+      });
+      const url = `https://test.local/sessions/${name}/ws-token`;
+      await serviceRequestHeaders(url, { method: "POST", body: "{}" });
+      await env.DB.prepare(
+        "UPDATE user_identities SET provider_login = ? WHERE user_id = ? AND provider = 'github'"
+      )
+        .bind("octocat", userId)
+        .run();
+      if (scenario === "reconnect") {
+        const prior = await stub.fetch("http://internal/internal/ws-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, canonicalUserId: userId }),
+        });
+        expect(prior.status).toBe(200);
+      }
+      const tokenResponse = await serviceFetch(url, { method: "POST", body: "{}" });
+      expect(tokenResponse.status).toBe(200);
+      const { token } = await tokenResponse.json<{ token: string }>();
+      await seedSandboxAuth(stub, {
+        authToken: "author-sandbox-token",
+        sandboxId: "author-sandbox",
+      });
+      const { ws: sandbox } = await openSandboxWs(name, {
+        authToken: "author-sandbox-token",
+        sandboxId: "author-sandbox",
+      });
+      expect(sandbox).not.toBeNull();
+      sandbox!.accept();
+      const { ws: client } = await openClientWs(name);
+      try {
+        const subscribed = collectMessages(client, {
+          until: (message) => message.type === "subscribed",
+        });
+        client.send(JSON.stringify({ type: "subscribe", token, clientId: `browser-${scenario}` }));
+        expect((await subscribed).some((message) => message.type === "subscribed")).toBe(true);
+        sandbox!.send(
+          JSON.stringify({
+            type: "ready",
+            sandboxId: "author-sandbox",
+            timestamp: Date.now() / 1000,
+          })
+        );
+        await waitForSandboxStatus(stub, "ready");
+        const commands = collectMessages(sandbox!, {
+          until: (message) => message.type === "prompt",
+        });
+        client.send(
+          JSON.stringify({
+            type: "prompt",
+            clientRequestId: crypto.randomUUID(),
+            content: "Commit the fix as me",
+          })
+        );
+        const command = (await commands).find((message) => message.type === "prompt");
+        expect(command?.author).toEqual({
+          userId,
+          gitIdentity: {
+            mode: "attributed-user",
+            name: "Integration Browser User",
+            email: "583231+octocat@users.noreply.github.com",
+          },
+        });
+      } finally {
+        client.close();
+        sandbox!.close();
+      }
+    }
+  );
 });

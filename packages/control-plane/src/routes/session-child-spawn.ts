@@ -268,6 +268,7 @@ export async function handleSpawnChild(
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,
     platformUserId: spawnContext.promptAuthor.canonicalUserId ?? parentSession?.userId ?? null,
+    participantCanonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
     collaboratorSourceSessionId: parentId,
     scmLogin: spawnContext.promptAuthor.scmLogin,
     scmName: spawnContext.promptAuthor.scmName,

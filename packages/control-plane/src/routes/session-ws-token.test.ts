@@ -53,11 +53,12 @@ function createContext(db: SqlDatabase = accessDatabase().db): RequestContext {
 
 function createEnv(fetch: (request: Request) => Promise<Response>): Env {
   return {
+    SCM_PROVIDER: "gitlab",
     SESSION: fakeSessionRuntimeDispatch(fetch),
   } as unknown as Env;
 }
 
-describe("session ws-token route", () => {
+describe("session ws-token route (non-GitHub display fields)", () => {
   it("forwards validated optional SCM display fields", async () => {
     const forwarded: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {

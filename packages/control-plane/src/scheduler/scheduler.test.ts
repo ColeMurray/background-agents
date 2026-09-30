@@ -158,11 +158,15 @@ vi.mock("../db/session-index", () => ({
   }),
 }));
 
+const mockUserStoreGetIdentitiesForUser = vi.fn().mockResolvedValue([]);
+const mockUserStoreGetUserById = vi.fn().mockResolvedValue(null);
 const mockUserStoreGetIdentity = vi.fn().mockResolvedValue(null);
 vi.mock("../db/user-store", () => ({
   UserStore: vi.fn().mockImplementation(function () {
     return {
       getIdentity: mockUserStoreGetIdentity,
+      getIdentitiesForUser: mockUserStoreGetIdentitiesForUser,
+      getUserById: mockUserStoreGetUserById,
     };
   }),
 }));
@@ -503,6 +507,8 @@ describe("Scheduler", () => {
     mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
       provider === "slack" ? { userId: "slack-actor-user" } : null
     );
+    mockUserStoreGetIdentitiesForUser.mockResolvedValue([]);
+    mockUserStoreGetUserById.mockResolvedValue(null);
     capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
@@ -564,6 +570,26 @@ describe("Scheduler", () => {
       await expect(getPromptBody(fetchMock)).resolves.toMatchObject({
         authorId: sampleAutomation.created_by,
         canonicalUserId: sampleAutomation.user_id,
+      });
+    });
+
+    it("attributes scheduled prompts to the owner's linked GitHub identity", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: "owner" },
+      ]);
+      mockUserStoreGetUserById.mockResolvedValue({ displayName: "Automation Owner" });
+      const stub = createMockSessionStub();
+      await expect(createScheduler(createEnv(undefined, stub)).tick()).resolves.toMatchObject({
+        processed: 1,
+      });
+      await expect(getInitBody(vi.mocked(stub.fetch))).resolves.toMatchObject({
+        canonicalUserId: sampleAutomation.user_id,
+        scmUserId: "42",
+        scmLogin: "owner",
+        scmName: "Automation Owner",
+        scmEmail: "42+owner@users.noreply.github.com",
       });
     });
 
@@ -2594,6 +2620,33 @@ describe("Scheduler", () => {
       // A steer is not a new trigger and not a skip.
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+
+    it("attributes a Slack automation follow-up to the actor, not the automation owner", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockImplementation(async (userId: string) =>
+        userId === "slack-actor-user"
+          ? [{ provider: "github", providerUserId: "77", providerLogin: "reviewer" }]
+          : []
+      );
+      mockUserStoreGetUserById.mockResolvedValue({ displayName: "Slack Reviewer" });
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).resolves.toMatchObject({ steered: 1 });
+      await expect(getPromptBody(vi.mocked(stub.fetch))).resolves.toMatchObject({
+        authorId: "slack:U1",
+        canonicalUserId: "slack-actor-user",
+        scmEnrichment: {
+          userId: "77",
+          login: "reviewer",
+          name: "Slack Reviewer",
+          email: "77+reviewer@users.noreply.github.com",
+        },
+      });
     });
 
     it("resolves and authorizes the Slack actor once across several steering candidates", async () => {

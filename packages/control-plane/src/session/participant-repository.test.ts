@@ -160,15 +160,6 @@ describe("ParticipantRepository", () => {
     ]);
   });
 
-  it("updates participant tokens", () => {
-    repository.updateParticipantTokens("p-1", {
-      scmAccessTokenEncrypted: "access",
-      scmRefreshTokenEncrypted: "refresh",
-      scmTokenExpiresAt: 9000,
-    });
-    expect(mock.calls[0].params).toEqual(["access", "refresh", 9000, "p-1"]);
-  });
-
   it("updates the WebSocket token", () => {
     repository.updateParticipantWsToken("p-1", "new-hash", 8000);
     expect(mock.calls[0].params).toEqual(["new-hash", 8000, "p-1"]);

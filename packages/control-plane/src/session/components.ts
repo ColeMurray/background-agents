@@ -372,7 +372,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
-    env,
     log,
     generateId: () => generateId(),
     resolveCurrentGitHubAccessToken:
