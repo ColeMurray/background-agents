@@ -580,8 +580,18 @@ export class SandboxShutdownCoordinator {
   }
 
   /** Captures the held source again under a new operation, without waiting for its runtime. */
-  private async retryCapture(state: ShutdownRecord): Promise<void> {
+  private async retryCapture(
+    state: ShutdownRecord,
+    trigger?: "alarm" | "reconnect"
+  ): Promise<void> {
     if (this.activeOperation !== null || !this.owns(state) || !this.canRetryShutdown(state)) return;
+    if (trigger)
+      this.deps.log?.info("Retrying a failed sandbox save", {
+        event: "sandbox.preservation_retry",
+        trigger,
+        operation_id: state.operationId,
+        reason: state.reason,
+      });
     const next: ShutdownRecord = {
       ...state,
       error: undefined,
@@ -639,12 +649,7 @@ export class SandboxShutdownCoordinator {
     if ((state.phase !== "failed" && state.phase !== "unknown") || !this.canRetryShutdown(state))
       return "exit";
     if (this.activeOperation === null && this.now() >= state.captureByMs!) {
-      this.deps.log?.info("Retrying a failed save after the runtime reconnected", {
-        event: "sandbox.preservation_retry",
-        operation_id: state.operationId,
-        reason: state.reason,
-      });
-      this.deps.background.submit(() => this.retryCapture(state), {
+      this.deps.background.submit(() => this.retryCapture(state, "reconnect"), {
         name: "sandbox.preservation_retry",
       });
     }
@@ -996,6 +1001,13 @@ export class SandboxShutdownCoordinator {
     }
     if (state.phase === "saved")
       return this.continuationPaused(state) ? "hold_watchdogs" : "continue";
+    if (state.phase === "failed" || state.phase === "unknown") {
+      if (this.activeOperation === null && this.availableRecoveryActions(state).includes("retry")) {
+        if (this.now() >= state.captureByMs!) await this.retryCapture(state, "alarm");
+        else await this.deps.alarm.schedule(state.captureByMs!);
+      }
+      return "hold_watchdogs";
+    }
     await this.advance();
     return "hold_watchdogs";
   }
