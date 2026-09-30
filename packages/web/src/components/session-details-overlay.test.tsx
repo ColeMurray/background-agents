@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionDetailsOverlay } from "./session-details-overlay";
+import type { SessionCapabilities } from "@/lib/session-capabilities";
 
 vi.mock("./session-right-sidebar", () => ({
   SessionRightSidebarContent: () => <p>Run information</p>,
@@ -27,9 +28,13 @@ it.each([true, false])("hides closed details from assistive technology (phone=%s
       read: true,
       collaborate: true,
       lifecycle: true,
+      delete: false,
+      move: false,
+      manageCollaborators: false,
+      changeVisibility: false,
       sandboxAccess: false,
       exportTrace: false,
-    },
+    } satisfies SessionCapabilities,
   };
   const view = render(<SessionDetailsOverlay {...props} open={false} />);
   expect(screen.queryByRole("dialog", { name: "Session details" })).not.toBeInTheDocument();
