@@ -1221,11 +1221,17 @@ export class SandboxShutdownCoordinator {
   }
 
   private fail(state: ShutdownRecord, phase: "failed" | "unknown", error: string): void {
-    this.publish({ ...state, phase, error });
+    const failed: ShutdownRecord = { ...state, phase, error };
+    this.publish(failed);
     this.broadcast({
       type: "sandbox_warning",
       message: `${phase === "failed" ? "Sandbox save failed" : "Sandbox save could not be confirmed"}: ${error}`,
     });
+    // An alarm may have been consumed while the provider call was still pending.
+    if (this.availableRecoveryActions(failed).includes("retry"))
+      this.deps.background.submit(() => this.deps.alarm.schedule(failed.captureByMs!), {
+        name: "sandbox.preservation_retry_alarm",
+      });
   }
 
   /** Confirmed provider stop of one source, bounded by the caller's deadline. */

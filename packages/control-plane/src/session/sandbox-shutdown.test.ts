@@ -1087,6 +1087,66 @@ describe("SandboxShutdownCoordinator", () => {
       expect(f.deps.alarm.schedule).toHaveBeenCalledExactlyOnceWith(failed.captureByMs);
     });
 
+    it.each(["provider rejection", "deadline timeout"] as const)(
+      "re-arms a consumed in-flight alarm after %s",
+      async (outcome) => {
+        vi.useFakeTimers();
+        try {
+          let rejectCapture!: (error: Error) => void;
+          const takeSnapshot = vi
+            .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+            .mockImplementationOnce(
+              () =>
+                new Promise((_, reject) => {
+                  rejectCapture = reject;
+                })
+            )
+            .mockResolvedValue({ success: true, imageId: "retry-image", sourceStopped: true });
+          const f = fixture(provider({ takeSnapshot }));
+          let pendingAlarm: number | null = null;
+          f.deps.alarm.schedule.mockImplementation(async (atMs) => {
+            pendingAlarm = Math.min(pendingAlarm ?? Infinity, atMs);
+          });
+          await readyWithoutDeadline(f);
+          await f.shutdown.requestShutdown("inactivity_timeout");
+          f.shutdown.prepared(preparedEvent(f.store.value!));
+
+          pendingAlarm = null;
+          const capturing = f.shutdown.handleAlarm();
+          await vi.advanceTimersByTimeAsync(0);
+          const state = f.store.value!;
+          expect(state.phase).toBe("capturing");
+          if (outcome === "provider rejection") await f.deps.alarm.schedule(state.stopByMs!);
+          expect(pendingAlarm).toBe(
+            outcome === "provider rejection" ? state.stopByMs : state.captureByMs
+          );
+          f.setNow(pendingAlarm!);
+          pendingAlarm = null;
+          await expect(f.shutdown.handleAlarm()).resolves.toBe("hold_watchdogs");
+          expect(takeSnapshot).toHaveBeenCalledOnce();
+
+          if (outcome === "provider rejection")
+            rejectCapture(new Error("transient provider error"));
+          else await vi.advanceTimersByTimeAsync(state.captureByMs! - 100_000);
+          await capturing;
+          await Promise.all(f.backgroundTasks.splice(0).map((task) => task()));
+
+          expect(f.store.value?.phase).toBe("unknown");
+          expect(pendingAlarm).toBe(state.captureByMs);
+          f.setNow(pendingAlarm!);
+          pendingAlarm = null;
+          await f.shutdown.handleAlarm();
+          expect(takeSnapshot).toHaveBeenCalledTimes(2);
+          expect(f.store.value).toMatchObject({
+            phase: "saved",
+            receipt: { artifactId: "retry-image" },
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    );
+
     it.each(["failed", "unknown"] as const)(
       "retries a held %s capture at its deadline without a reconnect",
       async (phase) => {
@@ -1304,6 +1364,7 @@ describe("SandboxShutdownCoordinator", () => {
           await f.shutdown.handleAlarm();
         }
 
+        await Promise.all(f.backgroundTasks.splice(0).map((task) => task()));
         expect(f.takeSnapshot).toHaveBeenCalledTimes(2);
         expect(f.store.value?.phase).toBe("unknown");
         expect(f.shutdown.onRefusedReconnect()).toBe("retry");
