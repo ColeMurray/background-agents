@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { TeamResponse } from "@/hooks/use-teams";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
@@ -15,13 +15,14 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture = () => {};
 });
 
-async function selectOption(
-  user: ReturnType<typeof userEvent.setup>,
-  label: string,
-  option: string
-) {
-  await user.click(screen.getByRole("combobox", { name: label }));
-  await user.click(await screen.findByRole("option", { name: option }));
+async function selectTeam(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("combobox", { name: "Team context" }));
+  await user.click(await screen.findByRole("option", { name }));
+}
+
+async function selectAudience(user: ReturnType<typeof userEvent.setup>, label: string) {
+  await user.click(screen.getByRole("button", { name: /^Session access:/ }));
+  await user.click(screen.getByRole("radio", { name: label }));
 }
 
 function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: TeamRole } {
@@ -44,19 +45,43 @@ function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: Tea
 }
 
 describe("Home team context", () => {
-  it("defaults workspace drafts to workspace visibility without offering team visibility", async () => {
+  it("separates icon-led session access from the agent controls", async () => {
+    const user = userEvent.setup();
+    mocks.teams = [team()];
+    render(<Home />);
+    const trigger = screen.getByRole("button", {
+      name: "Session access: Workspace; team context: No team",
+    });
+    expect(trigger).toHaveTextContent("Workspace");
+    expect(trigger.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
+    await user.click(trigger);
+    const context = screen.getByRole("dialog", { name: "Session access" });
+    expect(within(context).getByRole("combobox", { name: "Team context" })).toHaveTextContent(
+      "No team"
+    );
+    expect(
+      within(context).getByRole("radiogroup", { name: "Session audience" })
+    ).toBeInTheDocument();
+    expect(
+      within(context).queryByRole("button", { name: /model and effort/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Manage secrets and settings" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("defaults workspace drafts to workspace visibility with team visibility disabled", async () => {
     const user = userEvent.setup();
     render(<Home />);
-    const visibility = screen.getByRole("combobox", { name: "Session visibility" });
+    const visibility = screen.getByRole("button", { name: /^Session access: Workspace;/ });
     expect(visibility.tagName).toBe("BUTTON");
     expect(visibility).toHaveTextContent("Workspace");
     await user.click(visibility);
-    const menu = await screen.findByRole("listbox");
-    expect(within(menu).queryByRole("option", { name: "Team" })).not.toBeInTheDocument();
+    const menu = screen.getByRole("radiogroup", { name: "Session audience" });
+    expect(within(menu).getByRole("radio", { name: "Workspace" })).toBeChecked();
+    expect(within(menu).getByRole("radio", { name: "Team" })).toBeDisabled();
     await user.keyboard("{Escape}");
-    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-      target: { value: "Ship it" },
-    });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ teamId: null, visibility: "workspace" })
     );
@@ -67,13 +92,11 @@ describe("Home team context", () => {
     mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "private" })];
     mocks.activeTeamId = "team-1";
     const view = render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-      target: { value: "Ship it" },
-    });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
     );
-    await selectOption(user, "Session visibility", "Workspace");
+    await selectAudience(user, "Workspace");
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
     );
@@ -82,11 +105,18 @@ describe("Home team context", () => {
         vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
       ).toHaveLength(2)
     );
+    const workspaceCall = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url) === "/api/sessions")[1];
+    expect(JSON.parse(String(workspaceCall[1]?.body))).toMatchObject({
+      teamId: "team-1",
+      visibility: "workspace",
+    });
     mocks.activeTeamId = "team-2";
     view.rerender(<Home />);
-    expect(screen.getByRole("combobox", { name: "Session visibility" })).toHaveTextContent(
-      "Private"
-    );
+    expect(
+      screen.getByRole("button", { name: "Session access: Private; team context: Design" })
+    ).toHaveTextContent("Private");
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
       expect(calls).toHaveLength(3);
@@ -95,58 +125,116 @@ describe("Home team context", () => {
         visibility: "private",
       });
     });
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([url]) => String(url) === "/api/sessions/session-1/archive")
+    ).toHaveLength(2);
   });
 
-  it("offers a custom composer team choice and maps Workspace back to no team", async () => {
+  it("offers a composer team choice, preserves Workspace access, and maps No team to null", async () => {
     const user = userEvent.setup();
     mocks.teams = [team()];
     const view = render(<Home />);
-    const trigger = screen.getByRole("combobox", { name: "Session team" });
+    const trigger = screen.getByRole("button", { name: /^Session access:/ });
     expect(trigger.tagName).toBe("BUTTON");
     expect(trigger).toHaveTextContent("Workspace");
-    await selectOption(user, "Session team", "Engineering");
+    await user.click(trigger);
+    await selectTeam(user, "Engineering");
     expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
     mocks.activeTeamId = "team-1";
     view.rerender(<Home />);
-    expect(trigger).toHaveTextContent("Engineering");
-    await selectOption(user, "Session team", "Workspace");
+    expect(trigger).toHaveAccessibleName("Session access: Workspace; team context: Engineering");
+    expect(screen.getByRole("combobox", { name: "Team context" })).toHaveTextContent("Engineering");
+    await selectTeam(user, "No team");
     expect(mocks.setActiveTeam).toHaveBeenLastCalledWith(null);
+    mocks.activeTeamId = null;
+    view.rerender(<Home />);
+    expect(trigger).toHaveAccessibleName("Session access: Workspace; team context: No team");
+    await user.keyboard("{Escape}");
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: null, visibility: "workspace" })
+    );
+  });
+
+  it("preserves Private access when the composer team context changes and warms the final pair", async () => {
+    const user = userEvent.setup();
+    mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "workspace" })];
+    mocks.activeTeamId = "team-1";
+    const view = render(<Home />);
+    mocks.setActiveTeam.mockImplementation((teamId: string | null) => {
+      mocks.activeTeamId = teamId;
+      view.rerender(<Home />);
+    });
+    await selectAudience(user, "Private");
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "private" })
+    );
+    await user.click(screen.getByRole("button", { name: /^Session access:/ }));
+    await selectTeam(user, "Design");
+    expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-2");
+    expect(
+      screen.getByRole("button", { name: "Session access: Private; team context: Design" })
+    ).toHaveTextContent("Private");
+    expect(screen.getByRole("radio", { name: "Private" })).toBeChecked();
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
+      expect(calls).toHaveLength(2);
+      expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({
+        teamId: "team-2",
+        visibility: "private",
+      });
+    });
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([url]) => String(url) === "/api/sessions/session-1/archive")
+    ).toHaveLength(1);
   });
 
   it("selects visibility with the keyboard and restores focus to its trigger", async () => {
     const user = userEvent.setup();
     render(<Home />);
-    const trigger = screen.getByRole("combobox", { name: "Session visibility" });
-    await user.tab();
-    await user.tab();
+    const trigger = screen.getByRole("button", { name: /^Session access:/ });
+    trigger.focus();
     expect(trigger).toHaveFocus();
     await user.keyboard("[Space]");
-    await waitFor(() => expect(screen.getByRole("option", { name: "Workspace" })).toHaveFocus());
-    await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("option", { name: "Private" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Workspace" })).toHaveFocus());
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("radio", { name: "Private" })).toHaveFocus();
+    expect(screen.getByRole("radio", { name: "Workspace" })).toBeChecked();
     await user.keyboard("{Enter}");
     expect(trigger).toHaveTextContent("Private");
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Session access" })).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("waits for membership and settings reconciliation before warming or sending", async () => {
+    const user = userEvent.setup();
     mocks.teamsLoading = true;
     mocks.teams = [team()];
     const view = render(<Home />);
     const input = screen.getByPlaceholderText("What do you want to build?");
-    fireEvent.change(input, { target: { value: "Ship it" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await user.type(input, "Ship it");
+    await user.keyboard("{Control>}{Enter}{/Control}");
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Session team" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Session visibility" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Session access:/ })).toBeDisabled();
     expect(fetch).not.toHaveBeenCalled();
     mocks.teamsLoading = false;
     mocks.requireTeamOnCreate = true;
     mocks.teams = [team()];
     view.rerender(<Home />);
     expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
-    expect(screen.queryByRole("combobox", { name: "Session team" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Session access:/ }));
+    expect(screen.getByRole("combobox", { name: "Team context" })).not.toBeDisabled();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
+    await user.click(screen.getByRole("combobox", { name: "Team context" }));
+    expect(screen.queryByRole("option", { name: "No team" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}{Escape}");
     expect(fetch).not.toHaveBeenCalled();
     mocks.activeTeamId = "team-1";
     view.rerender(<Home />);
@@ -155,38 +243,40 @@ describe("Home team context", () => {
     );
   });
 
-  it("blocks warming and shortcut submission with an inline notice when a team is required but none are available", () => {
+  it("blocks warming and shortcut submission with an inline notice when a team is required but none are available", async () => {
+    const user = userEvent.setup();
     mocks.requireTeamOnCreate = true;
     render(<Home />);
     expect(screen.getByText("Join a team to create a session.")).toBeInTheDocument();
     const input = screen.getByPlaceholderText("What do you want to build?");
-    fireEvent.change(input, { target: { value: "Ship it" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await user.type(input, "Ship it");
+    await user.keyboard("{Control>}{Enter}{/Control}");
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("does not create workspace drafts when the team context failed to load", () => {
+  it("does not create workspace drafts when the team context failed to load", async () => {
+    const user = userEvent.setup();
     mocks.teamsError = new Error("Settings unavailable");
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-      target: { value: "Ship it" },
-    });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Session access:/ })).toBeDisabled();
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it("surfaces terminal creation codes on first typing and does not retry the denied draft", async () => {
+    const user = userEvent.setup();
     vi.mocked(fetch).mockResolvedValue(
       Response.json({ error: "Team archived", code: "team_archived" }, { status: 409 })
     );
     render(<Home />);
     const input = screen.getByPlaceholderText("What do you want to build?");
-    fireEvent.change(input, { target: { value: "Ship it" } });
+    await user.type(input, "Ship it");
     await screen.findByText("Team archived (team_archived)");
-    fireEvent.change(input, { target: { value: "" } });
-    fireEvent.change(input, { target: { value: "Try again" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await user.clear(input);
+    await user.type(input, "Try again");
+    await user.keyboard("{Control>}{Enter}{/Control}");
     expect(
       vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
     ).toHaveLength(1);
@@ -200,13 +290,11 @@ describe("Home team context", () => {
       )
       .mockResolvedValueOnce(Response.json({ sessionId: "session-1", status: "created" }));
     render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-      target: { value: "Ship it" },
-    });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
     await screen.findByText("Visibility denied (visibility_denied)");
-    const visibility = screen.getByRole("combobox", { name: "Session visibility" });
+    const visibility = screen.getByRole("button", { name: /^Session access:/ });
     expect(visibility).not.toBeDisabled();
-    await selectOption(user, "Session visibility", "Private");
+    await selectAudience(user, "Private");
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
       expect(calls).toHaveLength(2);
@@ -218,14 +306,13 @@ describe("Home team context", () => {
   });
 
   it("waits for a team's default environment before warming the composed draft", async () => {
+    const user = userEvent.setup();
     mocks.teams = [team({ defaultEnvironmentId: "env-1" })];
     mocks.activeTeamId = "team-1";
     mocks.environmentsLoadingValue = true;
     localStorage.setItem("open-inspect-last-selected-repo", repo.fullName);
     const view = render(<Home />);
-    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
-      target: { value: "Ship it" },
-    });
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
     expect(fetch).not.toHaveBeenCalled();
     mocks.environmentsLoadingValue = false;
     mocks.environmentsValue = [environment];

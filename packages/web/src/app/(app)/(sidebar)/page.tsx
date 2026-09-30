@@ -10,13 +10,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SessionAccessSelector } from "@/components/session-access-selector";
 import { matchesShortcut } from "@/lib/keyboard-shortcuts";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
@@ -144,8 +138,9 @@ export default function Home() {
     }
   }, [activeTeamId, loadingTeams, requireTeamOnCreate, setActiveTeam, teamError, teams]);
 
+  // Composer context changes preserve the audience; sidebar changes use team defaults.
   useEffect(() => {
-    setVisibilityDraft(null);
+    setVisibilityDraft((draft) => (draft?.teamId === activeTeamId ? draft : null));
   }, [activeTeamId]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
@@ -436,6 +431,10 @@ export default function Home() {
       teamContext={teamContext}
       teamCreationReady={teamCreationReady}
       visibility={visibility}
+      onTeamChange={(teamId) => {
+        setVisibilityDraft({ teamId, value: visibility });
+        setActiveTeam(teamId);
+      }}
       onVisibilityChange={(value) => {
         if (activeTeamId !== null || value !== "team")
           setVisibilityDraft({ teamId: activeTeamId, value });
@@ -481,6 +480,7 @@ function HomeContent({
   teamContext,
   teamCreationReady,
   visibility,
+  onTeamChange,
   onVisibilityChange,
   selectedModel,
   setSelectedModel,
@@ -513,6 +513,7 @@ function HomeContent({
   teamContext: ReturnType<typeof useActiveTeam>;
   teamCreationReady: boolean;
   visibility: SessionVisibility;
+  onTeamChange: (teamId: string | null) => void;
   onVisibilityChange: (value: SessionVisibility) => void;
   selectedModel: ValidModel;
   setSelectedModel: (value: ValidModel) => void;
@@ -561,9 +562,8 @@ function HomeContent({
     handleDragOver,
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
-  const { sessionTarget, selectedRepo, repos, loadingRepos, isLaunchable } = picker;
+  const { sessionTarget, repos, loadingRepos, isLaunchable } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
-  const selectedTeam = teamContext.teams.find((team) => team.id === teamContext.activeTeamId);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -700,58 +700,9 @@ function HomeContent({
                   </div>
                 </div>
 
-                {/* Footer row with session controls */}
+                {/* Agent configuration stays inside the composer. */}
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
-                    {teamContext.teams.length === 1 && !teamContext.requireTeamOnCreate ? (
-                      <Select
-                        value={teamContext.activeTeamId ?? "workspace"}
-                        onValueChange={(value) =>
-                          teamContext.setActiveTeam(value === "workspace" ? null : value)
-                        }
-                        disabled={creating || teamContext.loading || !!teamContext.error}
-                      >
-                        <SelectTrigger
-                          aria-label="Session team"
-                          density="compact"
-                          className="w-auto max-w-[12rem] border-0 bg-transparent px-0 text-muted-foreground hover:text-foreground"
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent side="top" align="start">
-                          <SelectItem value="workspace">Workspace</SelectItem>
-                          <SelectItem value={teamContext.teams[0].id}>
-                            {teamContext.teams[0].name}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <span className="max-w-[12rem] truncate text-sm text-muted-foreground">
-                        {selectedTeam?.name ?? "Workspace"}
-                      </span>
-                    )}
-                    <Select
-                      value={visibility}
-                      onValueChange={(value) =>
-                        onVisibilityChange(
-                          value === "team" ? "team" : value === "private" ? "private" : "workspace"
-                        )
-                      }
-                      disabled={creating || !teamCreationReady}
-                    >
-                      <SelectTrigger
-                        aria-label="Session visibility"
-                        density="compact"
-                        className="w-auto border-0 bg-transparent px-0 text-muted-foreground hover:text-foreground"
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent side="top" align="start">
-                        <SelectItem value="workspace">Workspace</SelectItem>
-                        {selectedTeam && <SelectItem value="team">Team</SelectItem>}
-                        <SelectItem value="private">Private</SelectItem>
-                      </SelectContent>
-                    </Select>
                     <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
@@ -792,6 +743,17 @@ function HomeContent({
                 </div>
               </div>
 
+              <SessionAccessSelector
+                teamId={teamContext.activeTeamId}
+                teams={teamContext.teams}
+                visibility={visibility}
+                onTeamChange={onTeamChange}
+                onVisibilityChange={onVisibilityChange}
+                requireTeamOnCreate={teamContext.requireTeamOnCreate}
+                disabled={creating || teamContext.loading || !!teamContext.error}
+                visibilityDisabled={!teamCreationReady}
+              />
+
               {/* Secrets disclosure per session target (design §7.4) */}
               {sessionTarget?.kind === "environment" && (
                 <p className="mt-3 text-xs text-muted-foreground text-center">
@@ -808,17 +770,6 @@ function HomeContent({
                   </Link>
                   .
                 </p>
-              )}
-
-              {selectedRepo && (
-                <div className="mt-3 text-center">
-                  <Link
-                    href="/settings"
-                    className="text-xs text-muted-foreground hover:text-foreground transition"
-                  >
-                    Manage secrets and settings
-                  </Link>
-                </div>
               )}
 
               {repos.length === 0 && !loadingRepos && (
