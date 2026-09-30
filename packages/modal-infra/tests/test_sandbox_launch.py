@@ -19,7 +19,7 @@ from sandbox_runtime.constants import (
     VNC_PASSWORD_ENV_VAR,
 )
 from sandbox_runtime.types import SandboxStatus, SessionConfig
-from src.sandbox.launch import SandboxLauncher
+from src.sandbox.launch import ACCESS_PASSWORD_READ_TIMEOUT_SECONDS, SandboxLauncher
 from src.sandbox.launch_policy import (
     DockerImageUnavailableError,
     InvalidDockerSettingsError,
@@ -33,6 +33,7 @@ from src.sandbox.manager import (
 )
 from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 from src.sandbox.vm_recovery import VMAllocationOutcome, VMServiceLaunch
+from tests.modal_sdk_contract import sandbox_create_request, sandbox_exec_request
 
 
 def _fake_create(captured: dict):
@@ -58,8 +59,18 @@ def _fake_create(captured: dict):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
+@pytest.mark.parametrize(
+    "resources, expected_cpu, expected_memory, timeout_seconds",
+    [
+        ({}, None, None, 30),
+        ({"cpuCores": 0.5}, 0.5, None, 300),
+        ({"memoryMib": 2048}, None, 2048, 1800),
+        ({"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+    ],
+    ids=["defaults", "cpu-only", "memory-only", "cpu-and-memory"],
+)
 async def test_launch_matrix_preserves_common_and_source_specific_behavior(
-    monkeypatch, image_source
+    monkeypatch, image_source, resources, expected_cpu, expected_memory, timeout_seconds
 ):
     captured: dict = {}
     base_image = object()
@@ -83,14 +94,13 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         "terminalPort": 9002,
         "terminalEnabled": True,
         "tunnelPorts": [3000],
-        "cpuCores": 1.5,
-        "memoryMib": 3072,
+        **resources,
     }
     common = {
         "sandbox_id": "sandbox-1",
         "control_plane_url": "https://control.example",
         "sandbox_auth_token": "sandbox-token",
-        "timeout_seconds": 4321,
+        "timeout_seconds": timeout_seconds,
         "user_env_vars": {
             "CONTROL_PLANE_URL": "https://user.example",
             "CUSTOM_ENV": "preserved",
@@ -141,12 +151,13 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         expected_image = images["repo-image-1"] if image_source == "repository" else base_image
 
     kwargs = captured["kwargs"]
+    sandbox_create_request(*captured["command"], **kwargs)
     env = kwargs["env"]
     assert captured["command"] == ("python", "-m", "sandbox_runtime.entrypoint")
     assert kwargs["image"] is expected_image
-    assert kwargs["timeout"] == 4321
-    assert kwargs["cpu"] == 1.5
-    assert kwargs["memory"] == 3072
+    assert kwargs["timeout"] == timeout_seconds
+    assert kwargs.get("cpu") == expected_cpu
+    assert kwargs.get("memory") == expected_memory
     assert kwargs["encrypted_ports"] == [9000, 9001, 9002, 3000]
     # The default launch never touches the VM runtime or named allocations.
     assert "experimental_options" not in kwargs
@@ -431,7 +442,18 @@ def _not_found(*_args, **_kwargs):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
-async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch, image_source):
+@pytest.mark.parametrize(
+    "settings, expected_cpu, expected_memory, timeout_seconds",
+    [
+        (None, 2, 4096, 30),
+        (DOCKER_SETTINGS, 2, 4096, 4321),
+        ({"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048, 600),
+    ],
+    ids=["defaults", "integer-cpu", "fractional-cpu"],
+)
+async def test_docker_launch_selects_vm_runtime_and_named_allocation(
+    monkeypatch, image_source, settings, expected_cpu, expected_memory, timeout_seconds
+):
     manager, captured, docker_image = _docker_manager(monkeypatch)
     artifact = object()
     monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _id: artifact)
@@ -448,19 +470,26 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(monkeypatch
             control_plane_url="https://control.example",
             sandbox_auth_token="token",
             user_env_vars={DOCKER_ENABLED_ENV_VAR: "false"},
-            settings=dict(DOCKER_SETTINGS),
+            settings=settings,
+            timeout_seconds=timeout_seconds,
             sandbox_backend="modal-vm",
         )
     else:
         handle = await manager.create_sandbox(
-            _docker_config(repo_image_id="repo-image-1" if image_source == "repository" else None)
+            _docker_config(
+                repo_image_id="repo-image-1" if image_source == "repository" else None,
+                settings=settings,
+                timeout_seconds=timeout_seconds,
+            )
         )
 
     kwargs = captured["kwargs"]
+    sandbox_create_request(*captured["command"], **kwargs)
     assert kwargs["image"] is (docker_image if image_source == "base" else artifact)
     assert kwargs["experimental_options"] == {"vm_runtime": True}
-    assert kwargs["cpu"] == (2.0, 2.0)
-    assert kwargs["memory"] == 4096
+    assert kwargs["cpu"] == (expected_cpu, expected_cpu)
+    assert kwargs["memory"] == expected_memory
+    assert kwargs["timeout"] == timeout_seconds
     assert kwargs["name"] == docker_allocation_name("session-1")
     assert kwargs["tags"] == {
         **docker_allocation_tags("session-1", "sandbox-acme-repo-1700000000000"),
@@ -652,6 +681,43 @@ async def test_docker_retry_returns_the_original_access_credentials(
     assert adopted.vnc_password == original.vnc_password == "old-vnc"
     assert create.await_count == int(create_race)
     assert existing.exec.aio.call_args.args[-2:] == ("CODE_SERVER_PASSWORD", VNC_PASSWORD_ENV_VAR)
+    sandbox_exec_request(*existing.exec.aio.await_args.args, **existing.exec.aio.await_args.kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code_server_enabled", [False, True])
+@pytest.mark.parametrize("vnc_enabled", [False, True])
+async def test_access_password_read_arguments_match_enabled_services(
+    code_server_enabled, vnc_enabled
+):
+    passwords = {"CODE_SERVER_PASSWORD": "code-password", VNC_PASSWORD_ENV_VAR: "vnc-pass"}
+    process = SimpleNamespace(
+        stdout=SimpleNamespace(
+            read=SimpleNamespace(aio=AsyncMock(return_value=json.dumps(passwords)))
+        ),
+        wait=SimpleNamespace(aio=AsyncMock(return_value=0)),
+    )
+    execute = AsyncMock(return_value=process)
+    recovered = await SandboxLauncher._read_access_passwords(
+        SimpleNamespace(exec=SimpleNamespace(aio=execute)),
+        code_server_enabled=code_server_enabled,
+        vnc_enabled=vnc_enabled,
+    )
+
+    keys = []
+    if code_server_enabled:
+        keys.append("CODE_SERVER_PASSWORD")
+    if vnc_enabled:
+        keys.append(VNC_PASSWORD_ENV_VAR)
+    assert recovered == {key: passwords[key] for key in keys}
+    if not keys:
+        execute.assert_not_awaited()
+    else:
+        execute.assert_awaited_once()
+        request = sandbox_exec_request(*execute.await_args.args, **execute.await_args.kwargs)
+        assert list(request.command_args[:3]) == ["python", "-I", "-c"]
+        assert list(request.command_args[4:]) == keys
+        assert request.timeout_secs == ACCESS_PASSWORD_READ_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -891,6 +957,7 @@ async def test_launch_rejects_boolean_tunnel_ports(monkeypatch, restore, ports, 
         )
 
     kwargs = create.call_args.kwargs
+    sandbox_create_request(*create.call_args.args, **kwargs)
     assert kwargs.get("encrypted_ports", []) == expected
     assert all(type(port) is int for port in kwargs.get("encrypted_ports", []))
     assert kwargs["env"].get(EXPECTED_TUNNEL_PORTS_ENV_VAR) == (

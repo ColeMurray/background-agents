@@ -30,6 +30,7 @@ from src.sandbox.build_session import (
 )
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from src.web_api import IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+from tests.modal_sdk_contract import sandbox_create_request, snapshot_filesystem_request
 
 
 @pytest.fixture(autouse=True)
@@ -171,7 +172,13 @@ def test_reserved_user_env_scrub_matches_manifest():
 
 
 @pytest.mark.asyncio
-async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env(monkeypatch):
+@pytest.mark.parametrize(
+    "execution_timeout_seconds, provider_timeout_seconds",
+    [(1200, 1800), (1800, 2400), (3600, 4200)],
+)
+async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env(
+    monkeypatch, execution_timeout_seconds, provider_timeout_seconds
+):
     sandbox = SimpleNamespace(object_id="modal-session-1")
     create = _async_method(sandbox)
     monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
@@ -195,14 +202,15 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
             "MODAL_SANDBOX_ID": "attacker-sandbox",
             "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "99999",
         },
-        build_execution_timeout_seconds=1200,
-        timeout_seconds=1800,
+        build_execution_timeout_seconds=execution_timeout_seconds,
+        timeout_seconds=provider_timeout_seconds,
     )
 
     assert launch.provider_session_id == "modal-session-1"
     assert launch.sandbox_backend == "modal"
     args = create.aio.await_args.args
     kwargs = create.aio.await_args.kwargs
+    sandbox_create_request(*args, **kwargs)
     assert args == (
         "python",
         "-m",
@@ -229,7 +237,9 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         kwargs["env"]["OI_REPO_IMAGE_FAILURE_CALLBACK_URL"]
         == "https://cp.test/image-builds/build-failed"
     )
-    assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == "1200"
+    assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == str(
+        execution_timeout_seconds
+    )
     assert kwargs["env"]["VCS_HOST"] == "gitlab.com"
     assert kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
     assert kwargs["env"]["VCS_CLONE_TOKEN"] == "clone-token"
@@ -238,7 +248,7 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
     }
     assert kwargs["secrets"] == []
-    assert kwargs["timeout"] == 1800
+    assert kwargs["timeout"] == provider_timeout_seconds
     assert kwargs["workdir"] == "/workspace"
 
 
@@ -326,7 +336,8 @@ async def test_start_build_sandbox_refuses_mismatched_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
+@pytest.mark.parametrize("command_router", [False, True], ids=["legacy", "router"])
+async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch, command_router):
     snapshot_filesystem = _async_method(SimpleNamespace(object_id="im-snapshot-1"))
     sandbox = SimpleNamespace(
         get_tags=_async_method(
@@ -343,6 +354,9 @@ async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
 
     assert image_id == "im-snapshot-1"
     snapshot_filesystem.assert_not_called()
+    snapshot_filesystem_request(
+        **snapshot_filesystem.aio.await_args.kwargs, command_router=command_router
+    )
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
 
 
@@ -415,8 +429,17 @@ async def test_terminate_build_sandbox_treats_provider_not_found_as_success(monk
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("docker_enabled", [False, True])
+@pytest.mark.parametrize(
+    "settings, expected_cpu, expected_memory",
+    [
+        (None, 2, 4096),
+        ({"cpuCores": 2, "memoryMib": 4096}, 2, 4096),
+        ({"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048),
+    ],
+    ids=["defaults", "integer-cpu", "fractional-cpu"],
+)
 async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
-    monkeypatch, docker_enabled
+    monkeypatch, docker_enabled, settings, expected_cpu, expected_memory
 ):
     sandbox = SimpleNamespace(object_id="modal-session-1")
     create = _async_method(sandbox)
@@ -435,20 +458,23 @@ async def test_create_build_sandbox_selects_the_variant_from_frozen_settings(
         failure_callback_url="https://cp.test/image-builds/build-failed",
         user_env_vars={DOCKER_ENABLED_ENV_VAR: "true"},
         sandbox_backend="modal-vm" if docker_enabled else "modal",
-        sandbox_settings=({"cpuCores": 2, "memoryMib": 4096} if docker_enabled else None),
+        sandbox_settings=settings,
     )
 
     assert launch.provider_session_id == "modal-session-1"
     assert launch.sandbox_backend == ("modal-vm" if docker_enabled else "modal")
     kwargs = create.aio.await_args.kwargs
+    sandbox_create_request(*create.aio.await_args.args, **kwargs)
     assert kwargs["env"][DOCKER_ENABLED_ENV_VAR] == ("true" if docker_enabled else "false")
     if docker_enabled:
         assert kwargs["image"] is docker_image
         assert kwargs["experimental_options"] == {"vm_runtime": True}
-        assert (kwargs["cpu"], kwargs["memory"]) == ((2, 2), 4096)
+        assert (kwargs["cpu"], kwargs["memory"]) == ((expected_cpu, expected_cpu), expected_memory)
     else:
         assert kwargs["image"] is default_image
         assert "experimental_options" not in kwargs
+        assert "cpu" not in kwargs
+        assert "memory" not in kwargs
 
 
 @pytest.mark.asyncio
