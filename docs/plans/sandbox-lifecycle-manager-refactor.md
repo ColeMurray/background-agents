@@ -76,17 +76,17 @@ No schema, wire/runtime/provider-backend contract, timeout or retry policy chang
 
 ## Access Contract
 
-`createSandboxAccess` binds only an artifact storage port, broadcast, socket observation/detachment,
+`SandboxAccess` receives only an artifact storage port, broadcast, socket observation/detachment,
 the provider's resumable-stop capability check, dashboard URL builder and lazy logger. It owns no
 mutable lifecycle flags, generation checks, signing-key retention, encryption key or full-manager
-reference. Its factory performs no dependency work.
+reference. Its constructor performs no dependency work.
 
 Composition constructs repository/socket/messenger leaves, then access, then shutdown, then manager.
-Shutdown receives `access.retireShutdownAccess` directly; retirement clears access, notifies
-clients, then detaches with the unchanged close code and reason. There is no manager retirement
-forwarding method. URL-only retirement preserves credentials on resumable providers when supported,
-falls back to full clearing otherwise, and always clears tunnels and notifies. Other termination
-paths keep their own existing clear/detach order.
+Shutdown receives a callback to `access.retireShutdownAccess()` directly; retirement clears access,
+notifies clients, then detaches with the unchanged close code and reason. There is no manager
+retirement forwarding method. URL-only retirement preserves credentials on resumable providers when
+supported, falls back to full clearing otherwise, and always clears tunnels and notifies. Other
+termination paths keep their own existing clear/detach order.
 
 The manager calls individual `storeCodeServer`, `storeVnc`, `storeAndBroadcastTunnelUrls`,
 `storeTtyd` operations for fresh/restore at their original await points. It still orchestrates

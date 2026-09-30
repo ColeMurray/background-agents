@@ -48,7 +48,7 @@ import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
 import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
 // The composition root shares the internal access collaborator with shutdown and lifecycle only.
 // eslint-disable-next-line no-restricted-imports
-import { createSandboxAccess, type SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
+import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
@@ -441,7 +441,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     createLogger("lifecycle-manager"),
     getPublicSessionId
   );
-  const access = createSandboxAccess({
+  const access = new SandboxAccess({
     storage: sandboxRepository,
     broadcaster: messenger,
     sockets: lifecycleSockets,
@@ -479,7 +479,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // composition function has constructed and returned the complete graph.
     onLifecycleChange: () => messageQueue.processMessageQueue(),
     reconcileStatusFromMessages: () => statusService.reconcileFromMessageState(),
-    retireAccess: access.retireShutdownAccess,
+    retireAccess: () => access.retireShutdownAccess(),
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,

@@ -5,7 +5,7 @@ import {
   DEFAULT_LIFECYCLE_CONFIG,
   SandboxLifecycleManager,
 } from "../../src/sandbox/lifecycle/manager";
-import { createSandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
+import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sandbox/provider";
 import { providerResumesAfterStop } from "../../src/sandbox/provider";
 import { createLogger } from "../../src/logger";
@@ -734,7 +734,7 @@ describe("sandbox graceful shutdown wiring", () => {
         detachSandboxWebSocket: () => undefined,
       };
       const log = createLogger("shutdown-test");
-      const access = createSandboxAccess({
+      const access = new SandboxAccess({
         storage: sandbox,
         broadcaster,
         sockets,
@@ -755,7 +755,7 @@ describe("sandbox graceful shutdown wiring", () => {
           },
         },
         onLifecycleChange: async () => undefined,
-        retireAccess: access.retireShutdownAccess,
+        retireAccess: () => access.retireShutdownAccess(),
       } as never);
       const manager = new SandboxLifecycleManager(
         provider,

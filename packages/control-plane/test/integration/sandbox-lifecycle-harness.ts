@@ -3,7 +3,7 @@ import {
   DEFAULT_LIFECYCLE_CONFIG,
   SandboxLifecycleManager,
 } from "../../src/sandbox/lifecycle/manager";
-import { createSandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
+import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import { providerResumesAfterStop, type SandboxProvider } from "../../src/sandbox/provider";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
@@ -81,7 +81,7 @@ export function realLifecycleHarness(
     sendToSandbox: () => false,
     detachSandboxWebSocket: () => sandbox.revokeActiveSocketId(),
   };
-  const access = createSandboxAccess({
+  const access = new SandboxAccess({
     storage: sandbox,
     broadcaster,
     sockets,
@@ -113,7 +113,7 @@ export function realLifecycleHarness(
     },
     onLifecycleChange: processQueue,
     reconcileStatusFromMessages: async () => undefined,
-    retireAccess: access.retireShutdownAccess,
+    retireAccess: () => access.retireShutdownAccess(),
   } as never);
   const manager = new SandboxLifecycleManager(
     provider,

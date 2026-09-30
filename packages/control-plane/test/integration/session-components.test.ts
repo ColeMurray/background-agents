@@ -6,6 +6,7 @@ import type { Env } from "../../src/types";
 import { createSessionRuntime } from "../../src/session/components";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { SandboxLifecycleManager } from "../../src/sandbox/lifecycle/manager";
+import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import { SessionMessageQueue } from "../../src/session/message-queue";
 import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
@@ -65,6 +66,7 @@ describe("createSessionRuntime", () => {
       };
       platform.createBackgroundTasks = () => ({ submit: runtimeOperation });
       const prototypes = [
+        SandboxAccess.prototype,
         SandboxLifecycleManager.prototype,
         SandboxShutdownCoordinator.prototype,
         SessionMessageQueue.prototype,

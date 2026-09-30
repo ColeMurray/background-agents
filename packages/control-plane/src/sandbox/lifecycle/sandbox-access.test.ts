@@ -1,9 +1,8 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createSandboxAccess,
+  SandboxAccess,
   TERMINAL_TOKEN_TTL_SECONDS,
-  type SandboxAccess,
   type SandboxAccessDependencies,
   type SandboxAccessStorage,
 } from "./sandbox-access";
@@ -58,7 +57,7 @@ function fixture(overrides: Partial<SandboxAccessDependencies> = {}) {
     ...overrides,
   };
   return {
-    access: createSandboxAccess(dependencies),
+    access: new SandboxAccess(dependencies),
     dependencies,
     storage,
     broadcaster,
@@ -73,12 +72,13 @@ function fixture(overrides: Partial<SandboxAccessDependencies> = {}) {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("createSandboxAccess", () => {
+describe("SandboxAccess", () => {
   it("does no dependency work at construction, even without an initialized logger", () => {
     const getLogger = vi.fn(() => {
       throw new Error("session not initialized");
     });
     const f = fixture({ getLogger });
+    expect(f.access).toBeInstanceOf(SandboxAccess);
 
     for (const dependency of [
       ...Object.values(f.storage),
@@ -301,7 +301,7 @@ describe("createSandboxAccess", () => {
 
   it("keeps dashboard and connected notifications distinct and repeatable, with no notification when unavailable", () => {
     const f = fixture();
-    const withoutBuilder = createSandboxAccess({
+    const withoutBuilder = new SandboxAccess({
       ...f.dependencies,
       sandboxDashboardUrlBuilder: undefined,
     });

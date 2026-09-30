@@ -13,7 +13,7 @@ import {
 } from "./manager";
 import type { McpServerLookup, SlackAgentNotifyLookup } from "./launch-context";
 import type { ImageBuildLookup, ImageBuildSpawnRow } from "./image-selection";
-import { createSandboxAccess, TERMINAL_TOKEN_TTL_SECONDS } from "./sandbox-access";
+import { SandboxAccess, TERMINAL_TOKEN_TTL_SECONDS } from "./sandbox-access";
 import { createLogger } from "../../logger";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
@@ -2830,19 +2830,15 @@ describe("SandboxLifecycleManager", () => {
         stopSandbox,
         createSandbox,
       });
-      const access = createSandboxAccess({
+      const access = new SandboxAccess({
         storage,
         broadcaster,
         sockets: wsManager,
         canResumeAfterStop: () => false,
         getLogger: () => createLogger("lifecycle-manager"),
       });
-      const shutdown = createCheckpointShutdown(
-        provider,
-        storage,
-        broadcaster,
-        undefined,
-        access.retireShutdownAccess
+      const shutdown = createCheckpointShutdown(provider, storage, broadcaster, undefined, () =>
+        access.retireShutdownAccess()
       );
       const manager = new SandboxLifecycleManager(
         provider,

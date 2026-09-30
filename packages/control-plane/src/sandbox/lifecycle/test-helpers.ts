@@ -17,7 +17,7 @@ import { createLogger } from "../../logger";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { ImageBuildLookup } from "./image-selection";
 import {
-  createSandboxAccess,
+  SandboxAccess,
   type SandboxAccessDependencies,
   type SandboxAccessStorage,
 } from "./sandbox-access";
@@ -471,7 +471,7 @@ export function createTestLifecycleManager(
   imageBuildLookup?: ImageBuildLookup,
   backgroundTasks?: BackgroundTasks
 ): SandboxLifecycleManager {
-  const access = createSandboxAccess({
+  const access = new SandboxAccess({
     storage,
     broadcaster,
     sockets: wsManager,
