@@ -91,6 +91,32 @@ function member(repoOwner: string, repoName: string, position: number) {
 }
 
 describe("SessionHeader", () => {
+  it("removes an open rename editor when lifecycle capability is revoked", () => {
+    const props = {
+      sessionState: createSessionState(),
+      fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Session 1" },
+      connected: true,
+      connecting: false,
+      isDetailsOpen: false,
+      isDesktopDetailsOpen: true,
+      showDesktopDetailsToggle: true,
+      detailsButtonRef: createRef<HTMLButtonElement>(),
+      actionsButtonRef: createRef<HTMLButtonElement>(),
+      onToggleDetails: vi.fn(),
+      onToggleDesktopDetails: vi.fn(),
+      onOpenMobileDetails: vi.fn(),
+      actions,
+      renameSession: vi.fn(),
+    };
+    const { rerender } = render(<SessionHeader {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Session 1" }));
+    expect(screen.getByRole("textbox", { name: "Session title" })).toBeInTheDocument();
+    rerender(
+      <SessionHeader {...props} capabilities={{ ...FULL_CAPABILITIES, lifecycle: false }} />
+    );
+    expect(screen.queryByRole("textbox", { name: "Session title" })).not.toBeInTheDocument();
+    expect(props.renameSession).not.toHaveBeenCalled();
+  });
   it("gives the desktop title available header space instead of a fixed width", () => {
     const title = "Correctness review of background agents";
     render(

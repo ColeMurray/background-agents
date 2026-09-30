@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { isEnvironmentId } from "./environments";
 import { auditEventListResponseSchema } from "./audit-events";
-import type { SessionInboxSession } from "./session-inbox";
-import type { SessionCapabilities } from "./session-access";
 import { sessionListRepositorySchema } from "./repositories";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
@@ -110,6 +108,8 @@ export const teamMemberSchema = teamMembershipSchema.extend({
 
 export const meTeamsResponseSchema = z.object({
   teams: z.array(teamResponseSchema.extend({ role: teamRoleSchema })),
+  // Older control-plane responses omit the setting during independent rollouts.
+  requireTeamOnCreate: z.boolean().default(false),
 });
 
 // Session modules depend on team settings; keep this wire schema cycle-free.
@@ -151,7 +151,7 @@ const teamInboxSessionSchema = z.object({
     canManageCollaborators: z.boolean(),
     canChangeVisibility: z.boolean(),
   }),
-}) satisfies z.ZodType<SessionInboxSession & { capabilities: SessionCapabilities }>;
+});
 const teamInboxItemSchema = z.object({
   rootSession: teamInboxSessionSchema,
   descendantSessions: z.array(teamInboxSessionSchema),

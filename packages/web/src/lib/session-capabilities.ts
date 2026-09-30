@@ -1,5 +1,4 @@
-import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { SessionCapabilities as ServerSessionCapabilities } from "@open-inspect/shared";
+import type { SessionCapabilities as ResponseCapabilities } from "@open-inspect/shared";
 
 /** Required session capability model shared by the page and every privileged child control. */
 export interface SessionCapabilities {
@@ -15,18 +14,20 @@ export interface SessionCapabilities {
 }
 
 export function resolveSessionCapabilities(
-  hasPermission: (permission: PermissionId) => boolean,
-  capabilities?: ServerSessionCapabilities
+  capabilities: Partial<ResponseCapabilities> | null | undefined,
+  canExportTrace = false
 ): SessionCapabilities {
   return {
-    read: capabilities?.canRead ?? false,
-    collaborate: capabilities?.canCollaborate ?? false,
-    lifecycle: capabilities?.canManageLifecycle ?? false,
-    delete: capabilities?.canDelete ?? false,
-    move: capabilities?.canMove ?? false,
-    manageCollaborators: capabilities?.canManageCollaborators ?? false,
-    changeVisibility: capabilities?.canChangeVisibility ?? false,
-    sandboxAccess: capabilities?.canSandbox ?? false,
-    exportTrace: hasPermission("sessions.export"),
+    read: capabilities?.canRead === true,
+    collaborate: capabilities?.canRead === true && capabilities.canCollaborate === true,
+    lifecycle: capabilities?.canRead === true && capabilities.canManageLifecycle === true,
+    delete: capabilities?.canRead === true && capabilities.canDelete === true,
+    move: capabilities?.canRead === true && capabilities.canMove === true,
+    manageCollaborators:
+      capabilities?.canRead === true && capabilities.canManageCollaborators === true,
+    changeVisibility: capabilities?.canRead === true && capabilities.canChangeVisibility === true,
+    sandboxAccess: capabilities?.canRead === true && capabilities.canSandbox === true,
+    // Export is a workspace permission absent from the session capability contract.
+    exportTrace: capabilities?.canRead === true && canExportTrace,
   };
 }

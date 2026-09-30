@@ -22,6 +22,27 @@ beforeEach(() => {
 });
 
 describe("team hooks", () => {
+  it.each([undefined, false, true])(
+    "loads membership responses with requireTeamOnCreate=%s without a decoder error",
+    async (requireTeamOnCreate) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+        status: "authenticated",
+      });
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({
+          teams: [],
+          ...(requireTeamOnCreate === undefined ? {} : { requireTeamOnCreate }),
+        })
+      );
+      const { result } = renderHook(useMeTeams, { wrapper });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.error).toBeUndefined();
+      expect(result.current.teams).toEqual([]);
+      expect(result.current.requireTeamOnCreate).toBe(requireTeamOnCreate ?? false);
+    }
+  );
+
   it("preserves slug_taken on create conflicts", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ error: "Team slug already exists", code: "slug_taken" }, { status: 409 })
@@ -62,8 +83,46 @@ describe("team hooks", () => {
       data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
       status: "authenticated",
     });
-    renderHook(() => useMeTeams(false), { wrapper });
+    const { result } = renderHook(() => useMeTeams(false), { wrapper });
     expect(browserApiFetch).not.toHaveBeenCalled();
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("loads legacy memberships without capabilities while denying privileged team controls", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({
+        requireTeamOnCreate: false,
+        teams: [
+          {
+            id: "team_design",
+            slug: "design",
+            name: "Design",
+            description: null,
+            joinPolicy: "invite_only",
+            defaultVisibility: "workspace",
+            defaultEnvironmentId: null,
+            grantsVersion: 0,
+            archivedAt: null,
+            createdAt: 1,
+            updatedAt: 1,
+            memberCount: 1,
+            role: "lead",
+          },
+        ],
+      })
+    );
+    const { result } = renderHook(useMeTeams, { wrapper });
+    await waitFor(() => expect(result.current.teams).toHaveLength(1));
+    const capabilities = renderHook(() => useTeamCapabilities(result.current.teams[0]));
+    expect(capabilities.result.current).toMatchObject({
+      canEditMetadata: false,
+      canManageMembers: false,
+      canArchive: false,
+    });
   });
 
   it("refreshes all-team and membership lists and caches the server's joined team", async () => {
@@ -128,6 +187,7 @@ describe("team hooks", () => {
       });
       vi.mocked(browserApiFetch).mockResolvedValue(
         Response.json({
+          requireTeamOnCreate: true,
           teams: [
             {
               id: "team_design",
@@ -150,6 +210,7 @@ describe("team hooks", () => {
       );
       const { result } = renderHook(useMeTeams, { wrapper });
       await waitFor(() => expect(result.current.teams).toHaveLength(1));
+      expect(result.current.requireTeamOnCreate).toBe(true);
       const actions = renderHook(() => useTeamCapabilities(result.current.teams[0]));
       expect(actions.result.current).toMatchObject({
         canJoin: false,

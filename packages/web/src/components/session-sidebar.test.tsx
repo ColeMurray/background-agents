@@ -14,6 +14,14 @@ const { mockHook, authorization } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-sidebar-sessions", () => ({ useSidebarSessions: mockHook }));
+vi.mock("@/hooks/use-active-team", () => ({
+  useActiveTeam: () => ({
+    activeTeamId: null,
+    scope: undefined,
+    teams: [],
+    setActiveTeam: vi.fn(),
+  }),
+}));
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { name: "Test User", email: "test@example.com" } } }),
   signOut: vi.fn(),
@@ -54,6 +62,16 @@ function session(id: string, title: string, parentSessionId: string | null = nul
     prCount: 0,
     environmentId: null,
     readState: { latestMessageId: null, version: 0, unread: false } as const,
+    capabilities: {
+      canRead: true,
+      canCollaborate: true,
+      canManageLifecycle: true,
+      canDelete: true,
+      canMove: true,
+      canSandbox: true,
+      canManageCollaborators: true,
+      canChangeVisibility: true,
+    },
     createdAt: 1,
     updatedAt: 2,
   };

@@ -341,6 +341,70 @@ describe("modal-vm startup resolution", () => {
     expect(f.client.createSandbox).toHaveBeenCalledOnce();
   });
 
+  it("does not announce bridge access when shutdown becomes held during access completion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const f = fixture();
+    let lookupEntered!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => (lookupEntered = resolve));
+    f.client.resolveVmSandbox.mockImplementation(async () => {
+      lookupEntered();
+      throw new ModalApiError("unavailable", 503);
+    });
+    const manager = f.makeManager();
+    const spawning = manager.spawnSandbox();
+    await lookupStarted;
+    await vi.advanceTimersByTimeAsync(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS + 20_000);
+    await spawning;
+
+    const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
+    const pending = f.sandbox.modal_object_id;
+    f.client.stopSandbox.mockClear();
+    f.client.resolveVmSandbox.mockResolvedValue({
+      sandboxId: generation.sandboxId,
+      modalObjectId: "sb-real",
+      sandboxBackend: "modal-vm",
+      ttydUrl: "https://terminal.example",
+    });
+    let completeEntered!: () => void;
+    const completing = new Promise<void>((resolve) => (completeEntered = resolve));
+    let releaseCompletion!: () => void;
+    const completionGate = new Promise<void>((resolve) => (releaseCompletion = resolve));
+    const complete = vi.mocked(f.storage.completeProviderResume).getMockImplementation()!;
+    vi.mocked(f.storage.completeProviderResume).mockImplementationOnce(async (...args) => {
+      completeEntered();
+      await completionGate;
+      return complete(...args);
+    });
+    let work!: Promise<unknown>;
+    f.backgroundTasks.submit.mockImplementation((task) => {
+      work = task();
+    });
+    vi.mocked(f.wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
+    manager.onSandboxSocketAttached(generation);
+    await completing;
+    const held = {
+      ...f.store.read()!,
+      phase: "unknown" as const,
+      error: "Shutdown held during completion",
+    };
+    f.store.write(held);
+    releaseCompletion();
+    await work;
+
+    expect(f.sandbox.modal_object_id).toBe("sb-real");
+    expect(f.sandbox.ttyd_token).toBeTruthy();
+    expect(f.storage.completeProviderResume).toHaveBeenCalledWith(
+      generation,
+      expect.objectContaining({ providerObjectId: "sb-real" }),
+      pending
+    );
+    expect(f.store.read()).toEqual(held);
+    expect(f.client.stopSandbox).not.toHaveBeenCalled();
+    expect(manager.isProviderStartupPending()).toBe(false);
+    expect(f.broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
+  });
+
   it("completes a restore after bounded transient errors when its bridge later resolves", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));

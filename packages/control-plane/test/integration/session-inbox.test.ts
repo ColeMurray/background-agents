@@ -4,56 +4,9 @@ import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import type { SessionInboxCategory } from "@open-inspect/shared/types/session-inbox";
-import type { SessionViewer } from "@open-inspect/shared";
 import { SessionInboxStore } from "../../src/db/session-inbox-store";
 
-const VIEWER_ID = "11111111111111111111111111111111";
-const viewer: SessionViewer = {
-  kind: "user",
-  userId: VIEWER_ID,
-  roleKey: "member",
-  permissions: ["sessions.read"],
-  suspended: false,
-  memberships: new Map([["team-a", "member"]]),
-};
-
-async function seedTeams(): Promise<void> {
-  await env.DB.prepare(
-    "INSERT INTO users (id, display_name, created_at, updated_at) VALUES (?, 'Viewer', 1, 1)"
-  )
-    .bind(VIEWER_ID)
-    .run();
-  await env.DB.prepare(
-    "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team-a', 'a', 'A', 1, 1), ('team-b', 'b', 'B', 1, 1)"
-  ).run();
-  await env.DB.prepare(
-    "INSERT INTO team_memberships (team_id, user_id, created_at) VALUES ('team-a', ?, 1)"
-  )
-    .bind(VIEWER_ID)
-    .run();
-}
-
-function session(id: string, overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    id,
-    ownerTeamId: null,
-    visibility: "workspace",
-    title: id,
-    repoOwner: "open-inspect",
-    repoName: "open-inspect",
-    model: "anthropic/claude-sonnet-4-6",
-    reasoningEffort: "high",
-    baseBranch: "main",
-    status: "completed",
-    parentSessionId: null,
-    spawnSource: "user",
-    spawnDepth: 0,
-    userId: VIEWER_ID,
-    createdAt: 1000,
-    updatedAt: 2000,
-    ...overrides,
-  };
-}
+import { VIEWER_ID, viewer, seedTeams, session } from "./session-inbox-test-helpers";
 
 describe("session inbox", () => {
   beforeEach(cleanD1Tables);

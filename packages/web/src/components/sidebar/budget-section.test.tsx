@@ -6,6 +6,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { BudgetSection } from "./budget-section";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 expect.extend(matchers);
 
@@ -17,9 +20,22 @@ vi.mock("@/lib/browser-api-fetch", () => ({
 afterEach(() => {
   cleanup();
   fetchMock.mockReset();
+  vi.clearAllMocks();
 });
 
 describe("BudgetSection", () => {
+  it("toasts the server reason_code for a denied budget change", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ error: "Forbidden", reason_code: "team_inactive" }, { status: 403 })
+    );
+    const user = userEvent.setup();
+    render(<BudgetSection sessionId="session-1" totalCost={3} canManageBudget />);
+    await user.click(screen.getByRole("button", { name: "Edit limit" }));
+    await user.click(screen.getByRole("button", { name: "No limit" }));
+    expect(toast.error).toHaveBeenCalledWith(
+      "Unable to update the session cost limit (team_inactive)"
+    );
+  });
   it("shows observed cost and limit with a static reported-usage note", () => {
     render(
       <BudgetSection

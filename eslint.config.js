@@ -22,6 +22,11 @@ const sandboxImplementationImports = [
     message:
       "Access mechanics are internal to lifecycle composition. Consumers use lifecycle ports and session access readers.",
   },
+  {
+    regex: "(?:^|/)lifecycle/vm-startup-reconciliation(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "VM startup reconciliation is internal to the lifecycle manager. Consumers use lifecycle ports.",
+  },
 ];
 
 export default tseslint.config(

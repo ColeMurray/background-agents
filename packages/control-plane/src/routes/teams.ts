@@ -32,6 +32,7 @@ import {
   TeamMembershipStore,
 } from "../db/team-memberships";
 import { TeamSlugConflictError, TeamStore } from "../db/teams";
+import { TeamSettingsStore } from "../db/team-settings";
 import type { RequestContext } from "../http/request-context";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -169,7 +170,9 @@ async function meTeams(_request: Request, _env: Env, _params: object, ctx: Reque
   });
   const leadCounts = await membershipStore.listLeadCounts();
   const memberCounts = await membershipStore.listMemberCounts();
+  const { requireTeamOnCreate } = await new TeamSettingsStore(ctx.db).get();
   return json({
+    requireTeamOnCreate,
     teams: await Promise.all(
       teams.map(async (team) => ({
         ...(await responseTeam(

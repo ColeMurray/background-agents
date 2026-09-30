@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
 import { useAuthSession } from "@/lib/auth-session";
+import { useActiveTeam } from "./use-active-team";
 import useSWR, { mutate, useSWRConfig } from "swr";
 import type {
   SessionInboxCategory,
@@ -22,6 +23,7 @@ import {
   parseSessionInboxPage,
   parseSessionInboxSnapshot,
   sessionInboxDestinationCategory,
+  type SessionInboxFilters,
 } from "@/lib/session-inbox-api";
 import {
   markLatestMessageRead,
@@ -55,6 +57,7 @@ function useCategoryPagination(
   filterIdentity: string,
   canonicalRootIds: Set<string>,
   mine: boolean,
+  filters: SessionInboxFilters,
   refreshSnapshot: () => Promise<unknown>,
   nextPageSequence: MutableRefObject<number>
 ) {
@@ -143,9 +146,10 @@ function useCategoryPagination(
         category,
         cursor: lastPage.nextCursor,
         mine,
+        ...filters,
       }),
     });
-  }, [category, filterIdentity, lastPage, mine, paginationRequest, snapshot]);
+  }, [category, filterIdentity, filters, lastPage, mine, paginationRequest, snapshot]);
 
   const retry = useCallback(
     () => (error && paginationRequest ? retryPage() : refreshSnapshot()),
@@ -189,6 +193,11 @@ function useCategoryPagination(
 
 export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
+  const { activeTeamId, scope, loading: loadingTeams, error: teamsError } = useActiveTeam();
+  const filters = useMemo(
+    () => ({ teamIds: activeTeamId ? [activeTeamId] : undefined, scope }),
+    [activeTeamId, scope]
+  );
   const { fetcher, mutate: mutateCache } = useSWRConfig();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
     useState<SessionCreatorFilter | null>(null);
@@ -214,9 +223,10 @@ export function useSidebarSessions() {
     }
   }, []);
 
-  const enabled = Boolean(authSession) && sessionCreatorFilter !== null;
+  const enabled =
+    Boolean(authSession) && sessionCreatorFilter !== null && !loadingTeams && !teamsError;
   const mine = sessionCreatorFilter === "mine";
-  const snapshotKey = enabled ? buildSessionInboxSnapshotKey(mine) : null;
+  const snapshotKey = enabled ? buildSessionInboxSnapshotKey(mine, filters) : null;
   const {
     data: snapshot,
     error: snapshotError,
@@ -234,7 +244,7 @@ export function useSidebarSessions() {
     }
   );
   const userId = authSession?.user.id ?? null;
-  const paginationFilterIdentity = JSON.stringify([userId, mine]);
+  const paginationFilterIdentity = JSON.stringify([userId, mine, snapshotKey]);
   const nextPageSequence = useRef(0);
   const canonicalRootIds = useMemo(
     () =>
@@ -256,6 +266,7 @@ export function useSidebarSessions() {
     paginationFilterIdentity,
     canonicalRootIds,
     mine,
+    filters,
     refreshSnapshot,
     nextPageSequence
   );
@@ -265,6 +276,7 @@ export function useSidebarSessions() {
     paginationFilterIdentity,
     canonicalRootIds,
     mine,
+    filters,
     refreshSnapshot,
     nextPageSequence
   );
@@ -274,6 +286,7 @@ export function useSidebarSessions() {
     paginationFilterIdentity,
     canonicalRootIds,
     mine,
+    filters,
     refreshSnapshot,
     nextPageSequence
   );
@@ -458,8 +471,9 @@ export function useSidebarSessions() {
     inProgress: inProgressItems.map((item) => item.rootSession),
     finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
-    loading: sessionCreatorFilter === null || isLoading,
-    sessionsError: snapshotError ?? categoryResults.find((result) => result.error)?.error,
+    loading: sessionCreatorFilter === null || loadingTeams || isLoading,
+    sessionsError:
+      teamsError ?? snapshotError ?? categoryResults.find((result) => result.error)?.error,
     refreshSnapshot,
     // Keyed by SessionInboxCategory, in camelCase. These used to be `running`
     // and `recent` here and `in_progress`/`finished` everywhere else, so the

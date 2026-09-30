@@ -6,7 +6,6 @@ import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-sh
 import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
-import { ActionBar } from "@/components/action-bar";
 import type { SessionActionProps } from "@/components/session-actions";
 import {
   BoxIcon,
@@ -191,7 +190,7 @@ export function SessionHeader({
   };
 
   const handleRenameSubmit = async () => {
-    if (!sessionState) {
+    if (!sessionState || !capabilities.lifecycle) {
       setIsRenaming(false);
       return;
     }
@@ -236,7 +235,7 @@ export function SessionHeader({
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
           <div className="min-w-0 flex-1">
-            {isRenaming ? (
+            {isRenaming && capabilities.lifecycle ? (
               <input
                 autoFocus
                 aria-label="Session title"
@@ -290,11 +289,6 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
-          {!capabilities.collaborate && (
-            <div className="hidden md:block">
-              <ActionBar {...actions} />
-            </div>
-          )}
           <div className="hidden items-center gap-1 md:flex">
             {capabilities.read && (
               <ConnectionStatusIcon

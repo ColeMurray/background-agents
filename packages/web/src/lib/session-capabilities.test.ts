@@ -14,15 +14,65 @@ const SERVER_CAPABILITIES: SessionCapabilities = {
 };
 
 describe("resolveSessionCapabilities", () => {
-  it("grants trace export only to users with sessions.export", () => {
-    const readOnly = resolveSessionCapabilities((permission) => permission === "sessions.read");
-    expect(readOnly.exportTrace).toBe(false);
-    const exporter = resolveSessionCapabilities((permission) => permission === "sessions.export");
-    expect(exporter.exportTrace).toBe(true);
+  it.each([
+    { canRead: true, canExportTrace: true, allowed: true },
+    { canRead: true, canExportTrace: false, allowed: false },
+    { canRead: false, canExportTrace: true, allowed: false },
+    { canRead: undefined, canExportTrace: true, allowed: false },
+  ])(
+    "grants trace export only with session read and workspace export: $canRead/$canExportTrace",
+    ({ canRead, canExportTrace, allowed }) => {
+      expect(resolveSessionCapabilities({ canRead }, canExportTrace).exportTrace).toBe(allowed);
+    }
+  );
+  it("uses the server's session capabilities, not workspace permission grants", () => {
+    expect(
+      resolveSessionCapabilities({
+        canRead: true,
+        canCollaborate: false,
+        canManageLifecycle: false,
+        canSandbox: false,
+      })
+    ).toEqual({
+      read: true,
+      collaborate: false,
+      lifecycle: false,
+      delete: false,
+      move: false,
+      manageCollaborators: false,
+      changeVisibility: false,
+      sandboxAccess: false,
+      exportTrace: false,
+    });
+    expect(
+      resolveSessionCapabilities({
+        canRead: true,
+        canCollaborate: true,
+        canManageLifecycle: true,
+        canSandbox: true,
+      })
+    ).toMatchObject({
+      collaborate: true,
+      lifecycle: true,
+      sandboxAccess: true,
+    });
+  });
+  it("fails closed when response capabilities are missing", () => {
+    expect(resolveSessionCapabilities(undefined, true)).toEqual({
+      read: false,
+      collaborate: false,
+      lifecycle: false,
+      delete: false,
+      move: false,
+      manageCollaborators: false,
+      changeVisibility: false,
+      sandboxAccess: false,
+      exportTrace: false,
+    });
   });
 
   it("uses server decisions rather than workspace permissions for session controls", () => {
-    expect(resolveSessionCapabilities(() => true, SERVER_CAPABILITIES)).toEqual({
+    expect(resolveSessionCapabilities(SERVER_CAPABILITIES, true)).toEqual({
       read: true,
       collaborate: false,
       lifecycle: false,
@@ -36,7 +86,7 @@ describe("resolveSessionCapabilities", () => {
   });
 
   it("disables session controls when capabilities are absent even for an administrator", () => {
-    expect(resolveSessionCapabilities(() => true)).toEqual({
+    expect(resolveSessionCapabilities(undefined, true)).toEqual({
       read: false,
       collaborate: false,
       lifecycle: false,
@@ -45,10 +95,28 @@ describe("resolveSessionCapabilities", () => {
       sandboxAccess: false,
       manageCollaborators: false,
       changeVisibility: false,
-      exportTrace: true,
+      exportTrace: false,
     });
   });
   it("does not grant trace export without the global permission", () => {
-    expect(resolveSessionCapabilities(() => false, SERVER_CAPABILITIES).exportTrace).toBe(false);
+    expect(resolveSessionCapabilities(SERVER_CAPABILITIES, false).exportTrace).toBe(false);
+  });
+
+  it("denies all actions without session read even when every action is granted", () => {
+    expect(
+      resolveSessionCapabilities(
+        {
+          canRead: false,
+          canCollaborate: true,
+          canManageLifecycle: true,
+          canDelete: true,
+          canMove: true,
+          canManageCollaborators: true,
+          canChangeVisibility: true,
+          canSandbox: true,
+        },
+        true
+      )
+    ).toEqual(resolveSessionCapabilities(undefined));
   });
 });

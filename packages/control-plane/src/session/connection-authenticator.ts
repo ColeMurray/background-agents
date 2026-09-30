@@ -5,6 +5,7 @@ import {
   type AccessDecision,
   type SessionAction,
   type SessionAccessRow,
+  type SessionCapabilities,
   type SessionViewer,
 } from "@open-inspect/shared";
 import {
@@ -42,6 +43,7 @@ import {
   type TeamsEnforcementMode,
 } from "../authorization/teams-enforcement";
 import type { ClientCommandAuthorization } from "./message-router";
+import { effectiveSessionCapabilities } from "../authorization/session-admission";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -451,7 +453,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
             ws,
             clientInfo,
             enrichment,
-            this.decide(resolution, "sandbox").allowed,
+            effectiveSessionCapabilities(resolution.viewer, resolution.row, resolution.mode),
             canManageSessionBudget(resolution.row.ownerUserId, resolution.authorization)
           )
         );
@@ -493,20 +495,21 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     ws: SessionWebSocket,
     client: ClientInfo,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0],
-    canAccessSandbox: boolean,
+    capabilities: SessionCapabilities,
     canManageBudget: boolean
   ): boolean {
     const { wsManager, snapshotReader } = this.deps;
     const snapshot = snapshotReader.readSessionSnapshot(enrichment);
     if (!snapshot) return false;
 
-    const authorizedSnapshot = canAccessSandbox
+    const authorizedSnapshot = capabilities.canSandbox
       ? snapshot
       : redactSessionSnapshotSandboxAccess(snapshot);
     if (
       !wsManager.send(ws, {
         type: "subscribed",
         ...authorizedSnapshot,
+        session: { ...authorizedSnapshot.session, capabilities },
         participantId: client.participantId,
         participant: {
           participantId: client.participantId,

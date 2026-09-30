@@ -10,7 +10,6 @@ import { formatRelativeTime } from "@/lib/time";
 import { MoreIcon, ArchiveIcon, BranchIcon, BoxIcon } from "@/components/ui/icons";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { useSessionRename } from "@/hooks/use-session-rename";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,7 +23,7 @@ const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
 
 /**
- * Displays a session and derives lifecycle controls from the current user's workspace permissions.
+ * Displays a session with lifecycle controls from its server-computed capabilities.
  */
 export function SessionListItem({
   session,
@@ -43,8 +42,8 @@ export function SessionListItem({
   onSessionSelect?: () => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
-  const { hasPermission } = useCurrentUserAuthorization();
-  const canManageLifecycle = hasPermission("sessions.lifecycle");
+  const canManageLifecycle = session.capabilities?.canManageLifecycle ?? false;
+  const canMarkRead = session.capabilities?.canRead === true && session.readState.unread;
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const repoInfo = formatSessionRepositoriesLabel(
@@ -109,7 +108,7 @@ export function SessionListItem({
   };
 
   const handleMarkLatestMessageRead = async () => {
-    if (isMarkingLatestRead) return;
+    if (!canMarkRead || isMarkingLatestRead) return;
     setIsActionsOpen(false);
     setIsMarkingLatestRead(true);
     try {
@@ -169,12 +168,12 @@ export function SessionListItem({
       touchStartRef.current = { x: touch.clientX, y: touch.clientY };
       clearLongPressTimer();
       longPressTimerRef.current = window.setTimeout(() => {
-        if (!canManageLifecycle && !session.readState.unread) return;
+        if (!canManageLifecycle && !canMarkRead) return;
         longPressTriggeredRef.current = true;
         setIsActionsOpen(true);
       }, MOBILE_LONG_PRESS_MS);
     },
-    [canManageLifecycle, clearLongPressTimer, isMobile, session.readState.unread]
+    [canManageLifecycle, canMarkRead, clearLongPressTimer, isMobile]
   );
 
   const handleTouchMove = useCallback(
@@ -312,7 +311,7 @@ export function SessionListItem({
           </Link>
         )}
 
-        {(canManageLifecycle || session.readState.unread) && (
+        {(canManageLifecycle || canMarkRead) && (
           <div className="absolute inset-y-0 right-2 flex items-center">
             <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
               <DropdownMenuTrigger asChild>
@@ -344,7 +343,7 @@ export function SessionListItem({
                 {canManageLifecycle && (
                   <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
                 )}
-                {session.readState.unread && (
+                {canMarkRead && (
                   <DropdownMenuItem
                     onSelect={handleMarkLatestMessageRead}
                     disabled={isMarkingLatestRead}
@@ -391,13 +390,14 @@ export function ChildSessionListItem({
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
   const [isMarkingLatestRead, setIsMarkingLatestRead] = useState(false);
+  const canMarkRead = session.capabilities?.canRead === true && session.readState.unread;
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
   const displayTitle = session.title || "Sub-task";
   const paddingLeftRem = 1.75 + Math.max(depth - 1, 0) * 1;
   const handleMarkLatestMessageRead = async () => {
-    if (isMarkingLatestRead) return;
+    if (!canMarkRead || isMarkingLatestRead) return;
     setIsMarkingLatestRead(true);
     try {
       await onMarkLatestMessageRead(session.id);
@@ -438,7 +438,7 @@ export function ChildSessionListItem({
           )}
         </div>
       </Link>
-      {session.readState.unread && (
+      {canMarkRead && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
