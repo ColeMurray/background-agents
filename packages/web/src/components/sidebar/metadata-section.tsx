@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { formatModelName, truncateBranch, copyToClipboard } from "@/lib/format";
+import { formatModelName, copyToClipboard } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
@@ -13,23 +13,13 @@ import { listPrArtifacts, listPrArtifactsForRepo } from "@/lib/pr-artifacts";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
-import {
-  ClockIcon,
-  SparkleIcon,
-  GitPrIcon,
-  BranchIcon,
-  RepoIcon,
-  FolderIcon,
-  CopyIcon,
-  CheckIcon,
-  LinkIcon,
-  ErrorIcon,
-  RefreshIcon,
-} from "@/components/ui/icons";
+import { GitPrIcon, CopyIcon, CheckIcon, ErrorIcon, RefreshIcon } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 import { prBadgeVariant } from "@/components/ui/badge-variants";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { useTeam } from "@/hooks/use-teams";
+import { PullRequestStateIcon } from "@/components/pr-state-icon";
+import { DetailsSection, PropertyList, PropertyRow } from "./details-section";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
@@ -57,6 +47,8 @@ interface MetadataSectionProps {
   canManageLifecycle: boolean;
   ownerTeamId?: string | null;
   visibility?: SessionVisibility;
+  /** Extra rows for the run property list, such as the session cost. */
+  children?: ReactNode;
 }
 
 /**
@@ -100,6 +92,52 @@ function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
   );
 }
 
+/** One tracked PR: its state, its number (linked when the URL is safe), and its badge. */
+function PullRequestRow({
+  artifact,
+  showHead = false,
+}: {
+  artifact: Artifact;
+  showHead?: boolean;
+}) {
+  const prNumber = artifact.metadata?.prNumber;
+  const prState = artifact.metadata?.prState;
+  const prHead = artifact.metadata?.head;
+  const prUrl = getSafeExternalUrl(artifact.url ?? undefined);
+  const label = prNumber ? `#${prNumber}` : "PR";
+  return (
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+      {prState ? (
+        <PullRequestStateIcon state={prState} label={`PR ${prState}`} />
+      ) : (
+        <GitPrIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+      )}
+      {prUrl ? (
+        <a
+          href={prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-accent hover:underline"
+        >
+          {label}
+        </a>
+      ) : (
+        <span className="text-foreground">{label}</span>
+      )}
+      {showHead && prHead && (
+        <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]" title={prHead}>
+          {prHead}
+        </span>
+      )}
+      {prState && (
+        <Badge variant={prBadgeVariant(prState)} className="capitalize">
+          {prState}
+        </Badge>
+      )}
+    </span>
+  );
+}
+
 export function MetadataSection({
   sessionId,
   createdAt,
@@ -118,6 +156,7 @@ export function MetadataSection({
   canManageLifecycle,
   ownerTeamId,
   visibility,
+  children,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
@@ -149,308 +188,234 @@ export function MetadataSection({
     }
   };
 
+  const started = formatRelativeTime(createdAt);
+  const syncButton =
+    showSyncButton && sessionId ? <PullRequestSyncButton sessionId={sessionId} /> : null;
+  const hasRepositoryRows =
+    Boolean(baseBranch || branchName || manualPrUrl) || prArtifacts.length > 0;
+
   return (
-    <div className="space-y-3">
-      {/* Timestamp */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <ClockIcon className="w-4 h-4" />
-        <span>{formatRelativeTime(createdAt)}</span>
-      </div>
-
-      {ownerTeamId !== undefined && (
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Team</span>
-          {ownerTeamId ? <OwningTeam id={ownerTeamId} /> : <span>Workspace (no team)</span>}
-        </div>
-      )}
-      {visibility && (
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Visibility</span>
-          <span className="capitalize">{visibility}</span>
-        </div>
-      )}
-
-      {/* Parent session */}
-      {parentSessionId && (
-        <div className="flex items-center gap-2 text-sm">
-          <LinkIcon className="w-4 h-4 text-muted-foreground" />
-          <Link href={`/session/${parentSessionId}`} className="text-accent hover:underline">
-            Parent session
-          </Link>
-        </div>
-      )}
-
-      {/* Model */}
-      {model && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <SparkleIcon className="w-4 h-4" />
-          <span>
-            {formatModelName(model)}
-            {reasoningEffort && <span> · {reasoningEffort}</span>}
-          </span>
-        </div>
-      )}
-
-      {/* Environment provenance */}
-      {environmentId && (
-        <div className="flex items-center gap-2 text-sm">
-          <FolderIcon className="w-4 h-4 text-muted-foreground" />
-          {environmentName ? (
-            <span className="text-foreground truncate max-w-[180px]" title={environmentName}>
-              {environmentName}
+    <div className="space-y-6">
+      <DetailsSection title="Run information">
+        <PropertyList>
+          <PropertyRow label="Started">
+            <span title={new Date(createdAt).toLocaleString()}>
+              {started === "now" ? "Just now" : `${started} ago`}
             </span>
-          ) : (
-            <span className="text-muted-foreground">Environment deleted</span>
+          </PropertyRow>
+          {ownerTeamId !== undefined && (
+            <PropertyRow label="Team">
+              {ownerTeamId ? <OwningTeam id={ownerTeamId} /> : <span>Workspace (no team)</span>}
+            </PropertyRow>
           )}
-        </div>
-      )}
-
-      {/* Scalar repo/PR/branch rows — single-repo (and scalar-era) sessions
-          render exactly as before. Multi-repo sessions use the member list. */}
-      {!isMultiRepo && (
-        <>
-          {/* PR rows — one per pull request, oldest first. A lone PR keeps
-              the sync button inline; several move it to a section header so
-              it clearly refreshes them all. */}
-          {prArtifacts.length > 1 && (
-            <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              <span>Pull requests</span>
-              {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
-            </div>
+          {visibility && (
+            <PropertyRow label="Visibility">
+              <span className="capitalize">{visibility}</span>
+            </PropertyRow>
           )}
-          {prArtifacts.map((artifact) => {
-            const prNumber = artifact.metadata?.prNumber;
-            const prState = artifact.metadata?.prState;
-            const prHead = artifact.metadata?.head;
-            const prUrl = getSafeExternalUrl(artifact.url ?? undefined);
-            return (
-              <div key={artifact.id} className="flex items-center gap-2 text-sm">
-                <RepoIcon className="w-4 h-4 text-muted-foreground" />
-                {prUrl ? (
-                  <a
-                    href={prUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-accent hover:underline"
-                  >
-                    {prNumber ? `#${prNumber}` : "PR"}
-                  </a>
-                ) : (
-                  <span className="text-foreground">{prNumber ? `#${prNumber}` : "PR"}</span>
-                )}
-                {prArtifacts.length > 1 && prHead && (
-                  <span
-                    className="min-w-0 truncate max-w-[120px] text-muted-foreground"
-                    title={prHead}
-                  >
-                    {truncateBranch(prHead)}
-                  </span>
-                )}
-                {prState && (
-                  <Badge variant={prBadgeVariant(prState)} className="capitalize">
-                    {prState}
-                  </Badge>
-                )}
-                {prArtifacts.length === 1 && showSyncButton && sessionId && (
-                  <PullRequestSyncButton sessionId={sessionId} />
-                )}
-              </div>
-            );
-          })}
-
-          {/* Manual-PR fallback link (legacy sessions without a PR artifact) */}
-          {manualPrUrl && (
-            <div className="flex items-center gap-2 text-sm">
-              <RepoIcon className="w-4 h-4 text-muted-foreground" />
-              <a
-                href={manualPrUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent hover:underline"
-              >
-                Create PR
-              </a>
-            </div>
-          )}
-
-          {/* Base Branch */}
-          {baseBranch && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <BranchIcon className="w-4 h-4" />
-              {repoOwner && repoName ? (
-                <a
-                  href={getScmBranchUrl(repoOwner, repoName, baseBranch)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-accent truncate max-w-[180px] hover:underline"
-                  title={baseBranch}
-                >
-                  {truncateBranch(baseBranch)}
-                </a>
-              ) : (
-                <span className="truncate max-w-[180px]" title={baseBranch}>
-                  {truncateBranch(baseBranch)}
-                </span>
+          {model && (
+            <PropertyRow label="Model">
+              {formatModelName(model)}
+              {reasoningEffort && (
+                <span className="text-muted-foreground"> · {reasoningEffort}</span>
               )}
-            </div>
+            </PropertyRow>
           )}
-
-          {/* Working Branch */}
-          {branchName && (
-            <div className="flex items-center gap-2 text-sm">
-              <GitPrIcon className="w-4 h-4 text-muted-foreground" />
-              {branchUrl ? (
-                <a
-                  href={branchUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-accent truncate max-w-[180px] hover:underline"
-                  title={branchName}
-                >
-                  {truncateBranch(branchName)}
-                </a>
-              ) : (
-                <span className="text-foreground truncate max-w-[180px]" title={branchName}>
-                  {truncateBranch(branchName)}
-                </span>
+          {/* Environment provenance */}
+          {environmentId && (
+            <PropertyRow label="Environment">
+              {environmentName ?? (
+                <span className="text-muted-foreground">Environment deleted</span>
               )}
-              <button
-                type="button"
-                onClick={handleCopyBranch}
-                className="p-1 hover:bg-muted transition-colors"
-                title={copied ? "Copied!" : "Copy branch name"}
-              >
-                {copied ? (
-                  <CheckIcon className="w-3.5 h-3.5 text-success" />
-                ) : (
-                  <CopyIcon className="w-3.5 h-3.5 text-secondary-foreground" />
-                )}
-              </button>
-            </div>
+            </PropertyRow>
           )}
+          {parentSessionId && (
+            <PropertyRow label="Parent">
+              <Link href={`/session/${parentSessionId}`} className="text-accent hover:underline">
+                Parent session
+              </Link>
+            </PropertyRow>
+          )}
+          {children}
+        </PropertyList>
+      </DetailsSection>
 
-          {/* Repository tag */}
+      {/* Single-repository context. Multi-repo sessions use the member list. */}
+      {!isMultiRepo && (hasRepositoryMetadata || hasRepositoryRows) && (
+        <DetailsSection title="Repository" action={syncButton}>
           {hasRepositoryMetadata && (
-            <div className="flex items-center gap-2 text-sm">
-              <RepoIcon className="w-4 h-4 text-muted-foreground" />
+            <p className="text-xs">
               {repoOwner && repoName ? (
                 <a
                   href={getScmRepoUrl(repoOwner, repoName)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-accent hover:underline"
+                  className="text-accent [overflow-wrap:anywhere] hover:underline"
+                  title={`${repoOwner}/${repoName}`}
                 >
                   {repoOwner}/{repoName}
                 </a>
               ) : (
                 <span className="text-muted-foreground">{NO_REPOSITORY_LABEL}</span>
               )}
-            </div>
+            </p>
           )}
-        </>
+          {hasRepositoryRows && (
+            <PropertyList>
+              {baseBranch && (
+                <PropertyRow label="Base">
+                  {repoOwner && repoName ? (
+                    <a
+                      href={getScmBranchUrl(repoOwner, repoName, baseBranch)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent hover:underline"
+                      title={baseBranch}
+                    >
+                      {baseBranch}
+                    </a>
+                  ) : (
+                    <span title={baseBranch}>{baseBranch}</span>
+                  )}
+                </PropertyRow>
+              )}
+              {branchName && (
+                <PropertyRow label="Branch">
+                  <span className="flex items-start justify-between gap-1">
+                    {branchUrl ? (
+                      <a
+                        href={branchUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 text-accent hover:underline"
+                        title={branchName}
+                      >
+                        {branchName}
+                      </a>
+                    ) : (
+                      <span className="min-w-0" title={branchName}>
+                        {branchName}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleCopyBranch}
+                      className="-my-1 shrink-0 rounded p-1 hover:bg-muted transition-colors"
+                      title={copied ? "Copied!" : "Copy branch name"}
+                      aria-label={copied ? "Copied branch name" : "Copy branch name"}
+                    >
+                      {copied ? (
+                        <CheckIcon className="w-3.5 h-3.5 text-success" />
+                      ) : (
+                        <CopyIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+                      )}
+                    </button>
+                  </span>
+                </PropertyRow>
+              )}
+              {prArtifacts.length > 0 && (
+                <PropertyRow label={prArtifacts.length > 1 ? "Pull requests" : "Pull request"}>
+                  <span className="block space-y-1.5">
+                    {prArtifacts.map((artifact) => (
+                      // Several PRs stay distinguishable by their head branch.
+                      <span key={artifact.id} className="block">
+                        <PullRequestRow artifact={artifact} showHead={prArtifacts.length > 1} />
+                      </span>
+                    ))}
+                  </span>
+                </PropertyRow>
+              )}
+              {/* Manual-PR fallback link (legacy sessions without a PR artifact) */}
+              {manualPrUrl && (
+                <PropertyRow label="Pull request">
+                  <a
+                    href={manualPrUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent hover:underline"
+                  >
+                    Create PR
+                  </a>
+                </PropertyRow>
+              )}
+            </PropertyList>
+          )}
+        </DetailsSection>
       )}
 
       {/* Repository member list (multi-repo sessions) */}
       {isMultiRepo && repositories && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            <span>Repositories</span>
-            {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
-          </div>
-          {repositories.map((repo, index) => {
-            const repoPrArtifacts = listPrArtifactsForRepo(artifacts, repo, index === 0);
-            // The scalar mirror is only a fallback for sessions whose PR
-            // artifacts have not synced yet.
-            const repoFallbackPrUrl =
-              repoPrArtifacts.length === 0 ? getSafeExternalUrl(repo.prUrl || undefined) : null;
-            const repoBranchUrl = repo.branchName
-              ? getScmBranchUrl(repo.repoOwner, repo.repoName, repo.branchName)
-              : null;
-            return (
-              <div key={`${repo.repoOwner}/${repo.repoName}`} className="space-y-1">
-                <div className="flex items-center gap-2 text-sm">
-                  <RepoIcon className="w-4 h-4 text-muted-foreground" />
-                  <a
-                    href={getScmRepoUrl(repo.repoOwner, repo.repoName)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-accent hover:underline truncate max-w-[170px]"
-                    title={`${repo.repoOwner}/${repo.repoName}`}
-                  >
-                    {repo.repoOwner}/{repo.repoName}
-                  </a>
-                  {index === 0 && (
-                    <Badge variant="info" className="text-[10px]">
-                      primary
-                    </Badge>
-                  )}
-                </div>
-                {(repo.branchName || repoPrArtifacts.length > 0 || repoFallbackPrUrl) && (
-                  <div className="ml-6 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    {repo.branchName && (
-                      <span className="inline-flex min-w-0 items-center gap-1">
-                        <GitPrIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                        {repoBranchUrl ? (
-                          <a
-                            href={repoBranchUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-accent truncate max-w-[120px] hover:underline"
-                            title={repo.branchName}
-                          >
-                            {truncateBranch(repo.branchName)}
-                          </a>
-                        ) : (
-                          <span className="truncate max-w-[120px]" title={repo.branchName}>
-                            {truncateBranch(repo.branchName)}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {repoPrArtifacts.map((artifact) => {
-                      const repoPrNumber = artifact.metadata?.prNumber;
-                      const repoPrState = artifact.metadata?.prState;
-                      const repoPrUrl = getSafeExternalUrl(artifact.url ?? undefined);
-                      return (
-                        <span key={artifact.id} className="inline-flex items-center gap-1">
-                          {repoPrUrl ? (
-                            <a
-                              href={repoPrUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-accent hover:underline"
-                            >
-                              {repoPrNumber ? `#${repoPrNumber}` : "PR"}
-                            </a>
-                          ) : (
-                            <span className="text-foreground">
-                              {repoPrNumber ? `#${repoPrNumber}` : "PR"}
-                            </span>
-                          )}
-                          {repoPrState && (
-                            <Badge variant={prBadgeVariant(repoPrState)} className="capitalize">
-                              {repoPrState}
-                            </Badge>
-                          )}
-                        </span>
-                      );
-                    })}
-                    {repoFallbackPrUrl && (
-                      <a
-                        href={repoFallbackPrUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-accent hover:underline"
-                      >
-                        PR
-                      </a>
+        <DetailsSection title="Repositories" action={syncButton}>
+          <ul className="space-y-4">
+            {repositories.map((repo, index) => {
+              const repoPrArtifacts = listPrArtifactsForRepo(artifacts, repo, index === 0);
+              // The scalar mirror is only a fallback for sessions whose PR
+              // artifacts have not synced yet.
+              const repoFallbackPrUrl =
+                repoPrArtifacts.length === 0 ? getSafeExternalUrl(repo.prUrl || undefined) : null;
+              const repoBranchUrl = repo.branchName
+                ? getScmBranchUrl(repo.repoOwner, repo.repoName, repo.branchName)
+                : null;
+              return (
+                <li key={`${repo.repoOwner}/${repo.repoName}`} className="space-y-1.5 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <a
+                      href={getScmRepoUrl(repo.repoOwner, repo.repoName)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-w-0 text-accent [overflow-wrap:anywhere] hover:underline"
+                      title={`${repo.repoOwner}/${repo.repoName}`}
+                    >
+                      {repo.repoOwner}/{repo.repoName}
+                    </a>
+                    {index === 0 && (
+                      <Badge variant="info" className="shrink-0 text-[10px]">
+                        primary
+                      </Badge>
                     )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                  {repo.branchName && (
+                    <div className="flex items-start gap-1.5 text-muted-foreground">
+                      <GitPrIcon className="mt-px w-3.5 h-3.5 shrink-0" />
+                      {repoBranchUrl ? (
+                        <a
+                          href={repoBranchUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-w-0 text-accent [overflow-wrap:anywhere] hover:underline"
+                          title={repo.branchName}
+                        >
+                          {repo.branchName}
+                        </a>
+                      ) : (
+                        <span className="min-w-0 [overflow-wrap:anywhere]" title={repo.branchName}>
+                          {repo.branchName}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {(repoPrArtifacts.length > 0 || repoFallbackPrUrl) && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {repoPrArtifacts.map((artifact) => (
+                        <PullRequestRow key={artifact.id} artifact={artifact} />
+                      ))}
+                      {repoFallbackPrUrl && (
+                        <a
+                          href={repoFallbackPrUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-accent hover:underline"
+                        >
+                          PR
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </DetailsSection>
       )}
 
       {/* Non-fatal boot/runtime warnings */}

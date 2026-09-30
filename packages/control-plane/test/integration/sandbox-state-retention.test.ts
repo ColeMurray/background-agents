@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { env } from "cloudflare:test";
 import type { SandboxProvider, SnapshotResult, RestoreResult } from "../../src/sandbox/provider";
+import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
+import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
+import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
+import { createSessionRuntime } from "../../src/session/components";
 import { SandboxShutdownRepository } from "../../src/session/sandbox-shutdown-repository";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedSandboxAuth, seedMessage } from "./helpers";
@@ -41,6 +46,88 @@ function snapshotProvider(overrides: Partial<SandboxProvider> = {}): SandboxProv
 }
 
 describe("sandbox state retention", () => {
+  it("reconstructs and rearms persisted rejected cleanup without releasing a durable shutdown hold", async () => {
+    const stub = await servingSession();
+    await runInSessionDO(stub, async (instance, durableState) => {
+      const background: Promise<unknown>[] = [];
+      const platform = createDurableObjectSessionPlatform(durableState, env.DB);
+      platform.createBackgroundTasks = () => ({
+        submit: (task) => {
+          background.push(task());
+        },
+      });
+      const runtimeEnv = createCloudflareEnv((instance as unknown as { env: WorkerBindings }).env);
+      const initial = createSessionRuntime(platform, runtimeEnv);
+      const row = initial.internals.sandboxRepository.getSandbox()!;
+      const generation = { sandboxId: row.modal_sandbox_id!, createdAt: row.created_at };
+      expect(
+        initial.internals.sandboxRepository.rejectProviderStartup(generation, "rejected-source")
+      ).toBe("failed");
+      const shutdownStore = new SandboxShutdownRepository(durableState.storage.sql);
+      shutdownStore.write({
+        phase: "unknown",
+        generation,
+        provider: "modal",
+        providerObjectId: "rejected-source",
+        lifetimeKind: "none",
+        expiresAtMs: null,
+        drainAtMs: null,
+        generationReady: false,
+        receipt: {
+          kind: "snapshot",
+          artifactId: "saved-filesystem",
+          provider: "modal",
+          runtimeVersion: "v67-legacy",
+          savedAtMs: Date.now(),
+        },
+      });
+      const held = shutdownStore.read();
+      durableState.storage.sql.exec("DELETE FROM session_alarm_state");
+      await durableState.storage.deleteAlarm();
+      const stop = vi
+        .spyOn(ModalSandboxProvider.prototype, "stopSandbox")
+        .mockRejectedValue(new Error("provider unavailable"));
+      try {
+        const restarted = createSessionRuntime(platform, runtimeEnv);
+        const manager = restarted.internals.lifecycleManager;
+        const beforeRearm = Date.now();
+        restarted.alarms.rehydrate();
+        await Promise.all(background);
+        const [deadline] = durableState.storage.sql
+          .exec("SELECT pending_deadline FROM session_alarm_state")
+          .toArray();
+        expect(deadline.pending_deadline).toBeGreaterThanOrEqual(beforeRearm + 30_000);
+        expect(deadline.pending_deadline).toBeLessThanOrEqual(Date.now() + 30_000);
+        expect(stop).not.toHaveBeenCalled();
+        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(await manager.handleShutdownAlarm()).toBe("hold_watchdogs");
+        expect(stop).toHaveBeenCalledOnce();
+        expect(restarted.internals.sandboxRepository.getSandbox()).toMatchObject({
+          modal_object_id: "rejected-source",
+          startup_rejected: 1,
+          fenced: 1,
+          auth_token_hash: "",
+          active_socket_id: "",
+        });
+        expect(shutdownStore.read()).toEqual(held);
+        stop.mockResolvedValue({ success: true });
+        expect(await manager.handleShutdownAlarm()).toBe("hold_watchdogs");
+        expect(restarted.internals.sandboxRepository.getSandbox()).toMatchObject({
+          modal_object_id: null,
+          startup_rejected: 1,
+          fenced: 1,
+          status: "failed",
+        });
+        expect(shutdownStore.read()).toEqual(held);
+        expect(await manager.handleShutdownAlarm()).toBe("hold_watchdogs");
+        expect(stop).toHaveBeenCalledTimes(2);
+        expect(shutdownStore.read()).toEqual(held);
+      } finally {
+        stop.mockRestore();
+      }
+    });
+  });
+
   it.each([
     ["snapshot", "access"],
     ["snapshot", "announcement"],

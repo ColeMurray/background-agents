@@ -38,14 +38,17 @@ describe("BudgetSection", () => {
   });
   it("shows observed cost and limit with a static reported-usage note", () => {
     render(
-      <BudgetSection
-        sessionId="session-1"
-        totalCost={3.42}
-        maxSessionCostUsd={10}
-        canManageBudget={false}
-      />
+      <dl>
+        <BudgetSection
+          sessionId="session-1"
+          totalCost={3.42}
+          maxSessionCostUsd={10}
+          canManageBudget={false}
+        />
+      </dl>
     );
-    expect(screen.getByText("Session cost: $3.42 of $10.00 limit")).toBeInTheDocument();
+    expect(screen.getByRole("term")).toHaveTextContent("Cost");
+    expect(screen.getByText("$3.42 of $10.00 limit")).toBeInTheDocument();
     expect(
       screen.getByText("Costs and limits reflect reported model usage only.")
     ).toBeInTheDocument();
@@ -56,7 +59,9 @@ describe("BudgetSection", () => {
     fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
     const user = userEvent.setup();
     render(
-      <BudgetSection sessionId="session-1" totalCost={3} maxSessionCostUsd={10} canManageBudget />
+      <dl>
+        <BudgetSection sessionId="session-1" totalCost={3} maxSessionCostUsd={10} canManageBudget />
+      </dl>
     );
 
     await user.click(screen.getByRole("button", { name: "Edit limit" }));

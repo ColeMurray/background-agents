@@ -92,4 +92,23 @@ describe("FilesChangedSection", () => {
     expect(screen.getByText("acme/api")).toBeVisible();
     expect(screen.getByText("Repository checkout is unavailable")).toBeVisible();
   });
+
+  it("shows each file's folder under its name without losing disambiguated labels", () => {
+    render(<FilesChangedSection repositories={repositories} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("packages/web")).toBeVisible();
+    expect(screen.getByText("packages/api")).toBeVisible();
+    expect(screen.getByRole("button", { name: /web\/index\.ts.*modified/ })).toHaveAttribute(
+      "title",
+      "packages/web/index.ts"
+    );
+  });
+
+  it("explains an empty search without hiding unavailable repository notices", async () => {
+    render(<FilesChangedSection repositories={repositories} onSelect={vi.fn()} />);
+    await userEvent.type(screen.getByRole("searchbox"), "not-a-file");
+
+    expect(screen.getByRole("status")).toHaveTextContent("No changed files match");
+    expect(screen.getByText("Repository checkout is unavailable")).toBeVisible();
+  });
 });
