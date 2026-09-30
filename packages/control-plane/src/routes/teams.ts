@@ -238,7 +238,8 @@ async function teamSessions(
     items.flatMap(({ rootSession, descendantSessions }) => [rootSession, ...descendantSessions])
   );
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
-    sessions.filter((row) => row.visibility === "private").map((row) => row.id)
+    sessions.map((row) => row.id),
+    { privateOnly: true }
   );
   const sessionIds = new Set(sessions.map((row) => row.id));
   const decorate = (row: ScopedInboxSession) => ({

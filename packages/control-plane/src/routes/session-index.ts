@@ -185,7 +185,8 @@ export async function handleListSessions(
   );
   if (result instanceof Response) return result;
   const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
-    result.sessions.filter((row) => row.visibility === "private").map((row) => row.id)
+    result.sessions.map((row) => row.id),
+    { privateOnly: true }
   );
   const sessions = result.sessions.map((row) => ({
     ...row,
