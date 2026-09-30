@@ -107,7 +107,7 @@ async def test_take_snapshot_passes_explicit_timeout():
 
     assert image_id == "im-session"
     snapshot_filesystem.assert_not_called()
-    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs, command_router=False)
+    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs)
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
 
 
@@ -156,8 +156,7 @@ async def test_unknown_backend_tag_is_explicitly_rejected(monkeypatch):
 @pytest.mark.parametrize(
     "budget, expected", [(1, 1), (1.9, 1), (179.8, 179), (300, 300), (500, 300)]
 )
-@pytest.mark.parametrize("command_router", [False, True], ids=["legacy", "router"])
-async def test_take_snapshot_bounds_whole_second_timeout(budget, expected, command_router):
+async def test_take_snapshot_bounds_whole_second_timeout(budget, expected):
     snapshot_filesystem = _async_method(SimpleNamespace(object_id="im-session"))
     handle = SandboxHandle(
         sandbox_id="sandbox-1",
@@ -168,9 +167,7 @@ async def test_take_snapshot_bounds_whole_second_timeout(budget, expected, comma
 
     await SandboxManager().take_snapshot(handle, timeout_seconds=budget)
 
-    snapshot_filesystem_request(
-        **snapshot_filesystem.aio.await_args.kwargs, command_router=command_router
-    )
+    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs)
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=expected)
 
 
@@ -327,7 +324,7 @@ async def test_vm_capture_exec_timeout_is_sdk_compatible_and_within_budget(monke
     timeout = execute.aio.await_args.kwargs["timeout"]
     assert type(timeout) is int
     assert timeout == min(int(budget), int(CONTROL_TIMEOUT_SECONDS))
-    snapshot_filesystem_request(**snapshot.aio.await_args.kwargs, command_router=True)
+    snapshot_filesystem_request(**snapshot.aio.await_args.kwargs)
     snapshot.aio.assert_awaited_once_with(
         timeout=min(int(budget), SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
     )
@@ -374,5 +371,5 @@ async def test_vm_preparation_consumes_capture_budget(monkeypatch, elapsed, expe
         snapshot.aio.assert_not_awaited()
     else:
         await SandboxManager().take_snapshot(handle, timeout_seconds=10)
-        snapshot_filesystem_request(**snapshot.aio.await_args.kwargs, command_router=True)
+        snapshot_filesystem_request(**snapshot.aio.await_args.kwargs)
         snapshot.aio.assert_awaited_once_with(timeout=expected)

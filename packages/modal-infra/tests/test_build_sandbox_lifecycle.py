@@ -336,8 +336,7 @@ async def test_start_build_sandbox_refuses_mismatched_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("command_router", [False, True], ids=["legacy", "router"])
-async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch, command_router):
+async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
     snapshot_filesystem = _async_method(SimpleNamespace(object_id="im-snapshot-1"))
     sandbox = SimpleNamespace(
         get_tags=_async_method(
@@ -354,9 +353,7 @@ async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch, comma
 
     assert image_id == "im-snapshot-1"
     snapshot_filesystem.assert_not_called()
-    snapshot_filesystem_request(
-        **snapshot_filesystem.aio.await_args.kwargs, command_router=command_router
-    )
+    snapshot_filesystem_request(**snapshot_filesystem.aio.await_args.kwargs)
     snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
 
 

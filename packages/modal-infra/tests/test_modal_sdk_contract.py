@@ -99,11 +99,11 @@ def test_create_uses_sdk_resource_conversion(
 
 
 @pytest.mark.parametrize("timeout", [55, 55.0, 55.5])
-@pytest.mark.parametrize("command_router", [False, True], ids=["legacy", "router"])
-def test_snapshot_accepts_float_timeout(timeout, command_router):
-    snapshot_filesystem_request(timeout=timeout, command_router=command_router)
+def test_snapshot_accepts_float_timeout_without_truncation(timeout):
+    request = snapshot_filesystem_request(timeout=timeout)
+    assert request.timeout == timeout
 
 
-def test_legacy_snapshot_serializes_timeout_without_truncation():
-    request = snapshot_filesystem_request(timeout=55.5, command_router=False)
-    assert request.timeout == 55.5
+def test_snapshot_checks_router_timeout_conversion():
+    with pytest.raises(TypeError, match=r"float\(\) argument must be"):
+        snapshot_filesystem_request(timeout=None)

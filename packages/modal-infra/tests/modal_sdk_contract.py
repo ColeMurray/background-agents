@@ -51,11 +51,7 @@ def sandbox_create_request(*args: str, **kwargs: Any) -> api_pb2.SandboxCreateRe
     )
 
 
-def snapshot_filesystem_request(
-    *, timeout: int | float, command_router: bool
-) -> api_pb2.SandboxSnapshotFsRequest | task_command_router_pb2.TaskSnapshotFilesystemRequest:
-    if command_router:
-        # The router timeout is passed separately, not stored in an integer protobuf field.
-        float(timeout)
-        return task_command_router_pb2.TaskSnapshotFilesystemRequest()
+def snapshot_filesystem_request(*, timeout: int | float) -> api_pb2.SandboxSnapshotFsRequest:
+    # Check both SDK paths; the router timeout is passed separately from its request.
+    float(timeout)
     return api_pb2.SandboxSnapshotFsRequest(timeout=timeout)
