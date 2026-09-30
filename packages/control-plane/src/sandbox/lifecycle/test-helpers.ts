@@ -38,6 +38,7 @@ import type {
   StopConfig,
   StopResult,
 } from "../provider";
+import { providerResumesAfterStop } from "../provider";
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
@@ -474,10 +475,7 @@ export function createTestLifecycleManager(
     storage,
     broadcaster,
     sockets: wsManager,
-    canResumeAfterStop: () =>
-      !!provider.capabilities.supportsExplicitStop &&
-      !!provider.stopSandbox &&
-      !!provider.capabilities.supportsPersistentResume,
+    canResumeAfterStop: () => providerResumesAfterStop(provider),
     getLogger: () => {
       const log = createLogger("lifecycle-manager");
       const sessionId = config.getSessionId?.();

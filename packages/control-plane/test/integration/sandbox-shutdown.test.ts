@@ -7,6 +7,7 @@ import {
 } from "../../src/sandbox/lifecycle/manager";
 import { createSandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import type { RestoreConfig, RestoreResult, SandboxProvider } from "../../src/sandbox/provider";
+import { providerResumesAfterStop } from "../../src/sandbox/provider";
 import { createLogger } from "../../src/logger";
 import { EventRepository } from "../../src/session/event-repository";
 import { MessageFailureService } from "../../src/session/message-failure-service";
@@ -737,10 +738,7 @@ describe("sandbox graceful shutdown wiring", () => {
         storage: sandbox,
         broadcaster,
         sockets,
-        canResumeAfterStop: () =>
-          !!provider.capabilities.supportsExplicitStop &&
-          !!provider.capabilities.supportsPersistentResume &&
-          !!provider.stopSandbox,
+        canResumeAfterStop: () => providerResumesAfterStop(provider),
         getLogger: () => log,
       });
       const shutdown = new SandboxShutdownCoordinator({

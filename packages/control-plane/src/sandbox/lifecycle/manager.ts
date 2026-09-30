@@ -27,6 +27,7 @@ import {
   PrebuiltImageUnavailableError,
   SandboxProviderError,
   SandboxLaunchRejectedError,
+  providerResumesAfterStop,
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -1413,7 +1414,7 @@ export class SandboxLifecycleManager
    * Whether stopping should preserve provider-owned state for in-place resume.
    */
   private usesProviderManagedStop(): boolean {
-    return this.canStopProviderSandbox() && !!this.provider.capabilities.supportsPersistentResume;
+    return providerResumesAfterStop(this.provider);
   }
 
   /**

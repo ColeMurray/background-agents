@@ -4,7 +4,7 @@ import {
   SandboxLifecycleManager,
 } from "../../src/sandbox/lifecycle/manager";
 import { createSandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
-import type { SandboxProvider } from "../../src/sandbox/provider";
+import { providerResumesAfterStop, type SandboxProvider } from "../../src/sandbox/provider";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
@@ -85,10 +85,7 @@ export function realLifecycleHarness(
     storage: sandbox,
     broadcaster,
     sockets,
-    canResumeAfterStop: () =>
-      !!provider.capabilities.supportsExplicitStop &&
-      !!provider.capabilities.supportsPersistentResume &&
-      !!provider.stopSandbox,
+    canResumeAfterStop: () => providerResumesAfterStop(provider),
     getLogger: () => log,
   });
   const shutdown = new SandboxShutdownCoordinator({

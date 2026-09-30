@@ -647,3 +647,14 @@ export interface SandboxProvider {
    */
   stopSandbox?(config: StopConfig): Promise<StopResult>;
 }
+
+/** Whether an explicit stop can preserve the execution for in-place resume. */
+export function providerResumesAfterStop(
+  provider: Pick<SandboxProvider, "capabilities" | "stopSandbox">
+): boolean {
+  return (
+    !!provider.capabilities.supportsExplicitStop &&
+    !!provider.stopSandbox &&
+    !!provider.capabilities.supportsPersistentResume
+  );
+}

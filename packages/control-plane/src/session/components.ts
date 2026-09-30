@@ -28,7 +28,7 @@ import { generateId, hashToken, encryptToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import type { SandboxProvider } from "../sandbox/provider";
+import { providerResumesAfterStop, type SandboxProvider } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
@@ -445,10 +445,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     storage: sandboxRepository,
     broadcaster: messenger,
     sockets: lifecycleSockets,
-    canResumeAfterStop: () =>
-      !!sandboxProvider.capabilities.supportsExplicitStop &&
-      !!sandboxProvider.stopSandbox &&
-      !!sandboxProvider.capabilities.supportsPersistentResume,
+    canResumeAfterStop: () => providerResumesAfterStop(sandboxProvider),
     getLogger: () => accessLog,
     sandboxDashboardUrlBuilder:
       sandboxBackend === "modal" || sandboxBackend === "modal-vm"
