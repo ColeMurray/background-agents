@@ -84,7 +84,7 @@ export class ParticipantRepository {
   updateParticipantIdentity(
     participantId: string,
     data: {
-      canonicalUserId: string;
+      canonicalUserId: string | null;
       scmUserId: string | null;
       scmLogin: string | null;
       scmName: string | null;

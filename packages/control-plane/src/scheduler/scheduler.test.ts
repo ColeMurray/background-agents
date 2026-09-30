@@ -2825,7 +2825,13 @@ describe("Scheduler", () => {
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         if (scenario === "empty")
           expect(prompt.scmEnrichment).toMatchObject({ userId: "77", login: null });
-        else expect(prompt.scmEnrichment).toBeUndefined();
+        else
+          expect(prompt.scmEnrichment).toEqual({
+            userId: null,
+            login: null,
+            name: null,
+            email: null,
+          });
         expect(mockGitHubAccountInfo).not.toHaveBeenCalled();
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       }
@@ -2876,7 +2882,7 @@ describe("Scheduler", () => {
       ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
       const body = await getPromptBody(vi.mocked(stub.fetch));
       expect(body.canonicalUserId).toBe("slack-actor-user");
-      expect(body.scmEnrichment).toBeUndefined();
+      expect(body.scmEnrichment).toEqual({ userId: null, login: null, name: null, email: null });
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 

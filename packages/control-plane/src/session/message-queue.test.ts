@@ -185,6 +185,7 @@ function buildQueue(
     getParticipantById: vi.fn(() => createParticipant()),
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
+    updateParticipantIdentity: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => ({
       messageId: event.messageId,
       messageCreatedAt: 1000,
@@ -2371,7 +2372,8 @@ describe("SessionMessageQueue", () => {
         },
       });
 
-      expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+      expect(h.repository.updateParticipantIdentity).toHaveBeenCalledWith("part-1", {
+        canonicalUserId: null,
         scmName: "Trusted Octo Cat",
         scmEmail: "1001+octocat@users.noreply.github.com",
         scmLogin: "octocat",
@@ -2389,6 +2391,7 @@ describe("SessionMessageQueue", () => {
       });
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
     });
   });
 });

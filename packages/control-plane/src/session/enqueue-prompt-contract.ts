@@ -17,7 +17,8 @@ export const enqueuePromptRequestSchema = z
     reasoningEffort: z.string().optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
-    // Trusted SCM enrichment resolved by the router at prompt time.
+    // Authoritative SCM snapshot resolved by the router at prompt time.
+    // Explicit null fields clear stored attribution; absence leaves it unchanged.
     scmEnrichment: z
       .object({
         userId: z.string().nullable(),

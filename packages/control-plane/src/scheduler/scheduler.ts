@@ -1737,14 +1737,15 @@ export class Scheduler {
           content: event.text,
           authorId: `slack:${event.actorUserId}`,
           canonicalUserId: actorUserId,
-          scmEnrichment: enrichment
-            ? {
-                userId: enrichment.scmUserId,
-                login: enrichment.scmLogin ?? null,
-                name: enrichment.displayName ?? null,
-                email: enrichment.email ?? null,
-              }
-            : undefined,
+          scmEnrichment:
+            resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
+              ? {
+                  userId: enrichment?.scmUserId ?? null,
+                  login: enrichment?.scmLogin ?? null,
+                  name: enrichment?.displayName ?? null,
+                  email: enrichment?.email ?? null,
+                }
+              : undefined,
           source: "slack",
           callbackContext,
         },
