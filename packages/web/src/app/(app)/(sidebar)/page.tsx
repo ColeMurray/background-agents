@@ -10,6 +10,13 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { matchesShortcut } from "@/lib/keyboard-shortcuts";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
@@ -697,40 +704,54 @@ function HomeContent({
                 <div className="flex flex-col gap-2 px-4 py-2 border-t border-border-muted sm:flex-row sm:items-center sm:gap-0">
                   <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
                     {teamContext.teams.length === 1 && !teamContext.requireTeamOnCreate ? (
-                      <select
-                        aria-label="Session team"
-                        value={teamContext.activeTeamId ?? ""}
-                        onChange={(event) => teamContext.setActiveTeam(event.target.value || null)}
+                      <Select
+                        value={teamContext.activeTeamId ?? "workspace"}
+                        onValueChange={(value) =>
+                          teamContext.setActiveTeam(value === "workspace" ? null : value)
+                        }
                         disabled={creating || teamContext.loading || !!teamContext.error}
-                        className="max-w-[12rem] bg-transparent text-sm text-muted-foreground disabled:opacity-50"
                       >
-                        <option value="">Workspace</option>
-                        <option value={teamContext.teams[0].id}>{teamContext.teams[0].name}</option>
-                      </select>
+                        <SelectTrigger
+                          aria-label="Session team"
+                          density="compact"
+                          className="w-auto max-w-[12rem] border-0 bg-transparent px-0 text-muted-foreground hover:text-foreground"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent side="top" align="start">
+                          <SelectItem value="workspace">Workspace</SelectItem>
+                          <SelectItem value={teamContext.teams[0].id}>
+                            {teamContext.teams[0].name}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
                     ) : (
                       <span className="max-w-[12rem] truncate text-sm text-muted-foreground">
                         {selectedTeam?.name ?? "Workspace"}
                       </span>
                     )}
-                    <select
-                      aria-label="Session visibility"
+                    <Select
                       value={visibility}
-                      onChange={(event) =>
+                      onValueChange={(value) =>
                         onVisibilityChange(
-                          event.target.value === "team"
-                            ? "team"
-                            : event.target.value === "private"
-                              ? "private"
-                              : "workspace"
+                          value === "team" ? "team" : value === "private" ? "private" : "workspace"
                         )
                       }
                       disabled={creating || !teamCreationReady}
-                      className="bg-transparent text-sm text-muted-foreground disabled:opacity-50"
                     >
-                      <option value="workspace">Workspace</option>
-                      {selectedTeam && <option value="team">Team</option>}
-                      <option value="private">Private</option>
-                    </select>
+                      <SelectTrigger
+                        aria-label="Session visibility"
+                        density="compact"
+                        className="w-auto border-0 bg-transparent px-0 text-muted-foreground hover:text-foreground"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent side="top" align="start">
+                        <SelectItem value="workspace">Workspace</SelectItem>
+                        {selectedTeam && <SelectItem value="team">Team</SelectItem>}
+                        <SelectItem value="private">Private</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <ModelReasoningSelector
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}

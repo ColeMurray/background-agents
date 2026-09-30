@@ -31,8 +31,12 @@ describe("Home team context", () => {
   it("defaults workspace drafts to workspace visibility without offering team visibility", async () => {
     render(<Home />);
     const visibility = screen.getByRole("combobox", { name: "Session visibility" });
-    expect(visibility).toHaveValue("workspace");
-    expect(within(visibility).queryByRole("option", { name: "Team" })).not.toBeInTheDocument();
+    expect(visibility.tagName).toBe("BUTTON");
+    expect(visibility).toHaveTextContent("Workspace");
+    fireEvent.keyDown(visibility, { key: " " });
+    const menu = await screen.findByRole("listbox");
+    expect(within(menu).queryByRole("option", { name: "Team" })).not.toBeInTheDocument();
+    fireEvent.keyDown(menu, { key: "Escape" });
     fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
       target: { value: "Ship it" },
     });
@@ -51,9 +55,8 @@ describe("Home team context", () => {
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
     );
-    fireEvent.change(screen.getByRole("combobox", { name: "Session visibility" }), {
-      target: { value: "workspace" },
-    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Session visibility" }), { key: " " });
+    fireEvent.click(await screen.findByRole("option", { name: "Workspace" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
     );
@@ -64,7 +67,9 @@ describe("Home team context", () => {
     );
     mocks.activeTeamId = "team-2";
     view.rerender(<Home />);
-    expect(screen.getByRole("combobox", { name: "Session visibility" })).toHaveValue("private");
+    expect(screen.getByRole("combobox", { name: "Session visibility" })).toHaveTextContent(
+      "Private"
+    );
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
       expect(calls).toHaveLength(3);
@@ -75,28 +80,40 @@ describe("Home team context", () => {
     });
   });
 
-  it("offers a composer team choice when the single-team switcher is hidden", () => {
+  it("offers a custom composer team choice and maps Workspace back to no team", async () => {
     mocks.teams = [team()];
-    render(<Home />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Session team" }), {
-      target: { value: "team-1" },
-    });
+    const view = render(<Home />);
+    const trigger = screen.getByRole("combobox", { name: "Session team" });
+    expect(trigger.tagName).toBe("BUTTON");
+    expect(trigger).toHaveTextContent("Workspace");
+    fireEvent.keyDown(trigger, { key: " " });
+    fireEvent.click(await screen.findByRole("option", { name: "Engineering" }));
     expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
+    mocks.activeTeamId = "team-1";
+    view.rerender(<Home />);
+    expect(trigger).toHaveTextContent("Engineering");
+    fireEvent.keyDown(trigger, { key: " " });
+    fireEvent.click(await screen.findByRole("option", { name: "Workspace" }));
+    expect(mocks.setActiveTeam).toHaveBeenLastCalledWith(null);
   });
 
   it("waits for membership and settings reconciliation before warming or sending", async () => {
     mocks.teamsLoading = true;
+    mocks.teams = [team()];
     const view = render(<Home />);
     const input = screen.getByPlaceholderText("What do you want to build?");
     fireEvent.change(input, { target: { value: "Ship it" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Session team" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Session visibility" })).toBeDisabled();
     expect(fetch).not.toHaveBeenCalled();
     mocks.teamsLoading = false;
     mocks.requireTeamOnCreate = true;
     mocks.teams = [team()];
     view.rerender(<Home />);
     expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
+    expect(screen.queryByRole("combobox", { name: "Session team" })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
     mocks.activeTeamId = "team-1";
     view.rerender(<Home />);
@@ -155,7 +172,8 @@ describe("Home team context", () => {
     await screen.findByText("Visibility denied (visibility_denied)");
     const visibility = screen.getByRole("combobox", { name: "Session visibility" });
     expect(visibility).not.toBeDisabled();
-    fireEvent.change(visibility, { target: { value: "private" } });
+    fireEvent.keyDown(visibility, { key: " " });
+    fireEvent.click(await screen.findByRole("option", { name: "Private" }));
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
       expect(calls).toHaveLength(2);
