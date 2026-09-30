@@ -326,6 +326,22 @@ describe("launch input orchestration", () => {
     expect(provider.createSandbox).not.toHaveBeenCalled();
   });
 
+  it.each(["expired", "superseded"] as const)(
+    "does not mark restore invoked or call the provider after %s pending registration",
+    async (outcome) => {
+      const { manager, provider, sandbox, shutdown } = createLaunchFixture();
+      sandbox.status = "stopped";
+      sandbox.snapshot_image_id = "saved-image";
+      sandbox.snapshot_runtime_version = COMPATIBLE_RUNTIME_VERSION;
+      vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+      shutdown.recordPendingProviderHandle.mockResolvedValueOnce(outcome);
+      await manager.spawnSandbox();
+      expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+    }
+  );
+
   it.each(["fresh", "restore"] as const)(
     "%s reserves the identity before deferred hash and env reads",
     async (mode) => {
