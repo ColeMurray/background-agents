@@ -16,11 +16,7 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
   const { provenance, loading, error } = useSessionSkills(sessionId);
   if (error) return null;
   if (loading) {
-    return (
-      <div className="border-t border-border-muted py-3 text-xs text-muted-foreground">
-        Loading managed skills...
-      </div>
-    );
+    return <div className="text-xs text-muted-foreground">Loading managed skills...</div>;
   }
   if (!provenance) return null;
 

@@ -362,7 +362,7 @@ describe("PR sync button", () => {
     });
   });
 
-  it("moves to a Pull requests header covering every row when several PRs exist", () => {
+  it("puts one sync action in the Repository heading when several PRs exist", () => {
     render(
       <MetadataSection
         sessionId="session-1"
@@ -384,8 +384,9 @@ describe("PR sync button", () => {
     // One button for the whole section, not one pinned to the first row.
     const buttons = screen.getAllByRole("button", { name: "Sync PR status" });
     expect(buttons).toHaveLength(1);
-    const header = screen.getByText("Pull requests");
-    expect(header.parentElement).toContainElement(buttons[0]);
+    const heading = screen.getByRole("heading", { name: "Repository" });
+    expect(heading.parentElement).toContainElement(buttons[0]);
+    expect(screen.getByText("Pull requests")).toBeInTheDocument();
     // Rows carry their head branch so several PRs stay distinguishable.
     expect(screen.getByText("feat/second")).toBeInTheDocument();
   });

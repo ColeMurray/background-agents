@@ -420,7 +420,8 @@ describe("SessionRightSidebar", () => {
     );
 
     selectTab("Info");
-    expect(screen.queryByText(/Session cost|No session cost limit/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("term", { name: "Cost" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Cost", { exact: true })).not.toBeInTheDocument();
     expect(container.querySelector(".mt-4")).not.toBeInTheDocument();
   });
 

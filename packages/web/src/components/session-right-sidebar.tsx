@@ -28,6 +28,7 @@ import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { BudgetSection } from "./sidebar/budget-section";
+import { DetailsSection } from "./sidebar/details-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import {
   SESSION_INSPECTOR_TABS,
@@ -294,36 +295,41 @@ export function SessionRightSidebarContent({
         )}
       </InspectorPanel>
 
-      <InspectorPanel value="info" activeTab={activeTab} className="space-y-5">
+      <InspectorPanel value="info" activeTab={activeTab} className="space-y-6">
         {sessionState ? (
           <>
-            <div className="space-y-4">
-              <MetadataSection
-                sessionId={sessionId}
-                createdAt={sessionState.createdAt}
-                model={sessionState.model}
-                reasoningEffort={sessionState.reasoningEffort}
-                baseBranch={sessionState.baseBranch}
-                branchName={sessionState.branchName || undefined}
-                repoOwner={sessionState.repoOwner}
-                repoName={sessionState.repoName}
-                artifacts={artifacts}
-                repositories={sessionState.repositories}
-                environmentId={sessionState.environmentId}
-                environmentName={sessionState.environmentName}
-                warnings={warnings}
-                parentSessionId={sessionState.parentSessionId}
-                canManageLifecycle={capabilities.lifecycle}
-              />
+            <MetadataSection
+              sessionId={sessionId}
+              createdAt={sessionState.createdAt}
+              model={sessionState.model}
+              reasoningEffort={sessionState.reasoningEffort}
+              baseBranch={sessionState.baseBranch}
+              branchName={sessionState.branchName || undefined}
+              repoOwner={sessionState.repoOwner}
+              repoName={sessionState.repoName}
+              artifacts={artifacts}
+              repositories={sessionState.repositories}
+              environmentId={sessionState.environmentId}
+              environmentName={sessionState.environmentName}
+              warnings={warnings}
+              parentSessionId={sessionState.parentSessionId}
+              canManageLifecycle={capabilities.lifecycle}
+            >
               <BudgetSection
                 sessionId={sessionId}
                 totalCost={sessionState.totalCost ?? 0}
                 maxSessionCostUsd={sessionState.maxSessionCostUsd}
                 canManageBudget={canManageBudget}
               />
-            </div>
+            </MetadataSection>
+            <ManagedSkillsSection sessionId={sessionState.id} />
+            {(!presenceSynced || participants.length > 0) && (
+              <DetailsSection title="Participants">
+                <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
+              </DetailsSection>
+            )}
             {capabilities.exportTrace && (
-              <div className="border-t border-border-muted pt-4">
+              <div>
                 <button
                   type="button"
                   onClick={() => void downloadTrace()}
@@ -332,13 +338,6 @@ export function SessionRightSidebarContent({
                 >
                   Download trace
                 </button>
-              </div>
-            )}
-            <ManagedSkillsSection sessionId={sessionState.id} />
-            {(!presenceSynced || participants.length > 0) && (
-              <div className="border-t border-border-muted pt-4">
-                <h3 className="mb-3 text-xs font-semibold">Participants</h3>
-                <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
               </div>
             )}
           </>
