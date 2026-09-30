@@ -86,3 +86,9 @@ failed there before the isolated run. The focused Modal suite passed 106 tests.
 Before claiming a successful live enforced investigation, rebuild the image and check the complete
 agent launch in a bounded dev test. Missing bubblewrap, unavailable namespaces, unsupported
 configuration or an unsupported SDK must never cause an unrestricted fallback.
+
+The [DIV-77 dev pilot](investigation-profile-pilot-2026-09-16.md) deployed generation 66 on an
+explicitly authorized release retry. Its single smoke passed independent filesystem boundary probes
+but failed to resolve the approved model before source reads or a report. A complete enforced live
+investigation remains unproven; [DIV-81](https://linear.app/divinedesign/issue/DIV-81) tracks the
+blocker.
