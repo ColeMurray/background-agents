@@ -216,6 +216,10 @@ VERCEL_API_TOKEN
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
 
+# Documentation site (packages/docs)
+DOCS_SITE_ENABLED # Optional; defaults to false, which destroys a provisioned docs project
+DOCS_CUSTOM_DOMAIN # Optional; empty serves the vercel.app URL only
+
 # Modal
 MODAL_TOKEN_ID
 MODAL_TOKEN_SECRET

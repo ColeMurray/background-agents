@@ -1151,6 +1151,10 @@ ENABLE_SERVICE_BINDINGS
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
 
+# Documentation site (packages/docs)
+DOCS_SITE_ENABLED
+DOCS_CUSTOM_DOMAIN
+
 # Modal
 MODAL_WORKSPACE
 MODAL_ENVIRONMENT
@@ -1233,6 +1237,8 @@ Secrets for credentials:
 | `VERCEL_API_TOKEN`                 | Vercel API token _(only if `web_platform = "vercel"`)_                                      |
 | `VERCEL_TEAM_ID`                   | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                |
 | `VERCEL_PROJECT_ID`                | Vercel project ID _(only if `web_platform = "vercel"`)_                                     |
+| `DOCS_SITE_ENABLED`                | `true` keeps the docs site Vercel project (default: `false`; see `packages/docs/README.md`) |
+| `DOCS_CUSTOM_DOMAIN`               | Optional docs site hostname, e.g. `docs.example.com` (default: the vercel.app URL only)     |
 | `MODAL_TOKEN_ID`                   | Modal token ID                                                                              |
 | `MODAL_TOKEN_SECRET`               | Modal token secret                                                                          |
 | `MODAL_WORKSPACE`                  | Modal workspace name                                                                        |
