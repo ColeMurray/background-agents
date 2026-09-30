@@ -1629,6 +1629,7 @@ export class Scheduler {
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,
       platformUserId: executionPrincipal.platformUserId,
+      participantCanonicalUserId: executionPrincipal.platformUserId,
       scmUserId: scmEnrichment?.scmUserId,
       scmLogin: scmEnrichment?.scmLogin,
       scmName: scmEnrichment?.displayName,

@@ -66,7 +66,7 @@ export interface SessionInitInput {
   /** Canonical session owner for D1 access control and attribution. Null when unresolved. */
   platformUserId: string | null;
   /** Creator credential identity, when different from inherited session ownership. */
-  participantCanonicalUserId?: string | null;
+  participantCanonicalUserId: string | null;
   ownerTeamId: string | null;
   visibility: SessionVisibility;
   collaboratorSourceSessionId?: string;
@@ -102,6 +102,9 @@ export async function initializeSession(
   input: SessionInitInput,
   ctx: RequestContext
 ): Promise<{ sessionId: string; status: string }> {
+  if (input.participantCanonicalUserId === undefined) {
+    throw new Error("Participant canonical identity must be explicit");
+  }
   if (
     (input.managedSkillsManifest === undefined) ===
     (input.managedSkillsSourceSessionId === undefined)
@@ -232,10 +235,7 @@ export async function initializeSession(
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,
-          canonicalUserId:
-            input.participantCanonicalUserId === undefined
-              ? input.platformUserId
-              : input.participantCanonicalUserId,
+          canonicalUserId: input.participantCanonicalUserId,
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,
