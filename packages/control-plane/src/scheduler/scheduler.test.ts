@@ -14,7 +14,7 @@ import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
 import type { InvocationRunAggregate } from "../db/automation-store";
-import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import type { SlackAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared/triggers";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -461,6 +461,19 @@ const sampleSlackAutomation = {
 
 const sampleSlackPermalink = "https://example.slack.com/archives/C1/p1700000000000200";
 const sampleSlackContextBlock = `A message was posted in #ops.\nPermalink: ${sampleSlackPermalink}`;
+
+function makeWebhookEvent(): WebhookAutomationEvent {
+  return {
+    source: "webhook",
+    eventType: "webhook.received",
+    automationId: "auto-1",
+    triggerKey: "webhook:retry",
+    concurrencyKey: "webhook:auto-1",
+    contextBlock: "Webhook received",
+    meta: {},
+    body: { task: "Run tests" },
+  };
+}
 
 function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomationEvent {
   const ts = "1700000000.000200";
@@ -2264,6 +2277,40 @@ describe("Scheduler", () => {
   });
 
   describe("event", () => {
+    it("does not report an invocation ID when an overlap skip was not inserted", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleAutomation,
+        trigger_type: "webhook",
+        event_type: "webhook.received",
+        trigger_config: null,
+      });
+      mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow());
+      mockStore.insertSkippedInvocation.mockResolvedValue({ inserted: false });
+      const result = await createScheduler().event(makeWebhookEvent());
+
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationId: null });
+      expect(mockStore.insertSkippedInvocation).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a null invocation ID when an event is deduplicated", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleAutomation,
+        trigger_type: "webhook",
+        event_type: "webhook.received",
+        trigger_config: null,
+      });
+      mockStore.insertInvocationGuarded.mockRejectedValue(
+        new Error(
+          "UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.trigger_key"
+        )
+      );
+
+      const result = await createScheduler().event(makeWebhookEvent());
+
+      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationId: null });
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+
     it.each([
       { trigger_config: "{invalid" },
       { trigger_config: "" },
