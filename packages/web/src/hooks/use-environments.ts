@@ -7,7 +7,7 @@ import type {
 
 export const ENVIRONMENTS_KEY = "/api/environments";
 
-export function useEnvironments(): {
+export function useEnvironments(teamId?: string | null): {
   environments: Environment[];
   loading: boolean;
   error: unknown;
@@ -15,7 +15,11 @@ export function useEnvironments(): {
   const { data: session, status } = useAuthSession();
 
   const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
-    session ? ENVIRONMENTS_KEY : null
+    session
+      ? teamId
+        ? `${ENVIRONMENTS_KEY}?teamId=${encodeURIComponent(teamId)}`
+        : ENVIRONMENTS_KEY
+      : null
   );
 
   return {

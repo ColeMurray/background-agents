@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 import { formatSessionCost } from "@/lib/session-cost";
 
 interface BudgetSectionProps {
@@ -36,6 +38,15 @@ export function BudgetSection({
         body: JSON.stringify({ maxCostUsd }),
       });
       if (!response.ok) {
+        if (response.status === 403) {
+          const message = await sessionActionErrorMessage(
+            response,
+            "Unable to update the session cost limit"
+          );
+          setError(message);
+          toast.error(message);
+          return;
+        }
         const body: unknown = await response.json().catch(() => null);
         const serverMessage =
           body &&
@@ -86,7 +97,7 @@ export function BudgetSection({
         )}
       </div>
 
-      {editing && (
+      {canManageBudget && editing && (
         <div className="space-y-2 border-l-2 border-border pl-3">
           <label className="block text-xs text-muted-foreground" htmlFor="session-cost-limit">
             USD limit for this session

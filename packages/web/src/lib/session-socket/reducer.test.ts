@@ -15,6 +15,17 @@ import {
 
 type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
 
+const SERVER_CAPABILITIES: NonNullable<SessionState["capabilities"]> = {
+  canRead: true,
+  canCollaborate: true,
+  canManageLifecycle: true,
+  canSandbox: true,
+  canDelete: false,
+  canMove: false,
+  canManageCollaborators: false,
+  canChangeVisibility: false,
+};
+
 function createSessionState(overrides: Partial<SessionState> = {}): SessionState {
   return {
     id: "session-1",
@@ -509,6 +520,46 @@ describe("sessionSocketReducer", () => {
   });
 
   describe("subscribed", () => {
+    it.each([undefined, SERVER_CAPABILITIES])(
+      "retains server capabilities when subscribed omits them: %j",
+      (capabilities) => {
+        const hydrated = createSessionSocketState(
+          createSnapshot({ session: createSessionState({ capabilities }) })
+        );
+        const message = createSubscribedMessage();
+        message.session.title = "Live title";
+        expect(message.session).not.toHaveProperty("capabilities");
+
+        const subscribed = reduce(hydrated, serverMessage(message));
+        expect(subscribed.sessionState?.capabilities).toBe(capabilities);
+        expect(subscribed.sessionState?.title).toBe("Live title");
+        expect(subscribed.events).toEqual([]);
+      }
+    );
+
+    it("replaces server capabilities with explicit denials and retains those on later omission", () => {
+      const hydrated = createSessionSocketState(
+        createSnapshot({ session: createSessionState({ capabilities: SERVER_CAPABILITIES }) })
+      );
+      const denied = {
+        ...SERVER_CAPABILITIES,
+        canRead: false,
+        canCollaborate: false,
+        canManageLifecycle: false,
+        canSandbox: false,
+      };
+      const subscribed = reduce(
+        hydrated,
+        serverMessage(
+          createSubscribedMessage({ session: createSessionState({ capabilities: denied }) })
+        )
+      );
+      expect(subscribed.sessionState?.capabilities).toEqual(denied);
+      expect(
+        reduce(subscribed, serverMessage(createSubscribedMessage())).sessionState?.capabilities
+      ).toEqual(denied);
+    });
+
     it("hydrates budget management capability and applies authoritative budget updates", () => {
       const subscribed = subscribedState({ canManageBudget: true });
       const state = reduce(

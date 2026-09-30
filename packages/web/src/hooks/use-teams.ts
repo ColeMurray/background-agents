@@ -10,6 +10,7 @@ import {
   teamMemberSchema,
   teamResponseSchema,
   teamRoleSchema,
+  meTeamsResponseSchema,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
 import { workspaceMemberListResponseSchema } from "@open-inspect/shared/rbac";
@@ -25,7 +26,9 @@ const teamSchema = teamResponseSchema.extend({
 export type TeamResponse = z.infer<typeof teamSchema>;
 export type TeamMember = z.infer<typeof teamMemberSchema>;
 const teamsSchema = z.object({ teams: z.array(teamSchema) });
-const meTeamsSchema = z.object({ teams: z.array(teamSchema.extend({ role: teamRoleSchema })) });
+const meTeamsSchema = meTeamsResponseSchema.extend({
+  teams: z.array(teamSchema.extend({ role: teamRoleSchema })),
+});
 const membersSchema = z.object({ members: z.array(teamMemberSchema) });
 
 async function get<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
@@ -70,7 +73,12 @@ export function useMeTeams() {
   const result = useSWR(session?.user ? ME_TEAMS_KEY : null, () =>
     get(ME_TEAMS_KEY, meTeamsSchema)
   );
-  return { teams: result.data?.teams ?? [], loading: result.isLoading, error: result.error };
+  return {
+    teams: result.data?.teams ?? [],
+    requireTeamOnCreate: result.data?.requireTeamOnCreate ?? false,
+    loading: Boolean(session?.user) && !result.data && !result.error,
+    error: result.error,
+  };
 }
 
 export function useTeams() {

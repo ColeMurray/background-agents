@@ -13,76 +13,96 @@ import {
 import Home from "./page";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import type { TeamResponse } from "@/hooks/use-teams";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 
 expect.extend(matchers);
 
-const mocks = vi.hoisted(() => ({
-  routerPush: vi.fn(),
-  mutateMock: vi.fn(),
-  reposValue: [] as Array<{
-    id: number;
-    fullName: string;
-    owner: string;
-    name: string;
-    description: string | null;
-    private: boolean;
-    defaultBranch: string;
-  }>,
-  loadingReposValue: false,
-  environmentsLoadingValue: false,
-  environmentsValue: [] as Array<{
-    id: string;
-    name: string;
-    description: string | null;
-    prebuildEnabled: boolean;
-    createdAt: number;
-    updatedAt: number;
-    repositories: Array<{
-      repoOwner: string;
-      repoName: string;
-      repoId: number | null;
-      baseBranch: string;
-    }>;
-  }>,
-  enabledModelsValue: [] as string[],
-  enabledModelOptionsValue: [] as Array<{
-    category: string;
-    models: Array<{ id: string; name: string; description: string }>;
-  }>,
-  providerAccountsValue: [] as Array<{
-    id: string;
-    provider: "openai" | "xai" | "anthropic";
-    displayName: string;
-    externalAccountId: string | null;
-    status: "active";
-    createdBy: null;
-    updatedBy: null;
-    lastVerifiedAt: null;
-    lastUsedAt: null;
-    createdAt: number;
-    updatedAt: number;
-    archivedAt: null;
-  }>,
-  providerAccountsLoadingValue: false,
-  skillPreview: {
-    skills: [
-      {
-        skillId: "skill-1",
-        revisionId: "revision-1",
-        name: "review-pr",
-        description: "Review a pull request",
-        revisionNumber: 1,
-        revisionSha256: "abc",
-        totalBytes: 10,
-        assignmentSources: [],
-      },
-    ],
-    totalBytes: 10,
-    ignoredProfileSkillIds: [],
-  },
-  keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
-  canCreateSession: true,
-}));
+const mocks = vi.hoisted(() => {
+  const teamContext: {
+    activeTeamId: string | null;
+    teams: (TeamResponse & { role: TeamRole })[];
+    teamsLoading: boolean;
+    teamsError: unknown;
+    requireTeamOnCreate: boolean;
+  } = {
+    activeTeamId: null,
+    teams: [],
+    teamsLoading: false,
+    teamsError: undefined,
+    requireTeamOnCreate: false,
+  };
+  return {
+    routerPush: vi.fn(),
+    toastError: vi.fn(),
+    mutateMock: vi.fn(),
+    reposValue: [] as Array<{
+      id: number;
+      fullName: string;
+      owner: string;
+      name: string;
+      description: string | null;
+      private: boolean;
+      defaultBranch: string;
+    }>,
+    loadingReposValue: false,
+    environmentsLoadingValue: false,
+    environmentsValue: [] as Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      prebuildEnabled: boolean;
+      createdAt: number;
+      updatedAt: number;
+      repositories: Array<{
+        repoOwner: string;
+        repoName: string;
+        repoId: number | null;
+        baseBranch: string;
+      }>;
+    }>,
+    enabledModelsValue: [] as string[],
+    enabledModelOptionsValue: [] as Array<{
+      category: string;
+      models: Array<{ id: string; name: string; description: string }>;
+    }>,
+    providerAccountsValue: [] as Array<{
+      id: string;
+      provider: "openai" | "xai" | "anthropic";
+      displayName: string;
+      externalAccountId: string | null;
+      status: "active";
+      createdBy: null;
+      updatedBy: null;
+      lastVerifiedAt: null;
+      lastUsedAt: null;
+      createdAt: number;
+      updatedAt: number;
+      archivedAt: null;
+    }>,
+    providerAccountsLoadingValue: false,
+    skillPreview: {
+      skills: [
+        {
+          skillId: "skill-1",
+          revisionId: "revision-1",
+          name: "review-pr",
+          description: "Review a pull request",
+          revisionNumber: 1,
+          revisionSha256: "abc",
+          totalBytes: 10,
+          assignmentSources: [],
+        },
+      ],
+      totalBytes: 10,
+      ignoredProfileSkillIds: [],
+    },
+    keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
+    canCreateSession: true,
+    ...teamContext,
+    setActiveTeam: vi.fn(),
+  };
+});
 
 const repo = {
   id: 1,
@@ -105,9 +125,22 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-active-team", () => ({
+  useActiveTeam: () => ({
+    activeTeamId: mocks.activeTeamId,
+    setActiveTeam: mocks.setActiveTeam,
+    teams: mocks.teams,
+    scope: undefined,
+    requireTeamOnCreate: mocks.requireTeamOnCreate,
+    loading: mocks.teamsLoading,
+    error: mocks.teamsError,
+  }),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.routerPush }),
 }));
+vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
 
 vi.mock("swr", () => ({
   // Home uses the default export only for the picker's prebuild-status text.
@@ -230,7 +263,14 @@ beforeEach(() => {
   mocks.providerAccountsLoadingValue = false;
   mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
   mocks.canCreateSession = true;
+  mocks.activeTeamId = null;
+  mocks.teams = [];
+  mocks.teamsLoading = false;
+  mocks.teamsError = undefined;
+  mocks.requireTeamOnCreate = false;
+  mocks.setActiveTeam.mockReset();
   mocks.routerPush.mockReset();
+  mocks.toastError.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
     "fetch",
@@ -240,6 +280,9 @@ beforeEach(() => {
         return Response.json({ sessionId: "session-1", status: "created" });
       }
       if (url === "/api/sessions/session-1/prompt") {
+        return Response.json({ ok: true });
+      }
+      if (url === "/api/sessions/session-1/archive") {
         return Response.json({ ok: true });
       }
       return Response.json({ error: "unexpected request" }, { status: 500 });
@@ -283,6 +326,188 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: TeamRole } {
+    return {
+      id: "team-1",
+      slug: "engineering",
+      name: "Engineering",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      memberCount: 1,
+      role: "member",
+      ...overrides,
+    };
+  }
+
+  it("defaults workspace drafts to workspace visibility without offering team visibility", async () => {
+    render(<Home />);
+    const visibility = screen.getByRole("combobox", { name: "Session visibility" });
+    expect(visibility).toHaveValue("workspace");
+    expect(within(visibility).queryByRole("option", { name: "Team" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: null, visibility: "workspace" })
+    );
+  });
+
+  it("uses the active team's defaults and archives the warm draft on visibility and team changes", async () => {
+    mocks.teams = [team(), team({ id: "team-2", name: "Design", defaultVisibility: "private" })];
+    mocks.activeTeamId = "team-1";
+    const view = render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Session visibility" }), {
+      target: { value: "workspace" },
+    });
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything())
+    );
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+      ).toHaveLength(2)
+    );
+    mocks.activeTeamId = "team-2";
+    view.rerender(<Home />);
+    expect(screen.getByRole("combobox", { name: "Session visibility" })).toHaveValue("private");
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
+      expect(calls).toHaveLength(3);
+      expect(JSON.parse(String(calls[2][1]?.body))).toMatchObject({
+        teamId: "team-2",
+        visibility: "private",
+      });
+    });
+  });
+
+  it("offers a composer team choice when the single-team switcher is hidden", () => {
+    mocks.teams = [team()];
+    render(<Home />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Session team" }), {
+      target: { value: "team-1" },
+    });
+    expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
+  });
+
+  it("waits for membership and settings reconciliation before warming or sending", async () => {
+    mocks.teamsLoading = true;
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    expect(fetch).not.toHaveBeenCalled();
+    mocks.teamsLoading = false;
+    mocks.requireTeamOnCreate = true;
+    mocks.teams = [team()];
+    view.rerender(<Home />);
+    expect(mocks.setActiveTeam).toHaveBeenCalledWith("team-1");
+    expect(fetch).not.toHaveBeenCalled();
+    mocks.activeTeamId = "team-1";
+    view.rerender(<Home />);
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
+    );
+  });
+
+  it("blocks warming and shortcut submission with an inline notice when a team is required but none are available", () => {
+    mocks.requireTeamOnCreate = true;
+    render(<Home />);
+    expect(screen.getByText("Join a team to create a session.")).toBeInTheDocument();
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not create workspace drafts when the team context failed to load", () => {
+    mocks.teamsError = new Error("Settings unavailable");
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces terminal creation codes on first typing and does not retry the denied draft", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      Response.json({ error: "Team archived", code: "team_archived" }, { status: 409 })
+    );
+    render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    await screen.findByText("Team archived (team_archived)");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: "Try again" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+    ).toHaveLength(1);
+  });
+
+  it("shows the first prompt's server denial reason in a toast without navigating", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).endsWith("/prompt")
+        ? Response.json(
+            {
+              error: "Forbidden",
+              code: "session_action_denied",
+              reason_code: "missing_permission",
+            },
+            { status: 403 }
+          )
+        : Response.json({ sessionId: "session-1", status: "created" })
+    );
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith("Failed to send prompt (missing_permission)")
+    );
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+
+  it("can correct visibility after a terminal denial and recreate the draft", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        Response.json({ error: "Visibility denied", code: "visibility_denied" }, { status: 403 })
+      )
+      .mockResolvedValueOnce(Response.json({ sessionId: "session-1", status: "created" }));
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await screen.findByText("Visibility denied (visibility_denied)");
+    const visibility = screen.getByRole("combobox", { name: "Session visibility" });
+    expect(visibility).not.toBeDisabled();
+    fireEvent.change(visibility, { target: { value: "private" } });
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
+      expect(calls).toHaveLength(2);
+      expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({
+        teamId: null,
+        visibility: "private",
+      });
+    });
+  });
+
   it("does not render session creation UI without session creation permission", () => {
     mocks.canCreateSession = false;
 
@@ -535,6 +760,29 @@ describe("Home", () => {
     updatedAt: 1,
     repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 1, baseBranch: "main" }],
   };
+
+  it("waits for a team's default environment before warming the composed draft", async () => {
+    mocks.teams = [team({ defaultEnvironmentId: "env-1" })];
+    mocks.activeTeamId = "team-1";
+    mocks.environmentsLoadingValue = true;
+    localStorage.setItem("open-inspect-last-selected-repo", repo.fullName);
+    const view = render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    mocks.environmentsLoadingValue = false;
+    mocks.environmentsValue = [environment];
+    view.rerender(<Home />);
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({
+        environmentId: "env-1",
+        teamId: "team-1",
+        visibility: "team",
+      })
+    );
+    expect(sessionCreateBody()).not.toHaveProperty("repoOwner");
+  });
 
   it("persists an environment selection and restores it on the next visit", async () => {
     mocks.environmentsValue = [environment];

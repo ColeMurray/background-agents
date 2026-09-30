@@ -28,6 +28,7 @@ import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { BudgetSection } from "./sidebar/budget-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 
 interface SessionRightSidebarProps {
@@ -108,7 +109,10 @@ export function SessionRightSidebarContent({
         `/api/sessions/${encodeURIComponent(sessionId)}/export`,
         { signal: controller.signal }
       );
-      if (!response.ok) throw new Error("Trace export failed");
+      if (!response.ok) {
+        toast.error(await sessionActionErrorMessage(response, "Failed to download trace"));
+        return;
+      }
 
       const blob = await response.blob();
       // Trace read and stream failures arrive as NDJSON records inside a 200 response.

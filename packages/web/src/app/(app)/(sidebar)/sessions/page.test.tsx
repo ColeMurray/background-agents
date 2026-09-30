@@ -5,6 +5,9 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@/lib/session-list";
+import type * as ActiveTeam from "@/hooks/use-active-team";
+import { ActiveTeamProvider } from "@/hooks/use-active-team";
+import { DEFAULT_SESSION_DISCOVERY_QUERY } from "@/lib/session-discovery";
 import SessionsPage from "./page";
 
 expect.extend(matchers);
@@ -17,6 +20,54 @@ const { mockReplace, mockUseSessionDiscovery, mockSearchParamsState, mockPermiss
     mockPermissions: new Set<string>(),
   })
 );
+
+const teamMocks = vi.hoisted(() => ({
+  activeTeamId: "all-my-teams" as string | null,
+  loading: false,
+  error: undefined as unknown,
+  setActiveTeam: vi.fn(),
+  roleKey: "member",
+  realContext: false,
+}));
+
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({
+    teams: [
+      { id: "team_alpha", name: "Alpha", role: "member", archivedAt: null },
+      { id: "team_beta", name: "Beta", role: "lead", archivedAt: null },
+    ],
+    loading: teamMocks.loading,
+    error: teamMocks.error,
+    requireTeamOnCreate: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-active-team", async (importOriginal) => {
+  const original = await importOriginal<typeof ActiveTeam>();
+  return {
+    ...original,
+    useActiveTeam: () =>
+      teamMocks.realContext
+        ? original.useActiveTeam()
+        : {
+            ...teamMocks,
+            activeTeamId: teamMocks.activeTeamId?.startsWith("team_")
+              ? teamMocks.activeTeamId
+              : null,
+            scope:
+              teamMocks.activeTeamId === null
+                ? "workspace"
+                : teamMocks.activeTeamId === "all-teams"
+                  ? "all"
+                  : undefined,
+            teams: [
+              { id: "team_alpha", name: "Alpha", role: "member" },
+              { id: "team_beta", name: "Beta", role: "lead" },
+            ],
+            requireTeamOnCreate: false,
+          },
+  };
+});
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
@@ -59,6 +110,7 @@ vi.mock("@/hooks/use-session-discovery", () => ({
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     loading: false,
+    authorization: { role: { key: teamMocks.roleKey } },
     hasPermission: (permission: string) => mockPermissions.has(permission),
   }),
 }));
@@ -170,6 +222,13 @@ describe("SessionsPage", () => {
     mockPermissions.add("repositories.read");
     mockUseSessionDiscovery.mockReset();
     mockUseSessionDiscovery.mockReturnValue(defaultHookResult);
+    teamMocks.activeTeamId = "all-my-teams";
+    teamMocks.loading = false;
+    teamMocks.error = undefined;
+    teamMocks.roleKey = "member";
+    teamMocks.setActiveTeam.mockReset();
+    teamMocks.realContext = false;
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -244,6 +303,7 @@ describe("SessionsPage", () => {
 
     expect(screen.getByRole("button", { name: "Load more sessions" })).toBeInTheDocument();
     expect(lastQuery()).toEqual({
+      ...DEFAULT_SESSION_DISCOVERY_QUERY,
       q: "",
       creator: "all",
       repository: null,
@@ -278,6 +338,7 @@ describe("SessionsPage", () => {
     const rows = within(screen.getByRole("list", { name: "Sessions" })).getAllByRole("link");
     expect(rows[0]).toHaveTextContent("Archived");
     expect(lastQuery()).toEqual({
+      ...DEFAULT_SESSION_DISCOVERY_QUERY,
       q: "login",
       creator: "mine",
       repository: { repoOwner: "partner", repoName: "sdk" },
@@ -495,5 +556,284 @@ describe("SessionsPage", () => {
     act(() => vi.runOnlyPendingTimers());
     expect(mockReplace).toHaveBeenCalledTimes(1);
     expect(mockReplace).toHaveBeenLastCalledWith("/sessions", { scroll: false });
+  });
+
+  it.each([
+    [null, undefined, "workspace", "Workspace"],
+    ["team_alpha", ["team_alpha"], undefined, "Alpha"],
+    ["all-my-teams", undefined, undefined, "All my teams"],
+    ["all-teams", undefined, "all", "All teams"],
+  ])(
+    "inherits active context %s when the URL has no team filter",
+    (activeTeamId, teamIds, scope, label) => {
+      teamMocks.activeTeamId = activeTeamId;
+      teamMocks.roleKey = "administrator";
+      mockSearchParamsState.value = new URLSearchParams(
+        "q=login&ownerFilter=started&visibility=team"
+      );
+      render(<SessionsPage />);
+
+      expect(lastQuery()).toMatchObject({
+        q: "login",
+        teamIds,
+        scope,
+        ownerFilter: "started",
+        visibility: "team",
+      });
+      expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent(label!);
+      expect(mockReplace).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps an explicit unknown team URL authoritative without widening", () => {
+    teamMocks.activeTeamId = "team_alpha";
+    mockSearchParamsState.value = new URLSearchParams(
+      "teamIds[]=team_missing&ownerFilter=participating&visibility=private&createdBy=me"
+    );
+    render(<SessionsPage />);
+
+    expect(lastQuery()).toMatchObject({
+      teamIds: ["team_missing"],
+      scope: undefined,
+      creator: "mine",
+      ownerFilter: "participating",
+      visibility: "private",
+    });
+    expect(lastOptions()).toEqual({ enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("team_missing");
+    expect(screen.getByRole("combobox", { name: "Owner" })).toHaveTextContent("Participating");
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Private");
+    expect(teamMocks.setActiveTeam).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("preserves repeated selected teams from a link", () => {
+    mockSearchParamsState.value = new URLSearchParams(
+      "teamIds[]=team_alpha&teamIds[]=team_missing"
+    );
+    render(<SessionsPage />);
+    expect(lastQuery()).toMatchObject({ teamIds: ["team_alpha", "team_missing"] });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Alpha, team_missing");
+    expect(lastOptions()).toEqual({ enabled: true });
+  });
+
+  it.each(["workspace", "all"])("honors explicit scope=%s over the active team", (scope) => {
+    teamMocks.activeTeamId = "team_alpha";
+    teamMocks.roleKey = "administrator";
+    mockSearchParamsState.value = new URLSearchParams({ scope });
+    render(<SessionsPage />);
+    expect(lastQuery()).toMatchObject({ scope, teamIds: undefined });
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("updates team context on switcher changes while preserving filters and pending search", () => {
+    teamMocks.activeTeamId = "team_alpha";
+    mockSearchParamsState.value = new URLSearchParams(
+      "teamIds[]=team_missing&createdBy=me&lifecycle=archived&origin=automation&ownerFilter=participating&visibility=private"
+    );
+    const { rerender } = render(<SessionsPage />);
+    typeSearch("pending login");
+    teamMocks.activeTeamId = "team_beta";
+    rerender(<SessionsPage />);
+
+    const href = mockReplace.mock.calls.at(-1)?.[0];
+    expect(href).toBeDefined();
+    const params = new URL(href, "https://example.com").searchParams;
+    expect(params.getAll("teamIds[]")).toEqual(["team_beta"]);
+    expect(params.get("scope")).toBeNull();
+    expect(params.get("q")).toBe("pending login");
+    expect(params.get("createdBy")).toBe("me");
+    expect(params.get("ownerFilter")).toBe("participating");
+    expect(params.get("visibility")).toBe("private");
+    expect(params.get("lifecycle")).toBe("archived");
+    expect(params.get("origin")).toBe("automation");
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Beta");
+    act(() => vi.runOnlyPendingTimers());
+    expect(
+      new URL(mockReplace.mock.calls.at(-1)![0], "https://example.com").searchParams.getAll(
+        "teamIds[]"
+      )
+    ).toEqual(["team_beta"]);
+  });
+
+  it("preserves in-flight filter changes when switching an inherited team context", () => {
+    teamMocks.activeTeamId = "team_alpha";
+    mockSearchParamsState.value = new URLSearchParams("q=login");
+    const { rerender } = render(<SessionsPage />);
+    chooseOption(screen.getByRole("combobox", { name: "Owner" }), "Participating");
+    teamMocks.activeTeamId = "team_beta";
+    rerender(<SessionsPage />);
+
+    const params = new URL(mockReplace.mock.calls.at(-1)![0], "https://example.com").searchParams;
+    expect(params.getAll("teamIds[]")).toEqual(["team_beta"]);
+    expect(params.get("ownerFilter")).toBe("participating");
+    expect(params.get("q")).toBe("login");
+    expect(screen.getByRole("combobox", { name: "Owner" })).toHaveTextContent("Participating");
+  });
+
+  it("does not overwrite an explicit link when initial active-team loading settles", () => {
+    teamMocks.activeTeamId = null;
+    teamMocks.loading = true;
+    mockSearchParamsState.value = new URLSearchParams("teamIds[]=team_missing");
+    const { rerender } = render(<SessionsPage />);
+    teamMocks.activeTeamId = "team_alpha";
+    teamMocks.loading = false;
+    rerender(<SessionsPage />);
+
+    expect(lastQuery()).toMatchObject({ teamIds: ["team_missing"] });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("team_missing");
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("does not treat the inherited context alone as a clearable filter", () => {
+    teamMocks.activeTeamId = "team_alpha";
+    render(<SessionsPage />);
+    expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
+  });
+
+  it("writes independent Owner and Visibility controls while retaining Creator Mine", () => {
+    mockSearchParamsState.value = new URLSearchParams("createdBy=me&teamIds[]=team_alpha");
+    render(<SessionsPage />);
+    chooseOption(screen.getByRole("combobox", { name: "Owner" }), "Participating");
+    chooseOption(screen.getByRole("combobox", { name: "Visibility" }), "Private");
+    const params = new URL(mockReplace.mock.calls.at(-1)![0], "https://example.com").searchParams;
+    expect(params.get("ownerFilter")).toBe("participating");
+    expect(params.get("visibility")).toBe("private");
+    expect(params.get("createdBy")).toBe("me");
+    expect(params.getAll("teamIds[]")).toEqual(["team_alpha"]);
+  });
+
+  it("selects All my teams without falling back to the previously active team", () => {
+    teamMocks.activeTeamId = "team_alpha";
+    mockSearchParamsState.value = new URLSearchParams("q=login&teamIds[]=team_alpha");
+    const { rerender } = render(<SessionsPage />);
+    chooseOption(screen.getByRole("combobox", { name: "Team" }), "All my teams");
+    expect(teamMocks.setActiveTeam).toHaveBeenCalledWith("all-my-teams");
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=login", { scroll: false });
+    teamMocks.activeTeamId = "all-my-teams";
+    mockSearchParamsState.value = new URLSearchParams("q=login");
+    rerender(<SessionsPage />);
+    expect(lastQuery()).toMatchObject({ q: "login", teamIds: undefined, scope: undefined });
+  });
+
+  it("uses the real provider's All my teams scope and preserves page filters after navigation", () => {
+    teamMocks.realContext = true;
+    localStorage.setItem("open-inspect-active-team", "team_alpha");
+    mockSearchParamsState.value = new URLSearchParams(
+      "q=login&teamIds[]=team_alpha&createdBy=me&ownerFilter=participating&visibility=private"
+    );
+    const { rerender } = render(
+      <ActiveTeamProvider>
+        <SessionsPage />
+      </ActiveTeamProvider>
+    );
+
+    chooseOption(screen.getByRole("combobox", { name: "Team" }), "All my teams");
+    const href = mockReplace.mock.calls.at(-1)![0];
+    const params = new URL(href, "https://example.com").searchParams;
+    expect(new URL(href, "https://example.com").pathname).toBe("/sessions");
+    expect(params.getAll("teamIds[]")).toEqual([]);
+    expect(params.has("scope")).toBe(false);
+    expect(params.get("q")).toBe("login");
+    expect(params.get("createdBy")).toBe("me");
+    expect(params.get("ownerFilter")).toBe("participating");
+    expect(params.get("visibility")).toBe("private");
+    mockSearchParamsState.value = params;
+    rerender(
+      <ActiveTeamProvider>
+        <SessionsPage />
+      </ActiveTeamProvider>
+    );
+
+    expect(lastQuery()).toMatchObject({
+      q: "login",
+      creator: "mine",
+      ownerFilter: "participating",
+      visibility: "private",
+      teamIds: undefined,
+      scope: undefined,
+    });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("All my teams");
+    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
+  });
+
+  it("protects explicit links through first-run hydration with the real provider", () => {
+    teamMocks.realContext = true;
+    teamMocks.loading = true;
+    localStorage.setItem("open-inspect-active-team", "team_alpha");
+    mockSearchParamsState.value = new URLSearchParams("teamIds[]=team_missing&ownerFilter=started");
+    const { rerender } = render(
+      <ActiveTeamProvider>
+        <SessionsPage />
+      </ActiveTeamProvider>
+    );
+    expect(lastOptions()).toEqual({ enabled: false });
+    teamMocks.loading = false;
+    rerender(
+      <ActiveTeamProvider>
+        <SessionsPage />
+      </ActiveTeamProvider>
+    );
+
+    expect(lastQuery()).toMatchObject({
+      teamIds: ["team_missing"],
+      scope: undefined,
+      ownerFilter: "started",
+    });
+    expect(lastOptions()).toEqual({ enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("team_missing");
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("updates between aggregate scopes even though the real hook's activeTeamId stays null", () => {
+    teamMocks.activeTeamId = null;
+    mockSearchParamsState.value = new URLSearchParams("q=login&scope=workspace");
+    const { rerender } = render(<SessionsPage />);
+    teamMocks.activeTeamId = "all-my-teams";
+    rerender(<SessionsPage />);
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=login", { scroll: false });
+    teamMocks.roleKey = "administrator";
+    teamMocks.activeTeamId = "all-teams";
+    rerender(<SessionsPage />);
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?q=login&scope=all", { scroll: false });
+  });
+
+  it.each(["owner", "administrator", "member"])(
+    "gates All teams by server role %s, not session permissions",
+    (roleKey) => {
+      teamMocks.roleKey = roleKey;
+      mockPermissions.add("sessions.manage");
+      render(<SessionsPage />);
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Team" }), { key: "Enter" });
+      expect(screen.queryByRole("option", { name: "All teams" }) !== null).toBe(
+        roleKey !== "member"
+      );
+      expect(screen.getByRole("option", { name: "Workspace" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "All my teams" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Alpha" })).toBeInTheDocument();
+    }
+  );
+
+  it("does not fetch a fallback context before active teams load or when they fail", () => {
+    teamMocks.loading = true;
+    const { rerender } = render(<SessionsPage />);
+    expect(lastOptions()).toEqual({ enabled: false });
+    teamMocks.loading = false;
+    teamMocks.error = new Error("teams failed");
+    rerender(<SessionsPage />);
+    expect(lastOptions()).toEqual({ enabled: false });
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load teams.");
+  });
+
+  it("clears other filters without widening the active team context", () => {
+    teamMocks.activeTeamId = "team_alpha";
+    mockSearchParamsState.value = new URLSearchParams(
+      "q=login&ownerFilter=participating&visibility=private"
+    );
+    render(<SessionsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(mockReplace).toHaveBeenLastCalledWith("/sessions?teamIds%5B%5D=team_alpha", {
+      scroll: false,
+    });
   });
 });

@@ -11,6 +11,8 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import { listPrArtifacts, listPrArtifactsForRepo } from "@/lib/pr-artifacts";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 import {
   ClockIcon,
   SparkleIcon,
@@ -64,9 +66,12 @@ function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
     if (syncing) return;
     setSyncing(true);
     try {
-      await browserApiFetch(`/api/sessions/${sessionId}/pull-requests/refresh`, {
+      const response = await browserApiFetch(`/api/sessions/${sessionId}/pull-requests/refresh`, {
         method: "POST",
       });
+      if (!response.ok) {
+        toast.error(await sessionActionErrorMessage(response, "Failed to sync PR status"));
+      }
     } catch {
       // Fire-and-forget: the socket stream is the source of truth, so a
       // failed trigger only means no update arrives.

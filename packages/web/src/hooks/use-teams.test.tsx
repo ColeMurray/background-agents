@@ -50,6 +50,7 @@ describe("team hooks", () => {
     });
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({
+        requireTeamOnCreate: false,
         teams: [
           {
             id: "team_design",
