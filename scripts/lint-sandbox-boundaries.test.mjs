@@ -18,6 +18,7 @@ test("new consumers and platform adapters cannot import sandbox implementations"
       ["SandboxAccess", "../sandbox/lifecycle/sandbox-access"],
       ["VmStartupReconciliation", "../sandbox/lifecycle/vm-startup-reconciliation"],
       ["AllocationCleanupDependencies", "../sandbox/lifecycle/allocation-cleanup"],
+      ["ProviderStopOutcome", "../sandbox/lifecycle/provider-stop"],
     ]) {
       const [result] = await eslint.lintText(
         `import type { ${name} } from "${source}"; export type Dependency = ${name};`,

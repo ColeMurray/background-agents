@@ -2,8 +2,8 @@ import type { Logger } from "../../logger";
 import type { AlarmScheduler } from "../../platform-ports";
 import type { SandboxRow } from "../../session/types";
 import type { SandboxGeneration } from "./ports";
+import { boundedProviderStop, type ProviderStopOutcome } from "./provider-stop";
 
-export const PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS = 10_000;
 const REJECTED_ALLOCATION_CLEANUP_RETRY_MS = 30_000;
 
 export interface AllocationCleanupStorage {
@@ -15,8 +15,8 @@ export interface AllocationCleanupDependencies {
   storage: AllocationCleanupStorage;
   alarmScheduler: Pick<AlarmScheduler, "schedule">;
   canStop: () => boolean;
-  /** Stops only the supplied handle, preserving the caller's stop arguments. */
-  stop: (providerObjectId: string, signal: AbortSignal) => Promise<void>;
+  /** Confirms only provider retirement; skipped dispatch returns not_stopped. */
+  stop: (providerObjectId: string, signal: AbortSignal) => Promise<ProviderStopOutcome>;
   getLogger: () => Pick<Logger, "warn">;
 }
 
@@ -52,24 +52,17 @@ export async function destroyLateProviderResult(
   providerObjectId: string | undefined
 ): Promise<boolean> {
   if (!providerObjectId || !deps.canStop()) return false;
-  const controller = new AbortController();
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    const stopTimeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => {
-        controller.abort();
-        reject(new Error("Late provider cleanup timed out"));
-      }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
-    });
-    await Promise.race([deps.stop(providerObjectId, controller.signal), stopTimeoutPromise]);
-    return true;
+    const outcome = await boundedProviderStop(
+      (signal) => deps.stop(providerObjectId, signal),
+      "Late provider cleanup timed out"
+    );
+    return outcome === "confirmed";
   } catch (error) {
     deps.getLogger().warn("Failed to destroy superseded provider sandbox", {
       provider_object_id: providerObjectId,
       error: error instanceof Error ? error.message : String(error),
     });
     return false;
-  } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }

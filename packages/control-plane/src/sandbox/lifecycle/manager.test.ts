@@ -596,6 +596,7 @@ describe("SandboxLifecycleManager", () => {
         await vi.advanceTimersByTimeAsync(10_000);
         await spawning;
 
+        expect(vi.mocked(provider.stopSandbox!).mock.calls[0][0].signal?.aborted).toBe(true);
         expect(provider.createSandbox).toHaveBeenCalledOnce();
         expect(providerHandleAtCreate).toBeNull();
         expect(storage.commitProviderStartup).toHaveBeenCalledWith(
@@ -615,6 +616,44 @@ describe("SandboxLifecycleManager", () => {
         vi.useRealTimers();
       }
     });
+
+    it.each([false, true])(
+      "requires a dispatched stop only for confirmation-required replacement (fenced=%s)",
+      async (fenced) => {
+        const session = createMockSession();
+        const sandbox = createMockSandbox({ status: "failed", fenced: fenced ? 1 : 0 });
+        const storage = createMockStorage(session, sandbox);
+        vi.mocked(storage.getSession).mockReturnValueOnce(session).mockReturnValue(null);
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        });
+        const manager = createTestLifecycleManager(
+          provider,
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createUnmanagedShutdown(),
+          createTestConfig()
+        );
+        await manager.spawnSandbox();
+        expect(provider.stopSandbox).not.toHaveBeenCalled();
+        if (fenced) {
+          expect(provider.createSandbox).not.toHaveBeenCalled();
+          expect(storage.updateSandboxForSpawn).not.toHaveBeenCalled();
+          expect(sandbox.modal_object_id).toBe("modal-obj-123");
+          expect(sandbox.last_spawn_error).toBe(
+            "Provider stop could not be dispatched before sandbox replacement"
+          );
+        } else {
+          expect(provider.createSandbox).toHaveBeenCalledOnce();
+          expect(storage.updateSandboxModalObjectId).toHaveBeenCalledWith(null);
+        }
+      }
+    );
 
     it("stores VNC access without publishing it before the sandbox is ready", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });

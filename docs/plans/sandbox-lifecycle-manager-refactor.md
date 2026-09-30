@@ -28,6 +28,8 @@ Paths are relative to `packages/control-plane/src/`.
 - `sandbox/lifecycle/allocation-cleanup.ts` owns stateless bounded late-result destruction,
   rejected-cleanup retry rearming and matching-handle completion. Rejection/claim authority,
   admission flags and prior-generation replacement retirement remain in the manager.
+- `sandbox/lifecycle/provider-stop.ts` owns the shared local stop bound, abort/timer mechanics and
+  explicit `confirmed`/`not_stopped` outcome contract, not either caller's retirement policy.
 - `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
   `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
   shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
@@ -165,10 +167,10 @@ and unified acceptance require separately scoped safety work; neither is claimed
 `destroyLateProviderResult`, `rearmRejectedStartupCleanupAlarm` and `attemptRejectedStartupCleanup`
 are stateless functions. Their narrow dependencies are a two-method repository port (`getSandbox`,
 `updateSandboxModalObjectId`), the shared scheduler's `schedule`, explicit-stop eligibility, a stop
-operation requiring a supplied handle and signal, and a lazy warning logger. Rearming and late
-destruction each accept only their dependency subset. The manager constructs the readonly dependency
-wiring without invoking it; no manager reference, local ownership flag, shutdown policy, new
-persisted record or raw platform alarm belongs to cleanup.
+operation requiring a supplied handle and signal with a `confirmed`/`not_stopped` result, and a lazy
+warning logger. Rearming and late destruction each accept only their dependency subset. The manager
+constructs the readonly dependency wiring without invoking it; no manager reference, local ownership
+flag, shutdown policy, new persisted record or raw platform alarm belongs to cleanup.
 
 Rejection ordering remains manager-owned: recognize `SandboxLaunchRejectedError`, synchronously
 `rejectProviderStartup` to fence credentials/socket authority and retain the handle, detach with the
@@ -182,8 +184,17 @@ Rejected cleanup awaits retry scheduling before provider I/O. It stops the expli
 `startup_superseded`, `destroy`, the public session name/internal ID fallback and a bounded signal,
 retaining the existing **undefined** `generationCreatedAtMs`. The provider adapter still interprets
 absence; row age does not change pending-reference retirement classification on this path. The
-original stop bound is defined once in cleanup and also imported by the manager's separate
-replacement-retirement operation. Its require-confirmation/handle-clearing behavior is not merged.
+original stop bound and abort/timer implementation live in `provider-stop.ts`; late destruction and
+the manager's separate replacement-retirement operation both call `boundedProviderStop`. Timeout
+error messages, logging, retry and handle-clearing policies remain with the callers.
+
+Review follow-up corrects the inherited false-confirmation bug: the manager's stop adapter returns
+`not_stopped` when no provider method, session context or target permits dispatch, and `confirmed`
+only after the provider reports success. Rejected cleanup retains its handle/retry on `not_stopped`;
+confirmation-required replacement on explicit-stop providers refuses an undispatched stop before
+reserving a replacement. Best-effort replacement and providers without explicit stop retain their
+existing handle-clearing/continuation policy. This is a narrow behavioral fix, not a new provider
+absence rule or generalized teardown operation.
 
 Failed, unsupported or locally timed-out cleanup retains the handle and scheduled retry. Abort
 bounds local waiting only; eventual completion of a timed-out stop does not clear the handle. A
@@ -224,12 +235,13 @@ reconciliation internals.
 
 Allocation cleanup coverage retains assembled rejection/repository tests and adds controlled
 schedule/stop gates, local timeout followed by late completion, exact stop arguments, unsuccessful
-provider results, capability/method absence, generation-ID/timestamp/handle replacement isolation,
-terminal failure-accounting ownership and superseded results against a held successor. Existing
-real-storage held-current claim tests remain. Workerd now reconstructs the production runtime over a
-persisted rejected row and durable shutdown hold, exercises the actual rehydration hook/shared
-deadline storage, and confirms failed/successful/repeated cleanup preserves the hold and recovery
-receipt. ESLint keeps cleanup internals unavailable to public consumers.
+provider results, skipped dispatch/missing session context, capability/method absence,
+generation-ID/timestamp/handle replacement isolation, terminal failure-accounting ownership and
+superseded results against a held successor. Existing real-storage held-current claim tests remain.
+Workerd now reconstructs the production runtime over a persisted rejected row and durable shutdown
+hold, exercises the actual rehydration hook/shared deadline storage, and confirms
+failed/successful/repeated cleanup preserves the hold and recovery receipt. ESLint keeps cleanup
+internals unavailable to public consumers.
 
 `manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
 access/publication failure matrix, from the manager's orchestration suite. It retains real

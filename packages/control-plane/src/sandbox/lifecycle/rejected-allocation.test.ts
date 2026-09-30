@@ -380,6 +380,31 @@ describe("rejected provider allocation", () => {
     expect(fixture.alarmScheduler.schedule).toHaveBeenCalledTimes(3);
   });
 
+  it("retains and rearms rejected cleanup when session context prevents stop dispatch", async () => {
+    const sandbox = createMockSandbox({
+      status: "failed",
+      fenced: 1,
+      startup_rejected: 1,
+      modal_object_id: "sb-rejected",
+    });
+    const provider = createMockProvider({
+      capabilities: { supportsExplicitStop: true },
+      stopSandbox: vi.fn(async () => ({ success: true })),
+    });
+    const fixture = createAlarmFixture(sandbox, provider);
+    const session = fixture.storage.getSession();
+    vi.mocked(fixture.storage.getSession).mockReturnValue(null);
+    expect(await fixture.manager.handleShutdownAlarm()).toBe("hold_watchdogs");
+    expect(provider.stopSandbox).not.toHaveBeenCalled();
+    expect(sandbox.modal_object_id).toBe("sb-rejected");
+    expect(fixture.alarmScheduler.schedule).toHaveBeenCalledOnce();
+    vi.mocked(fixture.storage.getSession).mockReturnValue(session);
+    await fixture.manager.handleShutdownAlarm();
+    expect(provider.stopSandbox).toHaveBeenCalledOnce();
+    expect(sandbox.modal_object_id).toBeNull();
+    expect(fixture.alarmScheduler.schedule).toHaveBeenCalledTimes(2);
+  });
+
   it.each([0, PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS])(
     "does not reinterpret invisible pending cleanup as retirement based on row age (%s ms)",
     async (ageMs) => {

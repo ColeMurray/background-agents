@@ -88,10 +88,10 @@ import {
   attemptRejectedStartupCleanup,
   destroyLateProviderResult,
   rearmRejectedStartupCleanupAlarm,
-  PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS,
   type AllocationCleanupDependencies,
   type AllocationCleanupStorage,
 } from "./allocation-cleanup";
+import { boundedProviderStop, type ProviderStopOutcome } from "./provider-stop";
 export type { SandboxGeneration, SandboxAlarmResult } from "./ports";
 
 export type { AlarmScheduler } from "../../platform-ports";
@@ -1380,25 +1380,20 @@ export class SandboxLifecycleManager
       return;
     }
 
-    const controller = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const stopTimeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Provider stop timed out before sandbox replacement"));
-        }, PROVIDER_REPLACEMENT_STOP_TIMEOUT_MS);
-      });
-      await Promise.race([
-        this.stopProviderSandbox(
-          "respawn",
-          "destroy",
-          controller.signal,
-          providerObjectId,
-          prior?.created_at
-        ),
-        stopTimeoutPromise,
-      ]);
+      const outcome = await boundedProviderStop(
+        (signal) =>
+          this.stopProviderSandbox(
+            "respawn",
+            "destroy",
+            signal,
+            providerObjectId,
+            prior?.created_at
+          ),
+        "Provider stop timed out before sandbox replacement"
+      );
+      if (requireConfirmation && outcome !== "confirmed")
+        throw new Error("Provider stop could not be dispatched before sandbox replacement");
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {
       if (requireConfirmation) throw error;
@@ -1407,8 +1402,6 @@ export class SandboxLifecycleManager
         provider_object_id: providerObjectId,
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
 
@@ -1421,16 +1414,16 @@ export class SandboxLifecycleManager
     signal?: AbortSignal,
     providerObjectId?: string,
     generationCreatedAtMs?: number
-  ): Promise<void> {
+  ): Promise<ProviderStopOutcome> {
     if (!this.provider.stopSandbox) {
-      return;
+      return "not_stopped";
     }
 
     const sandbox = providerObjectId ? null : this.storage.getSandbox();
     const session = this.sessionContext.getSession();
     const objectId = providerObjectId ?? sandbox?.modal_object_id;
     if (!objectId || !session) {
-      return;
+      return "not_stopped";
     }
 
     const result = await this.provider.stopSandbox({
@@ -1445,6 +1438,7 @@ export class SandboxLifecycleManager
     if (!result.success) {
       throw new Error(result.error || "Failed to stop provider sandbox");
     }
+    return "confirmed";
   }
 
   /**

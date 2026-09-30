@@ -32,6 +32,11 @@ const sandboxImplementationImports = [
     message:
       "Allocation cleanup is internal to the lifecycle manager. Consumers use lifecycle ports.",
   },
+  {
+    regex: "(?:^|/)lifecycle/provider-stop(?:\\.[cm]?[jt]sx?)?$",
+    message:
+      "Bounded provider-stop mechanics are internal to lifecycle. Consumers use lifecycle ports.",
+  },
 ];
 
 export default tseslint.config(

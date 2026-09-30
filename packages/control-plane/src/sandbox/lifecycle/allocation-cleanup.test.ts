@@ -25,7 +25,7 @@ function fixture() {
     },
     alarmScheduler: { schedule: vi.fn(async (_deadline: number) => {}) },
     canStop: vi.fn(() => true),
-    stop: vi.fn(async (_handle: string, _signal: AbortSignal) => {}),
+    stop: vi.fn<AllocationCleanupDependencies["stop"]>(async () => "confirmed"),
     getLogger: vi.fn(() => logger),
   } satisfies AllocationCleanupDependencies;
   return { row, generation, deps, logger };
@@ -86,12 +86,23 @@ describe("allocation cleanup mechanics", () => {
     }
   );
 
+  it("retains the handle and retry when stop dispatch is skipped", async () => {
+    const { row, generation, deps } = fixture();
+    deps.stop.mockResolvedValue("not_stopped");
+    await attemptRejectedStartupCleanup(deps, generation, "rejected-handle");
+    expect(row.modal_object_id).toBe("rejected-handle");
+    expect(deps.storage.updateSandboxModalObjectId).not.toHaveBeenCalled();
+    expect(deps.alarmScheduler.schedule).toHaveBeenCalledOnce();
+  });
+
   it("bounds local stop without treating abort or later success as retirement", async () => {
     vi.useFakeTimers();
     const { row, generation, deps, logger } = fixture();
     const startedAt = Date.now();
     let finishStop!: () => void;
-    const stopping = new Promise<void>((resolve) => (finishStop = resolve));
+    const stopping = new Promise<"confirmed">(
+      (resolve) => (finishStop = () => resolve("confirmed"))
+    );
     deps.stop.mockImplementation(() => stopping);
     const cleaning = attemptRejectedStartupCleanup(deps, generation, "rejected-handle");
     await vi.advanceTimersByTimeAsync(9_999);
