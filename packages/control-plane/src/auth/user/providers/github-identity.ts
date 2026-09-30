@@ -35,6 +35,11 @@ const githubErrorSchema = z.object({ message: z.string() });
 const GITHUB_RATE_LIMIT_MESSAGE = /rate limit|abuse/i;
 const ERROR_BODY_TIMED_OUT = Symbol("error body timed out");
 
+interface TimedResponse {
+  readonly response: Response;
+  readonly abort: () => void;
+}
+
 export interface GitHubProviderIdentityResolverConfig {
   readonly issuer: string;
   readonly userAgent: string;
@@ -88,7 +93,7 @@ export class GitHubProviderIdentityResolver {
   }
 
   private async fetchGitHubUser(accessToken: string): Promise<z.infer<typeof githubUserSchema>> {
-    const response = await this.fetchWithTimeout(`${GITHUB_API_URL}/user`, {
+    const { response } = await this.fetchWithTimeout(`${GITHUB_API_URL}/user`, {
       headers: this.apiHeaders(accessToken),
     });
     if (!response.ok) {
@@ -111,11 +116,11 @@ export class GitHubProviderIdentityResolver {
       pageUrl.searchParams.set("per_page", String(GITHUB_EMAILS_PER_PAGE));
       pageUrl.searchParams.set("page", String(page));
 
-      const response = await this.fetchWithTimeout(pageUrl, {
+      const { response, abort } = await this.fetchWithTimeout(pageUrl, {
         headers: this.apiHeaders(accessToken),
       });
       if (!response.ok) {
-        throw await this.emailLookupFailure(response);
+        throw await this.emailLookupFailure(response, abort);
       }
       const parsed = githubEmailPageSchema.safeParse(
         await this.parseJson(response, "GitHub emails")
@@ -141,10 +146,13 @@ export class GitHubProviderIdentityResolver {
    * permission "Email addresses: Read-only". GitHub answers a missing
    * permission with 403. A 403 caused by a rate limit is transient instead.
    */
-  private async emailLookupFailure(response: Response): Promise<OAuthProviderError> {
+  private async emailLookupFailure(
+    response: Response,
+    abort: () => void
+  ): Promise<OAuthProviderError> {
     if (
       response.status === HTTP_FORBIDDEN &&
-      !(await isTransientForbidden(response, this.requestTimeoutMs))
+      !(await isTransientForbidden(response, abort, this.requestTimeoutMs))
     ) {
       this.logger.error("GitHub email lookup was rejected", {
         event: "auth.github_email_lookup_failed",
@@ -177,13 +185,21 @@ export class GitHubProviderIdentityResolver {
     }
   }
 
-  private async fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  /**
+   * The timeout covers the request until headers arrive. The returned `abort`
+   * lets a caller stop a body read that outlives it.
+   */
+  private async fetchWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit
+  ): Promise<TimedResponse> {
     let lastCause: unknown;
     for (let attempt = 1; attempt <= GITHUB_NETWORK_REQUEST_ATTEMPTS; attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
       try {
-        return await this.fetchImpl(input, { ...init, signal: controller.signal });
+        const response = await this.fetchImpl(input, { ...init, signal: controller.signal });
+        return { response, abort: () => controller.abort() };
       } catch (cause) {
         lastCause = cause;
       } finally {
@@ -203,9 +219,13 @@ export class GitHubProviderIdentityResolver {
 
 /**
  * Whether a GitHub 403 is transient: a rate limit, or an error body that does
- * not arrive within the request timeout (the fetch timer no longer covers it).
+ * not arrive within the request timeout. A stalled body read is aborted.
  */
-async function isTransientForbidden(response: Response, timeoutMs: number): Promise<boolean> {
+async function isTransientForbidden(
+  response: Response,
+  abort: () => void,
+  timeoutMs: number
+): Promise<boolean> {
   if (response.headers.get("X-RateLimit-Remaining") === "0") return true;
   if (response.headers.has("Retry-After")) return true;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -214,7 +234,10 @@ async function isTransientForbidden(response: Response, timeoutMs: number): Prom
   });
   try {
     const body = await Promise.race([response.json(), timedOut]);
-    if (body === ERROR_BODY_TIMED_OUT) return true;
+    if (body === ERROR_BODY_TIMED_OUT) {
+      abort();
+      return true;
+    }
     const parsed = githubErrorSchema.safeParse(body);
     return parsed.success && GITHUB_RATE_LIMIT_MESSAGE.test(parsed.data.message);
   } catch {

@@ -260,11 +260,13 @@ describe("GitHubProviderIdentityResolver", () => {
     });
   });
 
-  it("does not wait on a stalled GitHub error body", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+  it("aborts the request instead of waiting on a stalled GitHub error body", async () => {
+    let emailSignal: AbortSignal | null | undefined;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input, init) => {
       if (String(input) === "https://api.github.com/user") {
         return Response.json({ id: 583_231, login: "octocat" });
       }
+      emailSignal = init?.signal;
       return new Response(new ReadableStream({ start() {} }), { status: 403 });
     });
     const logger = { error: vi.fn() };
@@ -277,6 +279,7 @@ describe("GitHubProviderIdentityResolver", () => {
     await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
       failure: "provider_unavailable",
     });
+    expect(emailSignal?.aborted).toBe(true);
   });
 
   it("logs the GitHub status when the email lookup fails for another reason", async () => {
