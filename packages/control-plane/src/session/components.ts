@@ -24,7 +24,7 @@
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
-import { generateId, hashToken, encryptToken } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
@@ -59,7 +59,7 @@ import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
-import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
+import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -271,7 +271,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Secrets-at-rest encryption is not optional. Every consumer below takes
   // the validated key, so no fallback path can persist a secret in plaintext.
   const repoSecretsEncryptionKey = requireRepoSecretsEncryptionKey(env);
-  const tokenEncryptionKey = requireTokenEncryptionKey(env);
 
   // The session-scoped logger, created before anything can capture a logger
   // at all. Its `session_id` is injected per emit through the latched
@@ -757,7 +756,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    (token) => encryptToken(token, tokenEncryptionKey),
     generateId
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(

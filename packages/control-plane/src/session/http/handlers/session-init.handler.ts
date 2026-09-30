@@ -57,10 +57,6 @@ const initRequestSchema = z.object({
   scmLogin: z.string().nullable().optional(),
   scmName: z.string().nullable().optional(),
   scmEmail: z.string().nullable().optional(),
-  scmToken: z.string().nullable().optional(),
-  scmTokenEncrypted: z.string().nullable().optional(),
-  scmRefreshTokenEncrypted: z.string().nullable().optional(),
-  scmTokenExpiresAt: z.number().nullable().optional(),
   scmUserId: z.string().nullable().optional(),
   parentSessionId: z.string().nullable().optional(),
   spawnSource: spawnSourceSchema.optional(),
@@ -92,7 +88,6 @@ export class SessionInitHandler {
     private readonly participantRepository: ParticipantRepository,
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
-    private readonly encryptScmToken: (token: string) => Promise<string>,
     private readonly generateId: (bytes?: number) => string,
     private readonly now: () => number = Date.now
   ) {}
@@ -135,20 +130,6 @@ export class SessionInitHandler {
     // spawn, the first prompt spawns through processMessageQueue.
     if (this.sessionCoreRepository.getSession()) {
       return Response.json({ sessionId, status: "created" });
-    }
-
-    // Current SessionInitInput never sends token fields. Accept them here only
-    // so already-running pre-cutover producers remain readable.
-    let encryptedToken = body.scmTokenEncrypted ?? null;
-    if (body.scmToken) {
-      try {
-        encryptedToken = await this.encryptScmToken(body.scmToken);
-        log.debug("Encrypted SCM token for storage");
-      } catch (error) {
-        log.error("Failed to encrypt SCM token", {
-          error: error instanceof Error ? error : String(error),
-        });
-      }
     }
 
     const model = getValidModelOrDefault(body.model);
@@ -253,9 +234,6 @@ export class SessionInitHandler {
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: encryptedToken,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
         role: "owner",
         joinedAt: now,
       });

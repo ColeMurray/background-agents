@@ -9,17 +9,13 @@ const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
   userId: z.string().optional(),
   canonicalUserId: z.string().min(1),
   scmUserId: nullableOptionalString,
-  scmTokenEncrypted: nullableOptionalString,
-  scmRefreshTokenEncrypted: nullableOptionalString,
-  scmTokenExpiresAt: z.number().nullable().optional(),
 });
 
 type GenerateWsTokenRequest = z.infer<typeof generateWsTokenRequestSchema>;
 
 /**
  * HTTP boundary for WS-token minting: upserts the requesting participant and
- * rotates their WebSocket token. Token inputs remain only for pre-cutover
- * internal callers; current router requests send identity/display fields.
+ * rotates their WebSocket token. OAuth grants are held only by Better Auth.
  */
 export class WsTokenHandler {
   constructor(
@@ -52,36 +48,12 @@ export class WsTokenHandler {
     let participant = this.repository.getParticipantByUserId(body.userId);
 
     if (participant) {
-      // Only accept client tokens if they're newer than what we have in the DB.
-      // The server-side refresh may have rotated tokens, and the client could
-      // be sending stale values from an old session cookie.
-      const clientExpiresAt = body.scmTokenExpiresAt ?? null;
-      const dbExpiresAt = participant.scm_token_expires_at;
-      const clientSentAnyToken =
-        body.scmTokenEncrypted != null || body.scmRefreshTokenEncrypted != null;
-
-      const shouldUpdateTokens =
-        clientSentAnyToken &&
-        (dbExpiresAt == null || (clientExpiresAt != null && clientExpiresAt > dbExpiresAt));
-
-      // If we already have a refresh token (server-side refresh may rotate it),
-      // only accept an incoming refresh token when we're also accepting the
-      // access token update, or when we don't have one yet.
-      const shouldUpdateRefreshToken =
-        body.scmRefreshTokenEncrypted != null &&
-        (participant.scm_refresh_token_encrypted == null || shouldUpdateTokens);
-
       this.repository.updateParticipantCoalesce(participant.id, {
         canonicalUserId: body.canonicalUserId,
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: shouldUpdateTokens ? (body.scmTokenEncrypted ?? null) : null,
-        scmRefreshTokenEncrypted: shouldUpdateRefreshToken
-          ? (body.scmRefreshTokenEncrypted ?? null)
-          : null,
-        scmTokenExpiresAt: shouldUpdateTokens ? clientExpiresAt : null,
       });
     } else {
       const id = this.generateId();
@@ -93,9 +65,6 @@ export class WsTokenHandler {
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: body.scmTokenEncrypted ?? null,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
         role: "member",
         joinedAt: now,
       });
