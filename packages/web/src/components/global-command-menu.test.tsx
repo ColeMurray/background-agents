@@ -81,6 +81,32 @@ describe("GlobalCommandMenu", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses a readable neutral highlight for pointer and keyboard selection", async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    const newSession = screen.getByRole("option", { name: /New session/ });
+    const home = screen.getByRole("option", { name: /Home/ });
+
+    await user.hover(home);
+
+    expect(home).toHaveAttribute("aria-selected", "true");
+    expect(home).toHaveClass(
+      "data-[selected=true]:bg-muted",
+      "data-[selected=true]:text-foreground"
+    );
+    expect(home).not.toHaveClass("data-[selected=true]:bg-accent");
+
+    await user.keyboard("{ArrowUp}");
+
+    expect(newSession).toHaveAttribute("aria-selected", "true");
+    expect(newSession).toHaveClass(
+      "data-[selected=true]:bg-muted",
+      "data-[selected=true]:text-foreground"
+    );
+    expect(screen.getByText("Start a coding session")).toHaveClass("text-muted-foreground");
+    expect(screen.getByText("Cmd/Ctrl+Shift+O")).toHaveClass("text-muted-foreground");
+  });
+
   it("omits session creation destinations without session creation permission", () => {
     mocks.allowedPermissions = new Set();
 
