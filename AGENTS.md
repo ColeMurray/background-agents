@@ -1,5 +1,28 @@
 # AGENTS.md
 
+## Skyward fork
+
+This is `Skyward-AI/background-agents`, a fork of `ColeMurray/background-agents`. Work lands on
+`skyward` (the default branch). `main` mirrors `upstream/main` and never gets our commits. Open pull
+requests against `Skyward-AI/background-agents` base `skyward`, never against upstream.
+
+Clone setup:
+
+```bash
+git remote add upstream https://github.com/ColeMurray/background-agents.git
+git remote set-url --push upstream NO_PUSH_TO_UPSTREAM
+gh repo set-default Skyward-AI/background-agents
+git config rerere.enabled true && git config rerere.autoupdate true
+```
+
+Pull upstream changes and replay ours on top:
+
+```bash
+git fetch upstream
+git checkout main && git merge --ff-only upstream/main && git push origin main
+git checkout skyward && git rebase main && git push --force-with-lease origin skyward
+```
+
 Open-Inspect is a background coding agent system that spawns sandboxed dev environments to work on
 GitHub repositories. Single-tenant design. Stack: Cloudflare Workers (TypeScript), Modal (Python),
 Next.js (React), Terraform.
