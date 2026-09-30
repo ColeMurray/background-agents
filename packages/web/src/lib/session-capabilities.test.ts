@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { resolveSessionCapabilities } from "./session-capabilities";
+import type { SessionCapabilities } from "@open-inspect/shared";
+
+const SERVER_CAPABILITIES: SessionCapabilities = {
+  canRead: true,
+  canCollaborate: false,
+  canManageLifecycle: false,
+  canDelete: false,
+  canMove: true,
+  canSandbox: false,
+  canManageCollaborators: true,
+  canChangeVisibility: true,
+};
 
 describe("resolveSessionCapabilities", () => {
   it.each([
@@ -25,6 +37,10 @@ describe("resolveSessionCapabilities", () => {
       read: true,
       collaborate: false,
       lifecycle: false,
+      delete: false,
+      move: false,
+      manageCollaborators: false,
+      changeVisibility: false,
       sandboxAccess: false,
       exportTrace: false,
     });
@@ -46,8 +62,61 @@ describe("resolveSessionCapabilities", () => {
       read: false,
       collaborate: false,
       lifecycle: false,
+      delete: false,
+      move: false,
+      manageCollaborators: false,
+      changeVisibility: false,
       sandboxAccess: false,
       exportTrace: false,
     });
+  });
+
+  it("uses server decisions rather than workspace permissions for session controls", () => {
+    expect(resolveSessionCapabilities(SERVER_CAPABILITIES, true)).toEqual({
+      read: true,
+      collaborate: false,
+      lifecycle: false,
+      delete: false,
+      move: true,
+      sandboxAccess: false,
+      manageCollaborators: true,
+      changeVisibility: true,
+      exportTrace: true,
+    });
+  });
+
+  it("disables session controls when capabilities are absent even for an administrator", () => {
+    expect(resolveSessionCapabilities(undefined, true)).toEqual({
+      read: false,
+      collaborate: false,
+      lifecycle: false,
+      delete: false,
+      move: false,
+      sandboxAccess: false,
+      manageCollaborators: false,
+      changeVisibility: false,
+      exportTrace: false,
+    });
+  });
+  it("does not grant trace export without the global permission", () => {
+    expect(resolveSessionCapabilities(SERVER_CAPABILITIES, false).exportTrace).toBe(false);
+  });
+
+  it("denies all actions without session read even when every action is granted", () => {
+    expect(
+      resolveSessionCapabilities(
+        {
+          canRead: false,
+          canCollaborate: true,
+          canManageLifecycle: true,
+          canDelete: true,
+          canMove: true,
+          canManageCollaborators: true,
+          canChangeVisibility: true,
+          canSandbox: true,
+        },
+        true
+      )
+    ).toEqual(resolveSessionCapabilities(undefined));
   });
 });

@@ -51,6 +51,7 @@ export function SessionDetailsOverlay({
   capabilities,
   activeTab,
   onTabChange,
+  scope,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -183,6 +184,7 @@ export function SessionDetailsOverlay({
       capabilities={capabilities}
       activeTab={activeTab}
       onTabChange={onTabChange}
+      scope={scope}
     />
   );
 

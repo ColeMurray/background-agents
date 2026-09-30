@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
@@ -125,6 +125,12 @@ export function useSessionSocket(
     initialSnapshot,
     createSessionSocketState
   );
+  const [previousSnapshot, setPreviousSnapshot] = useState(initialSnapshot);
+  if (previousSnapshot !== initialSnapshot) {
+    setPreviousSnapshot(initialSnapshot);
+    // Scope writes refresh HTTP authorization without replacing the live timeline.
+    dispatch({ type: "snapshot_refreshed", session: initialSnapshot.session });
+  }
   const { hasPermission } = useCurrentUserAuthorization();
   const capabilities = resolveSessionCapabilities(
     cachedState.sessionState?.capabilities,

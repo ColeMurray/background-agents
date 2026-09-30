@@ -71,6 +71,8 @@ export const initialSessionSocketState: SessionSocketState = {
 };
 
 export type SessionSocketAction =
+  /** Refreshed HTTP scope/authorization; streamed content remains authoritative. */
+  | { type: "snapshot_refreshed"; session: SessionState }
   /** Any server message except sandbox_event, which is normalized first. */
   | { type: "server_message"; message: Exclude<ServerMessage, { type: "sandbox_event" }> }
   /** Live sandbox events, already passed through token buffering. */
@@ -353,6 +355,16 @@ export function sessionSocketReducer(
   action: SessionSocketAction
 ): SessionSocketState {
   switch (action.type) {
+    case "snapshot_refreshed":
+      return updateSessionState(state, (session) => ({
+        ...session,
+        capabilities: action.session.capabilities,
+        ownerTeamId: action.session.ownerTeamId,
+        ownerUserId: action.session.ownerUserId,
+        visibility: action.session.visibility,
+        collaborators: action.session.collaborators,
+      }));
+
     case "server_message":
       return reduceServerMessage(state, action.message);
 

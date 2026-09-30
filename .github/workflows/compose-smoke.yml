@@ -119,9 +119,9 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         run: npm ci
 
-      - name: Test smoke change detection
+      - name: Test smoke tooling
         if: steps.changes.outputs.run == 'true'
-        run: node --test scripts/compose-smoke-paths.test.mjs
+        run: node --test scripts/compose-smoke-paths.test.mjs scripts/compose-smoke.test.mjs
 
       - name: Build shared package
         if: steps.changes.outputs.run == 'true'

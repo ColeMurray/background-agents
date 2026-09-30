@@ -6,6 +6,15 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Added
 
+Teams now have a searchable directory with favorites, member lists, session overviews, and
+visibility-filtered activity. Active users can browse team names and memberships; a team's work
+remains restricted to members and administrators. Workspace audit readers can filter events by team.
+Session details show the owning team and visibility, with server-authorized controls to move
+sessions, change visibility, and manage private-session collaborators, including child-session
+cascades. Archived team metadata and member lists remain visible only to team members and workspace
+administrators. Team activity shows domain operations; HTTP authorization decisions remain in the
+permission-gated workspace audit log.
+
 **Team-aware session discovery and creation.** Following the team and visibility APIs, the web app
 now supports team selection and scoped session discovery. Inbox snapshot and paged reads accept
 ownership, visibility, and workspace scope filters and return effective server capabilities for

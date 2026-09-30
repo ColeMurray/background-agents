@@ -22,6 +22,7 @@ export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 
 const sessionStateSchema = z.object({
   id: z.string(),
+  ownerUserId: z.string().nullable().optional(),
   ownerTeamId: z.string().nullable().optional(),
   visibility: sessionVisibilitySchema.optional(),
   collaborators: z.array(z.string()).optional(),

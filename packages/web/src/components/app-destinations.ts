@@ -5,6 +5,7 @@ import {
   SettingsIcon,
 } from "@/components/ui/icons";
 import { SESSIONS_PATH } from "@/lib/session-discovery";
+import { TeamsIcon } from "@/components/teams/teams-icon";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ComponentType } from "react";
 
@@ -33,6 +34,13 @@ const SESSIONS_DESTINATION = {
 
 export const PRIMARY_APP_DESTINATIONS = [
   SESSIONS_DESTINATION,
+  {
+    label: "Teams",
+    description: "Browse teams, members, and shared work",
+    href: "/teams",
+    icon: TeamsIcon,
+    requiredPermission: "sessions.read",
+  },
   {
     label: "Automations",
     description: "Manage scheduled and event-triggered work",

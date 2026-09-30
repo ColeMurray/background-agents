@@ -297,7 +297,7 @@ export function SessionSidebar({
           </div>
         </div>
         <div className="px-4 pb-2 empty:hidden">
-          <TeamSwitcher />
+          <TeamSwitcher onNavigate={handleNavigationSelect} />
         </div>
       </div>
 

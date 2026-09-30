@@ -615,6 +615,46 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     }
   });
 
+  it("admits team directory reads but conceals member tabs and denies capabilities in every mode", async () => {
+    const observed: string[] = [];
+    for (const mode of ["off", "shadow", "on"] as const) {
+      for (const route of routes.filter(
+        (item) => isTeamRoute(item) && item.authorization.kind === "active-user"
+      )) {
+        if (route.authorization.kind !== "active-user") throw new Error("Missing team policy");
+        const requirement = route.authorization.allOf.find((entry) => entry.kind === "team");
+        if (!requirement || requirement.kind !== "team")
+          throw new Error("Missing team requirement");
+        const url = `${BASE}${materialize(route, { id: fixtures.teamId, userId: TEAM_VIEWER })}`;
+        const headers = await serviceRequestHeaders(url, {
+          method: route.method,
+          as: { userId: OTHER_MEMBER, role: "member" },
+        });
+        const response = await handle(
+          new Request(url, { method: route.method, headers }),
+          createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: mode }),
+          createExecutionContext()
+        );
+        const expected =
+          requirement.need === "read" || requirement.need === "canJoin"
+            ? 200
+            : requirement.need === "member"
+              ? 404
+              : 403;
+        const identity = `${route.method} ${route.path}`;
+        observed.push(`${identity} ${mode}/nonmember=${response.status}`);
+        expect(response.status, identity).toBe(expected);
+        if (expected === 403)
+          await expect(response.json()).resolves.toMatchObject({
+            reason_code: "team_capability_required",
+          });
+        if (expected === 404)
+          await expect(response.json()).resolves.toEqual({ error: "Team not found" });
+      }
+    }
+    expect(observed).toMatchSnapshot();
+  });
+
   it("conceals all team item routes from another team before any handler or DO call", async () => {
     const get = vi.fn(() => {
       throw new Error("Denied route reached the Durable Object");

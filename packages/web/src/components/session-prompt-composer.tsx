@@ -17,6 +17,7 @@ import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion"
 import type { ModelCategory, ReasoningEffort, ValidModel } from "@open-inspect/shared/models";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SessionScopeControls } from "@/lib/session-scope";
 
 type SessionPromptComposerProps = {
   session: {
@@ -27,6 +28,7 @@ type SessionPromptComposerProps = {
     onArchive: () => void | Promise<void>;
     onUnarchive: () => void | Promise<void>;
     capabilities: SessionCapabilities;
+    scope?: SessionScopeControls;
     /** Agent harness the session runs on; fixed at create. */
     harness: HarnessId;
   };
@@ -112,6 +114,7 @@ export function SessionPromptComposer({
             onArchive={session.onArchive}
             onUnarchive={session.onUnarchive}
             capabilities={session.capabilities}
+            scope={session.scope}
           />
         </div>
 

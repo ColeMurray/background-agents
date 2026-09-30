@@ -16,6 +16,8 @@ import { toast } from "sonner";
 import { GitPrIcon, CopyIcon, CheckIcon, ErrorIcon, RefreshIcon } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 import { prBadgeVariant } from "@/components/ui/badge-variants";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import { useTeam } from "@/hooks/use-teams";
 import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { DetailsSection, PropertyList, PropertyRow } from "./details-section";
 
@@ -43,6 +45,8 @@ interface MetadataSectionProps {
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
   canManageLifecycle: boolean;
+  ownerTeamId?: string | null;
+  visibility?: SessionVisibility;
   /** Extra rows for the run property list, such as the session cost. */
   children?: ReactNode;
 }
@@ -150,6 +154,8 @@ export function MetadataSection({
   warnings = [],
   parentSessionId,
   canManageLifecycle,
+  ownerTeamId,
+  visibility,
   children,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
@@ -197,6 +203,16 @@ export function MetadataSection({
               {started === "now" ? "Just now" : `${started} ago`}
             </span>
           </PropertyRow>
+          {ownerTeamId !== undefined && (
+            <PropertyRow label="Team">
+              {ownerTeamId ? <OwningTeam id={ownerTeamId} /> : <span>Workspace (no team)</span>}
+            </PropertyRow>
+          )}
+          {visibility && (
+            <PropertyRow label="Visibility">
+              <span className="capitalize">{visibility}</span>
+            </PropertyRow>
+          )}
           {model && (
             <PropertyRow label="Model">
               {formatModelName(model)}
@@ -431,5 +447,23 @@ export function MetadataSection({
         </div>
       )}
     </div>
+  );
+}
+
+function OwningTeam({ id }: { id: string }) {
+  const { team, loading, error } = useTeam(id);
+  if (!team || error)
+    return (
+      <span className="text-muted-foreground">
+        {loading ? "Loading team..." : "Team unavailable"}
+      </span>
+    );
+  return (
+    <Link
+      href={`/teams/${encodeURIComponent(team.slug)}`}
+      className="truncate text-accent hover:underline"
+    >
+      {team.name}
+    </Link>
   );
 }

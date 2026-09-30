@@ -1,7 +1,8 @@
 "use client";
 
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
+import { MoveSessionDialog } from "@/components/move-session-dialog";
 import type { ResolvedSandboxStatus } from "@/components/session-header";
 import {
   resolveSessionActions,
@@ -49,6 +50,7 @@ export function MobileSessionActions({
   sandbox,
   ...actions
 }: MobileSessionActionsProps) {
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
   const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
     actions.artifacts,
     actions.primaryRepo
@@ -153,6 +155,14 @@ export function MobileSessionActions({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
+            {actions.scope && (
+              <DropdownMenuItem
+                disabled={!actions.capabilities.move}
+                onClick={() => setShowMoveDialog(true)}
+              >
+                Move to team
+              </DropdownMenuItem>
+            )}
             {actions.capabilities.lifecycle && <DropdownMenuSeparator />}
             {actions.capabilities.lifecycle && (
               <DropdownMenuItem
@@ -172,6 +182,15 @@ export function MobileSessionActions({
           open={controls.showArchiveDialog}
           onOpenChange={controls.setShowArchiveDialog}
           onConfirm={controls.handleConfirmArchive}
+        />
+      )}
+      {actions.scope && (
+        <MoveSessionDialog
+          {...actions.scope}
+          sessionId={actions.sessionId}
+          canMove={actions.capabilities.move}
+          open={showMoveDialog}
+          onOpenChange={setShowMoveDialog}
         />
       )}
     </>

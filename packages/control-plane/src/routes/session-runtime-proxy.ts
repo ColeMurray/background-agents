@@ -206,6 +206,7 @@ async function handleSessionSnapshot(
   const snapshot = sandboxAllowed ? parsed.data : redactSessionSnapshotSandboxAccess(parsed.data);
   snapshot.session = {
     ...snapshot.session,
+    ownerUserId: row.userId ?? null,
     ownerTeamId: row.ownerTeamId,
     visibility: row.visibility,
     collaborators: [...collaborators],

@@ -11,6 +11,7 @@ import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
+import { ActionBar } from "@/components/action-bar";
 import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
@@ -56,7 +57,7 @@ import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
 import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { useSessionSnapshot } from "./session-snapshot-provider";
+import { useSessionSnapshot, useRefreshSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
@@ -81,7 +82,18 @@ function SessionContent({
   socket: ReturnType<typeof useSessionSocket>;
 }) {
   const { shortcuts } = useKeyboardShortcuts();
+  const refreshSnapshot = useRefreshSessionSnapshot();
   const sessionId = initialSnapshot.session.id;
+  const scope =
+    initialSnapshot.session.visibility === undefined
+      ? undefined
+      : {
+          ownerTeamId: initialSnapshot.session.ownerTeamId ?? null,
+          ownerUserId: initialSnapshot.session.ownerUserId ?? null,
+          visibility: initialSnapshot.session.visibility,
+          collaborators: initialSnapshot.session.collaborators ?? [],
+          onUpdated: refreshSnapshot,
+        };
   const {
     capabilities,
     connected,
@@ -351,6 +363,20 @@ function SessionContent({
         onRemove={handleRemoveQueuedPrompt}
         capabilities={capabilities}
       />
+      {!capabilities.collaborate && capabilities.read && (
+        <div className="hidden border-t border-border-muted p-4 md:block">
+          <ActionBar
+            sessionId={sessionId}
+            sessionStatus={sessionState?.status ?? DEFAULT_SESSION_STATUS}
+            artifacts={artifacts}
+            primaryRepo={primaryRepo}
+            onArchive={handleArchive}
+            onUnarchive={handleUnarchive}
+            capabilities={capabilities}
+            scope={scope}
+          />
+        </div>
+      )}
       {capabilities.collaborate && (
         <SessionPromptComposer
           session={{
@@ -361,6 +387,7 @@ function SessionContent({
             onArchive: handleArchive,
             onUnarchive: handleUnarchive,
             capabilities,
+            scope,
             harness: sessionHarness,
           }}
           prompt={{
@@ -434,6 +461,7 @@ function SessionContent({
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
           capabilities,
+          scope,
         }}
         optimisticTitle={optimisticTitle}
         renameSession={renameSession}
@@ -486,6 +514,7 @@ function SessionContent({
                 activeTab={inspectorTab}
                 onTabChange={selectInspectorTab}
                 capabilities={capabilities}
+                scope={scope}
               />
             }
             changes={
@@ -523,6 +552,7 @@ function SessionContent({
               activeTab={inspectorTab}
               onTabChange={selectInspectorTab}
               capabilities={capabilities}
+              scope={scope}
             />
           </>
         )}
@@ -551,6 +581,7 @@ function SessionContent({
           activeTab={inspectorTab}
           onTabChange={selectInspectorTab}
           capabilities={capabilities}
+          scope={scope}
         />
       )}
 

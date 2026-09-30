@@ -31,6 +31,7 @@ import {
   subscribeSessionReadStateReconciliation,
   type SessionReadStateReconciledDetail,
 } from "@/lib/session-read-state";
+import { subscribeSessionScopeChanges } from "@/lib/session-scope";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
 const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
@@ -46,6 +47,7 @@ interface AdditionalPagesState {
 
 interface PaginationRequest {
   filterIdentity: string;
+  generation: number;
   key: PaginationKey;
 }
 
@@ -65,14 +67,19 @@ function useCategoryPagination(
     pages: [],
   });
   const [paginationRequest, setPaginationRequest] = useState<PaginationRequest | null>(null);
+  const paginationGeneration = useRef(0);
   const firstPage = snapshot?.categories[category];
   const additionalPages =
     additionalPagesState.filterIdentity === filterIdentity ? additionalPagesState.pages : [];
 
-  useEffect(() => {
+  const resetRetainedPages = useCallback(() => {
+    paginationGeneration.current += 1;
     setAdditionalPagesState({ filterIdentity, pages: [] });
     setPaginationRequest(null);
   }, [filterIdentity]);
+
+  useEffect(resetRetainedPages, [resetRetainedPages]);
+  useEffect(() => subscribeSessionScopeChanges(resetRetainedPages), [resetRetainedPages]);
 
   useEffect(() => {
     setAdditionalPagesState((state) => {
@@ -94,7 +101,9 @@ function useCategoryPagination(
     isLoading: loadingMore,
     mutate: retryPage,
   } = useSWR<SessionInboxPage>(
-    paginationRequest ? [paginationRequest.key, paginationRequest.filterIdentity] : null,
+    paginationRequest
+      ? [paginationRequest.key, paginationRequest.filterIdentity, paginationRequest.generation]
+      : null,
     paginationRequest
       ? () => {
           if (!fetcher) throw new Error("Missing SWR fetcher");
@@ -106,7 +115,10 @@ function useCategoryPagination(
 
   useEffect(() => {
     if (!loadedPage || !paginationRequest) return;
-    if (paginationRequest.filterIdentity === filterIdentity) {
+    if (
+      paginationRequest.filterIdentity === filterIdentity &&
+      paginationRequest.generation === paginationGeneration.current
+    ) {
       const sequence = nextPageSequence.current++;
       const page = {
         ...loadedPage,
@@ -129,6 +141,7 @@ function useCategoryPagination(
     if (!snapshot || !lastPage?.nextCursor || paginationRequest) return;
     setPaginationRequest({
       filterIdentity,
+      generation: paginationGeneration.current,
       key: buildSessionInboxKey({
         category,
         cursor: lastPage.nextCursor,
@@ -164,11 +177,6 @@ function useCategoryPagination(
     },
     []
   );
-  const resetRetainedPages = useCallback(() => {
-    setAdditionalPagesState({ filterIdentity, pages: [] });
-    setPaginationRequest(null);
-  }, [filterIdentity]);
-
   return {
     firstPageItems: firstPage?.items ?? [],
     additionalPages,

@@ -46,7 +46,7 @@ export type RouteAuthorizationRequirement =
       operation: "manage" | "trigger";
       automationIdParam: string;
     }
-  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" }
+  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
 type BotServiceName = Exclude<ServiceName, "web">;
@@ -185,7 +185,7 @@ export function requireAutomation(
 }
 
 export function requireTeam(
-  need: keyof TeamCapabilities | "read",
+  need: keyof TeamCapabilities | "read" | "member",
   teamIdParam = "id"
 ): RouteAuthorization {
   return {

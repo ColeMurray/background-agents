@@ -24,13 +24,24 @@ export class SessionCollaboratorStore {
     return rows.results.map((row) => collaboratorSchema.parse(row).session_id);
   }
 
-  async listForSessions(sessionIds: readonly string[]): Promise<ReadonlyMap<string, string[]>> {
+  async listForSessions(
+    sessionIds: readonly string[],
+    options: { privateOnly?: boolean } = {}
+  ): Promise<ReadonlyMap<string, string[]>> {
     const result = new Map<string, string[]>();
+    const privateFilter = options.privateOnly
+      ? `AND EXISTS (
+           SELECT 1 FROM sessions
+           WHERE sessions.id = session_collaborators.session_id AND sessions.visibility = 'private'
+         )`
+      : "";
     for (let offset = 0; offset < sessionIds.length; offset += MAX_D1_QUERY_PARAMETERS) {
       const ids = sessionIds.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
       const rows = await this.db
         .prepare(
-          `SELECT session_id, user_id FROM session_collaborators WHERE session_id IN (${ids.map(() => "?").join(", ")})`
+          `SELECT session_id, user_id FROM session_collaborators
+           WHERE session_id IN (${ids.map(() => "?").join(", ")})
+           ${privateFilter}`
         )
         .bind(...ids)
         .all();

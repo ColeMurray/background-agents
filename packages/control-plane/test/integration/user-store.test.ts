@@ -18,6 +18,38 @@ describe("UserStore", () => {
     store = new UserStore(env.DB);
   });
 
+  describe("listCollaboratorCandidates", () => {
+    it("returns an empty list when there are no active users", async () => {
+      expect(await store.listCollaboratorCandidates()).toEqual([]);
+    });
+
+    it("returns only active picker identities ordered by name with email fallback", async () => {
+      const zed = await store.createUser({ displayName: "zed" });
+      const alice = await store.createUser({
+        displayName: "ALICE",
+        avatarUrl: "https://example.com/alice.png",
+      });
+      const bob = await store.createUser({ email: "bob@example.com" });
+      const suspended = await store.createUser({ displayName: "Suspended" });
+      const unassigned = await store.createUser({ displayName: "Unassigned" });
+      await env.DB.batch([
+        env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(suspended.id),
+        env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(unassigned.id),
+      ]);
+
+      expect(await store.listCollaboratorCandidates()).toEqual([
+        {
+          userId: alice.id,
+          displayName: "ALICE",
+          email: null,
+          avatarUrl: "https://example.com/alice.png",
+        },
+        { userId: bob.id, displayName: null, email: "bob@example.com", avatarUrl: null },
+        { userId: zed.id, displayName: "zed", email: null, avatarUrl: null },
+      ]);
+    });
+  });
+
   // ── resolveOrCreateUser ─────────────────────────────────────────
 
   describe("resolveOrCreateUser", () => {

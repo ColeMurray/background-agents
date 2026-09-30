@@ -10,6 +10,7 @@ import { SessionScopeStore } from "../db/session-scope-store";
 import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamStore } from "../db/teams";
+import { UserStore } from "../db/user-store";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
@@ -280,11 +281,24 @@ async function changeCollaborator(
   });
 }
 
+async function listCollaboratorCandidates(
+  _request: Request,
+  _env: Env,
+  _params: { id: string },
+  ctx: RequestContext
+) {
+  return json(await new UserStore(ctx.db).listCollaboratorCandidates());
+}
+
 export const sessionScopeRoutes = new Hono<ControlPlaneHonoEnv>();
-const always = (action: "changeVisibility" | "move" | "manageCollaborators" | "read") =>
+const always = (
+  action: "changeVisibility" | "move" | "manageCollaborators" | "read",
+  cacheControl?: "private, no-store"
+) =>
   admit({
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requireSession(action, { enforceAlways: true }),
+    cacheControl,
   });
 sessionScopeRoutes.put("/sessions/:id/visibility", always("changeVisibility"), (c) =>
   dispatch(c, changeVisibility)
@@ -295,4 +309,9 @@ sessionScopeRoutes.put("/sessions/:id/collaborators/:userId", always("manageColl
 );
 sessionScopeRoutes.delete("/sessions/:id/collaborators/:userId", always("read"), (c) =>
   dispatch(c, (request, env, params, ctx) => changeCollaborator(request, env, params, ctx, true))
+);
+sessionScopeRoutes.get(
+  "/sessions/:id/collaborator-candidates",
+  always("manageCollaborators", "private, no-store"),
+  (c) => dispatch(c, listCollaboratorCandidates)
 );

@@ -12,9 +12,17 @@ import { SessionDetailsOverlay } from "./session-details-overlay";
 import { SessionRightSidebar } from "./session-right-sidebar";
 import { useSessionInspectorTab } from "@/hooks/use-session-inspector-tab";
 import { resolveSessionCapabilities, type SessionCapabilities } from "@/lib/session-capabilities";
+import type { SessionScopeControls } from "@/lib/session-scope";
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/hooks/use-teams", () => ({
+  useTeam: () => ({ team: { name: "Design", slug: "design" } }),
+  useTeamMembers: () => ({ members: [{ userId: "user_owner" }], loading: false, error: undefined }),
+}));
+vi.mock("@/hooks/use-session-collaborator-candidates", () => ({
+  useSessionCollaboratorCandidates: () => ({ candidates: [], loading: false, error: undefined }),
+}));
 
 vi.mock("swr", () => ({
   default: () => ({ data: undefined }),
@@ -48,6 +56,10 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   lifecycle: true,
   sandboxAccess: true,
   exportTrace: true,
+  delete: true,
+  move: false,
+  manageCollaborators: false,
+  changeVisibility: false,
 };
 
 type SidebarProps = Omit<ComponentProps<typeof SessionRightSidebar>, "activeTab" | "onTabChange">;
@@ -154,6 +166,65 @@ describe("SessionRightSidebar", () => {
     totalCost: 3,
     maxSessionCostUsd: 10,
   };
+
+  it("shows authoritative team and visibility in desktop and mobile details", () => {
+    const scope: SessionScopeControls = {
+      ownerTeamId: "team_design",
+      ownerUserId: "user_owner",
+      visibility: "private",
+      collaborators: ["user_collaborator"],
+      onUpdated: vi.fn().mockResolvedValue(undefined),
+    };
+    const props = {
+      sessionId: "session-1",
+      sessionState,
+      participants: [],
+      presenceSynced: false,
+      events: [],
+      artifacts: [],
+      onOpenMedia: vi.fn(),
+      scope,
+      capabilities: { ...FULL_CAPABILITIES, changeVisibility: true, manageCollaborators: true },
+    };
+    const { rerender } = render(<Sidebar {...props} />);
+    selectTab("Info");
+    expect(screen.getByRole("link", { name: "Design" })).toHaveAttribute("href", "/teams/design");
+    expect(screen.getByText("private")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change visibility" })).toBeInTheDocument();
+    expect(screen.getByText("user_collaborator")).toBeInTheDocument();
+    rerender(<Overlay {...props} open isPhone onOpenChange={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "Design" })).toBeInTheDocument();
+    expect(screen.getByText("user_collaborator")).toBeInTheDocument();
+    rerender(
+      <Overlay {...props} capabilities={FULL_CAPABILITIES} open isPhone onOpenChange={vi.fn()} />
+    );
+    expect(screen.queryByRole("button", { name: "Change visibility" })).not.toBeInTheDocument();
+    expect(screen.queryByText("user_collaborator")).not.toBeInTheDocument();
+  });
+
+  it("never mounts private collaborator management on workspace-visible sessions", () => {
+    render(
+      <Sidebar
+        sessionId="session-1"
+        sessionState={sessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={{ ...FULL_CAPABILITIES, manageCollaborators: true }}
+        scope={{
+          ownerTeamId: null,
+          ownerUserId: "user_owner",
+          visibility: "workspace",
+          collaborators: ["user_secret"],
+          onUpdated: vi.fn(),
+        }}
+      />
+    );
+    expect(screen.getByText("Workspace (no team)")).toBeInTheDocument();
+    expect(screen.queryByText("user_secret")).not.toBeInTheDocument();
+  });
 
   it("hides Download trace from viewers and offers it to exporters in desktop and mobile details", () => {
     const props = {
