@@ -1,6 +1,9 @@
 import { auditEventSchema, type AuditEvent } from "@open-inspect/shared/types/audit-events";
 import type { AuditEventCursor } from "./audit-event-cursor";
 import type { SqlDatabase } from "./sql-database";
+import type { SessionViewer } from "@open-inspect/shared";
+import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
+import { visibleSessionsPredicate } from "./session-visibility";
 
 export interface AuditEventRow {
   id: string;
@@ -36,27 +39,66 @@ export function toAuditEvent(row: AuditEventRow): AuditEvent {
   });
 }
 
-/** Read-only D1 access for the workspace audit log. */
+/** Read-only access for workspace audit and visibility-scoped team activity. */
 export class AuditEventStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list(options: { limit: number; cursor: AuditEventCursor | null }) {
-    const result = options.cursor
-      ? await this.db
-          .prepare(
-            `SELECT * FROM authorization_audit_events
-             WHERE (occurred_at, id) < (?, ?)
-             ORDER BY occurred_at DESC, id DESC LIMIT ?`
+  async list(options: {
+    limit: number;
+    cursor: AuditEventCursor | null;
+    teamId?: string;
+    action?: string;
+    visibilityScope?: { viewer: SessionViewer; mode: TeamsEnforcementMode };
+  }) {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (options.teamId !== undefined) {
+      conditions.push("audit.team_id = ?");
+      params.push(options.teamId);
+    }
+    if (options.action !== undefined) {
+      conditions.push("audit.action = ?");
+      params.push(options.action);
+    }
+    if (options.visibilityScope) {
+      const viewer = options.visibilityScope.viewer;
+      const visible = visibleSessionsPredicate("session", viewer, {
+        mode: options.visibilityScope.mode,
+      });
+      // Session HTTP decisions can reference additional sessions in metadata. Without
+      // structured resource IDs for every reference, omit them from the team feed.
+      conditions.push(`(
+        (audit.resource_type != 'session' AND (
+          audit.resource_type != 'http_route' OR audit.resource_id IS NULL OR NOT (
+            audit.resource_id = '/sessions' OR audit.resource_id LIKE '/sessions/%'
           )
-          .bind(options.cursor.occurredAt, options.cursor.id, options.limit + 1)
-          .all<AuditEventRow>()
-      : await this.db
-          .prepare(
-            `SELECT * FROM authorization_audit_events
-             ORDER BY occurred_at DESC, id DESC LIMIT ?`
+        )) OR (
+          audit.resource_type = 'session' AND EXISTS (
+            SELECT 1 FROM sessions session
+            WHERE session.id = audit.resource_id AND ? = 1 AND ${visible.sql}
           )
-          .bind(options.limit + 1)
-          .all<AuditEventRow>();
+        )
+      )`);
+      params.push(
+        viewer.kind === "service" ||
+          (!viewer.suspended && viewer.permissions.includes("sessions.read"))
+          ? 1
+          : 0,
+        ...visible.params
+      );
+    }
+    if (options.cursor) {
+      conditions.push("(audit.occurred_at, audit.id) < (?, ?)");
+      params.push(options.cursor.occurredAt, options.cursor.id);
+    }
+    const result = await this.db
+      .prepare(
+        `SELECT audit.* FROM authorization_audit_events audit
+         ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY audit.occurred_at DESC, audit.id DESC LIMIT ?`
+      )
+      .bind(...params, options.limit + 1)
+      .all<AuditEventRow>();
 
     const rows = result.results ?? [];
     const hasMore = rows.length > options.limit;

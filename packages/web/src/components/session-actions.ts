@@ -10,6 +10,7 @@ import { listPrArtifacts } from "@/lib/pr-artifacts";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { Artifact } from "@/types/session";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
+import type { SessionScopeControls } from "@/lib/session-scope";
 
 export interface SessionActionProps {
   sessionId: string;
@@ -20,6 +21,7 @@ export interface SessionActionProps {
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
   capabilities: SessionCapabilities;
+  scope?: SessionScopeControls;
 }
 
 /** One PR a session-level action can open, ready to render as a link. */

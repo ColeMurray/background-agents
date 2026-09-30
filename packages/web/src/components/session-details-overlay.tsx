@@ -49,6 +49,7 @@ export function SessionDetailsOverlay({
   onOpenDiff,
   canManageBudget,
   capabilities,
+  scope,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -179,6 +180,7 @@ export function SessionDetailsOverlay({
       onOpenDiff={onOpenDiff}
       canManageBudget={canManageBudget}
       capabilities={capabilities}
+      scope={scope}
     />
   );
 

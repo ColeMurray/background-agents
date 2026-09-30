@@ -6,6 +6,7 @@ import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-sh
 import type { SandboxStatus as SandboxStatusValue } from "@open-inspect/shared/types/sessions";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { MobileSessionActions } from "@/components/mobile-session-actions";
+import { ActionBar } from "@/components/action-bar";
 import type { SessionActionProps } from "@/components/session-actions";
 import {
   BoxIcon,
@@ -289,6 +290,11 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
+          {!capabilities.collaborate && (
+            <div className="hidden md:block">
+              <ActionBar {...actions} />
+            </div>
+          )}
           <div className="hidden items-center gap-1 md:flex">
             {capabilities.read && (
               <ConnectionStatusIcon

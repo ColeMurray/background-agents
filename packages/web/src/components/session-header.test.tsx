@@ -31,6 +31,10 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   read: true,
   collaborate: true,
   lifecycle: true,
+  delete: false,
+  move: false,
+  manageCollaborators: false,
+  changeVisibility: false,
   sandboxAccess: true,
   exportTrace: true,
 };
@@ -141,6 +145,10 @@ describe("SessionHeader", () => {
           read: false,
           collaborate: false,
           lifecycle: false,
+          delete: false,
+          move: false,
+          manageCollaborators: false,
+          changeVisibility: false,
           sandboxAccess: false,
           exportTrace: false,
         }}
@@ -954,7 +962,17 @@ describe("SessionHeader mobile presentation", () => {
       }),
       {},
       undefined,
-      { read: true, collaborate: false, lifecycle: false, sandboxAccess: false, exportTrace: false }
+      {
+        read: true,
+        collaborate: false,
+        lifecycle: false,
+        delete: false,
+        move: false,
+        manageCollaborators: false,
+        changeVisibility: false,
+        sandboxAccess: false,
+        exportTrace: false,
+      }
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {

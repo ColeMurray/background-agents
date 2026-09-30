@@ -22,7 +22,26 @@ const hook = vi.hoisted(() => ({
   retry: vi.fn(),
 }));
 
-vi.mock("@/hooks/use-audit-events", () => ({ useAuditEvents: () => hook }));
+const filters = vi.hoisted(() => ({ audit: vi.fn(), allowed: true }));
+vi.mock("@/hooks/use-audit-events", () => ({
+  useAuditEvents: (...args: unknown[]) => {
+    filters.audit(...args);
+    return hook;
+  },
+}));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => filters.allowed }),
+}));
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({
+    teams: [
+      { id: "team_one", name: "Design", archivedAt: null },
+      { id: "team_two", name: "Engineering", archivedAt: null },
+    ],
+    loading: false,
+    error: null,
+  }),
+}));
 
 const scrollIntoView = vi.fn();
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -86,6 +105,8 @@ function renderSingle(event: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  filters.allowed = true;
+  filters.audit.mockReset();
   Object.assign(hook, {
     events: [],
     loading: false,
@@ -104,6 +125,19 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("AuditLogSettings", () => {
+  it("filters workspace audit events by a membership team", async () => {
+    render(<AuditLogSettings />);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Team" }), "team_two");
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_two", enabled: true });
+  });
+
+  it("withholds the feed and filters without the existing audit permission", () => {
+    filters.allowed = false;
+    render(<AuditLogSettings />);
+    expect(screen.queryByRole("combobox", { name: "Team" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+  });
   it("shows a team creation as an applied operation", () => {
     const article = renderSingle(createEvent("applied", { action: "team.created" }));
     expect(article.getByText("Team created")).toBeInTheDocument();

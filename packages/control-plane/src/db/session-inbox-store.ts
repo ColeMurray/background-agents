@@ -1,9 +1,9 @@
 import {
   SESSION_INBOX_CATEGORIES,
   type SessionInboxCategory,
-  type SessionInboxItem,
   type SessionInboxSession,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { visibleSessionsPredicate, type SessionReadScope } from "./session-visibility";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
@@ -27,15 +27,27 @@ export interface ListSessionInboxOptions {
 }
 
 export interface ListSessionInboxResult {
-  items: SessionInboxItem[];
+  items: Array<{
+    rootSession: ScopedInboxSession;
+    descendantSessions: ScopedInboxSession[];
+  }>;
   hasMore: boolean;
   nextCursor: SessionInboxCursor | null;
 }
+
+export type ScopedInboxSession = SessionInboxSession & {
+  userId: string | null;
+  ownerTeamId: string | null;
+  visibility: SessionVisibility;
+};
 
 export type ListSessionInboxSnapshotResult = Record<SessionInboxCategory, ListSessionInboxResult>;
 
 interface InboxSessionRow extends ViewerReadStateRow {
   id: string;
+  user_id: string | null;
+  owner_team_id: string | null;
+  visibility: SessionVisibility;
   title: string | null;
   repo_owner: string | null;
   repo_name: string | null;
@@ -58,9 +70,12 @@ interface InboxPageData {
   nextCursor: SessionInboxCursor | null;
 }
 
-function toListItem(row: InboxSessionRow): SessionInboxSession {
+function toListItem(row: InboxSessionRow): ScopedInboxSession {
   return {
     id: row.id,
+    userId: row.user_id,
+    ownerTeamId: row.owner_team_id,
+    visibility: row.visibility,
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
@@ -322,7 +337,7 @@ export class SessionInboxStore {
   /** Replace selected D1 rows with their metadata-enriched list items. */
   private assemblePage(
     page: InboxPageData,
-    sessionsById: Map<string, SessionInboxSession>
+    sessionsById: Map<string, ScopedInboxSession>
   ): ListSessionInboxResult {
     const items = page.roots.map(([rootId, lineage]) => {
       const rootRow = lineage.find(({ id }) => id === rootId) ?? lineage[0];

@@ -14,16 +14,87 @@ const FULL_CAPABILITIES = {
   lifecycle: true,
   sandboxAccess: true,
   exportTrace: true,
+  delete: true,
+  move: true,
+  manageCollaborators: true,
+  changeVisibility: true,
 } satisfies SessionCapabilities;
 const NO_LIFECYCLE = { ...FULL_CAPABILITIES, lifecycle: false };
 
 expect.extend(matchers);
+
+vi.mock("@/components/move-session-dialog", () => ({
+  MoveSessionDialog: ({ open, sessionId }: { open: boolean; sessionId: string }) =>
+    open ? (
+      <div role="dialog" aria-label="Move session">
+        {sessionId}
+      </div>
+    ) : null,
+}));
+const scope = {
+  ownerTeamId: "team_one",
+  ownerUserId: "user_owner",
+  visibility: "team" as const,
+  collaborators: [],
+  onUpdated: vi.fn().mockResolvedValue(undefined),
+};
 
 afterEach(() => {
   cleanup();
 });
 
 describe("ActionBar", () => {
+  it("opens the move dialog from More only when the server grants move", () => {
+    const { rerender } = render(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        scope={scope}
+        capabilities={{ ...FULL_CAPABILITIES, move: false }}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getByRole("menuitem", { name: "Move to team" })).toHaveAttribute("data-disabled");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to team" }));
+    expect(screen.queryByRole("dialog", { name: "Move session" })).not.toBeInTheDocument();
+    rerender(
+      <ActionBar
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        scope={scope}
+        capabilities={FULL_CAPABILITIES}
+      />
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to team" }));
+    expect(screen.getByRole("dialog", { name: "Move session" })).toHaveTextContent("session-1");
+  });
+
+  it("keeps moving a session available from the mobile action menu", () => {
+    render(
+      <MobileSessionActions
+        sessionId="session-1"
+        sessionStatus="active"
+        artifacts={[]}
+        scope={scope}
+        capabilities={FULL_CAPABILITIES}
+        triggerRef={{ current: null }}
+        onOpenDetails={vi.fn()}
+        onOpenMedia={vi.fn()}
+      />
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to team" }));
+    expect(screen.getByRole("dialog", { name: "Move session" })).toBeInTheDocument();
+  });
+
   it("hides lifecycle actions when the capability is denied", () => {
     render(
       <ActionBar

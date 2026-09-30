@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useTeamCapabilities } from "./use-team-capabilities";
-import { useMeTeams, useTeamMembers, useTeams } from "./use-teams";
+import { useMeTeams, useTeam, useTeamMembers, useTeams } from "./use-teams";
 
 vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -43,41 +43,122 @@ describe("team hooks", () => {
     await expect(act(() => result.current.removeMember("user_one"))).rejects.toThrow("last_lead");
   });
 
-  it("accepts a missing capabilities object but denies every team action", async () => {
+  it("preserves a server join conflict without inferring joinability", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json(
+        { error: "Team join is no longer available", code: "join_unavailable" },
+        { status: 409 }
+      )
+    );
+    const { result } = renderHook(useTeams, { wrapper });
+    await expect(act(() => result.current.joinTeam("team/one"))).rejects.toThrow(
+      "join_unavailable"
+    );
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/teams/team%2Fone/join", { method: "POST" });
+  });
+
+  it("does not load memberships while disabled", () => {
     vi.mocked(useAuthSession).mockReturnValue({
       data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
       status: "authenticated",
     });
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json({
-        teams: [
-          {
-            id: "team_design",
-            slug: "design",
-            name: "Design",
-            description: null,
-            joinPolicy: "invite_only",
-            defaultVisibility: "workspace",
-            defaultEnvironmentId: null,
-            grantsVersion: 0,
-            archivedAt: null,
-            createdAt: 1,
-            updatedAt: 1,
-            memberCount: 1,
-            role: "lead",
-          },
-        ],
-      })
-    );
-    const { result } = renderHook(useMeTeams, { wrapper });
-    await waitFor(() => expect(result.current.teams).toHaveLength(1));
-    const capabilities = renderHook(() => useTeamCapabilities(result.current.teams[0]));
-    expect(capabilities.result.current).toMatchObject({
-      canEditMetadata: false,
-      canManageMembers: false,
-      canArchive: false,
-    });
+    renderHook(() => useMeTeams(false), { wrapper });
+    expect(browserApiFetch).not.toHaveBeenCalled();
   });
+
+  it("refreshes all-team and membership lists and caches the server's joined team", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+      status: "authenticated",
+    });
+    let joined = false;
+    const team = () => ({
+      id: "team_design",
+      slug: "design",
+      name: "Design",
+      description: null,
+      joinPolicy: "open",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 0,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+      memberCount: joined ? 2 : 1,
+      capabilities: {
+        canJoin: !joined,
+        canLeave: joined,
+        canEditMetadata: false,
+        canManageMembers: false,
+        canManageRepositories: false,
+        canManageBindings: false,
+        canManageAutomations: false,
+        canManageSecrets: false,
+        canArchive: false,
+      },
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+      if (path.endsWith("/join") && init?.method === "POST") {
+        joined = true;
+        return Response.json(team());
+      }
+      if (path === "/api/teams") return Response.json({ teams: [team()] });
+      if (path === "/api/me/teams")
+        return Response.json({ teams: joined ? [{ ...team(), role: "member" }] : [] });
+      return Response.json(team());
+    });
+    const { result } = renderHook(
+      () => ({ all: useTeams(), mine: useMeTeams(), detail: useTeam("team_design") }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.detail.team?.memberCount).toBe(1));
+    expect(result.current.mine.teams).toEqual([]);
+    await act(() => result.current.all.joinTeam("team_design"));
+    expect(result.current.all.teams[0]?.memberCount).toBe(2);
+    expect(result.current.mine.teams[0]?.role).toBe("member");
+    expect(result.current.detail.team?.capabilities?.canJoin).toBe(false);
+  });
+
+  it.each([undefined, { canJoin: true }, { canEditMetadata: true }])(
+    "keeps a team visible with missing or incomplete capabilities %j but denies every action",
+    async (capabilities) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+        status: "authenticated",
+      });
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({
+          teams: [
+            {
+              id: "team_design",
+              slug: "design",
+              name: "Design",
+              description: null,
+              joinPolicy: "invite_only",
+              defaultVisibility: "workspace",
+              defaultEnvironmentId: null,
+              grantsVersion: 0,
+              archivedAt: null,
+              createdAt: 1,
+              updatedAt: 1,
+              memberCount: 1,
+              role: "lead",
+              capabilities,
+            },
+          ],
+        })
+      );
+      const { result } = renderHook(useMeTeams, { wrapper });
+      await waitFor(() => expect(result.current.teams).toHaveLength(1));
+      const actions = renderHook(() => useTeamCapabilities(result.current.teams[0]));
+      expect(actions.result.current).toMatchObject({
+        canJoin: false,
+        canEditMetadata: false,
+        canManageMembers: false,
+        canArchive: false,
+      });
+    }
+  );
 
   it("loads a lead through the single settings list endpoint", async () => {
     vi.mocked(useAuthSession).mockReturnValue({

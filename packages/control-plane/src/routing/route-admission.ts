@@ -626,10 +626,10 @@ async function enforceTeamRequirement(
       { ...team, leadCount: await memberships.countLeads(teamId) }
     );
     const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-    const visible = isAdmin || viewer.memberships.has(teamId);
-    if (!visible && requirement.need !== "canJoin")
+    const isMember = isAdmin || viewer.memberships.has(teamId);
+    if (!isMember && requirement.need === "member")
       return { response: error("Team not found", 404) };
-    if (requirement.need !== "read" && !access[requirement.need]) {
+    if (requirement.need !== "read" && requirement.need !== "member" && !access[requirement.need]) {
       const reasonCode =
         requirement.need === "canJoin"
           ? team.archivedAt !== null

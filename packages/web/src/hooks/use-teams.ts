@@ -18,9 +18,9 @@ import { useAuthSession } from "@/lib/auth-session";
 
 const TEAMS_KEY = "/api/teams";
 const ME_TEAMS_KEY = "/api/me/teams";
-// Missing capabilities leave the team visible while every team action stays disabled.
+// Missing or incomplete capabilities leave the team visible while every team action stays disabled.
 const teamSchema = teamResponseSchema.extend({
-  capabilities: teamResponseSchema.shape.capabilities.optional(),
+  capabilities: teamResponseSchema.shape.capabilities.partial().optional(),
 });
 export type TeamResponse = z.infer<typeof teamSchema>;
 export type TeamMember = z.infer<typeof teamMemberSchema>;
@@ -65,9 +65,9 @@ async function write<T>(
   return schema.parse(await response.json());
 }
 
-export function useMeTeams() {
+export function useMeTeams(enabled = true) {
   const { data: session } = useAuthSession();
-  const result = useSWR(session?.user ? ME_TEAMS_KEY : null, () =>
+  const result = useSWR(session?.user && enabled ? ME_TEAMS_KEY : null, () =>
     get(ME_TEAMS_KEY, meTeamsSchema)
   );
   return { teams: result.data?.teams ?? [], loading: result.isLoading, error: result.error };
@@ -93,11 +93,24 @@ export function useTeams() {
     return team;
   }
 
+  async function joinTeam(id: string) {
+    const key = `/api/teams/${encodeURIComponent(id)}` as const;
+    const team = await write(`${key}/join`, "POST", undefined, teamSchema);
+    await Promise.allSettled([
+      mutate(key, team, { revalidate: false }),
+      mutate(TEAMS_KEY),
+      mutate(ME_TEAMS_KEY),
+      mutate(`${key}/members`),
+    ]);
+    return team;
+  }
+
   return {
     teams: result.data?.teams ?? [],
     loading: result.isLoading,
     error: result.error,
     createTeam,
+    joinTeam,
   };
 }
 

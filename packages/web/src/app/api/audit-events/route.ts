@@ -4,6 +4,11 @@ import { settingsProxy } from "@/lib/settings-proxy";
 
 export const { GET } = settingsProxy(
   (_params: Record<string, never>, request: NextRequest) =>
-    buildControlPlanePath("/audit-events", new URL(request.url).searchParams, ["limit", "cursor"]),
+    buildControlPlanePath("/audit-events", new URL(request.url).searchParams, [
+      "limit",
+      "cursor",
+      "teamId",
+      "action",
+    ]),
   "audit events"
 );

@@ -61,7 +61,7 @@ const sessionInboxQuerySchema = z.object({
 });
 
 const log = createLogger("session-read-state");
-const SESSION_INBOX_LIMIT = 20;
+export const SESSION_INBOX_LIMIT = 20;
 
 async function readSessionList<T>(read: () => Promise<T>): Promise<T | Response> {
   try {

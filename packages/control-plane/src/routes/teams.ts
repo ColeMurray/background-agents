@@ -4,10 +4,27 @@ import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import {
   createTeamRequestSchema,
   teamRoleSchema,
+  teamSessionsResponseSchema,
+  teamActivityResponseSchema,
   updateTeamRequestSchema,
   type Team,
   type TeamRole,
 } from "@open-inspect/shared/types/teams";
+import {
+  SESSION_INBOX_CATEGORIES,
+  sessionInboxCategorySchema,
+} from "@open-inspect/shared/types/session-inbox";
+import {
+  effectiveSessionCapabilities,
+  teamsEnforcementMode,
+  viewerFromContext,
+} from "../authorization/session-admission";
+import { AuditEventStore, toAuditEvent } from "../db/audit-event-store";
+import { encodeAuditEventCursor } from "../db/audit-event-cursor";
+import { SessionIndexStore } from "../db/session-index";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
+import type { ScopedInboxSession, ListSessionInboxResult } from "../db/session-inbox-store";
 import { TeamAuditStore, type TeamAuditInput } from "../db/team-audit";
 import {
   LastLeadError,
@@ -21,12 +38,17 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
 import { parseQuery } from "./query";
+import { auditEventQuery } from "./audit-events";
+import { SESSION_INBOX_LIMIT } from "./session-index";
 import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   error,
   json,
   requirePermission,
   requireTeam,
+  requireAll,
+  permissionRequirement,
 } from "./shared";
 
 const PRIVATE = { cacheControl: "private, no-store" } as const;
@@ -39,6 +61,13 @@ const querySchema = z.object({
   membership: z.enum(["mine", "all"]).optional(),
   search: z.string().optional(),
   includeArchived: z.enum(["true", "false"]).optional(),
+});
+const sessionsQuerySchema = z.object({
+  bucket: sessionInboxCategorySchema.optional(),
+  cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
+});
+const activityQuerySchema = auditEventQuery.extend({
+  action: z.string().min(1, { error: "Invalid action" }).optional(),
 });
 
 function viewer(ctx: RequestContext) {
@@ -103,11 +132,10 @@ async function listTeams(request: Request, _env: Env, _params: object, ctx: Requ
   const query = parseQuery(request, querySchema);
   if (query instanceof Response) return query;
   const subject = viewer(ctx);
-  const isAdmin = subject.roleKey === "owner" || subject.roleKey === "administrator";
   const membershipStore = new TeamMembershipStore(ctx.db);
   const memberships = await membershipStore.listForUser(subject.userId);
   const teams = await new TeamStore(ctx.db).list({
-    forUserId: query.membership === "all" && isAdmin ? undefined : subject.userId,
+    forUserId: query.membership === "all" ? undefined : subject.userId,
     includeArchived: query.includeArchived === "true",
     search: query.search,
   });
@@ -168,6 +196,110 @@ async function createTeam(request: Request, _env: Env, _params: object, ctx: Req
 
 async function getTeam(_request: Request, _env: Env, _params: { id: string }, ctx: RequestContext) {
   return json(await responseTeam(ctx, admittedTeam(ctx)));
+}
+
+async function teamSessions(
+  request: Request,
+  env: Env,
+  _params: { id: string },
+  ctx: RequestContext
+) {
+  const query = parseQuery(request, sessionsQuerySchema);
+  if (query instanceof Response) return query;
+  if (query.cursor !== undefined && query.bucket === undefined)
+    return error("Bucket required for pagination", 400);
+  const cursor = parseSessionInboxCursor(query.cursor);
+  if (!cursor.ok) return error(cursor.error, 400);
+  const subject = viewer(ctx);
+  const sessionViewer = viewerFromContext(ctx, ctx.sessionMemberships ?? new Map());
+  const mode = teamsEnforcementMode(ctx, env);
+  const options = {
+    teamIds: [admittedTeam(ctx).id],
+    readScope: sessionViewer,
+    mode,
+    viewerUserId: subject.userId,
+    limit: SESSION_INBOX_LIMIT,
+  };
+  const store = new SessionIndexStore(ctx.db);
+  const pages =
+    query.bucket === undefined
+      ? await store.listInboxSnapshot(options)
+      : {
+          [query.bucket]: await store.listInbox({
+            ...options,
+            category: query.bucket,
+            cursor: cursor.cursor,
+          }),
+        };
+  const sessions = Object.values(pages).flatMap(({ items }) =>
+    items.flatMap(({ rootSession, descendantSessions }) => [rootSession, ...descendantSessions])
+  );
+  const collaborators = await new SessionCollaboratorStore(ctx.db).listForSessions(
+    sessions.filter((row) => row.visibility === "private").map((row) => row.id)
+  );
+  const sessionIds = new Set(sessions.map((row) => row.id));
+  const decorate = (row: ScopedInboxSession) => ({
+    ...row,
+    parentSessionId:
+      row.parentSessionId !== null && sessionIds.has(row.parentSessionId)
+        ? row.parentSessionId
+        : null,
+    capabilities: effectiveSessionCapabilities(
+      sessionViewer,
+      {
+        id: row.id,
+        ownerUserId: row.userId,
+        ownerTeamId: row.ownerTeamId,
+        visibility: row.visibility,
+        collaboratorIds: collaborators.get(row.id) ?? [],
+      },
+      mode
+    ),
+  });
+  const encodePage = (page: ListSessionInboxResult) => ({
+    items: page.items.map(({ rootSession, descendantSessions }) => ({
+      rootSession: decorate(rootSession),
+      descendantSessions: descendantSessions.map(decorate),
+    })),
+    hasMore: page.hasMore,
+    nextCursor: page.nextCursor ? encodeSessionInboxCursor(page.nextCursor) : null,
+  });
+  return json(
+    teamSessionsResponseSchema.parse(
+      query.bucket === undefined
+        ? {
+            categories: Object.fromEntries(
+              SESSION_INBOX_CATEGORIES.map((bucket) => [bucket, encodePage(pages[bucket])])
+            ),
+          }
+        : encodePage(pages[query.bucket])
+    )
+  );
+}
+
+async function teamActivity(
+  request: Request,
+  env: Env,
+  _params: { id: string },
+  ctx: RequestContext
+) {
+  const query = parseQuery(request, activityQuerySchema);
+  if (query instanceof Response) return query;
+  const result = await new AuditEventStore(ctx.db).list({
+    ...query,
+    teamId: admittedTeam(ctx).id,
+    visibilityScope: {
+      viewer: viewerFromContext(ctx, ctx.sessionMemberships ?? new Map()),
+      mode: teamsEnforcementMode(ctx, env),
+    },
+  });
+  return json(
+    teamActivityResponseSchema.parse({
+      events: result.rows.map(toAuditEvent),
+      hasMore: result.hasMore,
+      nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
+    })
+  );
 }
 
 async function updateTeam(
@@ -338,9 +470,7 @@ teamRoutes.get(
   admit({ ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, ...PRIVATE, authorization: ACTIVE_USER }),
   (c) => dispatch(c, meTeams)
 );
-teamRoutes.get("/teams", policy(requirePermission("sessions.read", { service: "deny" })), (c) =>
-  dispatch(c, listTeams)
-);
+teamRoutes.get("/teams", policy(ACTIVE_USER), (c) => dispatch(c, listTeams));
 teamRoutes.post(
   "/teams",
   policy(requirePermission("workspace.members.manage", { service: "deny" })),
@@ -356,5 +486,28 @@ teamRoutes.post("/teams/:id/restore", archive, (c) =>
 );
 teamRoutes.get("/teams/:id/members", read, (c) => dispatch(c, members));
 teamRoutes.put("/teams/:id/members/:userId", membersManage, (c) => dispatch(c, putMember));
-teamRoutes.delete("/teams/:id/members/:userId", read, (c) => dispatch(c, deleteMember));
+teamRoutes.delete("/teams/:id/members/:userId", policy(requireTeam("member")), (c) =>
+  dispatch(c, deleteMember)
+);
 teamRoutes.post("/teams/:id/join", policy(requireTeam("canJoin")), (c) => dispatch(c, joinTeam));
+const member = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  ...PRIVATE,
+  authorization: requireTeam("member"),
+});
+teamRoutes.get(
+  "/teams/:id/sessions",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    ...PRIVATE,
+    authorization: {
+      ...requireAll(
+        { kind: "team", teamIdParam: "id", need: "member" },
+        permissionRequirement("sessions.read")
+      ),
+      service: { kind: "deny" },
+    },
+  }),
+  (c) => dispatch(c, teamSessions)
+);
+teamRoutes.get("/teams/:id/activity", member, (c) => dispatch(c, teamActivity));

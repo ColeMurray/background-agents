@@ -16,7 +16,7 @@ import type { Env } from "../types";
 export const DEFAULT_AUDIT_EVENT_LIMIT = 25;
 const MAX_AUDIT_EVENT_LIMIT = 100;
 
-const auditEventQuery = z.object({
+export const auditEventQuery = z.object({
   limit: z
     .string({ error: "Invalid limit" })
     .regex(/^[1-9]\d*$/, { error: "Invalid limit" })
@@ -44,7 +44,12 @@ async function handleListAuditEvents(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const query = parseQuery(request, auditEventQuery);
+  const query = parseQuery(
+    request,
+    auditEventQuery.extend({
+      teamId: z.string().min(1, { error: "Invalid teamId" }).optional(),
+    })
+  );
   if (query instanceof Response) return query;
 
   const result = await new AuditEventStore(ctx.db).list(query);

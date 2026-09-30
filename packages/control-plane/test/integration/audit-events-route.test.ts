@@ -119,6 +119,26 @@ describe("GET /audit-events", () => {
     });
   });
 
+  it("filters workspace audit by team without hiding private-session evidence", async () => {
+    await env.DB.prepare(
+      `INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_alpha', 'alpha', 'Alpha', 1, 1), ('team_beta', 'beta', 'Beta', 1, 1)`
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO authorization_audit_events
+       (id, occurred_at, request_id, principal_kind, action, resource_type, resource_id, team_id, reason_code, operation_result, metadata_json)
+       VALUES ('private-event', 100, 'request-private', 'user', 'session.created_private', 'session', 'private-id', 'team_alpha', 'created', 'applied', '{"legacy":true,"title":"private"}'),
+              ('other-event', 200, 'request-other', 'user', 'team.updated', 'team', 'team_beta', 'team_beta', 'updated', 'applied', '{"legacy":true}')`
+    ).run();
+    const response = await serviceFetch("https://cp.test/audit-events?teamId=team_alpha");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      events: [{ id: "private-event", resourceId: "private-id", metadata: { title: "private" } }],
+      hasMore: false,
+    });
+    await assignRole("role_builtin_member");
+    expect((await serviceFetch("https://cp.test/audit-events?teamId=team_alpha")).status).toBe(403);
+  });
+
   it("records a successful session export as an allowed authorization event", async () => {
     const response = await serviceFetch("https://cp.test/sessions/export");
     expect(response.status).toBe(200);

@@ -16,11 +16,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(199);
+    expect(routes).toHaveLength(202);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(151);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(199);
+    expect(new Set(paths).size).toBe(154);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(202);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -28,6 +28,47 @@ describe("route policy table", () => {
     expect(route?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ permission: "analytics.read" }],
+    });
+  });
+
+  it("gates collaborator candidates on always-enforced human session management", () => {
+    expect(routeFor("GET", "/sessions/session-1/collaborator-candidates")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          {
+            kind: "session",
+            action: "manageCollaborators",
+            sessionIdParam: "id",
+            enforceAlways: true,
+          },
+        ],
+        service: { kind: "deny" },
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it.each(["sessions", "activity"])("requires human team membership for team %s", (tab) => {
+    expect(routeFor("GET", `/teams/team-1/${tab}`)).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [
+          { kind: "team", teamIdParam: "id", need: "member" },
+          ...(tab === "sessions" ? [{ kind: "permission", permission: "sessions.read" }] : []),
+        ],
+        service: { kind: "deny" },
+      },
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("keeps membership deletion behind member admission rather than directory read", () => {
+    expect(routeFor("DELETE", "/teams/team-1/members/user-1")?.authorization).toMatchObject({
+      allOf: [{ kind: "team", need: "member" }],
     });
   });
 

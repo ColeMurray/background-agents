@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 30, 2026
+
+### Added
+
+Teams now have a searchable directory with favorites, member lists, session overviews, and
+visibility-filtered activity. Active users can browse team names and memberships; a team's work
+remains restricted to members and administrators. Workspace audit readers can filter events by team.
+Session details show the owning team and visibility, with server-authorized controls to move
+sessions, change visibility, and manage private-session collaborators, including child-session
+cascades.
+
 ## September 29, 2026
 
 ### Added

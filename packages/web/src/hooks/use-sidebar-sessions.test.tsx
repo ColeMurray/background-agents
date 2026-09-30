@@ -2,7 +2,7 @@
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SWRConfig } from "swr";
+import { SWRConfig, useSWRConfig } from "swr";
 import type { ReactNode } from "react";
 import type {
   SessionInboxItem,
@@ -11,6 +11,10 @@ import type {
 } from "@open-inspect/shared/types/session-inbox";
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import { reconcileSessionReadState } from "@/lib/session-read-state";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { updateSessionScope } from "@/lib/session-scope";
+
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
@@ -268,6 +272,170 @@ describe("useSidebarSessions", () => {
 
     expect(headRequests).toBe(2);
     expect(paginationRequests).toBe(1);
+  });
+
+  it.each([
+    { path: "/api/sessions/s1/scope" as const, method: "PUT" as const },
+    { path: "/api/sessions/s1/visibility" as const, method: "PUT" as const },
+    { path: "/api/sessions/s1/collaborators/user" as const, method: "DELETE" as const },
+  ])("clears all retained pages before lists refresh after $path", async ({ path, method }) => {
+    const refreshedSnapshot = deferred<SessionInboxSnapshot>();
+    let scopeChanged = false;
+    const head = snapshot({
+      needs_attention: page(["attention"], "next"),
+      in_progress: page(["running"], "next"),
+      finished: page(["finished"], "next"),
+    });
+    const fetcher = vi.fn(async (key: string) => {
+      const category = new URLSearchParams(key.split("?")[1]).get("category");
+      if (category) return page([`${category}-${scopeChanged ? "visible" : "hidden"}`]);
+      return scopeChanged ? refreshedSnapshot.promise : head;
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async () => {
+      scopeChanged = true;
+      return new Response(null, { status: 204 });
+    });
+    const { result } = renderHook(
+      () => {
+        const sidebar = useSidebarSessions();
+        const config = useSWRConfig();
+        return {
+          ...sidebar,
+          updateScope: () => updateSessionScope(path, { method }, async () => {}, config),
+        };
+      },
+      { wrapper: wrapper(fetcher) }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        pagination.loadMore();
+      }
+    });
+    await waitFor(() => {
+      expect(result.current.needsAttention).toHaveLength(2);
+      expect(result.current.inProgress).toHaveLength(2);
+      expect(result.current.finished).toHaveLength(2);
+    });
+
+    let update!: Promise<void>;
+    act(() => {
+      update = result.current.updateScope();
+    });
+    await waitFor(() => {
+      expect(result.current.needsAttention).toEqual([]);
+      expect(result.current.inProgress).toEqual([]);
+      expect(result.current.finished).toEqual([]);
+    });
+    await act(async () => {
+      refreshedSnapshot.resolve(head);
+      await update;
+    });
+
+    act(() => {
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        pagination.loadMore();
+      }
+    });
+    await waitFor(() => {
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+        "attention",
+        "needs_attention-visible",
+      ]);
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual([
+        "running",
+        "in_progress-visible",
+      ]);
+      expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-visible"]);
+    });
+  });
+
+  it("discards old pagination responses after scope changes even when new loads reuse the cursor", async () => {
+    const oldPagesReady = deferred<void>();
+    const newPagesReady = deferred<void>();
+    let scopeChanged = false;
+    const fetcher = vi.fn(async (key: string) => {
+      const category = new URLSearchParams(key.split("?")[1]).get("category");
+      if (!category) {
+        return snapshot({
+          needs_attention: page(["attention"], "next"),
+          in_progress: page(["running"], "next"),
+          finished: page(["finished"], "next"),
+        });
+      }
+      const oldScope = !scopeChanged;
+      await (oldScope ? oldPagesReady.promise : newPagesReady.promise);
+      return page([`${category}-${oldScope ? "hidden" : "visible"}`]);
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async () => {
+      scopeChanged = true;
+      return Response.json({ ok: true });
+    });
+    const { result } = renderHook(
+      () => {
+        const sidebar = useSidebarSessions();
+        const config = useSWRConfig();
+        return {
+          ...sidebar,
+          updateScope: () =>
+            updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, async () => {}, config),
+        };
+      },
+      { wrapper: wrapper(fetcher) }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        pagination.loadMore();
+      }
+    });
+    await waitFor(() => {
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        expect(pagination.loadingMore).toBe(true);
+      }
+    });
+
+    let update!: Promise<void>;
+    act(() => {
+      update = result.current.updateScope();
+    });
+    await waitFor(() => {
+      expect(fetcher.mock.calls.filter(([key]) => !key.includes("category="))).toHaveLength(2);
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        expect(pagination.loadingMore).toBe(false);
+      }
+    });
+    act(() => {
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        pagination.loadMore();
+      }
+    });
+    await waitFor(() => {
+      for (const pagination of Object.values(result.current.sectionPagination)) {
+        expect(pagination.loadingMore).toBe(true);
+      }
+    });
+
+    await act(async () => oldPagesReady.resolve());
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention"]);
+    expect(result.current.inProgress.map(({ id }) => id)).toEqual(["running"]);
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished"]);
+
+    await act(async () => {
+      newPagesReady.resolve();
+      await update;
+    });
+    await waitFor(() => {
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual([
+        "attention",
+        "needs_attention-visible",
+      ]);
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual([
+        "running",
+        "in_progress-visible",
+      ]);
+      expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-visible"]);
+    });
   });
 
   it("removes a canonical root from every retained category tail", async () => {

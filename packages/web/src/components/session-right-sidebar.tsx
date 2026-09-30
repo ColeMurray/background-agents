@@ -29,6 +29,9 @@ import { BudgetSection } from "./sidebar/budget-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { toast } from "sonner";
+import type { SessionScopeControls } from "@/lib/session-scope";
+import { SessionVisibilityControl } from "./session-visibility-control";
+import { CollaboratorsSection } from "./sidebar/collaborators-section";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -46,6 +49,7 @@ interface SessionRightSidebarProps {
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
   capabilities: SessionCapabilities;
+  scope?: SessionScopeControls;
   canManageBudget?: boolean;
 }
 
@@ -70,6 +74,7 @@ export function SessionRightSidebarContent({
   onOpenDiff,
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
+  scope,
 }: SessionRightSidebarContentProps) {
   const [downloading, setDownloading] = useState(false);
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
@@ -173,7 +178,16 @@ export function SessionRightSidebarContent({
           warnings={warnings}
           parentSessionId={sessionState.parentSessionId}
           canManageLifecycle={capabilities.lifecycle}
+          ownerTeamId={scope?.ownerTeamId}
+          visibility={scope?.visibility}
         />
+        {scope && capabilities.changeVisibility && (
+          <SessionVisibilityControl
+            {...scope}
+            sessionId={sessionId}
+            canChangeVisibility={capabilities.changeVisibility}
+          />
+        )}
         <BudgetSection
           sessionId={sessionId}
           totalCost={sessionState.totalCost ?? 0}
@@ -181,6 +195,14 @@ export function SessionRightSidebarContent({
           canManageBudget={canManageBudget}
         />
       </div>
+
+      {scope?.visibility === "private" && capabilities.manageCollaborators && (
+        <CollaboratorsSection
+          {...scope}
+          sessionId={sessionId}
+          canManageCollaborators={capabilities.manageCollaborators}
+        />
+      )}
 
       {capabilities.exportTrace && (
         <div className="px-4 py-3 border-b border-border-muted">
@@ -360,6 +382,7 @@ export function SessionRightSidebar({
   onOpenDiff,
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
   capabilities,
+  scope,
 }: SessionRightSidebarProps) {
   return (
     <aside
@@ -387,6 +410,7 @@ export function SessionRightSidebar({
         onOpenDiff={onOpenDiff}
         canManageBudget={canManageBudget}
         capabilities={capabilities}
+        scope={scope}
       />
     </aside>
   );

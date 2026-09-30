@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { checkSessionAccess, type SessionAction } from "@open-inspect/shared";
+import { sessionCollaboratorCandidatesResponseSchema } from "@open-inspect/shared/types/sessions";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { SessionAuditStore } from "../db/session-audit";
 import { TeamAuditStore } from "../db/team-audit";
@@ -280,11 +281,34 @@ async function changeCollaborator(
   });
 }
 
+async function listCollaboratorCandidates(
+  _request: Request,
+  _env: Env,
+  _params: { id: string },
+  ctx: RequestContext
+) {
+  const { results } = await ctx.db
+    .prepare(
+      `SELECT users.id AS userId, users.display_name AS displayName,
+              users.email, users.avatar_url AS avatarUrl
+       FROM users
+       JOIN user_role_assignments assignment ON assignment.user_id = users.id
+       WHERE users.suspended_at IS NULL AND assignment.role_id IS NOT NULL
+       ORDER BY LOWER(COALESCE(users.display_name, users.email, users.id)), users.id`
+    )
+    .all();
+  return json(sessionCollaboratorCandidatesResponseSchema.parse(results));
+}
+
 export const sessionScopeRoutes = new Hono<ControlPlaneHonoEnv>();
-const always = (action: "changeVisibility" | "move" | "manageCollaborators" | "read") =>
+const always = (
+  action: "changeVisibility" | "move" | "manageCollaborators" | "read",
+  cacheControl?: "private, no-store"
+) =>
   admit({
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requireSession(action, { enforceAlways: true }),
+    cacheControl,
   });
 sessionScopeRoutes.put("/sessions/:id/visibility", always("changeVisibility"), (c) =>
   dispatch(c, changeVisibility)
@@ -295,4 +319,9 @@ sessionScopeRoutes.put("/sessions/:id/collaborators/:userId", always("manageColl
 );
 sessionScopeRoutes.delete("/sessions/:id/collaborators/:userId", always("read"), (c) =>
   dispatch(c, (request, env, params, ctx) => changeCollaborator(request, env, params, ctx, true))
+);
+sessionScopeRoutes.get(
+  "/sessions/:id/collaborator-candidates",
+  always("manageCollaborators", "private, no-store"),
+  (c) => dispatch(c, listCollaboratorCandidates)
 );

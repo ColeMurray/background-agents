@@ -36,6 +36,7 @@ type DatabaseOptions = {
   /** Custom-role grants for user-1; omitted means the owner role with every permission. */
   permissions?: PermissionId[];
   visibility?: "private";
+  userId?: string | null;
   /** Answers every statement admission and the proxy's own reads do not own. */
   delegate?: SqlDatabase;
 };
@@ -57,10 +58,13 @@ function createDatabase(options: DatabaseOptions = {}): SqlDatabase {
     return null;
   };
   const row = (sql: string): unknown => {
-    if (sql.includes("SELECT * FROM sessions"))
-      return options.visibility === "private"
-        ? { ...TEST_SESSION_ROW, visibility: "private", user_id: "another-user" }
-        : TEST_SESSION_ROW;
+    if (sql.includes("SELECT * FROM sessions")) {
+      const session =
+        options.visibility === "private"
+          ? { ...TEST_SESSION_ROW, visibility: "private", user_id: "another-user" }
+          : TEST_SESSION_ROW;
+      return options.userId === undefined ? session : { ...session, user_id: options.userId };
+    }
     if (sql.includes("FROM users u")) return { user_id: "user-1", suspended_at: null, ...role };
     if (sql.includes("FROM session_model_provider_auth")) {
       return {
@@ -195,6 +199,44 @@ describe("session runtime proxy routes", () => {
     }
   );
 
+  it.each(["canonical-owner", null])(
+    "decorates snapshot ownerUserId from the admitted D1 row (%s)",
+    async (ownerUserId) => {
+      const get = vi.spyOn(SessionIndexStore.prototype, "get");
+      const fetch = vi.fn(async (_request: Request) =>
+        Response.json({
+          session: {
+            id: "session-1",
+            ownerUserId: "runtime-owner",
+            title: "Session",
+            repoOwner: "acme",
+            repoName: "web",
+            baseBranch: "main",
+            branchName: "feature",
+            status: "active",
+            sandboxStatus: "ready",
+            messageCount: 0,
+            createdAt: 1,
+          },
+          artifacts: [],
+          promptQueue: [],
+          timeline: { events: [], hasMore: false, cursor: null },
+        })
+      );
+
+      const response = await dispatch(new Request("https://test.local/sessions/session-1"), {
+        ...createEnv(fetch, { userId: ownerUserId }),
+        TEAMS_ENFORCEMENT: "on",
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ session: { ownerUserId } });
+      expect(get).toHaveBeenCalledOnce();
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe(SessionInternalPaths.snapshot);
+    }
+  );
+
   it("forwards sandbox access for users", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
@@ -269,6 +311,10 @@ describe("session runtime proxy routes", () => {
       const snapshot = (await response.json()) as { session: Record<string, unknown> };
 
       expect(response.status).toBe(200);
+      expect(snapshot.session).toHaveProperty(
+        "ownerUserId",
+        input.visibility === "private" ? "another-user" : "user-1"
+      );
       if (input.exposed) {
         expect(snapshot.session).toHaveProperty("codeServerUrl", "https://code.example");
       } else {

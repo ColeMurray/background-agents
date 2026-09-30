@@ -61,7 +61,7 @@ import { useMarkSessionRead } from "@/hooks/use-mark-session-read";
 import { usePromptInput } from "@/hooks/use-prompt-input";
 import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import { useSessionSnapshot } from "./session-snapshot-provider";
+import { useSessionSnapshot, useRefreshSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { resolveSessionCapabilities } from "@/lib/session-capabilities";
@@ -76,9 +76,23 @@ const DEFAULT_SESSION_STATUS = "created" as const;
 export default function SessionPage() {
   const { shortcuts } = useKeyboardShortcuts();
   const { hasPermission } = useCurrentUserAuthorization();
-  const capabilities = useMemo(() => resolveSessionCapabilities(hasPermission), [hasPermission]);
   const initialSnapshot = useSessionSnapshot();
+  const refreshSnapshot = useRefreshSessionSnapshot();
+  const capabilities = resolveSessionCapabilities(
+    hasPermission,
+    initialSnapshot.session.capabilities
+  );
   const sessionId = initialSnapshot.session.id;
+  const scope =
+    initialSnapshot.session.visibility === undefined
+      ? undefined
+      : {
+          ownerTeamId: initialSnapshot.session.ownerTeamId ?? null,
+          ownerUserId: initialSnapshot.session.ownerUserId ?? null,
+          visibility: initialSnapshot.session.visibility,
+          collaborators: initialSnapshot.session.collaborators ?? [],
+          onUpdated: refreshSnapshot,
+        };
   const {
     connected,
     connecting,
@@ -372,6 +386,7 @@ export default function SessionPage() {
             onArchive: handleArchive,
             onUnarchive: handleUnarchive,
             capabilities,
+            scope,
             harness: sessionHarness,
           }}
           prompt={{
@@ -445,6 +460,7 @@ export default function SessionPage() {
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
           capabilities,
+          scope,
         }}
         optimisticTitle={optimisticTitle}
         renameSession={renameSession}
@@ -495,6 +511,7 @@ export default function SessionPage() {
                 onOpenDiff={openDiff}
                 canManageBudget={canManageBudget}
                 capabilities={capabilities}
+                scope={scope}
               />
             }
             changes={
@@ -531,6 +548,7 @@ export default function SessionPage() {
               onOpenDiff={openDiff}
               canManageBudget={canManageBudget}
               capabilities={capabilities}
+              scope={scope}
             />
           </>
         )}
@@ -557,6 +575,7 @@ export default function SessionPage() {
           onOpenDiff={openDiff}
           canManageBudget={canManageBudget}
           capabilities={capabilities}
+          scope={scope}
         />
       )}
 

@@ -16,12 +16,18 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   read: true,
   collaborate: true,
   lifecycle: true,
+  delete: false,
+  move: false,
+  manageCollaborators: false,
+  changeVisibility: false,
   sandboxAccess: true,
   exportTrace: true,
 };
 
 vi.mock("@/components/action-bar", () => ({
-  ActionBar: () => <div data-testid="action-bar" />,
+  ActionBar: ({ scope }: { scope?: { ownerTeamId: string | null } }) => (
+    <div data-testid="action-bar" data-team={scope?.ownerTeamId} />
+  ),
 }));
 vi.mock("@/components/attachment-preview-strip", () => ({
   AttachmentPreviewStrip: () => null,
@@ -95,6 +101,13 @@ function ComposerHarness({
         onUnarchive: vi.fn(),
         capabilities: { ...FULL_CAPABILITIES, lifecycle: canManageLifecycle },
         harness,
+        scope: {
+          ownerTeamId: "team_design",
+          ownerUserId: "user_owner",
+          visibility: "team",
+          collaborators: [],
+          onUpdated: vi.fn(),
+        },
       }}
       prompt={{
         value,
@@ -134,6 +147,10 @@ function ComposerHarness({
 }
 
 describe("SessionPromptComposer", () => {
+  it("passes the session scope to desktop actions for collaborating users", () => {
+    render(<ComposerHarness />);
+    expect(screen.getByTestId("action-bar")).toHaveAttribute("data-team", "team_design");
+  });
   it("disables autofill suggestions for the prompt", () => {
     render(<ComposerHarness />);
 

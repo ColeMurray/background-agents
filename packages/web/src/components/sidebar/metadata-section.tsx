@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 import { prBadgeVariant } from "@/components/ui/badge-variants";
+import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import { useTeam } from "@/hooks/use-teams";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
@@ -51,6 +53,8 @@ interface MetadataSectionProps {
   warnings?: WarningEvent[];
   parentSessionId?: string | null;
   canManageLifecycle: boolean;
+  ownerTeamId?: string | null;
+  visibility?: SessionVisibility;
 }
 
 /**
@@ -107,6 +111,8 @@ export function MetadataSection({
   warnings = [],
   parentSessionId,
   canManageLifecycle,
+  ownerTeamId,
+  visibility,
 }: MetadataSectionProps) {
   const [copied, setCopied] = useState(false);
 
@@ -145,6 +151,19 @@ export function MetadataSection({
         <ClockIcon className="w-4 h-4" />
         <span>{formatRelativeTime(createdAt)}</span>
       </div>
+
+      {ownerTeamId !== undefined && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Team</span>
+          {ownerTeamId ? <OwningTeam id={ownerTeamId} /> : <span>Workspace (no team)</span>}
+        </div>
+      )}
+      {visibility && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Visibility</span>
+          <span className="capitalize">{visibility}</span>
+        </div>
+      )}
 
       {/* Parent session */}
       {parentSessionId && (
@@ -458,5 +477,23 @@ export function MetadataSection({
         </div>
       )}
     </div>
+  );
+}
+
+function OwningTeam({ id }: { id: string }) {
+  const { team, loading, error } = useTeam(id);
+  if (!team || error)
+    return (
+      <span className="text-muted-foreground">
+        {loading ? "Loading team..." : "Team unavailable"}
+      </span>
+    );
+  return (
+    <Link
+      href={`/teams/${encodeURIComponent(team.slug)}`}
+      className="truncate text-accent hover:underline"
+    >
+      {team.name}
+    </Link>
   );
 }
