@@ -383,9 +383,9 @@ export async function seedMessage(
 export async function initNamedSession(
   sessionName: string,
   overrides?: {
-    repoOwner?: string;
-    repoName?: string;
-    repoId?: number;
+    repoOwner?: string | null;
+    repoName?: string | null;
+    repoId?: number | null;
     defaultBranch?: string;
     repositories?: Array<{
       repoOwner: string;

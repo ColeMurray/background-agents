@@ -15,6 +15,9 @@ import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
+// Optional attribution must leave time for minting before the browser proxy aborts.
+const WS_GITHUB_ATTRIBUTION_TIMEOUT_MS = 5_000;
+
 export async function handleSessionWsToken(
   request: Request,
   env: Env,
@@ -42,14 +45,21 @@ export async function handleSessionWsToken(
   const isGitHub = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let enrichment: GitHubEnrichment | null = null;
   if (isGitHub) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), WS_GITHUB_ATTRIBUTION_TIMEOUT_MS);
+    });
     try {
-      enrichment = await resolveGitHubEnrichmentForRequest(
-        new UserStore(ctx.db),
-        canonicalUserId,
-        await resolveGitHubCredentialAuthority(ctx, request.headers)
-      );
+      enrichment = await Promise.race([
+        resolveGitHubCredentialAuthority(ctx, request.headers).then((authority) =>
+          resolveGitHubEnrichmentForRequest(new UserStore(ctx.db), canonicalUserId, authority)
+        ),
+        deadline,
+      ]);
     } catch (retrievalError) {
       if (!(retrievalError instanceof GitHubAttributionUnavailableError)) throw retrievalError;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 

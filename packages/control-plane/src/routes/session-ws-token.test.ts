@@ -247,6 +247,37 @@ describe("GitHub browser attribution availability", () => {
       );
     }
   );
+  it.each(["listUserAccounts", "getAccessToken", "accountInfo"] as const)(
+    "mints a WS token before the proxy deadline when optional %s retrieval stalls",
+    async (method) => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(api[method]).mockImplementation(
+          () =>
+            new Promise((_resolve, reject) => {
+              setTimeout(() => reject(new Error("GitHub request timed out")), 20_000);
+            })
+        );
+        let response: Response | undefined;
+        const joined = join().then((value) => {
+          response = value;
+        });
+        await vi.advanceTimersByTimeAsync(14_000);
+        const beforeProxyDeadline = response;
+        // The delayed rejection must be consumed even if token minting already finished.
+        await vi.advanceTimersByTimeAsync(20_000);
+        await joined;
+        expect(beforeProxyDeadline?.status).toBe(200);
+        expect(fetch).toHaveBeenCalledOnce();
+        const body = await (fetch.mock.calls[0][0] as Request).json();
+        expect(body).toMatchObject({ replaceScmIdentity: true, scmUserId: null, scmLogin: null });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it("does not pair a trusted subject with caller display fields when the grant is empty", async () => {
     vi.mocked(api.getAccessToken).mockResolvedValue({ accessToken: "" });
     expect(
