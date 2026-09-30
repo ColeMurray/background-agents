@@ -38,7 +38,7 @@ export interface ParticipantServiceDeps {
   generateId: () => string;
   resolveCurrentGitHubAccessToken?: (
     canonicalUserId: string,
-    scmUserId: string
+    scmUserId: string | null
   ) => Promise<string | null>;
 }
 
@@ -246,11 +246,7 @@ export class ParticipantService {
       return this.resolveLegacyAuthForPR(participant);
     }
 
-    if (
-      this.resolveCurrentGitHubAccessToken &&
-      participant.canonical_user_id &&
-      participant.scm_user_id
-    ) {
+    if (this.resolveCurrentGitHubAccessToken && participant.canonical_user_id) {
       try {
         const accessToken = await this.resolveCurrentGitHubAccessToken(
           participant.canonical_user_id,

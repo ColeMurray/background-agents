@@ -104,17 +104,18 @@ export async function resolveCurrentGitHubAccessToken(
   userStore: UserStore,
   getAccountClient: () => ProviderAccountClient,
   canonicalUserId: string,
-  expectedScmUserId: string
+  expectedScmUserId: string | null
 ): Promise<string | null> {
   const enrichment = await resolveGitHubEnrichment(userStore, canonicalUserId);
   if (!enrichment) return null;
-  if (enrichment.scmUserId !== expectedScmUserId) {
+  // Browser joins may lack a cached SCM subject; the canonical identity is authoritative.
+  if (expectedScmUserId !== null && enrichment.scmUserId !== expectedScmUserId) {
     throw new Error("Session GitHub account no longer matches the canonical user");
   }
 
   const selection: ProviderAccountSelection = {
     providerId: "github",
-    accountId: expectedScmUserId,
+    accountId: enrichment.scmUserId,
     userId: canonicalUserId,
   };
   const accountClient = getAccountClient();
@@ -143,7 +144,7 @@ export async function resolveCurrentGitHubAccessToken(
 
   parseBetterAuthGitHubProfile(
     await accountClient.accountInfo({ query: selection }),
-    expectedScmUserId
+    enrichment.scmUserId
   );
   return token.accessToken;
 }
