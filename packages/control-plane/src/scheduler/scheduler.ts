@@ -88,7 +88,11 @@ import {
 } from "../automation/authorization-guard";
 import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
-import { resolveGitHubEnrichment, type GitHubEnrichment } from "../session/identity";
+import {
+  AmbiguousGitHubIdentityError,
+  resolveGitHubEnrichment,
+  type GitHubEnrichment,
+} from "../session/identity";
 import { resolveScmProviderFromEnv } from "../source-control/config";
 
 /** Max automations to process per tick (backpressure). */
@@ -1596,11 +1600,23 @@ export class Scheduler {
       executionPrincipal.platformUserId
     );
 
-    const scmEnrichment =
-      executionPrincipal.scmEnrichment ??
-      (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
-        ? await resolveGitHubEnrichment(new UserStore(this.db), executionPrincipal.platformUserId)
-        : null);
+    let scmEnrichment = executionPrincipal.scmEnrichment ?? null;
+    if (!scmEnrichment && resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github") {
+      try {
+        scmEnrichment = await resolveGitHubEnrichment(
+          new UserStore(this.db),
+          executionPrincipal.platformUserId
+        );
+      } catch (error) {
+        if (!(error instanceof AmbiguousGitHubIdentityError)) throw error;
+        this.log.warn("GitHub attribution is ambiguous; continuing without it", {
+          event: "scheduler.github_enrichment_ambiguous",
+          automation_id: automation.id,
+          run_id: run.id,
+          error,
+        });
+      }
+    }
 
     const sessionInput: SessionInitInput = {
       ownerTeamId: null,

@@ -593,6 +593,34 @@ describe("Scheduler", () => {
       });
     });
 
+    it("launches without attribution when GitHub identity is ambiguous", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: "one" },
+        { provider: "github", providerUserId: "43", providerLogin: "two" },
+      ]);
+      const stub = createMockSessionStub();
+      await expect(createScheduler(createEnv(undefined, stub)).tick()).resolves.toMatchObject({
+        processed: 1,
+        failed: 0,
+      });
+      const body = await getInitBody(vi.mocked(stub.fetch));
+      expect(body.scmUserId).toBeUndefined();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+    });
+
+    it("still fails launch when the attribution store is unavailable", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentitiesForUser.mockRejectedValue(new Error("D1 unavailable"));
+      await expect(createScheduler().tick()).resolves.toMatchObject({ processed: 0, failed: 1 });
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ status: "failed", failure_reason: "D1 unavailable" })
+      );
+    });
+
     it("rejects unattended execution before invocation work when the owner is unauthorized", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);

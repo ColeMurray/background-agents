@@ -77,6 +77,13 @@ const betterAuthGitHubAccountInfoSchema = z.object({
   }),
 });
 
+export class AmbiguousGitHubIdentityError extends Error {
+  constructor() {
+    super("User resolves to multiple GitHub provider accounts");
+    this.name = "AmbiguousGitHubIdentityError";
+  }
+}
+
 export class BetterAuthGitHubTokenUnavailableError extends Error {
   constructor(readonly retrievalError: unknown) {
     super("Better Auth GitHub token is unavailable", { cause: retrievalError });
@@ -172,7 +179,7 @@ export async function resolveGitHubEnrichment(
   const identities = await userStore.getIdentitiesForUser(userId);
   const githubIdentities = identities.filter((identity) => identity.provider === "github");
   if (githubIdentities.length > 1) {
-    throw new Error("User resolves to multiple GitHub provider accounts");
+    throw new AmbiguousGitHubIdentityError();
   }
   const githubIdentity = githubIdentities[0];
   if (!githubIdentity) return null;
