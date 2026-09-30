@@ -26,6 +26,14 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
 const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const mockIsPrincipalAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
+const mockGetGitHubAccessToken = vi.hoisted(() => vi.fn());
+const mockGitHubAccountInfo = vi.hoisted(() => vi.fn());
+vi.mock("../auth/user/runtime", () => ({
+  getUserAuth: vi.fn(() => ({
+    api: { getAccessToken: mockGetGitHubAccessToken, accountInfo: mockGitHubAccountInfo },
+  })),
+}));
+
 vi.mock("../source-control", () => ({
   createSourceControlProviderFromEnv: vi.fn(() => ({
     checkRepositoryAccess: mockCheckRepositoryAccess,
@@ -497,6 +505,8 @@ function lastInsertedChildren(): Array<Record<string, unknown>> {
 describe("Scheduler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetGitHubAccessToken.mockReset().mockResolvedValue({ accessToken: "" });
+    mockGitHubAccountInfo.mockReset();
     mockResolveSessionProviderAuth.mockResolvedValue([
       { provider: "openai", authMode: "api_key", selectionSource: "unattended_policy" },
       { provider: "xai", authMode: "api_key", selectionSource: "unattended_policy" },
@@ -507,7 +517,7 @@ describe("Scheduler", () => {
     mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
       provider === "slack" ? { userId: "slack-actor-user" } : null
     );
-    mockUserStoreGetIdentitiesForUser.mockResolvedValue([]);
+    mockUserStoreGetIdentitiesForUser.mockReset().mockResolvedValue([]);
     mockUserStoreGetUserById.mockResolvedValue(null);
     capturedInvocationParams = [];
     mockStore = createMockStore();
@@ -757,6 +767,37 @@ describe("Scheduler", () => {
       await createScheduler(createEnv(undefined, stub)).trigger("auto-1", "manual-user", null);
       expect(mockUserStoreGetIdentitiesForUser).not.toHaveBeenCalled();
       expect((await getInitBody(vi.mocked(stub.fetch))).scmUserId).toBeUndefined();
+    });
+
+    it("resolves the scheduled owner's verified profile when no login is cached", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: null },
+      ]);
+      mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
+      mockGitHubAccountInfo.mockResolvedValue({
+        user: { id: "42" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "42",
+          login: "verified-owner",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      });
+      const stub = createMockSessionStub();
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toMatchObject({
+        processed: 1,
+      });
+      expect(await getInitBody(vi.mocked(stub.fetch))).toMatchObject({
+        scmUserId: "42",
+        scmLogin: "verified-owner",
+        scmEmail: "42+verified-owner@users.noreply.github.com",
+      });
+      expect(mockGitHubAccountInfo).toHaveBeenCalledWith({
+        query: { providerId: "github", accountId: "42", userId: "user-1" },
+      });
     });
 
     it("resolves one provider auth snapshot for every child in a fan-out invocation", async () => {
@@ -2722,6 +2763,99 @@ describe("Scheduler", () => {
           email: "77+reviewer@users.noreply.github.com",
         },
       });
+    });
+
+    it("resolves the Slack actor's verified profile when no login is cached", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "77", providerLogin: null },
+      ]);
+      mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
+      mockGitHubAccountInfo.mockResolvedValue({
+        user: { id: "77" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "77",
+          login: "verified-actor",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      });
+      const stub = createMockSessionStub();
+      expect(
+        await createScheduler(createEnv(undefined, stub)).event(
+          makeSlackEvent({ text: "follow up" })
+        )
+      ).toMatchObject({ steered: 1, triggered: 0 });
+      expect(await getPromptBody(vi.mocked(stub.fetch))).toMatchObject({
+        canonicalUserId: "slack-actor-user",
+        scmEnrichment: {
+          userId: "77",
+          login: "verified-actor",
+          email: "77+verified-actor@users.noreply.github.com",
+        },
+      });
+      expect(mockGitHubAccountInfo).toHaveBeenCalledWith({
+        query: { providerId: "github", accountId: "77", userId: "slack-actor-user" },
+      });
+    });
+
+    it.each(["empty", "unavailable"])(
+      "steers without attribution when the actor grant is %s",
+      async (scenario) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-running" })
+        );
+        mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+          { provider: "github", providerUserId: "77", providerLogin: null },
+        ]);
+        if (scenario === "empty") mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "" });
+        else mockGetGitHubAccessToken.mockRejectedValue(new Error("revoked grant"));
+        const stub = createMockSessionStub();
+        expect(
+          await createScheduler(createEnv(undefined, stub)).event(
+            makeSlackEvent({ text: "follow up" })
+          )
+        ).toMatchObject({ steered: 1, triggered: 0 });
+        expect(
+          (await getPromptBody(vi.mocked(stub.fetch))).scmEnrichment?.login ?? null
+        ).toBeNull();
+        expect(mockGitHubAccountInfo).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      }
+    );
+
+    it("does not steer or start an owner run for a mismatched actor profile", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "77", providerLogin: null },
+      ]);
+      mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
+      mockGitHubAccountInfo.mockResolvedValue({
+        user: { id: "42" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "42",
+          login: "wrong",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      });
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).rejects.toThrow("mismatched GitHub account");
+      expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 
     it("steers a natural follow-up without attribution when GitHub identity is ambiguous", async () => {

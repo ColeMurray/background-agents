@@ -61,6 +61,8 @@ import {
   type SlackRunMetadata,
   type SlackCompletionContext,
 } from "./slack-completion";
+import { getUserAuth } from "../auth/user/runtime";
+import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
@@ -90,7 +92,7 @@ import type { RequestContext } from "../routes/shared";
 import { deliverWithRetry } from "../session/callback-delivery";
 import {
   AmbiguousGitHubIdentityError,
-  resolveGitHubEnrichment,
+  resolveGitHubEnrichmentForCanonicalUser,
   type GitHubEnrichment,
 } from "../session/identity";
 import { resolveScmProviderFromEnv } from "../source-control/config";
@@ -570,27 +572,13 @@ export class Scheduler {
     }
 
     let attributionError: unknown;
-    if (
-      !params.executionPrincipal &&
-      launchCandidates.length > 0 &&
-      resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
-    ) {
+    if (!params.executionPrincipal && launchCandidates.length > 0) {
       try {
-        executionPrincipal.scmEnrichment = await resolveGitHubEnrichment(
-          new UserStore(this.db),
+        executionPrincipal.scmEnrichment = await this.resolveScmEnrichment(
           executionPrincipal.platformUserId
         );
       } catch (error) {
-        if (error instanceof AmbiguousGitHubIdentityError) {
-          this.log.warn("GitHub attribution is ambiguous; continuing without it", {
-            event: "scheduler.github_enrichment_ambiguous",
-            automation_id: automation.id,
-            invocation_id: invocationId,
-            error,
-          });
-        } else {
-          attributionError = error;
-        }
+        attributionError = error;
       }
     }
 
@@ -1686,6 +1674,29 @@ export class Scheduler {
     );
   }
 
+  private async resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null> {
+    if (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) !== "github") return null;
+    try {
+      return await resolveGitHubEnrichmentForCanonicalUser(
+        new UserStore(this.db),
+        userId,
+        () => getUserAuth(this.env, this.db).api
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AmbiguousGitHubIdentityError) &&
+        !(error instanceof GitHubAttributionUnavailableError)
+      )
+        throw error;
+      this.log.warn("GitHub attribution unavailable; continuing without it", {
+        event: "scheduler.github_enrichment_unavailable",
+        user_id: userId,
+        error,
+      });
+      return null;
+    }
+  }
+
   /**
    * Route a follow-up slack message in a thread to its run's existing session as
    * the next turn — whether that run is still in flight, completed, or failed —
@@ -1718,19 +1729,7 @@ export class Scheduler {
       automationId: automation.id,
     };
 
-    let enrichment: GitHubEnrichment | null = null;
-    if (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github") {
-      try {
-        enrichment = await resolveGitHubEnrichment(new UserStore(this.db), actorUserId);
-      } catch (error) {
-        if (!(error instanceof AmbiguousGitHubIdentityError)) throw error;
-        this.log.warn("GitHub attribution is ambiguous; continuing without it", {
-          event: "scheduler.github_enrichment_ambiguous",
-          session_id: sessionId,
-          error,
-        });
-      }
-    }
+    const enrichment = await this.resolveScmEnrichment(actorUserId);
     try {
       await this.enqueueSessionPrompt(
         sessionId,
