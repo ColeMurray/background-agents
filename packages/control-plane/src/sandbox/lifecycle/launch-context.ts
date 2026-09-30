@@ -1,4 +1,4 @@
-import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
+import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
 import { extractProviderAndModel, getValidModelOrDefault } from "@open-inspect/shared/models";
 import {
   omitUnsupportedSandboxSettings,
@@ -6,7 +6,7 @@ import {
   type McpServerConfig,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
-import { repoImageBuildScope } from "../../image-builds/model";
+import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
 import type { Logger } from "../../logger";
 import { sessionHasRepository, type SessionRow } from "../../session/types";
 import {
@@ -47,7 +47,7 @@ export interface SandboxLaunchConfig {
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
 }
 
-interface SandboxLaunchContextDependencies {
+export interface SandboxLaunchContextDependencies {
   sessionContext: SandboxLaunchContextReader;
   provider: {
     name: string;
@@ -57,6 +57,47 @@ interface SandboxLaunchContextDependencies {
   imageBuildLookup?: ImageBuildLookup;
   /** Construction can precede the session row; resolve log context only at use. */
   getLogger: () => Pick<Logger, "info" | "warn">;
+}
+
+export type AgentLaunchFields = Pick<CreateSandboxConfig, "harness" | "provider" | "model">;
+
+export interface RepositoryLaunchInputs {
+  repositories: SessionRepositoryInfo[];
+  fields: Pick<CreateSandboxConfig, "repoOwner" | "repoName" | "branch" | "repositories">;
+}
+
+export interface ResolvedSandboxSettings {
+  sandboxSettings: SandboxSettings;
+  timeoutSeconds: number | undefined;
+}
+
+/** Input resolution only; startup mode, reservations and provider operations belong to the manager. */
+export interface SandboxLaunchContext {
+  getUserEnvVars(): Promise<Record<string, string> | undefined>;
+  resolveAgent(session: SessionRow): AgentLaunchFields;
+  resolveRepositories(session: SessionRow): RepositoryLaunchInputs;
+  lookupImageBuildForSpawn(
+    scope: ImageBuildScope,
+    repositories: SessionRepositoryInfo[],
+    harness: HarnessId
+  ): Promise<SelectedImageBuild | null>;
+  markImageBuildRestoreFailed(image: SelectedImageBuild, error: unknown): Promise<void>;
+  resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean>;
+  loadMcpServers(repositories: SessionRepositoryInfo[]): Promise<McpServerConfig[] | undefined>;
+  resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings;
+}
+
+/** Synchronous eligibility keeps ineligible sessions outside the image-lookup await. */
+export function resolveImageBuildScope(
+  session: SessionRow,
+  repositories: SessionRepositoryInfo[]
+): ImageBuildScope | null {
+  // Environment misses never fall back to a repo image, which bakes different setup/secrets.
+  if (session.environment_id) return { kind: "environment", id: session.environment_id };
+  // Ad-hoc multi-repo sessions cannot use an image that bakes a single checkout.
+  return sessionHasRepository(session) && repositories.length === 1
+    ? repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName)
+    : null;
 }
 
 /**
@@ -70,18 +111,18 @@ export function createSandboxLaunchContext({
   config,
   imageBuildLookup,
   getLogger,
-}: SandboxLaunchContextDependencies) {
+}: SandboxLaunchContextDependencies): SandboxLaunchContext {
   return {
     getUserEnvVars: () => sessionContext.getUserEnvVars(),
 
-    resolveAgent(session: SessionRow) {
+    resolveAgent(session: SessionRow): AgentLaunchFields {
       return {
         ...extractProviderAndModel(getValidModelOrDefault(session.model || config.model)),
         harness: getValidHarnessOrDefault(session.harness),
       };
     },
 
-    resolveRepositories(session: SessionRow) {
+    resolveRepositories(session: SessionRow): RepositoryLaunchInputs {
       const repositories = sessionContext.getSessionRepositories();
       // Single-repo sessions keep the scalar wire form unless they carry a base SHA.
       const multiRepoFields: Pick<CreateSandboxConfig, "repositories"> =
@@ -99,57 +140,43 @@ export function createSandboxLaunchContext({
       };
     },
 
-    lookupImageBuildForSpawn(
-      session: SessionRow,
-      repositories: SessionRepositoryInfo[]
-    ): Promise<SelectedImageBuild | null> | null {
-      // Environment misses never fall back to a repo image (which bakes different setup/secrets).
-      // Ad-hoc multi-repo sessions cannot use an image that bakes a single checkout.
-      const scope = session.environment_id
-        ? { kind: "environment" as const, id: session.environment_id }
-        : sessionHasRepository(session) && repositories.length === 1
-          ? repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName)
-          : null;
-      // Only ineligible scopes skip the await; eligible misses retain the existing async boundary.
-      if (!scope) return null;
-      return (async () => {
-        if (!imageBuildLookup || repositories.length === 0) return null;
-        try {
-          const image = await imageBuildLookup.getLatestReady(scope);
-          const result = await evaluateImageBuildForSpawn(
-            image,
-            repositories,
-            getValidHarnessOrDefault(session.harness)
-          );
-          if (result.outcome === "selected") {
-            getLogger().info("Using prebuilt image", {
-              event: "image_build.spawn_selected",
-              scope_kind: scope.kind,
-              scope_id: scope.id,
-              image_build_id: result.image.imageBuildId,
-              runtime_version: result.image.runtimeVersion,
-            });
-            return result.image;
-          }
-          getLogger().info("Prebuilt image miss, using base image", {
-            event: "image_build.spawn_miss",
+    async lookupImageBuildForSpawn(
+      scope: ImageBuildScope,
+      repositories: SessionRepositoryInfo[],
+      harness: HarnessId
+    ): Promise<SelectedImageBuild | null> {
+      if (!imageBuildLookup || repositories.length === 0) return null;
+      try {
+        const image = await imageBuildLookup.getLatestReady(scope);
+        const result = await evaluateImageBuildForSpawn(image, repositories, harness);
+        if (result.outcome === "selected") {
+          getLogger().info("Using prebuilt image", {
+            event: "image_build.spawn_selected",
             scope_kind: scope.kind,
             scope_id: scope.id,
-            reason: result.reason,
-            image_build_id: result.imageBuildId,
+            image_build_id: result.image.imageBuildId,
+            runtime_version: result.image.runtimeVersion,
           });
-          return null;
-        } catch (e) {
-          getLogger().warn("Failed to look up prebuilt image, using base image", {
-            event: "image_build.spawn_miss",
-            scope_kind: scope.kind,
-            scope_id: scope.id,
-            reason: "lookup_failed",
-            error: e instanceof Error ? e.message : String(e),
-          });
-          return null;
+          return result.image;
         }
-      })();
+        getLogger().info("Prebuilt image miss, using base image", {
+          event: "image_build.spawn_miss",
+          scope_kind: scope.kind,
+          scope_id: scope.id,
+          reason: result.reason,
+          image_build_id: result.imageBuildId,
+        });
+        return null;
+      } catch (e) {
+        getLogger().warn("Failed to look up prebuilt image, using base image", {
+          event: "image_build.spawn_miss",
+          scope_kind: scope.kind,
+          scope_id: scope.id,
+          reason: "lookup_failed",
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return null;
+      }
     },
 
     /** Called only by the manager's confirmed-unavailable branch; retry must survive D1 failure. */
@@ -207,10 +234,7 @@ export function createSandboxLaunchContext({
       }
     },
 
-    resolveSandboxSettings(session: SessionRow): {
-      sandboxSettings: SandboxSettings;
-      timeoutSeconds: number | undefined;
-    } {
+    resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings {
       let sandboxSettings: SandboxSettings;
       try {
         const settings = parsePersistedSandboxSettings(session.sandbox_settings);

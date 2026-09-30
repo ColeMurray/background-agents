@@ -59,6 +59,8 @@ import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-
 import type { ImageBuildLookup } from "./image-selection";
 import {
   createSandboxLaunchContext,
+  resolveImageBuildScope,
+  type SandboxLaunchContext,
   type SandboxLaunchConfig,
   type SandboxLaunchContextReader,
 } from "./launch-context";
@@ -488,7 +490,7 @@ export class SandboxLifecycleManager
 
   /** Memoized session-scoped logger, keyed by the resolved session id. */
   private logMemo?: { sessionId: string | undefined; logger: Logger };
-  private readonly launchContext: ReturnType<typeof createSandboxLaunchContext>;
+  private readonly launchContext: SandboxLaunchContext;
 
   /**
    * Session-scoped logger. Falls back to the module-level logger if no
@@ -772,8 +774,10 @@ export class SandboxLifecycleManager
       const agent = this.launchContext.resolveAgent(session);
       const { repositories, fields: repositoryFields } =
         this.launchContext.resolveRepositories(session);
-      const imageLookup = this.launchContext.lookupImageBuildForSpawn(session, repositories);
-      const selectedImage = imageLookup ? await imageLookup : null;
+      const imageScope = resolveImageBuildScope(session, repositories);
+      const selectedImage = imageScope
+        ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent.harness)
+        : null;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
@@ -793,7 +797,9 @@ export class SandboxLifecycleManager
         sandboxId: expectedSandboxId,
         controlPlaneUrl: this.config.controlPlaneUrl,
         sandboxAuthToken,
-        ...agent,
+        harness: agent.harness,
+        provider: agent.provider,
+        model: agent.model,
         userEnvVars,
         prebuiltImageId,
         prebuiltImageSha,
@@ -1105,7 +1111,9 @@ export class SandboxLifecycleManager
         sandboxId: expectedSandboxId,
         sandboxAuthToken,
         controlPlaneUrl: this.config.controlPlaneUrl,
-        ...agent,
+        harness: agent.harness,
+        provider: agent.provider,
+        model: agent.model,
         userEnvVars,
         timeoutSeconds,
         codeServerEnabled,

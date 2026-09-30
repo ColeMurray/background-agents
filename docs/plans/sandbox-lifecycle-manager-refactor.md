@@ -1,111 +1,97 @@
 # Sandbox Lifecycle Manager Refactor
 
-This document records implementation ownership for
-[COL-240](https://linear.app/colemurray/issue/COL-240/refactor-sandboxlifecyclemanager-into-focused-collaborators).
-The parent issue contains the approved incremental design;
-[ADR 0004](../adr/0004-sandbox-checkpoint-and-shutdown.md) governs public lifecycle and durable
-shutdown authority. The [T1 characterization matrix](sandbox-lifecycle-refactor-baseline.md) records
-compatibility evidence and separate existing behavior gaps, not fixes claimed by extraction.
+This is the ownership guide for the incremental
+[COL-240](https://linear.app/colemurray/issue/COL-240/refactor-sandboxlifecyclemanager-into-focused-collaborators)
+refactor. [ADR 0004](../adr/0004-sandbox-checkpoint-and-shutdown.md) governs lifecycle and durable
+shutdown authority. The [characterization matrix](sandbox-lifecycle-refactor-baseline.md) records
+compatibility evidence and separate behavior gaps, not fixes claimed by extraction.
 
-## Integration Status
-
-- T1 / COL-241 is integrated as `0ce9e9d` (PR #2144).
-- T2 / COL-242 extracts launch inputs and image mechanics. Starting checkout: clean `7716838`,
-  including the newer VM save/stop recovery fixes from PR #2146. Those changes are preserved.
-- T3 through T7 remain subsequent serial increments: access, VM reconciliation, allocation cleanup,
-  watchdog effects, then final composition/full verification. T3 requires integrated T2, not merely
-  a passing local suite or an open PR.
-- This design copy was absent at T2 start. These notes describe actual T2 ownership rather than
-  claiming the parent design's future collaborators have already landed.
-
-## Current Ownership
+## Ownership
 
 Paths are relative to `packages/control-plane/src/`.
 
-| Owner                                                                     | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sandbox/lifecycle/manager.ts`                                            | Public readiness, work admission and recovery; startup mode selection; generation/token reservation; ordered input awaits; provider invocation, pending-handle registration and recovery-invoked recording; confirmed-unavailable base retry and identity rotation; provider claims; failure/breaker accounting; access, VM reconciliation, cleanup and watchdog orchestration still awaiting later extractions. |
-| `sandbox/lifecycle/launch-context.ts`                                     | Stateless environment reads, model/harness resolution, ordered repository fields, MCP/Slack lookup, persisted-setting normalization, timeout conversion, image lookup/logging and explicitly requested best-effort invalidation.                                                                                                                                                                                 |
-| `sandbox/lifecycle/image-selection.ts`                                    | Existing pure image fingerprint, harness/runtime compatibility and provenance evaluation, reused without duplicating its policy.                                                                                                                                                                                                                                                                                 |
-| `sandbox/lifecycle/decisions.ts`, `alarm-policy.ts`, `shutdown-policy.ts` | Existing decision/policy functions.                                                                                                                                                                                                                                                                                                                                                                              |
-| `session/sandbox-repository.ts`                                           | Conditional SQL and encrypted access storage; no changed atomicity or persistence format.                                                                                                                                                                                                                                                                                                                        |
-| `session/sandbox-shutdown.ts`, `sandbox-shutdown-repository.ts`           | Durable shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.                                                                                                                                                                                                                                                                                                                           |
-| `session/components.ts`, `sandbox-lifecycle-adapters.ts`                  | Existing production graph and adapter wiring; lookup contracts now imported from their focused owner.                                                                                                                                                                                                                                                                                                            |
+- `sandbox/lifecycle/manager.ts` remains the public readiness, work-admission and recovery boundary.
+  It selects startup mode, reserves generation/token identity, sequences input awaits, registers
+  pending handles, records recovery invocation, dispatches providers, claims results, rotates retry
+  identity and owns failure/breaker accounting.
+- `sandbox/lifecycle/launch-context.ts` owns environment reads, model/harness defaults, ordered
+  repository fields, MCP/Slack lookup, persisted-setting normalization, timeout conversion, image
+  scope selection, lookup/logging and explicitly requested best-effort invalidation.
+- `sandbox/lifecycle/image-selection.ts` remains the pure fingerprint, harness/runtime compatibility
+  and provenance evaluator. Launch context reuses it rather than reimplementing policy.
+- `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
+  `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
+  shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
+- `session/components.ts` and `sandbox-lifecycle-adapters.ts` compose the existing graph. Consumer
+  ports remain in `sandbox/lifecycle/ports.ts`; consumers do not gain launch or shutdown internals.
 
-### Launch Input Interface
+Access, VM reconciliation, allocation cleanup and watchdog effects remain manager responsibilities
+until their serial extraction increments land. Each increment must integrate before its successor;
+the manager is not intended to become a tiny facade or lose lifecycle arbitration.
 
-`createSandboxLaunchContext` composes stateless functions. Its reader exposes only
-`getSessionRepositories()` and `getUserEnvVars()`. Its provider dependency is metadata only: `name`
-and `supportsSandboxTimeout`, never provider operations. Configuration contains the default model
-and optional MCP/Slack lookup ports. The optional image lookup remains provider-scoped in
-composition. A lazy `getLogger()` uses the manager's existing session-scoped logger; construction
-does not read the session or invoke a lookup.
+## Launch Contract
 
-The manager's constructor remains the assembled lifecycle boundary. Its config inherits the focused
-`SandboxLaunchConfig`, but only the projected launch fields reach the collaborator. Session-row
-selection, routing URL, reserved identity/token, launch mode, generation time and prior sandbox ID
-remain manager inputs. No full-manager reference, lifecycle storage/shutdown port, flag setter,
-provider-operation dependency or new consumer API is added to launch context.
+`SandboxLaunchContext` is an explicit internal interface. `createSandboxLaunchContext` is retained
+only to bind shared, narrow dependencies without introducing a stateful class: a two-method
+environment/repository reader, default model and MCP/Slack ports, provider metadata, optional image
+lookup and lazy logger. It has no mutable lifecycle state, storage/shutdown authority, provider
+operations, full-manager reference or service locator. Construction does not read the session or
+resolve log context.
 
-Operations remain individually callable so extraction does not introduce an async universal startup
-pipeline or a new await before provider registration:
+`AgentLaunchFields`, `RepositoryLaunchInputs` and `ResolvedSandboxSettings` name the return shapes.
+Agent fields are explicitly mapped into provider configs. Repository payload fields are restricted
+to the existing scalar identity/base branch and optional ordered member list; single-repo sessions
+omit the list unless a base SHA requires it. Nested owners and immutable base SHAs remain intact.
+`resolveSandboxSettings(session)` returns normalized/provider-filtered settings and the derived
+timeout together, so callers cannot assemble that ordering incorrectly.
 
-- Fresh: reserve identity/hash, retire prior provider, env, model/repositories, eligible image
-  lookup, MCP, Slack, settings/timeout, pending registration, provider create.
-- Restore: reserve identity/hash, seed snapshot runtime authority, retire prior provider, env,
-  model/repositories, Slack, MCP, settings/timeout, pending registration, recovery-invoked
-  recording, provider restore. There is no fresh image lookup or silent fresh fallback.
-- Resume: existing reservation/runtime handling, settings/timeout, optional recovery-invoked
-  recording, provider resume and existing access completion. No env, repositories, MCP, Slack or
-  image work.
-- Bridge: existing pending-reference/generation eligibility checks precede settings/timeout
-  resolution.
+`resolveImageBuildScope(session, repositories)` is a plain synchronous function returning
+`ImageBuildScope | null`. The manager awaits the promise-only lookup only for a non-null scope.
+Environment scope takes precedence and never falls back to a repo image. Ad-hoc multi-repo and
+repo-less sessions have no scope. An eligible scope keeps its existing await even when lookup is
+disabled or the repository list is empty.
 
-Launch context owns fresh image eligibility and returns synchronous `null` for ineligible scopes;
-the manager conditionally awaits the returned promise without reconstructing that policy. Eligible
-scopes retain their existing await even when lookup is disabled or the repository list is empty.
-`resolveSandboxSettings(session)` normalizes and filters persisted settings before returning both
-`sandboxSettings` and the derived `timeoutSeconds`; callers do not assemble that ordering
-themselves. Launch lookup never invalidates a miss or lookup error. Only the manager's existing
-`PrebuiltImageUnavailableError` branch explicitly requests invalidation, then reserves a new
-identity/token for base-image retry. Transient provider errors retain the valid prebuild.
+## Sequencing Invariants
 
-### Related Work And Limits
+- Reserve identity and shutdown ownership synchronously, invalidate old credentials, then publish
+  the generation-conditional hash before asynchronous input work. No launch read moves ahead of it.
+- Fresh: retire prior provider, env, agent/repositories, eligible image lookup, MCP, Slack,
+  settings/timeout, pending registration, provider create.
+- Restore: seed snapshot runtime authority, retire prior provider, env, agent/repositories, Slack,
+  MCP, settings/timeout, pending registration, recovery-invoked recording, provider restore.
+- Resume resolves only settings/timeout and its existing access contract. It gains no environment,
+  repository, MCP, Slack or image work. Bridge settings remain after pending-reference eligibility.
+- Lookup misses/errors never invalidate images. Only the manager's confirmed-unavailable branch
+  requests best-effort invalidation and reserves a fresh identity/token for base-image retry.
+  Transient provider errors retain valid images; saved-state failure never silently becomes fresh.
+- Preserve provider claims, generation/hold checks, access-write atomicity, conservative lifetime
+  provenance, undefined settings, milliseconds-to-seconds conversion and lazy session logging.
 
-COL-161 remains In Progress at T2 inspection; no spawn-time prompt-context feature was implemented
-or removed. Existing launch fields, immutable base SHAs, nested owners and repository ordering are
-preserved. COL-156 remains Backlog: current production safety-policy wiring and dormant construction
-behavior are retained; this increment does not claim to finish its broader constructor guarantees.
-The T1 behavior gaps remain separate, including fresh/restore's existing unscoped artifact writes.
+There is no universal startup pipeline. Independently landed context injection, construction safety
+or provider recovery behavior must be preserved, not implemented or removed as incidental cleanup.
+No schema, wire/runtime/provider-backend contract, timeout or retry policy changes are authorized.
 
-## T2 Verification
+## Verification
 
-Node `v24.20.0`, npm `11.19.0`, installed dependencies. Commands ran sequentially from repository
-root:
+Keep direct narrow-dependency tests for input resolution and lookup effects. Keep assembled tests
+for exact fresh/restore/resume payloads, reservation before asynchronous work, distinct integration
+ordering, the no-await boundary for ineligible images, retry identity rotation and lazy bridge
+settings. Image compatibility policy belongs to `image-selection.test.ts`; real-storage and Workerd
+tests retain generation, shutdown and early-connect coverage.
 
-| Command                                                                                             | Result                                                        |
-| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `npm run build -w @open-inspect/shared`                                                             | Passed.                                                       |
-| `npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle`                                  | Passed: 17 files, 549 tests, including 50 new cases.          |
-| `npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown` | Passed: 2 files, 20 tests, with Workerd provider substitutes. |
-| `npm run typecheck -w @open-inspect/control-plane`                                                  | Passed all four TypeScript configurations.                    |
-| `npm run lint -w @open-inspect/control-plane`                                                       | Passed.                                                       |
-| `npm run test:lint-sandbox-boundaries`                                                              | Passed: 2 tests.                                              |
-| Targeted `npx prettier --check` on all touched files                                                | Passed.                                                       |
-| `git diff --check`                                                                                  | Passed.                                                       |
+Build shared first, then run sequentially from the repository root:
 
-The first lifecycle run passed 546 tests and failed the new bridge-settings assertion because its
-fixture still had an ineligible `pending` status. The fixture now uses `ready`; the full selected
-directory passed on rerun. The first typecheck rejected a widened boolean in the new resume mock;
-using the existing literal `true` convention fixed it, and typecheck passed on rerun. These were
-test fixture/type errors, not baseline failures or production behavior changes.
+```bash
+npm run build -w @open-inspect/shared
+npm test -w @open-inspect/control-plane -- src/sandbox/lifecycle
+npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect sandbox-shutdown
+npm run typecheck -w @open-inspect/control-plane
+npm run lint -w @open-inspect/control-plane
+npm run test:lint-sandbox-boundaries
+git diff --check
+```
 
-Direct launch-context tests use narrow dependency mocks. New assembled-manager tests assert exact
-fresh/restore/resume payloads and use deferred hashing/env/integration work to verify reservation
-and ordered lookups. Existing image fallback/identity rotation, pending VM lifetime provenance,
-early-connect and shutdown tests remain. The bridge regression checks lazy settings resolution at
-the provider boundary. Review follow-up added two microtask-order cases for ineligible image scopes,
-strengthened eligible-miss async-boundary assertions, and verifies normalized settings and their
-timeout together. The commands above passed again after that follow-up. This is not exhaustive
-interleaving proof, a full package/bundle sweep, deployment or live-provider verification;
-final-story verification remains T7's scope.
+Check formatting of touched files. Record checkout details, exact command results and blockers in
+the PR/issue handoff rather than this enduring ownership guide. Full-story/package/bundle checks
+remain the final increment's scope. Provider substitutes are not live-provider verification, and
+this refactor does not authorize deployment or claim exhaustive interleaving safety.

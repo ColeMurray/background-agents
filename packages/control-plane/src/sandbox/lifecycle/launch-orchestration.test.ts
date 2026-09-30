@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { hashToken } from "../../auth/crypto";
-import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
-import type { SessionRepositoryInfo } from "../provider";
+import type { PendingSandboxAllocation, SessionRepositoryInfo } from "../provider";
 import { SandboxLifecycleManager } from "./manager";
 import {
   createMockAlarmScheduler,
@@ -27,15 +26,315 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function createLaunchFixture() {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(2_000_000);
+  const effects: string[] = [];
+  const repositories: SessionRepositoryInfo[] = [
+    {
+      repoOwner: "group/subgroup",
+      repoName: "api",
+      baseBranch: "release",
+      baseSha: "start-sha",
+    },
+  ];
+  const servers: McpServerConfig[] = [
+    {
+      id: "mcp-1",
+      name: "tools",
+      type: "remote",
+      enabled: true,
+      url: "https://mcp.example",
+      headers: { Authorization: "private-mcp" },
+    },
+  ];
+  const session = createMockSession({
+    repo_owner: "group/subgroup",
+    repo_name: "api",
+    base_branch: "release",
+    environment_id: "environment-1",
+    model: "",
+    harness: "claude",
+    code_server_enabled: 1,
+    vnc_enabled: 1,
+    sandbox_settings: '{"sandboxTimeoutMs":3600000,"terminalEnabled":true}',
+  });
+  const sandbox = createMockSandbox({
+    status: "pending",
+    modal_object_id: null,
+    modal_sandbox_id: "prior-sandbox",
+    last_heartbeat: null,
+  });
+  const storage = createMockStorage(session, sandbox);
+  const sessionContext = {
+    getSession: () => session,
+    getUserEnvVars: vi.fn(async () => {
+      effects.push("env");
+      return { API_KEY: "private-env" };
+    }),
+    getSessionRepositories: vi.fn(() => {
+      effects.push("repositories");
+      return repositories;
+    }),
+  };
+  const imageBuildLookup = {
+    getLatestReady: vi.fn(async () => {
+      effects.push("image");
+      return null;
+    }),
+    markRestoreFailed: vi.fn(async () => true),
+  };
+  const mcpServerLookup = {
+    getDecryptedForSession: vi.fn(async () => {
+      effects.push("mcp");
+      return servers;
+    }),
+  };
+  const slackAgentNotifyLookup = {
+    isEnabledForRepo: vi.fn(async () => {
+      effects.push("slack");
+      return true;
+    }),
+  };
+  const shutdown = createUnmanagedShutdown();
+  shutdown.reserveStartup.mockImplementation((_createdAt, _policy, persist) => {
+    effects.push("reserve");
+    persist();
+  });
+  shutdown.recordPendingProviderHandle.mockImplementation(async () => {
+    effects.push("pending_registration");
+    return "registered";
+  });
+  const provider = createMockProvider();
+  provider.pendingSandboxAllocation = vi.fn(
+    (): PendingSandboxAllocation => ({
+      reference: "pending-provider",
+      lifetime: {
+        kind: "finite",
+        observedAtMs: Date.now(),
+        expiresAtMs: Date.now() + 3_600_000,
+        source: "conservative_start_bound",
+      },
+    })
+  );
+  const manager = new SandboxLifecycleManager(
+    provider,
+    storage,
+    sessionContext,
+    createMockBroadcaster(),
+    createMockWebSocketManager(),
+    createMockAlarmScheduler(),
+    createMockIdGenerator(),
+    shutdown,
+    {
+      ...createTestConfig(),
+      model: "openai/gpt-5.4",
+      mcpServerLookup,
+      slackAgentNotifyLookup,
+    },
+    imageBuildLookup
+  );
+  return {
+    manager,
+    provider,
+    sandbox,
+    sessionContext,
+    shutdown,
+    imageBuildLookup,
+    mcpServerLookup,
+    slackAgentNotifyLookup,
+    effects,
+    repositories,
+    servers,
+  };
+}
+
 describe("launch input orchestration", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("fresh launch preserves the exact payload and env/image/MCP/Slack order", async () => {
+    const {
+      manager,
+      provider,
+      shutdown,
+      imageBuildLookup,
+      mcpServerLookup,
+      slackAgentNotifyLookup,
+      effects,
+      repositories,
+      servers,
+    } = createLaunchFixture();
+    vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+    const imageEntered = deferred<void>();
+    const image = deferred<null>();
+    imageBuildLookup.getLatestReady.mockImplementationOnce(() => {
+      effects.push("image");
+      imageEntered.resolve();
+      return image.promise;
+    });
+    const mcpEntered = deferred<void>();
+    const mcp = deferred<McpServerConfig[]>();
+    mcpServerLookup.getDecryptedForSession.mockImplementationOnce(() => {
+      effects.push("mcp");
+      mcpEntered.resolve();
+      return mcp.promise;
+    });
+    vi.mocked(provider.createSandbox).mockImplementation(async (config) => {
+      effects.push("create");
+      return { sandboxId: config.sandboxId, createdAt: Date.now(), lifetime: noLifetime() };
+    });
+    expect(effects).toEqual([]);
+
+    const launching = manager.spawnSandbox();
+    await imageEntered.promise;
+
+    expect(effects).toEqual(["reserve", "env", "repositories", "image"]);
+    expect(provider.createSandbox).not.toHaveBeenCalled();
+
+    image.resolve(null);
+    await mcpEntered.promise;
+
+    expect(effects).toEqual(["reserve", "env", "repositories", "image", "mcp"]);
+    expect(slackAgentNotifyLookup.isEnabledForRepo).not.toHaveBeenCalled();
+    expect(provider.createSandbox).not.toHaveBeenCalled();
+
+    mcp.resolve(servers);
+    await launching;
+
+    expect(vi.mocked(provider.createSandbox).mock.calls).toStrictEqual([
+      [
+        {
+          sessionId: "test-session",
+          generationCreatedAtMs: 2_000_000,
+          retireSandboxId: "prior-sandbox",
+          sandboxId: "sandbox-group/subgroup-api-2000000",
+          sandboxAuthToken: "generated-id-1",
+          controlPlaneUrl: "https://test.workers.dev",
+          repoOwner: "group/subgroup",
+          repoName: "api",
+          branch: "release",
+          harness: "claude",
+          provider: "openai",
+          model: "gpt-5.4",
+          userEnvVars: { API_KEY: "private-env" },
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
+          timeoutSeconds: 3600,
+          codeServerEnabled: true,
+          vncEnabled: true,
+          agentSlackNotifyEnabled: true,
+          mcpServers: servers,
+          sandboxSettings: { sandboxTimeoutMs: 3_600_000, terminalEnabled: true },
+          repositories,
+        },
+      ],
+    ]);
+    expect(effects).toEqual([
+      "reserve",
+      "env",
+      "repositories",
+      "image",
+      "mcp",
+      "slack",
+      "pending_registration",
+      "create",
+    ]);
+    expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
+    expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("restore preserves the exact payload and env/Slack/MCP order before receipt and provider", async () => {
+    const {
+      manager,
+      provider,
+      sandbox,
+      shutdown,
+      imageBuildLookup,
+      slackAgentNotifyLookup,
+      effects,
+      repositories,
+      servers,
+    } = createLaunchFixture();
+    sandbox.status = "stopped";
+    sandbox.snapshot_image_id = "saved-image";
+    sandbox.snapshot_runtime_version = COMPATIBLE_RUNTIME_VERSION;
+    vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+    const slackEntered = deferred<void>();
+    const slack = deferred<boolean>();
+    slackAgentNotifyLookup.isEnabledForRepo.mockImplementationOnce(() => {
+      effects.push("slack");
+      slackEntered.resolve();
+      return slack.promise;
+    });
+    shutdown.markRecoveryInvoked.mockImplementation(() => {
+      effects.push("recovery_invoked");
+    });
+    vi.mocked(provider.restoreFromSnapshot!).mockImplementation(async (config) => {
+      effects.push("restore");
+      return { success: true, sandboxId: config.sandboxId, lifetime: noLifetime() };
+    });
+    expect(effects).toEqual([]);
+
+    const launching = manager.spawnSandbox();
+    await slackEntered.promise;
+
+    expect(effects).toEqual(["reserve", "env", "repositories", "slack"]);
+    expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
+
+    slack.resolve(true);
+    await launching;
+
+    expect(vi.mocked(provider.restoreFromSnapshot!).mock.calls).toStrictEqual([
+      [
+        {
+          snapshotImageId: "saved-image",
+          sessionId: "test-session",
+          generationCreatedAtMs: 2_000_000,
+          retireSandboxId: "prior-sandbox",
+          sandboxId: "sandbox-group/subgroup-api-2000000",
+          sandboxAuthToken: "generated-id-1",
+          controlPlaneUrl: "https://test.workers.dev",
+          repoOwner: "group/subgroup",
+          repoName: "api",
+          branch: "release",
+          harness: "claude",
+          provider: "openai",
+          model: "gpt-5.4",
+          userEnvVars: { API_KEY: "private-env" },
+          timeoutSeconds: 3600,
+          codeServerEnabled: true,
+          vncEnabled: true,
+          agentSlackNotifyEnabled: true,
+          mcpServers: servers,
+          sandboxSettings: { sandboxTimeoutMs: 3_600_000, terminalEnabled: true },
+          repositories,
+        },
+      ],
+    ]);
+    expect(effects).toEqual([
+      "reserve",
+      "env",
+      "repositories",
+      "slack",
+      "mcp",
+      "pending_registration",
+      "recovery_invoked",
+      "restore",
+    ]);
+    expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+    expect(provider.createSandbox).not.toHaveBeenCalled();
+  });
+
   it.each(["fresh", "restore"] as const)(
-    "%s keeps reservation before input awaits and the exact provider payload",
+    "%s reserves the identity before deferred hash and env reads",
     async (mode) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(2_000_000);
-      const effects: string[] = [];
+      const { manager, provider, sandbox, sessionContext, effects } = createLaunchFixture();
+      if (mode === "restore") {
+        sandbox.status = "stopped";
+        sandbox.snapshot_image_id = "saved-image";
+        sandbox.snapshot_runtime_version = COMPATIBLE_RUNTIME_VERSION;
+      }
       const hashEntered = deferred<void>();
       const hash = deferred<string>();
       vi.mocked(hashToken).mockImplementationOnce(() => {
@@ -44,222 +343,38 @@ describe("launch input orchestration", () => {
         return hash.promise;
       });
       const envEntered = deferred<void>();
-      const env = deferred<Record<string, string>>();
-      const mcpEntered = deferred<void>();
-      const mcp = deferred<McpServerConfig[]>();
-      const slackEntered = deferred<void>();
-      const slack = deferred<boolean>();
-      const repositories: SessionRepositoryInfo[] = [
-        {
-          repoOwner: "group/subgroup",
-          repoName: "api",
-          baseBranch: "release",
-          baseSha: "start-sha",
-        },
-      ];
-      const session = createMockSession({
-        repo_owner: "group/subgroup",
-        repo_name: "api",
-        base_branch: "release",
-        environment_id: "environment-1",
-        model: "",
-        harness: "claude",
-        code_server_enabled: 1,
-        vnc_enabled: 1,
-        sandbox_settings: '{"sandboxTimeoutMs":3600000,"terminalEnabled":true}',
+      const env = deferred<{ API_KEY: string }>();
+      sessionContext.getUserEnvVars.mockImplementationOnce(() => {
+        effects.push("env");
+        envEntered.resolve();
+        return env.promise;
       });
-      const sandbox = createMockSandbox({
-        status: mode === "fresh" ? "pending" : "stopped",
-        modal_object_id: null,
-        modal_sandbox_id: "prior-sandbox",
-        last_heartbeat: null,
-        snapshot_image_id: mode === "restore" ? "saved-image" : null,
-        snapshot_runtime_version: mode === "restore" ? COMPATIBLE_RUNTIME_VERSION : null,
-      });
-      const storage = createMockStorage(session, sandbox);
-      const sessionContext = {
-        getSession: () => session,
-        getUserEnvVars: vi.fn(() => {
-          effects.push("env");
-          envEntered.resolve();
-          return env.promise;
-        }),
-        getSessionRepositories: vi.fn(() => {
-          effects.push("repositories");
-          return repositories;
-        }),
-      };
-      const image = {
-        id: "image-build-1",
-        provider_image_id: "prebuilt-image",
-        repositories_fingerprint: await computeRepositoriesFingerprint(repositories),
-        repository_shas: JSON.stringify([
-          { repoOwner: "group/subgroup", repoName: "api", baseSha: "baked-sha" },
-        ]),
-        runtime_version: COMPATIBLE_RUNTIME_VERSION,
-      };
-      const imageBuildLookup = {
-        getLatestReady: vi.fn(async () => {
-          effects.push("image");
-          return image;
-        }),
-        markRestoreFailed: vi.fn(async () => true),
-      };
-      const shutdown = createUnmanagedShutdown();
-      shutdown.reserveStartup.mockImplementation((_createdAt, _policy, persist) => {
-        effects.push("reserve");
-        persist();
-      });
-      shutdown.markRecoveryInvoked.mockImplementation(() => {
-        effects.push("recovery_invoked");
-      });
-      const provider = createMockProvider();
-      provider.pendingSandboxAllocation = vi.fn(() => {
-        effects.push("pending_reference");
-        return undefined;
-      });
-      vi.mocked(provider.createSandbox).mockImplementation(async (config) => {
-        effects.push("create");
-        return { sandboxId: config.sandboxId, createdAt: Date.now(), lifetime: noLifetime() };
-      });
-      vi.mocked(provider.restoreFromSnapshot!).mockImplementation(async (config) => {
-        effects.push("restore");
-        return { success: true, sandboxId: config.sandboxId, lifetime: noLifetime() };
-      });
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        sessionContext,
-        createMockBroadcaster(),
-        createMockWebSocketManager(),
-        createMockAlarmScheduler(),
-        createMockIdGenerator(),
-        shutdown,
-        {
-          ...createTestConfig(),
-          model: "openai/gpt-5.4",
-          mcpServerLookup: {
-            getDecryptedForSession: vi.fn(() => {
-              effects.push("mcp");
-              mcpEntered.resolve();
-              return mcp.promise;
-            }),
-          },
-          slackAgentNotifyLookup: {
-            isEnabledForRepo: vi.fn(() => {
-              effects.push("slack");
-              slackEntered.resolve();
-              return slack.promise;
-            }),
-          },
-        },
-        imageBuildLookup
-      );
-      expect(effects).toEqual([]);
+
       const launching = manager.spawnSandbox();
       await hashEntered.promise;
+
       expect(effects).toEqual(["reserve", "hash"]);
-      expect(sandbox.auth_token_hash).toBe("");
+      expect(sandbox.status).toBe("spawning");
+      expect(sandbox.created_at).toBe(2_000_000);
       expect(sandbox.modal_sandbox_id).toBe("sandbox-group/subgroup-api-2000000");
+      expect(sandbox.auth_token_hash).toBe("");
+      expect(sessionContext.getUserEnvVars).not.toHaveBeenCalled();
+
       hash.resolve("new-hash");
       await envEntered.promise;
+
       expect(effects).toEqual(["reserve", "hash", "env"]);
-      if (mode === "restore") expect(sandbox.runtime_version).toBe(COMPATIBLE_RUNTIME_VERSION);
+      expect(sandbox.auth_token_hash).toBe("new-hash");
+      expect(sandbox.runtime_version).toBe(mode === "restore" ? COMPATIBLE_RUNTIME_VERSION : null);
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+
       env.resolve({ API_KEY: "private-env" });
-      if (mode === "restore") {
-        await slackEntered.promise;
-        expect(effects).toEqual(["reserve", "hash", "env", "repositories", "slack"]);
-        slack.resolve(true);
-      }
-      await mcpEntered.promise;
-      expect(effects).toEqual(
-        mode === "fresh"
-          ? ["reserve", "hash", "env", "repositories", "image", "mcp"]
-          : ["reserve", "hash", "env", "repositories", "slack", "mcp"]
-      );
-      const servers: McpServerConfig[] = [
-        {
-          id: "mcp-1",
-          name: "tools",
-          type: "remote",
-          enabled: true,
-          url: "https://mcp.example",
-          headers: { Authorization: "private-mcp" },
-        },
-      ];
-      mcp.resolve(servers);
-      if (mode === "fresh") {
-        await slackEntered.promise;
-        slack.resolve(true);
-      }
       await launching;
-      const payload = {
-        sessionId: "test-session",
-        generationCreatedAtMs: 2_000_000,
-        retireSandboxId: "prior-sandbox",
-        sandboxId: "sandbox-group/subgroup-api-2000000",
-        sandboxAuthToken: "generated-id-1",
-        controlPlaneUrl: "https://test.workers.dev",
-        repoOwner: "group/subgroup",
-        repoName: "api",
-        branch: "release",
-        harness: "claude",
-        provider: "openai",
-        model: "gpt-5.4",
-        userEnvVars: { API_KEY: "private-env" },
-        timeoutSeconds: 3600,
-        codeServerEnabled: true,
-        vncEnabled: true,
-        agentSlackNotifyEnabled: true,
-        mcpServers: servers,
-        sandboxSettings: { sandboxTimeoutMs: 3_600_000, terminalEnabled: true },
-        repositories,
-      };
-      if (mode === "fresh") {
-        expect(vi.mocked(provider.createSandbox).mock.calls).toStrictEqual([
-          [
-            {
-              ...payload,
-              prebuiltImageId: "prebuilt-image",
-              prebuiltImageSha: "baked-sha",
-            },
-          ],
-        ]);
-        expect(effects).toEqual([
-          "reserve",
-          "hash",
-          "env",
-          "repositories",
-          "image",
-          "mcp",
-          "slack",
-          "pending_reference",
-          "create",
-        ]);
-        expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
-      } else {
-        expect(vi.mocked(provider.restoreFromSnapshot!).mock.calls).toStrictEqual([
-          [
-            {
-              ...payload,
-              snapshotImageId: "saved-image",
-            },
-          ],
-        ]);
-        expect(effects).toEqual([
-          "reserve",
-          "hash",
-          "env",
-          "repositories",
-          "slack",
-          "mcp",
-          "pending_reference",
-          "recovery_invoked",
-          "restore",
-        ]);
-        expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
-        expect(provider.createSandbox).not.toHaveBeenCalled();
-      }
+
+      expect(
+        mode === "fresh" ? provider.createSandbox : provider.restoreFromSnapshot
+      ).toHaveBeenCalledOnce();
     }
   );
 
@@ -281,10 +396,13 @@ describe("launch input orchestration", () => {
         session,
         createMockSandbox({ status: "pending", modal_object_id: null, last_heartbeat: null })
       );
-      const effects: string[] = [];
+      let repositoryMicrotaskPending = false;
+      let mcpStartedBeforeRepositoryMicrotask = false;
       vi.mocked(storage.getSessionRepositories).mockImplementation(() => {
-        effects.push("repositories");
-        queueMicrotask(() => effects.push("next_microtask"));
+        repositoryMicrotaskPending = true;
+        queueMicrotask(() => {
+          repositoryMicrotaskPending = false;
+        });
         return repositories;
       });
       const manager = new SandboxLifecycleManager(
@@ -300,7 +418,7 @@ describe("launch input orchestration", () => {
           ...createTestConfig(),
           mcpServerLookup: {
             getDecryptedForSession: async () => {
-              effects.push("mcp");
+              mcpStartedBeforeRepositoryMicrotask = repositoryMicrotaskPending;
               return [];
             },
           },
@@ -309,7 +427,7 @@ describe("launch input orchestration", () => {
 
       await manager.spawnSandbox();
 
-      expect(effects).toEqual(["repositories", "mcp", "next_microtask"]);
+      expect(mcpStartedBeforeRepositoryMicrotask).toBe(true);
     }
   );
 

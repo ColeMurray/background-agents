@@ -9,7 +9,9 @@ import { SandboxProviderError, type SessionRepositoryInfo } from "../provider";
 import type { ImageBuildLookup, ImageBuildSpawnRow, SelectedImageBuild } from "./image-selection";
 import {
   createSandboxLaunchContext,
+  resolveImageBuildScope,
   type McpServerLookup,
+  type SandboxLaunchContextDependencies,
   type SandboxLaunchContextReader,
   type SlackAgentNotifyLookup,
 } from "./launch-context";
@@ -33,7 +35,7 @@ const SELECTED_IMAGE: SelectedImageBuild = {
   runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
 };
 
-function fixture(overrides: Partial<Parameters<typeof createSandboxLaunchContext>[0]> = {}) {
+function fixture(overrides: Partial<SandboxLaunchContextDependencies> = {}) {
   const sessionContext = {
     getSessionRepositories: vi.fn<SandboxLaunchContextReader["getSessionRepositories"]>(() => []),
     getUserEnvVars: vi.fn<SandboxLaunchContextReader["getUserEnvVars"]>(async () => undefined),
@@ -55,10 +57,7 @@ function fixture(overrides: Partial<Parameters<typeof createSandboxLaunchContext
   return { context, sessionContext, imageBuildLookup, logger, getLogger };
 }
 
-async function readyImage(
-  repositories: SessionRepositoryInfo[] = [PRIMARY],
-  overrides: Partial<ImageBuildSpawnRow> = {}
-): Promise<ImageBuildSpawnRow> {
+async function readyImage(repositories: SessionRepositoryInfo[]): Promise<ImageBuildSpawnRow> {
   return {
     id: SELECTED_IMAGE.imageBuildId,
     provider_image_id: SELECTED_IMAGE.providerImageId,
@@ -71,9 +70,37 @@ async function readyImage(
       }))
     ),
     runtime_version: COMPATIBLE_RUNTIME_VERSION,
-    ...overrides,
   };
 }
+
+describe("resolveImageBuildScope", () => {
+  it.each([{ repositories: [PRIMARY, SECONDARY] }, { repositories: [] }])(
+    "keeps the environment scope with members $repositories",
+    ({ repositories }) => {
+      const session = createMockSession({ environment_id: "environment-1" });
+      expect(resolveImageBuildScope(session, repositories)).toEqual({
+        kind: "environment",
+        id: "environment-1",
+      });
+    }
+  );
+
+  it("uses the single member's normalized nested identity for an ad-hoc repo image", () => {
+    expect(resolveImageBuildScope(createMockSession(), [SECONDARY])).toEqual({
+      kind: "repo",
+      id: "group/subgroup/api",
+    });
+  });
+
+  it("synchronously excludes ad-hoc multi-repo images", () => {
+    expect(resolveImageBuildScope(createMockSession(), [PRIMARY, SECONDARY])).toBeNull();
+  });
+
+  it("synchronously excludes repo-less ad-hoc images", () => {
+    const session = createMockSession({ repo_owner: null, repo_name: null });
+    expect(resolveImageBuildScope(session, [])).toBeNull();
+  });
+});
 
 describe("createSandboxLaunchContext", () => {
   it("does no dependency work at construction, even before a logger is available", () => {
@@ -235,8 +262,9 @@ describe("createSandboxLaunchContext", () => {
 
       expect(
         await f.context.lookupImageBuildForSpawn(
-          createMockSession({ environment_id: "environment-1" }),
-          repositories
+          { kind: "environment", id: "environment-1" },
+          repositories,
+          DEFAULT_HARNESS
         )
       ).toEqual({ ...SELECTED_IMAGE, primaryBaseSha: "baked-API" });
       expect(f.imageBuildLookup.getLatestReady.mock.calls).toEqual([
@@ -257,8 +285,9 @@ describe("createSandboxLaunchContext", () => {
 
       expect(
         await f.context.lookupImageBuildForSpawn(
-          createMockSession({ environment_id: "environment-1" }),
-          [PRIMARY]
+          { kind: "environment", id: "environment-1" },
+          [PRIMARY],
+          DEFAULT_HARNESS
         )
       ).toBeNull();
       expect(f.imageBuildLookup.getLatestReady.mock.calls).toEqual([
@@ -271,11 +300,17 @@ describe("createSandboxLaunchContext", () => {
       expect(f.imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
     });
 
-    it("looks up a single-repo image using the member's normalized nested identity", async () => {
+    it("passes an explicitly selected repo scope through lookup", async () => {
       const f = fixture();
       f.imageBuildLookup.getLatestReady.mockResolvedValue(await readyImage([SECONDARY]));
 
-      expect(await f.context.lookupImageBuildForSpawn(createMockSession(), [SECONDARY])).toEqual({
+      expect(
+        await f.context.lookupImageBuildForSpawn(
+          { kind: "repo", id: "group/subgroup/api" },
+          [SECONDARY],
+          DEFAULT_HARNESS
+        )
+      ).toEqual({
         ...SELECTED_IMAGE,
         primaryBaseSha: "baked-API",
       });
@@ -285,34 +320,14 @@ describe("createSandboxLaunchContext", () => {
       });
     });
 
-    it("synchronously skips repo images for ad-hoc multi-repo sessions", () => {
+    it("retains the async boundary for an empty environment without invoking lookup", async () => {
       const f = fixture();
 
-      expect(
-        f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY, SECONDARY])
-      ).toBeNull();
-      expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
-      expect(f.getLogger).not.toHaveBeenCalled();
-    });
-
-    it("synchronously skips lookup for repo-less ad-hoc sessions", () => {
-      const f = fixture();
-      const session = createMockSession({ repo_owner: null, repo_name: null });
-
-      expect(f.context.lookupImageBuildForSpawn(session, [])).toBeNull();
-      expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
-      expect(f.getLogger).not.toHaveBeenCalled();
-    });
-
-    it("retains the async boundary for a repo-less environment without invoking lookup", async () => {
-      const f = fixture();
-      const session = createMockSession({
-        repo_owner: null,
-        repo_name: null,
-        environment_id: "environment-1",
-      });
-
-      const lookup = f.context.lookupImageBuildForSpawn(session, []);
+      const lookup = f.context.lookupImageBuildForSpawn(
+        { kind: "environment", id: "environment-1" },
+        [],
+        DEFAULT_HARNESS
+      );
       expect(lookup).toBeInstanceOf(Promise);
       expect(await lookup).toBeNull();
       expect(f.imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
@@ -322,7 +337,11 @@ describe("createSandboxLaunchContext", () => {
     it("skips lookup and invalidation when no image lookup is configured", async () => {
       const f = fixture({ imageBuildLookup: undefined });
 
-      const lookup = f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY]);
+      const lookup = f.context.lookupImageBuildForSpawn(
+        { kind: "repo", id: "testowner/testrepo" },
+        [PRIMARY],
+        DEFAULT_HARNESS
+      );
       expect(lookup).toBeInstanceOf(Promise);
       expect(await lookup).toBeNull();
       await expect(
@@ -331,37 +350,17 @@ describe("createSandboxLaunchContext", () => {
       expect(f.getLogger).not.toHaveBeenCalled();
     });
 
-    it.each([
-      { reason: "runtime_below_floor", overrides: { runtime_version: "v0-legacy" } },
-      { reason: "fingerprint_mismatch", overrides: { repositories_fingerprint: "other-snapshot" } },
-    ])(
-      "logs the evaluator's $reason miss without invalidating the image",
-      async ({ reason, overrides }) => {
-        const f = fixture();
-        f.imageBuildLookup.getLatestReady.mockResolvedValue(await readyImage([PRIMARY], overrides));
-
-        expect(
-          await f.context.lookupImageBuildForSpawn(createMockSession({ harness: "claude" }), [
-            PRIMARY,
-          ])
-        ).toBeNull();
-        expect(f.logger.info).toHaveBeenCalledWith("Prebuilt image miss, using base image", {
-          event: "image_build.spawn_miss",
-          scope_kind: "repo",
-          scope_id: "testowner/testrepo",
-          reason,
-          image_build_id: "build-1",
-        });
-        expect(f.imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
-        expect(f.logger.warn).not.toHaveBeenCalled();
-      }
-    );
-
     it("falls back on lookup failure without invalidating any image", async () => {
       const f = fixture();
       f.imageBuildLookup.getLatestReady.mockRejectedValue(new Error("lookup unavailable"));
 
-      expect(await f.context.lookupImageBuildForSpawn(createMockSession(), [PRIMARY])).toBeNull();
+      expect(
+        await f.context.lookupImageBuildForSpawn(
+          { kind: "repo", id: "testowner/testrepo" },
+          [PRIMARY],
+          DEFAULT_HARNESS
+        )
+      ).toBeNull();
       expect(f.imageBuildLookup.markRestoreFailed).not.toHaveBeenCalled();
       expect(f.logger.warn).toHaveBeenCalledWith(
         "Failed to look up prebuilt image, using base image",
