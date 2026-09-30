@@ -2,9 +2,7 @@ import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { Logger } from "../../logger";
 import type { SandboxRow } from "../../session/types";
-import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import type { StopConfig } from "../provider";
-import { formatBootBudgetFailure } from "./boot-failure-message";
 import type { SandboxAlarmResult, SandboxGeneration } from "./ports";
 import type { SandboxAccess } from "./sandbox-access";
 
@@ -49,11 +47,6 @@ export interface WatchdogEffectsDependencies {
     failureMessage: string;
     level?: "warn" | "error";
   }) => Promise<void>;
-  /** Only this explicit provider stop runs inside the manager's termination guard. */
-  stopBootBudgetSandbox: (
-    providerObjectId: string | undefined,
-    generationCreatedAtMs: number
-  ) => Promise<void>;
   getLogger: () => Pick<Logger, "info" | "warn" | "error">;
 }
 
@@ -200,54 +193,6 @@ export async function snapshotAndStopStaleSandbox(
     failureMessage: "Provider stop failed after heartbeat timeout",
   });
   return "stopped";
-}
-
-/** Send, fence, fail/publish and detach before the manager guards explicit provider stop. */
-export async function failBootBudget(
-  deps: Pick<
-    WatchdogEffectsDependencies,
-    | "storage"
-    | "broadcaster"
-    | "sockets"
-    | "shutdown"
-    | "access"
-    | "canStopProviderSandbox"
-    | "recordSpawnFailure"
-    | "reportSandboxError"
-    | "stopBootBudgetSandbox"
-    | "getLogger"
-  >,
-  elapsedMs: number,
-  timeoutMs: number,
-  ctx: WatchdogContext
-): Promise<SandboxAlarmResult> {
-  const bootPhase = parseStoredSandboxBootPhase(ctx.sandbox.boot_phase);
-  const reason = formatBootBudgetFailure(ctx.sandbox.boot_phase, timeoutMs);
-  deps.getLogger().warn("Boot budget exceeded", {
-    event: "sandbox.boot_budget",
-    ...sandboxBootPhaseLogFields(bootPhase),
-    elapsed_ms: elapsedMs,
-    timeout_ms: timeoutMs,
-  });
-  const held = deps.shutdown.holdFailedRetainedBoot(reason, {
-    sandboxId: ctx.sandbox.modal_sandbox_id,
-    createdAt: ctx.sandbox.created_at,
-  });
-  if (!held) {
-    deps.sockets.sendToSandbox({ type: "shutdown" });
-    deps.storage.fenceSandboxGeneration();
-  }
-  deps.storage.updateSandboxStatus("failed");
-  deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-  deps.access.clearAccess();
-  deps.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-  deps.reportSandboxError(reason);
-  if (held) return { kind: "boot_budget_exceeded", reason };
-  deps.sockets.detachSandboxWebSocket(1000, "Boot budget exceeded");
-  if (deps.canStopProviderSandbox()) {
-    await deps.stopBootBudgetSandbox(ctx.providerObjectId, ctx.sandbox.created_at);
-  }
-  return { kind: "boot_budget_exceeded", reason };
 }
 
 /** Shutdown owns inactivity first; only unmanaged work uses the legacy fallback. */

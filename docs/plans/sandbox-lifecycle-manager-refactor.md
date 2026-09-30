@@ -31,8 +31,9 @@ Paths are relative to `packages/control-plane/src/`.
 - `sandbox/lifecycle/provider-stop.ts` owns the shared local stop bound, abort/timer mechanics and
   explicit `confirmed`/`not_stopped` outcome contract, not either caller's retirement policy.
 - `sandbox/lifecycle/watchdog-effects.ts` owns stateless connect-timeout, stale-heartbeat, stale
-  snapshot/stop, boot-budget and inactivity effects. The manager captures alarm facts,
-  evaluates/dispatches policy, schedules healthy/warning checks and owns the termination guard.
+  snapshot/stop and inactivity effects. The manager retains the complete boot-budget effect,
+  captures alarm facts, evaluates/dispatches policy, schedules healthy/warning checks and owns the
+  termination guard.
 - `session/sandbox-repository.ts` owns conditional SQL and encrypted access storage.
   `session/sandbox-shutdown.ts` and `sandbox-shutdown-repository.ts` own the durable
   shutdown/checkpoint protocol, receipts, holds, source retirement and recovery.
@@ -216,7 +217,7 @@ guarantee is claimed.
 
 ## Watchdog Contract
 
-`failConnectTimeout`, `terminateStaleHeartbeat`, `snapshotAndStopStaleSandbox`, `failBootBudget` and
+`failConnectTimeout`, `terminateStaleHeartbeat`, `snapshotAndStopStaleSandbox` and
 `stopForInactivity` are stateless functions. Their dependencies are narrowed storage, broadcast,
 socket, shutdown and access ports plus named failure accounting/reporting, checkpoint triggering,
 provider capability checks and generation-targeted best-effort stop operations. Each function takes
@@ -224,6 +225,12 @@ only its dependency subset; there is no manager reference, flag setter, schedule
 class. Construction does not call dependencies, and logger resolution remains lazy, including
 detached snapshot rejection logging. Existing boot-phase parsing and failure text are reused without
 new vocabulary, defaults or messages.
+
+Review follow-up keeps `failBootBudget` entirely in the manager, alongside its termination/admission
+state. This replaces the effect-to-manager `stopBootBudgetSandbox` callback and private guard
+wrapper; the complete ordering and guarded stop are visible in one method. Moving termination
+ownership or splitting this operation behind a one-off reverse callback is not part of this
+increment.
 
 `handleAlarm` retains the initial shutdown hold check, pre-await sandbox/time/client/provider-handle
 capture, ID-plus-reservation-timestamp generation predicate, `evaluateAlarmPolicy` dispatch,
@@ -242,10 +249,10 @@ The shared `AlarmScheduler` remains the only alarm/deadline owner.
   episode is introduced.
 - Boot budget holds a failed retained source without runtime shutdown, fencing, detach or provider
   destruction. Otherwise it sends runtime shutdown, fences, fails/counts/retires access, publishes
-  and persists the failure, then detaches. Only the manager's `stopBootBudgetSandbox` operation sets
-  `isTerminatingSandbox`, awaits explicit destroy-stop and clears that same flag in `finally`.
-  Concurrent spawn is excluded during that stop, not during earlier publication/detachment. Other
-  watchdog paths intentionally do not acquire this guard; fatal termination keeps its own interval.
+  and persists the failure, then detaches. Within the same manager method, only explicit
+  destroy-stop runs inside the `isTerminatingSandbox` try/finally interval. Concurrent spawn is
+  excluded during that stop, not during earlier publication/detachment. Other watchdog paths
+  intentionally do not acquire this guard; fatal termination keeps its own interval.
 - Inactivity awaits shutdown ownership first and falls back only when unmanaged. Access retirement
   retains capability-based URL/secret rules. Resumable stop skips snapshot/runtime shutdown; legacy
   capture precedes runtime shutdown, explicit destroy-stop and final detach/warning. Existing
@@ -302,8 +309,11 @@ status/error publication and persistence before detachment and guarded stop; act
 blocked during stop and resumes after stop failure. Retained-source tests assert no send/detach and
 no duplicate failure charge under the hold. Deferred heartbeat/inactivity stop tests independently
 replace ID or timestamp for legacy and resumable providers and assert post-stop abandonment without
-successor mutation, detachment or new publication. Deferred ordinary captures prove in-flight and
-uncertain ownership blocks competing generic teardown and subsequent stop; inactivity ownership
+successor mutation, detachment or new publication. Reads return fresh row snapshots rather than
+aliases of the persisted fixture row; the captured alarm row remains unchanged across writes.
+Same-ID/timestamp continuations vary status, provider handle, heartbeat/activity and access URL to
+prove non-identity changes do not abandon the generation. Deferred ordinary captures prove in-flight
+and uncertain ownership blocks competing generic teardown and subsequent stop; inactivity ownership
 tests pin the absence of fallback effects before a held/owned decision. These extend rather than
 replace the existing half-boot/ready, destructive-snapshot, detached-capture, late-bridge,
 checkpoint-replacement, queue-result, duplicate-alarm and shared-deadline tests. ESLint keeps

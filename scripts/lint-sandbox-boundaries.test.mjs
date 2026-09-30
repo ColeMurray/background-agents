@@ -60,7 +60,7 @@ test("focused ports remain usable by consumers and extracted lifecycle modules",
   );
   assert.equal(cleanup.errorCount, 0, JSON.stringify(cleanup.messages));
   const [watchdog] = await eslint.lintText(
-    'import { failBootBudget } from "./watchdog-effects"; export const effect = failBootBudget;',
+    'import { terminateStaleHeartbeat } from "./watchdog-effects"; export const effect = terminateStaleHeartbeat;',
     { filePath: "packages/control-plane/src/sandbox/lifecycle/manager.ts" }
   );
   assert.equal(watchdog.errorCount, 0, JSON.stringify(watchdog.messages));

@@ -51,8 +51,10 @@ import {
   type SpawnConfig,
 } from "./decisions";
 import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
+import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
+import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import type { ImageBuildLookup } from "./image-selection";
 import {
   SandboxLaunchContext,
@@ -93,7 +95,6 @@ import { boundedProviderStop, type ProviderStopOutcome } from "./provider-stop";
 import {
   failConnectTimeout,
   terminateStaleHeartbeat,
-  failBootBudget,
   stopForInactivity,
   type WatchdogContext,
   type WatchdogEffectsDependencies,
@@ -492,8 +493,6 @@ export class SandboxLifecycleManager
       reportSandboxError: (reason) => this.reportSandboxError(reason),
       triggerSnapshot: (reason) => this.triggerSnapshot(reason),
       stopProviderSandboxSafely: (options) => this.stopProviderSandboxSafely(options),
-      stopBootBudgetSandbox: (providerObjectId, generationCreatedAtMs) =>
-        this.stopBootBudgetSandbox(providerObjectId, generationCreatedAtMs),
       getLogger: () => this.log,
     };
   }
@@ -1556,12 +1555,7 @@ export class SandboxLifecycleManager
         );
 
       case "boot_budget_exceeded":
-        return failBootBudget(
-          this.watchdogEffects,
-          finding.elapsedMs,
-          this.config.bootBudget.timeoutMs,
-          context
-        );
+        return this.failBootBudget(finding.elapsedMs, context);
 
       case "inactivity_timeout":
         return stopForInactivity(this.watchdogEffects, this.config.inactivity.timeoutMs, context);
@@ -1600,23 +1594,46 @@ export class SandboxLifecycleManager
     });
   }
 
-  /** Boot-budget publication/detachment precede this guard; only explicit stop is inside it. */
-  private async stopBootBudgetSandbox(
-    providerObjectId: string | undefined,
-    generationCreatedAtMs: number
-  ): Promise<void> {
-    this.isTerminatingSandbox = true;
-    try {
-      await this.stopProviderSandboxSafely({
-        reason: "boot_budget_exceeded",
-        intent: "destroy",
-        providerObjectId,
-        generationCreatedAtMs,
-        failureMessage: "Provider stop failed after boot budget",
-      });
-    } finally {
-      this.isTerminatingSandbox = false;
+  /** Publish and detach before guarding explicit stop; leave a held retained source intact. */
+  private async failBootBudget(elapsedMs: number, ctx: AlarmContext): Promise<SandboxAlarmResult> {
+    const bootPhase = parseStoredSandboxBootPhase(ctx.sandbox.boot_phase);
+    const reason = formatBootBudgetFailure(
+      ctx.sandbox.boot_phase,
+      this.config.bootBudget.timeoutMs
+    );
+    this.log.warn("Boot budget exceeded", {
+      event: "sandbox.boot_budget",
+      ...sandboxBootPhaseLogFields(bootPhase),
+      elapsed_ms: elapsedMs,
+      timeout_ms: this.config.bootBudget.timeoutMs,
+    });
+    const held = this.holdFailedRetainedBoot(ctx.sandbox, reason);
+    if (!held) {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.storage.fenceSandboxGeneration();
     }
+    this.storage.updateSandboxStatus("failed");
+    this.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
+    this.access.clearAccess();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+    this.reportSandboxError(reason);
+    if (held) return { kind: "boot_budget_exceeded", reason };
+    this.wsManager.detachSandboxWebSocket(1000, "Boot budget exceeded");
+    if (this.canStopProviderSandbox()) {
+      this.isTerminatingSandbox = true;
+      try {
+        await this.stopProviderSandboxSafely({
+          reason: "boot_budget_exceeded",
+          intent: "destroy",
+          providerObjectId: ctx.providerObjectId,
+          generationCreatedAtMs: ctx.sandbox.created_at,
+          failureMessage: "Provider stop failed after boot budget",
+        });
+      } finally {
+        this.isTerminatingSandbox = false;
+      }
+    }
+    return { kind: "boot_budget_exceeded", reason };
   }
 
   private isCurrentSandboxState(expected: SandboxRow): boolean {
