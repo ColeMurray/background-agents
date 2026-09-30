@@ -50,6 +50,19 @@ runtime. Cancelling a session stops its VM without saving. While a save has fail
 unknown, new prompts are held and the session offers to retry the save, restore the last saved
 state, or discard the VM and start fresh.
 
+An unexpected Docker daemon exit does not end an interactive session. The runtime attempts up to
+five crash restarts per session with bounded exponential backoff. If the restart budget is
+exhausted, Docker remains unavailable but the VM, harness, and workspace stay alive and saveable. A
+failed snapshot preparation gets an immediate Docker replacement without consuming that budget; if
+the replacement fails, it follows the same budgeted restart policy instead of ending the session.
+
+A save during restart backoff or after Docker becomes unavailable captures crash-consistent Docker
+state without waiting for a restart. Preparation reaps the old daemon's process group and prevents
+any later restart, so capture never races a new daemon writing to its data root. Docker and
+containerd recover that state on restore as after a power loss. Image builds remain strict: an
+unexpected daemon exit fails the build, and publishing a prepared image requires a clean daemon
+stop.
+
 Filesystem capture is not process/RAM continuity or an application-consistent database backup.
 Containers must use appropriate persistence and restart policies. Live Docker pause/resume is not
 provided. Raw daemon logs are truncated after clean preparation before reusable image capture.

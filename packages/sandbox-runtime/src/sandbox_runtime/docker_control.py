@@ -81,7 +81,13 @@ class DockerControl:
                     if command == b"prepare\n" and not self.prepared and not self.stopping:
                         try:
                             async with asyncio.timeout(PREPARATION_TIMEOUT_SECONDS):
-                                await self.service.prepare_for_snapshot()
+                                if self.service.running:
+                                    await self.service.prepare_for_snapshot()
+                                else:
+                                    # Session saves may capture crash-consistent Docker
+                                    # state, but must first reap any surviving descendants.
+                                    await self.service.stop()
+                                    self.service.log.info("docker.prepare_daemon_not_running")
                         except (Exception, asyncio.CancelledError) as error:
                             if self.recover is not None and not self.stopping:
                                 self.service.log.error("docker.prepare_failed", exc=error)

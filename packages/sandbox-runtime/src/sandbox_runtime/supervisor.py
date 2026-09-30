@@ -87,6 +87,7 @@ class SandboxSupervisor:
         )
         self._docker_watch_task: asyncio.Task[None] | None = None
         self._docker_watch_failure: BaseException | None = None
+        self._docker_restarts = 0
         # The boot-events channel the bridge relays; the repository boot
         # writes its own phases and warnings through the same log.
         self.boot_events: BootEventLog = (
@@ -401,54 +402,94 @@ class SandboxSupervisor:
         if self.docker_control is not None and self.boot_mode is not BootMode.BUILD:
             await self.docker_control.start()
 
-    async def _watch_docker(self) -> None:
-        """An unrequested daemon exit is fatal for as long as Docker is required."""
+    async def _watch_docker(self, *, restart_needed: bool = False) -> None:
+        """Recover session crashes within a lifetime budget; image builds remain strict."""
         service = self.docker_service
         assert service is not None
+        control = self.docker_control
+        task = asyncio.current_task()
+        assert task is not None
         try:
-            await service.wait()
+            while not self.shutdown_event.is_set():
+                if not restart_needed:
+                    await service.wait()
+                    if service.exit_expected:
+                        return
+                    self.log.error("docker.exited_unexpectedly")
+                    if self.boot_mode is BootMode.BUILD:
+                        self._docker_watch_failure = RuntimeError(
+                            "Required Docker daemon exited unexpectedly"
+                        )
+                        self.shutdown_event.set()
+                        return
+                assert control is not None
+                if self._docker_restarts >= self.MAX_RESTARTS:
+                    self.log.error("docker.unavailable", restart_count=self._docker_restarts)
+                    return
+                delay = min(self.BACKOFF_BASE ** (self._docker_restarts + 1), self.BACKOFF_MAX)
+                # Preparation must not wait out backoff, and its acknowledgement
+                # permanently fences any pending restart from the snapshot.
+                if await self._wait_for_shutdown(delay):
+                    return
+                async with control._lock:
+                    if control.stopping or control.prepared or self.shutdown_event.is_set():
+                        return
+                    self._docker_restarts += 1
+                    try:
+                        await service.stop()
+                        # Process-group cleanup can consume task cancellation.
+                        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
+                            return
+                        await service.start()
+                    except Exception as error:
+                        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
+                            return
+                        self.log.error("docker.exited_unexpectedly", exc=error)
+                        restart_needed = True
+                    else:
+                        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
+                            return
+                        self.log.info("docker.restarted", restart_count=self._docker_restarts)
+                        restart_needed = False
         except asyncio.CancelledError:
             raise
         except Exception as error:
             self.log.error("docker.watch_failed", exc=error)
-            self._docker_watch_failure = error
-            self.shutdown_event.set()
-            return
-        if service.exit_expected:
-            return
-        self.log.error("docker.exited_unexpectedly")
-        self._docker_watch_failure = RuntimeError("Required Docker daemon exited unexpectedly")
-        # Interrupt hooks and the process monitor; the failure is reported
-        # by ``run`` rather than treated as a requested shutdown.
-        self.shutdown_event.set()
+            if self.boot_mode is BootMode.BUILD:
+                self._docker_watch_failure = error
+                self.shutdown_event.set()
+            else:
+                self.log.error("docker.unavailable", restart_count=self._docker_restarts)
 
     async def _recover_docker_after_prepare(self) -> None:
-        """Replace a daemon after a failed snapshot attempt without losing session supervision."""
+        """Replace a daemon after failed preparation; the caller holds the control lock."""
         service = self.docker_service
         assert service is not None
         control = self.docker_control
-        if control is not None and control.stopping:
+        assert control is not None
+        if control.stopping or control.prepared or self.shutdown_event.is_set():
             return
         if not service.exit_expected:
             # Preparation never signalled this daemon; its exit belongs to
             # ordinary crash supervision, not failed-save recovery.
             return
         await self._stop_docker_watch()
+        task = asyncio.current_task()
+        assert task is not None
         try:
             await service.stop()
-            if control is not None and control.stopping:
+            if control.stopping or self.shutdown_event.is_set() or task.cancelling():
                 return
             await service.start()
-        except BaseException as error:
-            if control is not None and control.stopping:
-                raise
+        except Exception as error:
+            if control.stopping or self.shutdown_event.is_set() or task.cancelling():
+                return
             self.log.error("docker.exited_unexpectedly", exc=error)
-            self._docker_watch_failure = RuntimeError(
-                "Required Docker daemon exited unexpectedly after failed preparation"
-            )
-            self.shutdown_event.set()
-            raise
-        if control is not None and control.stopping:
+            # The immediate preparation recovery does not consume the crash
+            # budget. If it fails, retry in the watcher without delaying saves.
+            self._docker_watch_task = asyncio.create_task(self._watch_docker(restart_needed=True))
+            return
+        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
             return
         self._docker_watch_task = asyncio.create_task(self._watch_docker())
         self.log.info("docker.restarted_after_prepare")
@@ -757,10 +798,6 @@ class SandboxSupervisor:
             if self._bridge_watch_failure is not None:
                 raise self._bridge_watch_failure
             await self.monitor_processes()
-            # The Docker watcher runs for the whole session: a daemon that
-            # died under a working harness ended the session as a failure.
-            if self._docker_watch_failure is not None:
-                raise self._docker_watch_failure
         except BootExecutionCancelled:
             event = (
                 "image_build.cancelled"
@@ -806,8 +843,10 @@ class SandboxSupervisor:
             return False
         finally:
             if self.docker_control is not None:
-                await self.docker_control.stop()
+                self.docker_control.stopping = True
             await self._stop_docker_watch()
+            if self.docker_control is not None:
+                await self.docker_control.stop()
             await self._stop_bridge_watch()
             await self.shutdown()
         return True
@@ -818,6 +857,11 @@ class SandboxSupervisor:
 
     async def shutdown(self) -> None:
         self.log.info("supervisor.shutdown_start")
+        if self.docker_control is not None:
+            # Fence recovery before cancelling the watcher: it may own the
+            # control lock while waiting for a replacement daemon's readiness.
+            self.docker_control.stopping = True
+        await self._stop_docker_watch()
         if self.docker_control is not None:
             await self.docker_control.stop()
         if self._desktop_restart_task and not self._desktop_restart_task.done():
