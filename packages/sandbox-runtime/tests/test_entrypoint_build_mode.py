@@ -5,10 +5,12 @@ import json
 import os
 import signal
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime import repository_sync
 from sandbox_runtime.repository_sync import (
     RepositorySynchronizer,
     RepositorySyncOutcome,
@@ -17,6 +19,8 @@ from sandbox_runtime.repository_sync import (
 )
 from sandbox_runtime.runtime_config import BootMode
 from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
+
+_REAL_ENSURE_CREDENTIALS_CONFIGURED = RepositorySynchronizer.ensure_credentials_configured
 
 
 @pytest.fixture(autouse=True)
@@ -148,6 +152,38 @@ class TestImageBuildMode:
         supervisor.harness_process.start.assert_not_called()
         supervisor.agent_bridge.start.assert_not_called()
         supervisor.monitor_processes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_setup_uses_fixture_paths_not_host_paths(self, build_env, monkeypatch, tmp_path):
+        """Startup reaches mocked sync without writing image-owned host paths."""
+        # Run the real installer: this test proves the conftest backstop keeps
+        # it inside the test workspace, which the module-wide mock would hide.
+        monkeypatch.setattr(
+            RepositorySynchronizer,
+            "ensure_credentials_configured",
+            _REAL_ENSURE_CREDENTIALS_CONFIGURED,
+        )
+        real_gh = tmp_path / "real-gh"
+        real_gh.touch()
+        real_gh.chmod(0o755)
+        monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
+        supervisor = _make_supervisor(build_env)
+        supervisor.repository_boot.synchronizer.sync = AsyncMock(
+            return_value=_successful_sync(supervisor.repository_boot)
+        )
+        supervisor.repository_boot.hooks.run_setup = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run(_completion_callback(supervisor))
+
+        assert Path("/usr/local/bin/oi-git-credentials") != (
+            repository_sync.CREDENTIAL_HELPER_INSTALL_PATH
+        )
+        assert Path("/usr/local/bin/gh") != repository_sync.GH_WRAPPER_INSTALL_PATH
+        assert repository_sync.CREDENTIAL_HELPER_INSTALL_PATH.exists()
+        assert repository_sync.GH_WRAPPER_INSTALL_PATH.exists()
+        assert Path(os.environ["GIT_CONFIG_GLOBAL"]).parent == tmp_path
+        supervisor.repository_boot.synchronizer.sync.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_preset_shutdown_does_not_create_operation(self, build_env):
@@ -1623,7 +1659,7 @@ class TestEnsureCredentialHelperConfigured:
 
         assert all("--replace-all" in c for c in git_config_calls)
         pairs = {(c[4], c[5]) for c in git_config_calls}
-        assert ("credential.helper", "/usr/local/bin/oi-git-credentials") in pairs
+        assert ("credential.helper", str(repository_sync.CREDENTIAL_HELPER_INSTALL_PATH)) in pairs
         assert ("credential.useHttpPath", "true") in pairs
 
     @pytest.mark.asyncio

@@ -38,19 +38,31 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     (e.g. ``await sup.run()``) would otherwise overwrite it with fixture
     repos, which breaks push targeting and PR creation for the live session —
     and likewise delete the live boot-warnings file or read the live
-    tunnel-env file. Tests that care about a specific path still patch it
-    themselves; this fixture is the backstop that keeps every other test off
-    the real files.
+    tunnel-env file. Startup also installs git and gh credential helpers in
+    the image's system bin directory, so redirect those paths too: entrypoint
+    tests must never depend on host privileges before their sync seams run.
+    Tests that care about a specific path still patch it themselves; this
+    fixture is the backstop that keeps every other test off the real files.
     """
     manifest_path = str(tmp_path / "oi-repo-manifest.json")
     boot_warnings_path = str(tmp_path / "oi-boot-warnings.jsonl")
     tunnel_env_path = str(tmp_path / ".tunnels.env")
+    runtime_bin = tmp_path / "runtime-bin"
+    runtime_bin.mkdir()
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
     monkeypatch.setattr("sandbox_runtime.repository_boot.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.bridge.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.supervisor.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
+    monkeypatch.setattr(
+        "sandbox_runtime.repository_sync.CREDENTIAL_HELPER_INSTALL_PATH",
+        runtime_bin / "oi-git-credentials",
+    )
+    monkeypatch.setattr(
+        "sandbox_runtime.repository_sync.GH_WRAPPER_INSTALL_PATH", runtime_bin / "gh"
+    )
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
