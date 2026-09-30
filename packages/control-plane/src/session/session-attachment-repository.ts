@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { sessionAttachmentRowSchema, type SessionAttachmentRow } from "./types";
+import {
+  sessionAttachmentRowSchema,
+  SessionStorageIntegrityError,
+  type SessionAttachmentRow,
+} from "./types";
 import type { SqlStorage } from "./sql-storage";
 
 const attachmentTotalsRowSchema = z.object({
@@ -45,10 +49,11 @@ export class SessionAttachmentRepository {
       `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
        FROM attachments`
     );
-    const parsed = attachmentTotalsRowSchema.safeParse(result.toArray()[0]);
-    return parsed.success
-      ? { count: parsed.data.count, totalBytes: parsed.data.total_bytes }
-      : { count: 0, totalBytes: 0 };
+    const parsed = attachmentTotalsRowSchema.safeParse(result.one());
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed attachment totals row");
+    }
+    return { count: parsed.data.count, totalBytes: parsed.data.total_bytes };
   }
 
   getUnreferenced(attachmentIds: string[]): SessionAttachmentRow[] {

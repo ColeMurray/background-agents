@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
+import { SessionStorageIntegrityError } from "./types";
 
 /** WS client mapping result for hibernation recovery. */
 const wsClientMappingResultSchema = z.object({
@@ -92,8 +93,11 @@ export class WsClientMappingRepository {
     const parsed = nextAuthorizationExpiryRowSchema.safeParse(
       this.sql
         .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
-        .toArray()[0]
+        .one()
     );
-    return parsed.success ? parsed.data.expires_at : null;
+    if (!parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted ws authorization expiry row");
+    }
+    return parsed.data.expires_at;
   }
 }
