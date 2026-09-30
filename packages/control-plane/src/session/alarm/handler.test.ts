@@ -5,7 +5,9 @@ import type { MessageRepository } from "../message-repository";
 import { createEarliestAlarmScheduler } from "./scheduler";
 import type { SandboxAlarmResult } from "../../sandbox/lifecycle/manager";
 
-function createHandler(preserveBeforeWatchdogs?: () => Promise<"continue" | "hold_watchdogs">) {
+function createHandler(
+  preserveBeforeWatchdogs?: (allowCaptureRetry: boolean) => Promise<"continue" | "hold_watchdogs">
+) {
   const repository = {
     getProcessingMessageWithStartedAt: vi.fn(),
     getNextPendingMessage: vi.fn(() => null as { id: string } | null),
@@ -168,6 +170,8 @@ describe("createAlarmHandler", () => {
     await handler.handle();
 
     expect(preserve).toHaveBeenCalledTimes(2);
+    expect(preserve).toHaveBeenNthCalledWith(1, true);
+    expect(preserve).toHaveBeenNthCalledWith(2, false);
     expect(terminalMessageProjection.flushPending).toHaveBeenCalledOnce();
     expect(executionStop.recoverStopConfirmationTimeout).not.toHaveBeenCalled();
     expect(lifecycleManager.handleAlarm).not.toHaveBeenCalled();

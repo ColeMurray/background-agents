@@ -579,6 +579,21 @@ export class SandboxShutdownCoordinator {
     );
   }
 
+  private canAutomaticallyRetryCapture(state: ShutdownRecord): boolean {
+    return (
+      state.captureFailure === true &&
+      this.current(state) &&
+      (state.provider === undefined || state.provider === this.deps.provider.name) &&
+      (!state.receipt || state.receipt.provider === this.deps.provider.name) &&
+      this.canRetryShutdown(state)
+    );
+  }
+
+  private async scheduleCaptureRetry(state: ShutdownRecord): Promise<void> {
+    if (this.owns(state) && this.canAutomaticallyRetryCapture(state))
+      await this.deps.alarm.schedule(state.captureByMs!);
+  }
+
   /** Captures the held source again under a new operation, without waiting for its runtime. */
   private async retryCapture(
     state: ShutdownRecord,
@@ -648,7 +663,11 @@ export class SandboxShutdownCoordinator {
       return "retry";
     if ((state.phase !== "failed" && state.phase !== "unknown") || !this.canRetryShutdown(state))
       return "exit";
-    if (this.activeOperation === null && this.now() >= state.captureByMs!) {
+    if (
+      this.activeOperation === null &&
+      this.canAutomaticallyRetryCapture(state) &&
+      this.now() >= state.captureByMs!
+    ) {
       this.deps.background.submit(() => this.retryCapture(state, "reconnect"), {
         name: "sandbox.preservation_retry",
       });
@@ -985,7 +1004,7 @@ export class SandboxShutdownCoordinator {
   }
 
   /** Runs before generic watchdogs, and reasserts the absolute deadline on every alarm. */
-  async handleAlarm(): Promise<"continue" | "hold_watchdogs"> {
+  async handleAlarm(allowCaptureRetry = true): Promise<"continue" | "hold_watchdogs"> {
     const state = this.normalizeInterruptedRestore();
     if (!state) return "continue";
     if (state.phase === "running") {
@@ -1002,8 +1021,9 @@ export class SandboxShutdownCoordinator {
     if (state.phase === "saved")
       return this.continuationPaused(state) ? "hold_watchdogs" : "continue";
     if (state.phase === "failed" || state.phase === "unknown") {
-      if (this.activeOperation === null && this.availableRecoveryActions(state).includes("retry")) {
-        if (this.now() >= state.captureByMs!) await this.retryCapture(state, "alarm");
+      if (this.activeOperation === null && this.canAutomaticallyRetryCapture(state)) {
+        if (allowCaptureRetry && this.now() >= state.captureByMs!)
+          await this.retryCapture(state, "alarm");
         else await this.deps.alarm.schedule(state.captureByMs!);
       }
       return "hold_watchdogs";
@@ -1041,10 +1061,13 @@ export class SandboxShutdownCoordinator {
     }
     if (state.phase === "capturing") {
       if (this.activeOperation !== state.operationId)
-        this.fail(
-          state,
-          "unknown",
-          "The save was interrupted by a control-plane restart; its result is unknown."
+        await this.scheduleCaptureRetry(
+          this.fail(
+            state,
+            "unknown",
+            "The save was interrupted by a control-plane restart; its result is unknown.",
+            true
+          )
         );
       return;
     }
@@ -1076,13 +1099,16 @@ export class SandboxShutdownCoordinator {
   private async capture(state: ShutdownRecord): Promise<void> {
     const { provider } = this.deps;
     if (!state.providerObjectId || this.now() >= state.captureByMs!) {
-      this.fail(state, "failed", "No time or provider handle remained to save the sandbox.");
+      await this.scheduleCaptureRetry(
+        this.fail(state, "failed", "No time or provider handle remained to save the sandbox.", true)
+      );
       return;
     }
     this.activeOperation = state.operationId!;
     const capturing = { ...state, phase: "capturing" as const };
     this.publish(capturing);
     await this.deps.alarm.schedule(state.captureByMs!);
+    let failed: ShutdownRecord | undefined;
     try {
       const retained =
         !!provider.capabilities.supportsPersistentResume &&
@@ -1126,15 +1152,18 @@ export class SandboxShutdownCoordinator {
       else await this.retire(retiring);
     } catch (error) {
       if (this.owns(capturing))
-        this.fail(
+        failed = this.fail(
           capturing,
           "unknown",
           error instanceof ShutdownDeadlineError
             ? "The save did not finish before its deadline; its result is unknown."
-            : "The provider did not confirm the save. The previous recovery point is unchanged."
+            : "The provider did not confirm the save. The previous recovery point is unchanged.",
+          true
         );
     } finally {
       this.activeOperation = null;
+      // Re-arm after releasing ownership: an overdue alarm may be delivered immediately.
+      if (failed) await this.scheduleCaptureRetry(failed);
     }
   }
 
@@ -1220,18 +1249,19 @@ export class SandboxShutdownCoordinator {
     this.notifyLifecycleChange();
   }
 
-  private fail(state: ShutdownRecord, phase: "failed" | "unknown", error: string): void {
-    const failed: ShutdownRecord = { ...state, phase, error };
+  private fail(
+    state: ShutdownRecord,
+    phase: "failed" | "unknown",
+    error: string,
+    captureFailure = false
+  ): ShutdownRecord {
+    const failed: ShutdownRecord = { ...state, phase, error, captureFailure };
     this.publish(failed);
     this.broadcast({
       type: "sandbox_warning",
       message: `${phase === "failed" ? "Sandbox save failed" : "Sandbox save could not be confirmed"}: ${error}`,
     });
-    // An alarm may have been consumed while the provider call was still pending.
-    if (this.availableRecoveryActions(failed).includes("retry"))
-      this.deps.background.submit(() => this.deps.alarm.schedule(failed.captureByMs!), {
-        name: "sandbox.preservation_retry_alarm",
-      });
+    return failed;
   }
 
   /** Confirmed provider stop of one source, bounded by the caller's deadline. */

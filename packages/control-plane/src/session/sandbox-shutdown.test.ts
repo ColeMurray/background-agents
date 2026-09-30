@@ -3,6 +3,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import type { ShutdownRecord, ShutdownStore } from "./sandbox-shutdown-repository";
+import { createAlarmHandler } from "./alarm/handler";
 
 const GENERATION = { sandboxId: "sandbox-1", createdAt: 1_000 };
 const PENDING_VM_REFERENCE = 'modal-vm-session:["session-1","sandbox-1"]';
@@ -1183,6 +1184,51 @@ describe("SandboxShutdownCoordinator", () => {
         );
       }
     );
+
+    it("runs only one timed-out retry per composed alarm delivery", async () => {
+      vi.useFakeTimers();
+      try {
+        const f = await failedGracefulCapture();
+        f.takeSnapshot
+          .mockImplementationOnce(() => new Promise(() => {}))
+          .mockResolvedValue({ success: true, imageId: "retry-image", sourceStopped: true });
+        f.setNow(f.store.value!.captureByMs!);
+        const preserve = vi.fn((allowCaptureRetry?: boolean) =>
+          f.shutdown.handleAlarm(allowCaptureRetry)
+        );
+        const flushPending = vi.fn(async () => {});
+        const recoverStopConfirmationTimeout = vi.fn();
+        const handler = createAlarmHandler({
+          preserveBeforeWatchdogs: preserve,
+          terminalMessageProjection: { flushPending },
+          executionStop: { recoverStopConfirmationTimeout },
+          repository: {
+            getProcessingMessageWithStartedAt: vi.fn(() => null),
+            getNextPendingMessage: vi.fn(() => null),
+          },
+          lifecycleManager: { handleAlarm: vi.fn(async () => "no_action") },
+          log: f.deps.log,
+        } as never);
+
+        const delivery = handler.handle();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.takeSnapshot).toHaveBeenCalledTimes(2);
+        f.setNow(f.store.value!.captureByMs!);
+        await vi.advanceTimersByTimeAsync(300_000);
+        await delivery;
+
+        expect(f.takeSnapshot).toHaveBeenCalledTimes(2);
+        expect(f.store.value?.phase).toBe("unknown");
+        expect(f.shutdown.snapshot()).not.toHaveProperty("captureFailure");
+        expect(flushPending).toHaveBeenCalledOnce();
+        expect(recoverStopConfirmationTimeout).not.toHaveBeenCalled();
+        await handler.handle();
+        expect(f.takeSnapshot).toHaveBeenCalledTimes(3);
+        expect(f.store.value?.phase).toBe("saved");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
     it("spaces repeated failures by capture windows without extending the retry window", async () => {
       const f = await failedGracefulCapture();

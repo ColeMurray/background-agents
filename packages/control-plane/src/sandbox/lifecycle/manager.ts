@@ -155,7 +155,7 @@ export interface SandboxShutdownLifecycle {
   /** Supplies internal admission facts; the manager applies distinct queue and live-push policies. */
   admissionDecision(): SandboxWorkAdmission;
   /** Advances shutdown and prevents generic watchdogs from competing with unresolved work. */
-  handleAlarm(): Promise<"continue" | "hold_watchdogs">;
+  handleAlarm(allowCaptureRetry?: boolean): Promise<"continue" | "hold_watchdogs">;
   /** Applies an already-authorized recovery choice; only explicit restore releases a saved pause. */
   recover(action: ShutdownRecoveryAction): Promise<void>;
   /** Returns the safe public projection, excluding private provider handles and recovery receipts. */
@@ -2101,7 +2101,7 @@ export class SandboxLifecycleManager
     }
   }
 
-  async handleShutdownAlarm(): Promise<"continue" | "hold_watchdogs"> {
+  async handleShutdownAlarm(allowCaptureRetry = true): Promise<"continue" | "hold_watchdogs"> {
     const rejected = this.storage.getSandbox();
     if (rejected?.startup_rejected && rejected.modal_object_id) {
       await this.attemptRejectedStartupCleanup(
@@ -2110,7 +2110,7 @@ export class SandboxLifecycleManager
       );
       return "hold_watchdogs";
     }
-    return this.shutdown.handleAlarm();
+    return this.shutdown.handleAlarm(allowCaptureRetry);
   }
 
   recoverShutdown(action: ShutdownRecoveryAction): Promise<void> {

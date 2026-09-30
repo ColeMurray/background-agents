@@ -633,7 +633,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getExecutionTimeoutMs,
     now: () => Date.now(),
     log,
-    preserveBeforeWatchdogs: () => lifecycleManager.handleShutdownAlarm(),
+    preserveBeforeWatchdogs: (allowCaptureRetry) =>
+      lifecycleManager.handleShutdownAlarm(allowCaptureRetry),
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {

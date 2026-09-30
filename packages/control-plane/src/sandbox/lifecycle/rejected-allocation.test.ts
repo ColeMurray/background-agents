@@ -216,7 +216,8 @@ describe("rejected provider allocation", () => {
         async () => "hold_watchdogs" as never
       );
       const handler = createAlarmHandler({
-        preserveBeforeWatchdogs: () => restarted.manager.handleShutdownAlarm(),
+        preserveBeforeWatchdogs: (allowCaptureRetry: boolean) =>
+          restarted.manager.handleShutdownAlarm(allowCaptureRetry),
         lifecycleManager: restarted.manager,
         terminalMessageProjection: { flushPending: vi.fn(async () => {}) },
       } as never);
