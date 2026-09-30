@@ -100,6 +100,24 @@ describe("WsClientMappingRepository", () => {
     expect(repository.hasWsClientMapping("ws-1")).toBe(true);
   });
 
+  it("returns the next persisted authorization expiration", () => {
+    mock.setRows([{ expires_at: 2000 }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBe(2000);
+  });
+
+  it("accepts a null next authorization expiration", () => {
+    mock.setRows([{ expires_at: null }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBeNull();
+  });
+
+  it("returns null for a malformed next authorization expiration row", () => {
+    mock.setRows([{ expires_at: "2000" }]);
+
+    expect(repository.getNextAuthorizationExpiry()).toBeNull();
+  });
+
   it.each([undefined, null, "2000", Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects a mapping with an invalid authorization expiration: %s",
     (authorizationExpiresAt) => {

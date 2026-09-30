@@ -76,6 +76,14 @@ describe("SessionAttachmentRepository", () => {
     expect(mock.calls[0].query).not.toContain("cleanup_claimed_at");
   });
 
+  it("returns zero totals for a malformed attachment totals row", () => {
+    const query = `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_bytes
+       FROM attachments`;
+    mock.setRows(query, [{ count: "2", total_bytes: 3072 }]);
+
+    expect(repository.getTotals()).toEqual({ count: 0, totalBytes: 0 });
+  });
+
   it("finds only unreferenced, unclaimed attachments", () => {
     const query = `SELECT * FROM attachments
        WHERE id IN (?, ?) AND message_id IS NULL AND cleanup_claimed_at IS NULL`;

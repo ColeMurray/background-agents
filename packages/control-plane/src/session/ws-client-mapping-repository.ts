@@ -14,6 +14,10 @@ const wsClientMappingResultSchema = z.object({
   authorization_expires_at: z.number().finite(),
 });
 
+const nextAuthorizationExpiryRowSchema = z.object({
+  expires_at: z.number().finite().nullable(),
+});
+
 export type WsClientMappingResult = z.infer<typeof wsClientMappingResultSchema>;
 
 /** Data for a WS client mapping. */
@@ -85,9 +89,11 @@ export class WsClientMappingRepository {
 
   /** Return the earliest persisted authorization expiration, if any. */
   getNextAuthorizationExpiry(): number | null {
-    const rows = this.sql
-      .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
-      .toArray() as Array<{ expires_at: number | null }>;
-    return rows[0]?.expires_at ?? null;
+    const parsed = nextAuthorizationExpiryRowSchema.safeParse(
+      this.sql
+        .exec(`SELECT MIN(authorization_expires_at) AS expires_at FROM ws_client_mapping`)
+        .toArray()[0]
+    );
+    return parsed.success ? parsed.data.expires_at : null;
   }
 }
