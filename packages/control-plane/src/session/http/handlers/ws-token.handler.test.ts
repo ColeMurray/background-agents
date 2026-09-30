@@ -142,9 +142,6 @@ describe("WsTokenHandler", () => {
           scmLogin: "octocat-updated",
           scmName: "Updated Octocat",
           scmEmail: "updated@example.com",
-          scmTokenEncrypted: "enc-access-new",
-          scmRefreshTokenEncrypted: "enc-refresh-new",
-          scmTokenExpiresAt: 2000,
         }),
       })
     );
@@ -189,9 +186,6 @@ describe("WsTokenHandler", () => {
           scmLogin: "octocat",
           scmName: "The Octocat",
           scmEmail: "octocat@example.com",
-          scmTokenEncrypted: "enc-access",
-          scmRefreshTokenEncrypted: "enc-refresh",
-          scmTokenExpiresAt: 2000,
         }),
       })
     );
@@ -235,9 +229,6 @@ describe("WsTokenHandler", () => {
           scmLogin: null,
           scmName: null,
           scmEmail: null,
-          scmTokenEncrypted: null,
-          scmRefreshTokenEncrypted: null,
-          scmTokenExpiresAt: null,
         }),
       })
     );

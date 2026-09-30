@@ -55,6 +55,7 @@ describe("session provider auth persistence", () => {
         reasoningEffort: null,
         participantUserId: "user-1",
         platformUserId: null,
+        participantCanonicalUserId: null,
         managedSkillsManifest: {
           selection: { mode: "all" },
           resolverVersion: 1,

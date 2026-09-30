@@ -8,6 +8,9 @@ import { handleSessionWsToken } from "./session-ws-token";
 import type { RequestContext } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
+import { APIError } from "better-auth/api";
+import { OAuthProviderError } from "../auth/user/providers/types";
+import { AdmissionDeniedError } from "../auth/user/admission-policy";
 import { UserStore } from "../db/user-store";
 import type { ProviderAccountClient } from "../source-control/github-credential-authority";
 import { withSessionRuntime } from "./session-route";
@@ -184,7 +187,7 @@ describe("session ws-token route (non-GitHub display fields)", () => {
 describe("GitHub browser attribution availability", () => {
   const subject = "583231";
   let api: ProviderAccountClient;
-  let fetch: ReturnType<typeof vi.fn>;
+  let fetch: ReturnType<typeof vi.fn<(request: Request) => Promise<Response>>>;
   beforeEach(() => {
     vi.spyOn(UserStore.prototype, "getIdentitiesForUser").mockResolvedValue([
       { provider: "github", providerUserId: subject, providerLogin: null } as never,
@@ -269,6 +272,19 @@ describe("GitHub browser attribution availability", () => {
       },
     });
     await expect(join()).rejects.toThrow("mismatched GitHub account");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([
+    new OAuthProviderError("malformed_response", "invalid provider profile"),
+    new OAuthProviderError("invalid_configuration", "invalid provider config"),
+    new AdmissionDeniedError(),
+    APIError.from("BAD_REQUEST", {
+      code: "AMBIGUOUS_ACCOUNT",
+      message: "Multiple accounts share this ID",
+    }),
+  ])("rejects provider integrity/admission errors before minting: %s", async (cause) => {
+    vi.mocked(api.accountInfo).mockRejectedValue(cause);
+    await expect(join()).rejects.toBe(cause);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("rejects malformed authority responses rather than treating them as unavailability", async () => {

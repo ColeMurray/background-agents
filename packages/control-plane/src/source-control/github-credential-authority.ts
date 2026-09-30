@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { APIError } from "better-auth/api";
+import { OAuthProviderError } from "../auth/user/providers/types";
+import { AdmissionDeniedError } from "../auth/user/admission-policy";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 
 const providerAccountSchema = z.object({
@@ -23,6 +26,14 @@ async function retrieveAttribution<T>(retrieve: () => Promise<T>): Promise<T> {
   try {
     return await retrieve();
   } catch (cause) {
+    if (
+      (cause instanceof OAuthProviderError &&
+        cause.failure !== "provider_unavailable" &&
+        cause.failure !== "provider_rejected") ||
+      cause instanceof AdmissionDeniedError ||
+      (cause instanceof APIError && cause.body?.code === "AMBIGUOUS_ACCOUNT")
+    )
+      throw cause;
     throw new GitHubAttributionUnavailableError(cause);
   }
 }

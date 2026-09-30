@@ -2822,9 +2822,10 @@ describe("Scheduler", () => {
             makeSlackEvent({ text: "follow up" })
           )
         ).toMatchObject({ steered: 1, triggered: 0 });
-        expect(
-          (await getPromptBody(vi.mocked(stub.fetch))).scmEnrichment?.login ?? null
-        ).toBeNull();
+        const prompt = await getPromptBody(vi.mocked(stub.fetch));
+        if (scenario === "empty")
+          expect(prompt.scmEnrichment).toMatchObject({ userId: "77", login: null });
+        else expect(prompt.scmEnrichment).toBeUndefined();
         expect(mockGitHubAccountInfo).not.toHaveBeenCalled();
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       }
