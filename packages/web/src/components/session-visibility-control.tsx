@@ -109,7 +109,7 @@ export function SessionVisibilityControl({
           <SelectTrigger id={`${id}-visibility`} density="compact" className="h-8 w-40">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent onEscapeKeyDown={(event) => event.stopPropagation()}>
             <SelectItem value="workspace">Workspace</SelectItem>
             <SelectItem value="team" disabled={!ownerTeamId}>
               Team
