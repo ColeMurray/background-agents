@@ -81,12 +81,13 @@ function InspectorPanel({
   children: ReactNode;
 }) {
   // Inactive panels stay mounted so file filters and section state survive tab switches.
+  // Each panel scrolls on its own, so switching tabs never lands partway down another list.
   return (
     <TabsContent
       value={value}
       forceMount
       hidden={value !== activeTab}
-      className={cn("p-5", className)}
+      className={cn("min-h-0 flex-1 overflow-y-auto p-5", className)}
     >
       {children}
     </TabsContent>
@@ -111,7 +112,7 @@ export function SessionRightSidebarContent({
   capabilities,
 }: SessionRightSidebarContentProps) {
   const [downloading, setDownloading] = useState(false);
-  const { tab: activeTab, selectTab } = useSessionInspectorTab();
+  const { tab: activeTab, selectTab, showTab } = useSessionInspectorTab();
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
   const warnings = useMemo(
     () =>
@@ -153,10 +154,11 @@ export function SessionRightSidebarContent({
       Object.keys(sessionState?.tunnelUrls ?? {}).length
     );
 
-  // An open diff is navigated from the Changes list, and closing it returns focus to that list.
+  // An open diff is navigated from the Changes list, and closing it returns focus to that
+  // list. This is navigation, not the viewer's choice, so the remembered tab stays as it was.
   useEffect(() => {
-    if (selectedDiff) selectTab("changes");
-  }, [selectedDiff, selectTab]);
+    if (selectedDiff) showTab("changes");
+  }, [selectedDiff, showTab]);
 
   const downloadTrace = async () => {
     setDownloading(true);
@@ -201,9 +203,9 @@ export function SessionRightSidebarContent({
       onValueChange={(value) => {
         if (isSessionInspectorTab(value)) selectTab(value);
       }}
-      className="min-h-full"
+      className="flex min-h-0 flex-1 flex-col"
     >
-      <TabsList aria-label="Session inspector" className="sticky top-0 z-10 bg-background px-2">
+      <TabsList aria-label="Session inspector" className="shrink-0 bg-background px-2">
         {SESSION_INSPECTOR_TABS.map((tab) => (
           <TabsTrigger key={tab} value={tab}>
             {INSPECTOR_TAB_LABELS[tab]}{" "}
@@ -458,7 +460,7 @@ export function SessionRightSidebar({ isOpen = true, ...props }: SessionRightSid
       aria-hidden={!isOpen}
       className={
         isOpen
-          ? "hidden w-[340px] shrink-0 overflow-y-auto border-l border-border bg-background lg:block xl:w-[360px]"
+          ? "hidden w-[340px] shrink-0 flex-col border-l border-border bg-background lg:flex xl:w-[360px]"
           : "hidden"
       }
     >

@@ -39,7 +39,7 @@ export function ParticipantsSection({ participants, presenceSynced }: Participan
                 className="w-7 h-7 rounded-full border-2 border-input object-cover"
               />
             ) : (
-              <div className="w-7 h-7 rounded-full border-2 border-input bg-accent-muted flex items-center justify-center text-xs font-medium text-accent">
+              <div className="w-7 h-7 rounded-full border-2 border-input bg-card flex items-center justify-center text-xs font-medium text-foreground">
                 {participant.name.charAt(0).toUpperCase()}
               </div>
             )}

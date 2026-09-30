@@ -636,6 +636,39 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByRole("button", { name: /navigation.tsx modified/ })).toBeVisible();
   });
 
+  it("keeps the viewer's tab choice when opening a diff shows Changes", async () => {
+    const view = render(inspector({ diffState: READY_DIFF }));
+    selectTab("Info");
+    view.rerender(
+      inspector({
+        diffState: READY_DIFF,
+        selectedDiff: { repositoryPosition: 0, path: "src/components/navigation.tsx" },
+      })
+    );
+    expect(screen.getByRole("tab", { name: "Changes 1" })).toHaveAttribute("aria-selected", "true");
+    view.unmount();
+
+    render(inspector({ diffState: READY_DIFF }));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Info" })).toHaveAttribute("aria-selected", "true")
+    );
+  });
+
+  it("scrolls each tab panel on its own", () => {
+    render(inspector({ diffState: READY_DIFF }));
+    selectTab("Info");
+    const info = screen.getByRole("tabpanel", { name: "Info" });
+    info.scrollTop = 400;
+
+    selectTab("Changes 1");
+    const changes = screen.getByRole("tabpanel", { name: "Changes 1" });
+    expect(changes).not.toBe(info);
+    expect(changes).toHaveClass("overflow-y-auto");
+    expect(info).toHaveClass("overflow-y-auto");
+    expect(changes.scrollTop).toBe(0);
+    expect(document.getElementById("session-details-sidebar")).not.toHaveClass("overflow-y-auto");
+  });
+
   it("reopens on the tab the viewer chose last", async () => {
     const first = render(inspector());
     selectTab("Tasks");

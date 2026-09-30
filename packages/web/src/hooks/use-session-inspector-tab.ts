@@ -15,7 +15,8 @@ export function isSessionInspectorTab(value: unknown): value is SessionInspector
 /**
  * The session inspector tab this browser last chose. Starts on the default so
  * the server and the client render the same markup, then adopts the stored
- * choice after hydration.
+ * choice after hydration. `selectTab` records the viewer's choice; `showTab`
+ * navigates without replacing it.
  */
 export function useSessionInspectorTab() {
   const [tab, setTab] = useState<SessionInspectorTab>(DEFAULT_SESSION_INSPECTOR_TAB);
@@ -38,5 +39,5 @@ export function useSessionInspectorTab() {
     }
   }, []);
 
-  return { tab, selectTab };
+  return { tab, selectTab, showTab: setTab };
 }

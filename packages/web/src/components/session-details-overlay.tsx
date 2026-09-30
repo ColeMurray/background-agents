@@ -232,7 +232,7 @@ export function SessionDetailsOverlay({
               </button>
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">{sidebarContent}</div>
+          <div className="flex min-h-0 flex-1 flex-col">{sidebarContent}</div>
         </div>
       ) : (
         <div
@@ -257,7 +257,7 @@ export function SessionDetailsOverlay({
               Close
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">{sidebarContent}</div>
+          <div className="flex min-h-0 flex-1 flex-col">{sidebarContent}</div>
         </div>
       )}
     </div>

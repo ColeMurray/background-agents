@@ -92,6 +92,52 @@ function PullRequestSyncButton({ sessionId }: { sessionId: string }) {
   );
 }
 
+/** One tracked PR: its state, its number (linked when the URL is safe), and its badge. */
+function PullRequestRow({
+  artifact,
+  showHead = false,
+}: {
+  artifact: Artifact;
+  showHead?: boolean;
+}) {
+  const prNumber = artifact.metadata?.prNumber;
+  const prState = artifact.metadata?.prState;
+  const prHead = artifact.metadata?.head;
+  const prUrl = getSafeExternalUrl(artifact.url ?? undefined);
+  const label = prNumber ? `#${prNumber}` : "PR";
+  return (
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+      {prState ? (
+        <PullRequestStateIcon state={prState} label={`PR ${prState}`} />
+      ) : (
+        <GitPrIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+      )}
+      {prUrl ? (
+        <a
+          href={prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-accent hover:underline"
+        >
+          {label}
+        </a>
+      ) : (
+        <span className="text-foreground">{label}</span>
+      )}
+      {showHead && prHead && (
+        <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]" title={prHead}>
+          {prHead}
+        </span>
+      )}
+      {prState && (
+        <Badge variant={prBadgeVariant(prState)} className="capitalize">
+          {prState}
+        </Badge>
+      )}
+    </span>
+  );
+}
+
 export function MetadataSection({
   sessionId,
   createdAt,
@@ -203,46 +249,12 @@ export function MetadataSection({
               {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
             </div>
           )}
-          {prArtifacts.map((artifact) => {
-            const prNumber = artifact.metadata?.prNumber;
-            const prState = artifact.metadata?.prState;
-            const prHead = artifact.metadata?.head;
-            const prUrl = getSafeExternalUrl(artifact.url ?? undefined);
-            return (
-              <div key={artifact.id} className="flex flex-wrap items-center gap-2 text-xs">
-                {prState ? (
-                  <PullRequestStateIcon state={prState} label={`PR ${prState}`} />
-                ) : (
-                  <GitPrIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
-                )}
-                {prUrl ? (
-                  <a
-                    href={prUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-accent hover:underline"
-                  >
-                    {prNumber ? `#${prNumber}` : "PR"}
-                  </a>
-                ) : (
-                  <span className="text-foreground">{prNumber ? `#${prNumber}` : "PR"}</span>
-                )}
-                {prArtifacts.length > 1 && prHead && (
-                  <span
-                    className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]"
-                    title={prHead}
-                  >
-                    {prHead}
-                  </span>
-                )}
-                {prState && (
-                  <Badge variant={prBadgeVariant(prState)} className="capitalize">
-                    {prState}
-                  </Badge>
-                )}
-              </div>
-            );
-          })}
+          {prArtifacts.map((artifact) => (
+            <div key={artifact.id} className="text-xs">
+              {/* Several PRs stay distinguishable by their head branch. */}
+              <PullRequestRow artifact={artifact} showHead={prArtifacts.length > 1} />
+            </div>
+          ))}
 
           {/* Manual-PR fallback link (legacy sessions without a PR artifact) */}
           {manualPrUrl && (
@@ -405,37 +417,9 @@ export function MetadataSection({
                         )}
                       </span>
                     )}
-                    {repoPrArtifacts.map((artifact) => {
-                      const repoPrNumber = artifact.metadata?.prNumber;
-                      const repoPrState = artifact.metadata?.prState;
-                      const repoPrUrl = getSafeExternalUrl(artifact.url ?? undefined);
-                      return (
-                        <span key={artifact.id} className="inline-flex items-center gap-1.5">
-                          {repoPrState && (
-                            <PullRequestStateIcon state={repoPrState} label={`PR ${repoPrState}`} />
-                          )}
-                          {repoPrUrl ? (
-                            <a
-                              href={repoPrUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-accent hover:underline"
-                            >
-                              {repoPrNumber ? `#${repoPrNumber}` : "PR"}
-                            </a>
-                          ) : (
-                            <span className="text-foreground">
-                              {repoPrNumber ? `#${repoPrNumber}` : "PR"}
-                            </span>
-                          )}
-                          {repoPrState && (
-                            <Badge variant={prBadgeVariant(repoPrState)} className="capitalize">
-                              {repoPrState}
-                            </Badge>
-                          )}
-                        </span>
-                      );
-                    })}
+                    {repoPrArtifacts.map((artifact) => (
+                      <PullRequestRow key={artifact.id} artifact={artifact} />
+                    ))}
                     {repoFallbackPrUrl && (
                       <a
                         href={repoFallbackPrUrl}

@@ -29,6 +29,16 @@ describe("useSessionInspectorTab", () => {
     await waitFor(() => expect(secondRender.result.current.tab).toBe("tasks"));
   });
 
+  it("shows a tab without replacing the remembered choice", () => {
+    const { result } = renderHook(() => useSessionInspectorTab());
+
+    act(() => result.current.selectTab("info"));
+    act(() => result.current.showTab("changes"));
+
+    expect(result.current.tab).toBe("changes");
+    expect(localStorage.getItem("open-inspect-session-inspector-tab")).toBe("info");
+  });
+
   it("ignores a stored value that is not a tab", async () => {
     localStorage.setItem("open-inspect-session-inspector-tab", "pull-requests");
     const { result } = renderHook(() => useSessionInspectorTab());

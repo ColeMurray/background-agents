@@ -158,14 +158,7 @@ export function FilesChangedSection({
                       )}
                     >
                       <span
-                        className={cn(
-                          "w-3 shrink-0 font-mono text-[10px] font-semibold",
-                          file.status === "added"
-                            ? "text-success"
-                            : file.status === "deleted"
-                              ? "text-destructive"
-                              : "text-accent"
-                        )}
+                        className="w-3 shrink-0 font-mono text-[10px] font-semibold text-muted-foreground"
                         aria-hidden="true"
                       >
                         {STATUS_LABELS[file.status]}
