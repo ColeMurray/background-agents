@@ -81,7 +81,7 @@ describe("GlobalCommandMenu", () => {
     ).toBeInTheDocument();
   });
 
-  it("uses a readable neutral highlight for pointer and keyboard selection", async () => {
+  it("uses a readable neutral highlight and visible ring for pointer and keyboard selection", async () => {
     const user = userEvent.setup();
     renderMenu();
     const newSession = screen.getByRole("option", { name: /New session/ });
@@ -92,16 +92,23 @@ describe("GlobalCommandMenu", () => {
     expect(home).toHaveAttribute("aria-selected", "true");
     expect(home).toHaveClass(
       "data-[selected=true]:bg-muted",
-      "data-[selected=true]:text-foreground"
+      "data-[selected=true]:text-foreground",
+      "data-[selected=true]:ring-2",
+      "data-[selected=true]:ring-inset",
+      "data-[selected=true]:ring-ring"
     );
     expect(home).not.toHaveClass("data-[selected=true]:bg-accent");
 
     await user.keyboard("{ArrowUp}");
 
     expect(newSession).toHaveAttribute("aria-selected", "true");
+    expect(home).toHaveAttribute("aria-selected", "false");
     expect(newSession).toHaveClass(
       "data-[selected=true]:bg-muted",
-      "data-[selected=true]:text-foreground"
+      "data-[selected=true]:text-foreground",
+      "data-[selected=true]:ring-2",
+      "data-[selected=true]:ring-inset",
+      "data-[selected=true]:ring-ring"
     );
     expect(screen.getByText("Start a coding session")).toHaveClass("text-muted-foreground");
     expect(screen.getByText("Cmd/Ctrl+Shift+O")).toHaveClass("text-muted-foreground");
