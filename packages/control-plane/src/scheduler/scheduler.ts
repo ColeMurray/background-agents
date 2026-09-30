@@ -1706,11 +1706,20 @@ export class Scheduler {
       automationId: automation.id,
     };
 
+    let enrichment: GitHubEnrichment | null = null;
+    if (resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github") {
+      try {
+        enrichment = await resolveGitHubEnrichment(new UserStore(this.db), actorUserId);
+      } catch (error) {
+        if (!(error instanceof AmbiguousGitHubIdentityError)) throw error;
+        this.log.warn("GitHub attribution is ambiguous; continuing without it", {
+          event: "scheduler.github_enrichment_ambiguous",
+          session_id: sessionId,
+          error,
+        });
+      }
+    }
     try {
-      const enrichment =
-        resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
-          ? await resolveGitHubEnrichment(new UserStore(this.db), actorUserId)
-          : null;
       await this.enqueueSessionPrompt(
         sessionId,
         {

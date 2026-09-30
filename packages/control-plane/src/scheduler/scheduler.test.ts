@@ -2677,6 +2677,41 @@ describe("Scheduler", () => {
       });
     });
 
+    it("steers a natural follow-up without attribution when GitHub identity is ambiguous", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "77" },
+        { provider: "github", providerUserId: "78" },
+      ]);
+      const stub = createMockSessionStub();
+      expect(
+        await createScheduler(createEnv(undefined, stub)).event(
+          makeSlackEvent({ text: "also update the changelog" })
+        )
+      ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      const body = await getPromptBody(vi.mocked(stub.fetch));
+      expect(body.canonicalUserId).toBe("slack-actor-user");
+      expect(body.scmEnrichment).toBeUndefined();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it("does not start an owner run when steering attribution storage fails", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockRejectedValue(new Error("D1 unavailable"));
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).rejects.toThrow("D1 unavailable");
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+    });
+
     it("resolves and authorizes the Slack actor once across several steering candidates", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([
         sampleSlackAutomation,
