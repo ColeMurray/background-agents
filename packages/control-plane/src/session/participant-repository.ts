@@ -80,6 +80,29 @@ export class ParticipantRepository {
     );
   }
 
+  /** Replace an authoritative SCM snapshot, including cleared identity fields. */
+  updateParticipantIdentity(
+    participantId: string,
+    data: {
+      canonicalUserId: string;
+      scmUserId: string | null;
+      scmLogin: string | null;
+      scmName: string | null;
+      scmEmail: string | null;
+    }
+  ): void {
+    this.sql.exec(
+      `UPDATE participants SET canonical_user_id = ?, scm_user_id = ?, scm_login = ?,
+         scm_name = ?, scm_email = ? WHERE id = ?`,
+      data.canonicalUserId,
+      data.scmUserId,
+      data.scmLogin,
+      data.scmName,
+      data.scmEmail,
+      participantId
+    );
+  }
+
   updateParticipantWsToken(participantId: string, tokenHash: string, createdAt: number): void {
     this.sql.exec(
       `UPDATE participants

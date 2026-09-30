@@ -9,6 +9,7 @@ const generateWsTokenRequestSchema = sessionScmDisplayFieldsSchema.extend({
   userId: z.string().optional(),
   canonicalUserId: z.string().min(1),
   scmUserId: nullableOptionalString,
+  replaceScmIdentity: z.boolean().optional(),
 });
 
 type GenerateWsTokenRequest = z.infer<typeof generateWsTokenRequestSchema>;
@@ -48,13 +49,18 @@ export class WsTokenHandler {
     let participant = this.repository.getParticipantByUserId(body.userId);
 
     if (participant) {
-      this.repository.updateParticipantCoalesce(participant.id, {
+      const identity = {
         canonicalUserId: body.canonicalUserId,
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-      });
+      };
+      if (body.replaceScmIdentity) {
+        this.repository.updateParticipantIdentity(participant.id, identity);
+      } else {
+        this.repository.updateParticipantCoalesce(participant.id, identity);
+      }
     } else {
       const id = this.generateId();
       this.repository.createParticipant({

@@ -60,7 +60,8 @@ export async function handleSessionWsToken(
       body: JSON.stringify({
         userId,
         canonicalUserId,
-        scmUserId: enrichment?.scmUserId,
+        replaceScmIdentity: isGitHub,
+        scmUserId: enrichment?.scmUserId ?? null,
         scmLogin: isGitHub ? (enrichment?.scmLogin ?? null) : body.scmLogin,
         scmName: isGitHub ? (enrichment?.displayName ?? null) : body.scmName,
         scmEmail: isGitHub ? (enrichment?.email ?? null) : body.scmEmail,

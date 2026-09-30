@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import {
   collectMessages,
   initNamedSession,
@@ -8,7 +8,6 @@ import {
   openSandboxWs,
   queryDO,
   seedSandboxAuth,
-  serviceFetch,
   serviceRequestHeaders,
   waitForSandboxStatus,
 } from "./helpers";
@@ -151,7 +150,7 @@ describe("GET /internal/participants", () => {
 });
 
 describe("browser Git author attribution", () => {
-  it.each(["join", "reconnect"])(
+  it.each(["join", "reconnect", "unlink", "relink-without-login"])(
     "dispatches the linked GitHub author after an empty-body browser %s",
     async (scenario) => {
       const userId = "11111111111111111111111111111111";
@@ -167,15 +166,34 @@ describe("browser Git author attribution", () => {
       )
         .bind("octocat", userId)
         .run();
-      if (scenario === "reconnect") {
+      if (scenario !== "join") {
         const prior = await stub.fetch("http://internal/internal/ws-token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, canonicalUserId: userId }),
+          body: JSON.stringify({
+            userId,
+            canonicalUserId: userId,
+            scmUserId: scenario === "reconnect" ? null : "583231",
+            scmLogin: scenario === "reconnect" ? null : "octocat",
+          }),
         });
         expect(prior.status).toBe(200);
       }
-      const tokenResponse = await serviceFetch(url, { method: "POST", body: "{}" });
+      const headers = await serviceRequestHeaders(url, { method: "POST", body: "{}" });
+      if (scenario === "unlink") {
+        await env.DB.prepare(
+          "DELETE FROM user_identities WHERE user_id = ? AND provider = 'github'"
+        )
+          .bind(userId)
+          .run();
+      } else if (scenario === "relink-without-login") {
+        await env.DB.prepare(
+          "UPDATE user_identities SET provider_user_id = ?, provider_login = NULL WHERE user_id = ? AND provider = 'github'"
+        )
+          .bind("77", userId)
+          .run();
+      }
+      const tokenResponse = await SELF.fetch(url, { method: "POST", body: "{}", headers });
       expect(tokenResponse.status).toBe(200);
       const { token } = await tokenResponse.json<{ token: string }>();
       await seedSandboxAuth(stub, {
@@ -216,11 +234,14 @@ describe("browser Git author attribution", () => {
         const command = (await commands).find((message) => message.type === "prompt");
         expect(command?.author).toEqual({
           userId,
-          gitIdentity: {
-            mode: "attributed-user",
-            name: "Integration Browser User",
-            email: "583231+octocat@users.noreply.github.com",
-          },
+          gitIdentity:
+            scenario === "unlink" || scenario === "relink-without-login"
+              ? { mode: "agent-only" }
+              : {
+                  mode: "attributed-user",
+                  name: "Integration Browser User",
+                  email: "583231+octocat@users.noreply.github.com",
+                },
         });
       } finally {
         client.close();
