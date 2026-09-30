@@ -226,7 +226,7 @@ export function SessionRightSidebarContent({
 
       {/* Canonical durable checkout changes, plus media the agent captured */}
       <InspectorPanel value="changes" activeTab={activeTab}>
-        <div className="mb-5 border-b border-border-muted pb-4">
+        <div className="mb-5">
           <h3 className="text-sm font-semibold">Files changed</h3>
           {files.length > 0 && (
             <div className="mt-3 flex items-baseline gap-3 font-mono text-lg tabular-nums">
@@ -353,7 +353,7 @@ export function SessionRightSidebarContent({
       </InspectorPanel>
 
       <InspectorPanel value="tasks" activeTab={activeTab} className="space-y-5">
-        <div className="border-b border-border-muted pb-4">
+        <div>
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Agent plan</h3>
             {tasks.length > 0 && (
@@ -382,7 +382,7 @@ export function SessionRightSidebarContent({
       </InspectorPanel>
 
       <InspectorPanel value="tools" activeTab={activeTab} className="space-y-5">
-        <h3 className="border-b border-border-muted pb-4 text-sm font-semibold">Workspace tools</h3>
+        <h3 className="text-sm font-semibold">Workspace tools</h3>
         {!hasSandboxTools && (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {!sessionState
