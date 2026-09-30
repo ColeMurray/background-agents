@@ -3,6 +3,8 @@ import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 import { sessionRepositoryRowSchema } from "./session-list-metadata";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
+type SessionAuditStatement = { sessionId: string; statement: SqlStatement };
+
 /** D1 reads and atomic writes for session scope changes. */
 export class SessionScopeStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -52,21 +54,27 @@ export class SessionScopeStore {
   async updateVisibility(
     ids: string[],
     visibility: SessionVisibility,
-    audits: SqlStatement[] = []
+    audits: SessionAuditStatement[] = []
   ): Promise<void> {
     if (!ids.length) return;
-    await this.db.batch([
-      ...ids.map((id) =>
-        this.db.prepare("UPDATE sessions SET visibility = ? WHERE id = ?").bind(visibility, id)
-      ),
-      ...audits,
-    ]);
+    const auditBySessionId = new Map(
+      audits.map(({ sessionId, statement }) => [sessionId, statement])
+    );
+    await this.db.batch(
+      ids.flatMap((id) => {
+        const update = this.db
+          .prepare("UPDATE sessions SET visibility = ? WHERE id = ?")
+          .bind(visibility, id);
+        const audit = auditBySessionId.get(id);
+        return audit ? [update, audit] : [update];
+      })
+    );
   }
 
   async updateOwnerTeam(
     ids: string[],
     teamId: string | null,
-    audits: SqlStatement[] = [],
+    audits: SessionAuditStatement[] = [],
     beforeStatements: SqlStatement[] = [],
     memberUserId?: string
   ): Promise<boolean> {
@@ -77,9 +85,14 @@ export class SessionScopeStore {
     const membership = memberUserId
       ? " AND EXISTS (SELECT 1 FROM team_memberships WHERE team_id = ? AND user_id = ?)"
       : "";
-    const results = await this.db.batch([
-      ...beforeStatements,
-      ...ids.map((id) =>
+    const auditBySessionId = new Map(
+      audits.map(({ sessionId, statement }) => [sessionId, statement])
+    );
+    const statements = [...beforeStatements];
+    const updateIndexes: number[] = [];
+    for (const id of ids) {
+      updateIndexes.push(statements.length);
+      statements.push(
         this.db
           .prepare(
             `UPDATE sessions SET owner_team_id = ?, visibility = CASE WHEN ? IS NULL AND visibility = 'team' THEN 'workspace' ELSE visibility END WHERE id = ?${activeTeam}${membership}`
@@ -91,9 +104,11 @@ export class SessionScopeStore {
             ...(teamId ? [teamId] : []),
             ...(memberUserId ? [teamId, memberUserId] : [])
           )
-      ),
-      ...audits,
-    ]);
-    return (results[beforeStatements.length]?.meta.changes ?? 0) > 0;
+      );
+      const audit = auditBySessionId.get(id);
+      if (audit) statements.push(audit);
+    }
+    const results = await this.db.batch(statements);
+    return updateIndexes.every((index) => (results[index]?.meta.changes ?? 0) > 0);
   }
 }

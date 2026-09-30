@@ -281,6 +281,36 @@ describe("session scope routes", () => {
     }
   });
 
+  it("does not report or audit a missing descendant as moved", async () => {
+    await session("root");
+    await session("child", "root");
+    const team = await new TeamStore(env.DB).create({
+      slug: "deleted-child",
+      name: "Deleted child",
+      joinPolicy: "invite_only",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+    await grant(team.id);
+    const original = SessionScopeStore.prototype.updateOwnerTeam;
+    const write = vi
+      .spyOn(SessionScopeStore.prototype, "updateOwnerTeam")
+      .mockImplementation(async function (this: SessionScopeStore, ...args) {
+        await env.DB.prepare("DELETE FROM sessions WHERE id = 'child'").run();
+        return original.apply(this, args);
+      });
+    try {
+      const response = await request("/sessions/root/scope", "PUT", { teamId: team.id });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Session not found" });
+      const audits = await env.DB.prepare(
+        "SELECT resource_id FROM authorization_audit_events WHERE action = 'session.moved'"
+      ).all<{ resource_id: string }>();
+      expect(audits.results).toEqual([{ resource_id: "root" }]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("rolls back an open-team join when the move audit fails", async () => {
     await session("root");
     const team = await new TeamStore(env.DB).create({
@@ -325,7 +355,7 @@ describe("session scope routes", () => {
       new SessionScopeStore(failAudit).updateOwnerTeam(
         ["root"],
         team.id,
-        [moveAudit],
+        [{ sessionId: "root", statement: moveAudit }],
         [join, teamAudit]
       )
     ).rejects.toThrow();
@@ -378,7 +408,7 @@ describe("session scope routes", () => {
       await new SessionScopeStore(env.DB).updateOwnerTeam(
         ["root"],
         team.id,
-        [moveAudit],
+        [{ sessionId: "root", statement: moveAudit }],
         [join, joinedAudit],
         OWNER
       )
@@ -539,6 +569,29 @@ describe("session scope routes", () => {
       "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'session.visibility_changed'"
     ).first<{ count: number }>();
     expect(auditCount?.count).toBe(2);
+  });
+
+  it("does not audit a descendant deleted after visibility preflight", async () => {
+    await session("root");
+    await session("child", "root");
+    const original = SessionScopeStore.prototype.updateVisibility;
+    const write = vi
+      .spyOn(SessionScopeStore.prototype, "updateVisibility")
+      .mockImplementation(async function (this: SessionScopeStore, ...args) {
+        await env.DB.prepare("DELETE FROM sessions WHERE id = 'child'").run();
+        return original.apply(this, args);
+      });
+    try {
+      expect(
+        (await request("/sessions/root/visibility", "PUT", { visibility: "private" })).status
+      ).toBe(200);
+      const audits = await env.DB.prepare(
+        "SELECT resource_id FROM authorization_audit_events WHERE action = 'session.visibility_changed'"
+      ).all<{ resource_id: string }>();
+      expect(audits.results).toEqual([{ resource_id: "root" }]);
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("refuses a readable but non-owned descendant without changing any visibility", async () => {

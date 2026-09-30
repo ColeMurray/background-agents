@@ -82,15 +82,21 @@ async function changeVisibility(
   const audits = rows.flatMap((row) =>
     row && row.visibility !== body.visibility
       ? [
-          auditStore.bind({
-            requestId: ctx.request_id,
-            actorUserId,
-            action: "session.visibility_changed",
+          {
             sessionId: row.id,
-            teamId: row.ownerTeamId,
-            before: { visibility: row.visibility },
-            after: { visibility: body.visibility },
-          }),
+            statement: auditStore.bind(
+              {
+                requestId: ctx.request_id,
+                actorUserId,
+                action: "session.visibility_changed",
+                sessionId: row.id,
+                teamId: row.ownerTeamId,
+                before: { visibility: row.visibility },
+                after: { visibility: body.visibility },
+              },
+              true
+            ),
+          },
         ]
       : []
   );
@@ -174,8 +180,9 @@ async function moveSession(
     return json({ sessionId: params.id, ownerTeamId: body.teamId, affectedSessionIds: [] });
   }
   const auditStore = new SessionAuditStore(ctx.db);
-  const audits = changedRows.map((row) =>
-    auditStore.bind(
+  const audits = changedRows.map((row) => ({
+    sessionId: row.id,
+    statement: auditStore.bind(
       {
         requestId: ctx.request_id,
         actorUserId,
@@ -189,9 +196,9 @@ async function moveSession(
             body.teamId === null && row.visibility === "team" ? "workspace" : row.visibility,
         },
       },
-      Boolean(body.teamId)
-    )
-  );
+      true
+    ),
+  }));
   if (
     !(await scope.updateOwnerTeam(
       changedRows.map((row) => row.id),
