@@ -11,17 +11,26 @@ import {
 } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { useMeTeams } from "./use-teams";
+import { useCurrentUserAuthorization } from "./use-current-user-authorization";
 
 const ACTIVE_TEAM_STORAGE_KEY = "open-inspect-active-team";
 
 function useActiveTeamState() {
   const { data: session } = useAuthSession();
   const memberships = useMeTeams();
+  const {
+    authorization,
+    loading: authorizationLoading,
+    error: authorizationError,
+  } = useCurrentUserAuthorization();
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const userId = session?.user.id ?? null;
   const teams = memberships.teams.filter((team) => team.archivedAt === null);
-  const loading = memberships.loading || hydratedUserId !== userId;
+  const loading = memberships.loading || authorizationLoading || hydratedUserId !== userId;
+  const error = memberships.error ?? (authorization ? undefined : authorizationError);
+  const canListAllTeams =
+    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
 
   useEffect(() => {
     let stored = "workspace";
@@ -36,9 +45,9 @@ function useActiveTeamState() {
 
   const activeSelection =
     !loading &&
-    !memberships.error &&
+    !error &&
     (selection === "all-my-teams" ||
-      selection === "all-teams" ||
+      (selection === "all-teams" && canListAllTeams) ||
       teams.some((team) => team.id === selection))
       ? selection
       : "workspace";
@@ -51,14 +60,14 @@ function useActiveTeamState() {
         : undefined;
 
   useEffect(() => {
-    if (loading || memberships.error) return;
+    if (loading || error) return;
     if (selection !== activeSelection) setSelection(activeSelection);
     try {
       localStorage.setItem(ACTIVE_TEAM_STORAGE_KEY, activeSelection ?? "workspace");
     } catch {
       // Continue with the in-memory preference when storage is unavailable.
     }
-  }, [activeSelection, loading, memberships.error, selection]);
+  }, [activeSelection, loading, error, selection]);
 
   const setActiveTeam = useCallback(
     (value: string | null) => setSelection(value ?? "workspace"),
@@ -72,7 +81,7 @@ function useActiveTeamState() {
     scope,
     requireTeamOnCreate: memberships.requireTeamOnCreate,
     loading,
-    error: memberships.error,
+    error,
   };
 }
 
