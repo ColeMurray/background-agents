@@ -116,6 +116,13 @@ resume/restart/bridge tests, committed recovery failure boundaries, real encrypt
 and real composition retirement/construction checks. Existing session access-reader and repository
 tests remain independent; collaborator mocks do not replace assembled coverage.
 
+`manager-shutdown.test.ts` isolates the assembled shutdown/recovery cases, including the committed
+access/publication failure matrix, from the manager's orchestration suite. It retains real
+manager/access/shutdown composition with test storage/provider ports; real SQLite and Workerd checks
+remain separate. The baseline gap notes distinguish inherited unsafe outcomes from desired safety
+guarantees; green characterization tests do not make those outcomes safe or authorize hardening in
+this extraction.
+
 Build shared first, then run sequentially from the repository root:
 
 ```bash
