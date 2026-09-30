@@ -8,7 +8,7 @@ import type { SessionRow } from "../../session/types";
 import { SandboxProviderError, type SessionRepositoryInfo } from "../provider";
 import type { ImageBuildLookup, ImageBuildSpawnRow, SelectedImageBuild } from "./image-selection";
 import {
-  createSandboxLaunchContext,
+  SandboxLaunchContext,
   resolveImageBuildScope,
   type McpServerLookup,
   type SandboxLaunchContextDependencies,
@@ -46,7 +46,7 @@ function fixture(overrides: Partial<SandboxLaunchContextDependencies> = {}) {
   };
   const logger = { info: vi.fn(), warn: vi.fn() };
   const getLogger = vi.fn(() => logger);
-  const context = createSandboxLaunchContext({
+  const context = new SandboxLaunchContext({
     sessionContext,
     provider: { name: "modal", capabilities: { supportsSandboxTimeout: true } },
     config: { model: CONFIGURED_MODEL },
@@ -102,7 +102,7 @@ describe("resolveImageBuildScope", () => {
   });
 });
 
-describe("createSandboxLaunchContext", () => {
+describe("SandboxLaunchContext", () => {
   it("does no dependency work at construction, even before a logger is available", () => {
     const getLogger = vi.fn(() => {
       throw new Error("session not initialized");

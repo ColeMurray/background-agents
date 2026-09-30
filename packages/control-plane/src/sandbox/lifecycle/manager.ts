@@ -58,9 +58,8 @@ import { isJwtUnexpired, mintJwt } from "../../auth/jwt";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import type { ImageBuildLookup } from "./image-selection";
 import {
-  createSandboxLaunchContext,
+  SandboxLaunchContext,
   resolveImageBuildScope,
-  type SandboxLaunchContext,
   type SandboxLaunchConfig,
   type SandboxLaunchContextReader,
 } from "./launch-context";
@@ -523,7 +522,7 @@ export class SandboxLifecycleManager
     imageBuildLookup?: ImageBuildLookup,
     private readonly backgroundTasks?: BackgroundTasks
   ) {
-    this.launchContext = createSandboxLaunchContext({
+    this.launchContext = new SandboxLaunchContext({
       sessionContext,
       provider: {
         name: provider.name,

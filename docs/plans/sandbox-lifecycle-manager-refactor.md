@@ -31,12 +31,11 @@ the manager is not intended to become a tiny facade or lose lifecycle arbitratio
 
 ## Launch Contract
 
-`SandboxLaunchContext` is an explicit internal interface. `createSandboxLaunchContext` is retained
-only to bind shared, narrow dependencies without introducing a stateful class: a two-method
-environment/repository reader, default model and MCP/Slack ports, provider metadata, optional image
-lookup and lazy logger. It has no mutable lifecycle state, storage/shutdown authority, provider
-operations, full-manager reference or service locator. Construction does not read the session or
-resolve log context.
+`SandboxLaunchContext` is explicitly constructed as a class. Its constructor receives only a
+two-method environment/repository reader, default model and MCP/Slack ports, provider metadata,
+optional image lookup and lazy logger. These dependencies are held in readonly fields; the class
+owns no mutable lifecycle state, storage/shutdown authority, provider operations, full-manager
+reference or service locator. Construction does not read the session or resolve log context.
 
 `AgentLaunchFields`, `RepositoryLaunchInputs` and `ResolvedSandboxSettings` name the return shapes.
 Agent fields are explicitly mapped into provider configs. Repository payload fields are restricted

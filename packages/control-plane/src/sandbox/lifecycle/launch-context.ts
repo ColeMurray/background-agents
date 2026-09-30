@@ -71,22 +71,6 @@ export interface ResolvedSandboxSettings {
   timeoutSeconds: number | undefined;
 }
 
-/** Input resolution only; startup mode, reservations and provider operations belong to the manager. */
-export interface SandboxLaunchContext {
-  getUserEnvVars(): Promise<Record<string, string> | undefined>;
-  resolveAgent(session: SessionRow): AgentLaunchFields;
-  resolveRepositories(session: SessionRow): RepositoryLaunchInputs;
-  lookupImageBuildForSpawn(
-    scope: ImageBuildScope,
-    repositories: SessionRepositoryInfo[],
-    harness: HarnessId
-  ): Promise<SelectedImageBuild | null>;
-  markImageBuildRestoreFailed(image: SelectedImageBuild, error: unknown): Promise<void>;
-  resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean>;
-  loadMcpServers(repositories: SessionRepositoryInfo[]): Promise<McpServerConfig[] | undefined>;
-  resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings;
-}
-
 /** Synchronous eligibility keeps ineligible sessions outside the image-lookup await. */
 export function resolveImageBuildScope(
   session: SessionRow,
@@ -105,166 +89,180 @@ export function resolveImageBuildScope(
  * The manager calls each operation at its existing await point: fresh and restore intentionally
  * resolve integrations in different orders, while resume/bridge use only settings and timeouts.
  */
-export function createSandboxLaunchContext({
-  sessionContext,
-  provider,
-  config,
-  imageBuildLookup,
-  getLogger,
-}: SandboxLaunchContextDependencies): SandboxLaunchContext {
-  return {
-    getUserEnvVars: () => sessionContext.getUserEnvVars(),
+export class SandboxLaunchContext {
+  private readonly sessionContext: SandboxLaunchContextReader;
+  private readonly provider: SandboxLaunchContextDependencies["provider"];
+  private readonly config: SandboxLaunchConfig;
+  private readonly imageBuildLookup: ImageBuildLookup | undefined;
+  private readonly getLogger: SandboxLaunchContextDependencies["getLogger"];
 
-    resolveAgent(session: SessionRow): AgentLaunchFields {
-      return {
-        ...extractProviderAndModel(getValidModelOrDefault(session.model || config.model)),
-        harness: getValidHarnessOrDefault(session.harness),
-      };
-    },
+  constructor({
+    sessionContext,
+    provider,
+    config,
+    imageBuildLookup,
+    getLogger,
+  }: SandboxLaunchContextDependencies) {
+    this.sessionContext = sessionContext;
+    this.provider = provider;
+    this.config = config;
+    this.imageBuildLookup = imageBuildLookup;
+    this.getLogger = getLogger;
+  }
 
-    resolveRepositories(session: SessionRow): RepositoryLaunchInputs {
-      const repositories = sessionContext.getSessionRepositories();
-      // Single-repo sessions keep the scalar wire form unless they carry a base SHA.
-      const multiRepoFields: Pick<CreateSandboxConfig, "repositories"> =
-        repositories.length > 1 || repositories.some((repository) => repository.baseSha)
-          ? { repositories }
-          : {};
-      return {
-        repositories,
-        fields: {
-          repoOwner: session.repo_owner,
-          repoName: session.repo_name,
-          branch: session.base_branch,
-          ...multiRepoFields,
-        },
-      };
-    },
+  getUserEnvVars(): Promise<Record<string, string> | undefined> {
+    return this.sessionContext.getUserEnvVars();
+  }
 
-    async lookupImageBuildForSpawn(
-      scope: ImageBuildScope,
-      repositories: SessionRepositoryInfo[],
-      harness: HarnessId
-    ): Promise<SelectedImageBuild | null> {
-      if (!imageBuildLookup || repositories.length === 0) return null;
-      try {
-        const image = await imageBuildLookup.getLatestReady(scope);
-        const result = await evaluateImageBuildForSpawn(image, repositories, harness);
-        if (result.outcome === "selected") {
-          getLogger().info("Using prebuilt image", {
-            event: "image_build.spawn_selected",
-            scope_kind: scope.kind,
-            scope_id: scope.id,
-            image_build_id: result.image.imageBuildId,
-            runtime_version: result.image.runtimeVersion,
-          });
-          return result.image;
-        }
-        getLogger().info("Prebuilt image miss, using base image", {
-          event: "image_build.spawn_miss",
+  resolveAgent(session: SessionRow): AgentLaunchFields {
+    return {
+      ...extractProviderAndModel(getValidModelOrDefault(session.model || this.config.model)),
+      harness: getValidHarnessOrDefault(session.harness),
+    };
+  }
+
+  resolveRepositories(session: SessionRow): RepositoryLaunchInputs {
+    const repositories = this.sessionContext.getSessionRepositories();
+    // Single-repo sessions keep the scalar wire form unless they carry a base SHA.
+    const multiRepoFields: Pick<CreateSandboxConfig, "repositories"> =
+      repositories.length > 1 || repositories.some((repository) => repository.baseSha)
+        ? { repositories }
+        : {};
+    return {
+      repositories,
+      fields: {
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+        branch: session.base_branch,
+        ...multiRepoFields,
+      },
+    };
+  }
+
+  async lookupImageBuildForSpawn(
+    scope: ImageBuildScope,
+    repositories: SessionRepositoryInfo[],
+    harness: HarnessId
+  ): Promise<SelectedImageBuild | null> {
+    if (!this.imageBuildLookup || repositories.length === 0) return null;
+    try {
+      const image = await this.imageBuildLookup.getLatestReady(scope);
+      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
+      if (result.outcome === "selected") {
+        this.getLogger().info("Using prebuilt image", {
+          event: "image_build.spawn_selected",
           scope_kind: scope.kind,
           scope_id: scope.id,
-          reason: result.reason,
-          image_build_id: result.imageBuildId,
+          image_build_id: result.image.imageBuildId,
+          runtime_version: result.image.runtimeVersion,
         });
-        return null;
-      } catch (e) {
-        getLogger().warn("Failed to look up prebuilt image, using base image", {
-          event: "image_build.spawn_miss",
-          scope_kind: scope.kind,
-          scope_id: scope.id,
-          reason: "lookup_failed",
-          error: e instanceof Error ? e.message : String(e),
-        });
-        return null;
+        return result.image;
       }
-    },
+      this.getLogger().info("Prebuilt image miss, using base image", {
+        event: "image_build.spawn_miss",
+        scope_kind: scope.kind,
+        scope_id: scope.id,
+        reason: result.reason,
+        image_build_id: result.imageBuildId,
+      });
+      return null;
+    } catch (e) {
+      this.getLogger().warn("Failed to look up prebuilt image, using base image", {
+        event: "image_build.spawn_miss",
+        scope_kind: scope.kind,
+        scope_id: scope.id,
+        reason: "lookup_failed",
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+  }
 
-    /** Called only by the manager's confirmed-unavailable branch; retry must survive D1 failure. */
-    async markImageBuildRestoreFailed(image: SelectedImageBuild, error: unknown): Promise<void> {
-      if (!imageBuildLookup) return;
-      try {
-        await imageBuildLookup.markRestoreFailed(
-          image.imageBuildId,
-          `restore failed at spawn: ${error instanceof Error ? error.message : String(error)}`
+  /** Called only by the manager's confirmed-unavailable branch; retry must survive D1 failure. */
+  async markImageBuildRestoreFailed(image: SelectedImageBuild, error: unknown): Promise<void> {
+    if (!this.imageBuildLookup) return;
+    try {
+      await this.imageBuildLookup.markRestoreFailed(
+        image.imageBuildId,
+        `restore failed at spawn: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } catch (e) {
+      this.getLogger().warn("Failed to mark prebuilt image restore-failed", {
+        image_build_id: image.imageBuildId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
+    if (!this.config.slackAgentNotifyLookup) return false;
+    try {
+      return await this.config.slackAgentNotifyLookup.isEnabledForRepo(
+        sessionHasRepository(session) ? session.repo_owner : null,
+        sessionHasRepository(session) ? session.repo_name : null
+      );
+    } catch (err) {
+      this.getLogger().warn("Failed to resolve agent slack-notify gate; treating as disabled", {
+        event: "slack_notify.gate_resolve_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  async loadMcpServers(
+    repositories: SessionRepositoryInfo[]
+  ): Promise<McpServerConfig[] | undefined> {
+    try {
+      if (!this.config.mcpServerLookup) return undefined;
+      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
+        repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
+      );
+      this.getLogger().info("MCP servers loaded", {
+        event: "mcp.loaded",
+        count: servers?.length ?? 0,
+        names: servers?.map((s) => s.name) ?? [],
+      });
+      return servers?.length ? servers : undefined;
+    } catch (err) {
+      this.getLogger().warn("Failed to load MCP servers", {
+        event: "mcp.load_failed",
+        error: String(err),
+      });
+      return undefined;
+    }
+  }
+
+  resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings {
+    let sandboxSettings: SandboxSettings;
+    try {
+      const settings = parsePersistedSandboxSettings(session.sandbox_settings);
+      const unsupported = unsupportedSandboxSettings(settings, this.provider.name);
+      if (unsupported.length > 0) {
+        this.getLogger().warn("Ignoring persisted sandbox settings unsupported by the provider", {
+          event: "sandbox.settings_unsupported",
+          provider: this.provider.name,
+          settings: unsupported,
+        });
+      }
+      sandboxSettings = omitUnsupportedSandboxSettings(settings, this.provider.name);
+    } catch {
+      this.getLogger().warn("Failed to parse sandbox_settings, using defaults");
+      sandboxSettings = {};
+    }
+    if (!this.provider.capabilities.supportsSandboxTimeout) {
+      if (sandboxSettings.sandboxTimeoutMs !== undefined) {
+        throw new SandboxProviderError(
+          `${this.provider.name} does not support configurable sandbox timeouts`,
+          "permanent"
         );
-      } catch (e) {
-        getLogger().warn("Failed to mark prebuilt image restore-failed", {
-          image_build_id: image.imageBuildId,
-          error: e instanceof Error ? e.message : String(e),
-        });
       }
-    },
-
-    async resolveAgentSlackNotifyEnabled(session: SessionRow): Promise<boolean> {
-      if (!config.slackAgentNotifyLookup) return false;
-      try {
-        return await config.slackAgentNotifyLookup.isEnabledForRepo(
-          sessionHasRepository(session) ? session.repo_owner : null,
-          sessionHasRepository(session) ? session.repo_name : null
-        );
-      } catch (err) {
-        getLogger().warn("Failed to resolve agent slack-notify gate; treating as disabled", {
-          event: "slack_notify.gate_resolve_failed",
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return false;
-      }
-    },
-
-    async loadMcpServers(
-      repositories: SessionRepositoryInfo[]
-    ): Promise<McpServerConfig[] | undefined> {
-      try {
-        if (!config.mcpServerLookup) return undefined;
-        const servers = await config.mcpServerLookup.getDecryptedForSession(
-          repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
-        );
-        getLogger().info("MCP servers loaded", {
-          event: "mcp.loaded",
-          count: servers?.length ?? 0,
-          names: servers?.map((s) => s.name) ?? [],
-        });
-        return servers?.length ? servers : undefined;
-      } catch (err) {
-        getLogger().warn("Failed to load MCP servers", {
-          event: "mcp.load_failed",
-          error: String(err),
-        });
-        return undefined;
-      }
-    },
-
-    resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings {
-      let sandboxSettings: SandboxSettings;
-      try {
-        const settings = parsePersistedSandboxSettings(session.sandbox_settings);
-        const unsupported = unsupportedSandboxSettings(settings, provider.name);
-        if (unsupported.length > 0) {
-          getLogger().warn("Ignoring persisted sandbox settings unsupported by the provider", {
-            event: "sandbox.settings_unsupported",
-            provider: provider.name,
-            settings: unsupported,
-          });
-        }
-        sandboxSettings = omitUnsupportedSandboxSettings(settings, provider.name);
-      } catch {
-        getLogger().warn("Failed to parse sandbox_settings, using defaults");
-        sandboxSettings = {};
-      }
-      if (!provider.capabilities.supportsSandboxTimeout) {
-        if (sandboxSettings.sandboxTimeoutMs !== undefined) {
-          throw new SandboxProviderError(
-            `${provider.name} does not support configurable sandbox timeouts`,
-            "permanent"
-          );
-        }
-        return { sandboxSettings, timeoutSeconds: undefined };
-      }
-      const timeoutMs = sandboxSettings.sandboxTimeoutMs;
-      return {
-        sandboxSettings,
-        timeoutSeconds: timeoutMs === undefined ? undefined : timeoutMs / 1000,
-      };
-    },
-  };
+      return { sandboxSettings, timeoutSeconds: undefined };
+    }
+    const timeoutMs = sandboxSettings.sandboxTimeoutMs;
+    return {
+      sandboxSettings,
+      timeoutSeconds: timeoutMs === undefined ? undefined : timeoutMs / 1000,
+    };
+  }
 }
