@@ -59,6 +59,21 @@ describe("MetadataSection", () => {
     expect(screen.getByRole("button", { name: "Copy branch name" })).toBeVisible();
   });
 
+  it("shows the reasoning effort beside the model", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        model="anthropic/claude-opus-4-6"
+        reasoningEffort="high"
+        baseBranch="main"
+      />
+    );
+
+    expect(screen.getByText("Model").nextElementSibling).toHaveTextContent(
+      "Claude Opus 4.6 · high"
+    );
+  });
+
   it("keeps full member branch names in multi-repository sessions", () => {
     const branchName = "feature/shared-component-rollout-across-repositories";
     render(

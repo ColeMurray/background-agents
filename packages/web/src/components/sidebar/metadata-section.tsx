@@ -281,6 +281,7 @@ export function MetadataSection({
                       onClick={handleCopyBranch}
                       className="-my-1 shrink-0 rounded p-1 hover:bg-muted transition-colors"
                       title={copied ? "Copied!" : "Copy branch name"}
+                      aria-label={copied ? "Copied branch name" : "Copy branch name"}
                     >
                       {copied ? (
                         <CheckIcon className="w-3.5 h-3.5 text-success" />
