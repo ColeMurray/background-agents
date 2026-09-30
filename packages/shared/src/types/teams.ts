@@ -106,5 +106,6 @@ export const teamMemberSchema = teamMembershipSchema.extend({
 
 export const meTeamsResponseSchema = z.object({
   teams: z.array(teamResponseSchema.extend({ role: teamRoleSchema })),
-  requireTeamOnCreate: z.boolean(),
+  // Older control-plane responses omit the setting during independent rollouts.
+  requireTeamOnCreate: z.boolean().default(false),
 });

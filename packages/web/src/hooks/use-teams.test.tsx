@@ -22,6 +22,27 @@ beforeEach(() => {
 });
 
 describe("team hooks", () => {
+  it.each([undefined, false, true])(
+    "loads membership responses with requireTeamOnCreate=%s without a decoder error",
+    async (requireTeamOnCreate) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada", email: "ada@example.com", image: null } },
+        status: "authenticated",
+      });
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({
+          teams: [],
+          ...(requireTeamOnCreate === undefined ? {} : { requireTeamOnCreate }),
+        })
+      );
+      const { result } = renderHook(useMeTeams, { wrapper });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.error).toBeUndefined();
+      expect(result.current.teams).toEqual([]);
+      expect(result.current.requireTeamOnCreate).toBe(requireTeamOnCreate ?? false);
+    }
+  );
+
   it("preserves slug_taken on create conflicts", async () => {
     vi.mocked(browserApiFetch).mockResolvedValue(
       Response.json({ error: "Team slug already exists", code: "slug_taken" }, { status: 409 })
