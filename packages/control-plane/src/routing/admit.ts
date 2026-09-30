@@ -131,6 +131,7 @@ export function admit<const Policy extends AdmissionPolicy>(
       policy,
       params,
       pathname,
+      routeKey: `${c.req.raw.method} ${c.req.routePath}`,
       ctx: context,
     });
     c.set("admission", { policy, params, result });

@@ -6,13 +6,13 @@ import {
   type PermissionId,
 } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
+import { ACTOR_ENROLLMENT, type Principal } from "../auth/principal";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
 } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import { serviceAllowsPermission } from "../authorization/service-permissions";
+import { serviceAllowsPermission, serviceAllowsRoute } from "../authorization/service-permissions";
 import { AutomationStore } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
@@ -371,6 +371,11 @@ async function finalizeServiceActor(
   if (principal?.kind !== "service" || !principal.actor || principal.actor.canonicalUserId) {
     return null;
   }
+  // Authentication already rejects unknown actors for these services; never
+  // enroll one here if that ever changes.
+  if (ACTOR_ENROLLMENT[principal.service] === "existing-only") {
+    return authorizationUnavailable();
+  }
 
   // Deployment capability does not depend on the caller: a request this
   // deployment cannot serve must not enroll a user, identity, or assignment.
@@ -669,6 +674,8 @@ export async function admitRoute(input: {
   policy: RouteAdmissionPolicy;
   params: RouteParams;
   pathname: string;
+  /** The matched route as `METHOD /pattern`, for per-service route allowlists. */
+  routeKey: string;
   ctx: RequestContext;
 }): Promise<RouteAdmissionResult> {
   const { env, params, pathname, policy, ctx } = input;
@@ -725,6 +732,22 @@ export async function admitRoute(input: {
     if (ctx.principal) {
       logPrincipal(ctx.principal, ctx, pathname);
     }
+  }
+
+  // Before any actor enrollment or RBAC lookup: a service limited to explicit
+  // routes never reaches authorization for a route outside its list.
+  if (
+    ctx.principal?.kind === "service" &&
+    !serviceAllowsRoute(ctx.principal.service, input.routeKey)
+  ) {
+    logger.warn("Service route denied", {
+      event: "auth.service_route_denied",
+      service: ctx.principal.service,
+      route: input.routeKey,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return denied(json({ error: "Forbidden", code: "service_route_not_allowed" }, 403));
   }
 
   const authorization = await enforceRouteAuthorization(

@@ -13,7 +13,12 @@ import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";
 import type { Env } from "../../types";
-import { ASSERTION_RIGHTS, isActorNamespace, type ActorNamespace } from "../principal";
+import {
+  ACTOR_ENROLLMENT,
+  ASSERTION_RIGHTS,
+  isActorNamespace,
+  type ActorNamespace,
+} from "../principal";
 import type { AuthenticationRequestServices } from "../request-services";
 import type { AuthResult } from "../result";
 import { serviceAuthSecret } from "./config";
@@ -171,6 +176,17 @@ export async function authenticateServiceRequest(
       parsed.provider,
       parsed.providerUserId
     );
+    if (!identity && ACTOR_ENROLLMENT[service] === "existing-only") {
+      logger.warn("Actor assertion denied: unknown actor", {
+        event: "auth.assertion_denied",
+        failure: "unknown_actor",
+        service,
+        actor,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+    }
     resolvedActor = {
       provider: parsed.provider,
       providerUserId: parsed.providerUserId,

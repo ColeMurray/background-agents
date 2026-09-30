@@ -26,6 +26,14 @@ resource "random_password" "service_auth_secret_linear_bot" {
   special = false
 }
 
+# Agent World is an external caller, not a worker in this stack, so its key is
+# generated only when enabled and handed over through a sensitive output.
+resource "random_password" "service_auth_secret_agent_world" {
+  count   = var.enable_agent_world_service ? 1 : 0
+  length  = 64
+  special = false
+}
+
 # Dedicated pepper for image-build callback token hashes.
 resource "random_password" "image_callback_token_pepper" {
   length  = 64

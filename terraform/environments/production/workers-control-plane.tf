@@ -184,6 +184,9 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
+    var.enable_agent_world_service ? [
+      { name = "SERVICE_AUTH_SECRET_AGENT_WORLD", value = random_password.service_auth_secret_agent_world[0].result },
+    ] : [],
     local.github_oauth_enabled ? [
       { name = "GITHUB_CLIENT_SECRET", value = trimspace(var.github_client_secret) },
     ] : [],

@@ -51,4 +51,18 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "slack-bot": "slack",
   "github-bot": "github",
   "linear-bot": "linear",
+  "agent-world": "github",
+};
+
+/**
+ * Whether a service's asserted actor may be enrolled as a new user on first
+ * sight. Chat and tracker bots enroll the people who message them; Agent World
+ * acts only for existing members, so an unknown actor is rejected instead.
+ */
+export const ACTOR_ENROLLMENT: Record<ServiceName, "enroll" | "existing-only"> = {
+  web: "existing-only",
+  "slack-bot": "enroll",
+  "github-bot": "enroll",
+  "linear-bot": "enroll",
+  "agent-world": "existing-only",
 };

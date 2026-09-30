@@ -10,6 +10,8 @@ import {
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
+import type { ActorNamespace } from "../auth/principal";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
   applyIdentityEnforcement,
@@ -51,19 +53,24 @@ const MANAGED_SESSION_ID_FORBIDDEN_ERROR =
 /**
  * Whether this request's verified principal may reserve its own session id.
  *
- * Only the Linear bot acting through a verified Linear actor may preallocate a
- * session id: it persists the UUID before issuing the create, so a lost
- * response leaves a known identity to reconcile. Every other principal —
- * humans, other services, and actorless callers — has a supplied
- * `managedSessionId` rejected and otherwise gets a generated id.
+ * Only the Linear bot acting through a verified Linear actor, or Agent World
+ * acting through a verified GitHub actor, may preallocate a session id: each
+ * persists the UUID before issuing the create, so a lost response leaves a
+ * known identity to reconcile. Every other principal — humans, other services,
+ * and actorless callers — has a supplied `managedSessionId` rejected and
+ * otherwise gets a generated id.
  */
+const MANAGED_SESSION_ID_ACTOR_PROVIDERS: Partial<Record<ServiceName, ActorNamespace>> = {
+  "linear-bot": "linear",
+  "agent-world": "github",
+};
+
 function isManagedSessionIdentityPrincipal(ctx: RequestContext): boolean {
   const principal = ctx.principal;
   return (
     principal?.kind === "service" &&
-    principal.service === "linear-bot" &&
     principal.actor !== null &&
-    principal.actor.provider === "linear" &&
+    MANAGED_SESSION_ID_ACTOR_PROVIDERS[principal.service] === principal.actor.provider &&
     principal.actor.participantUserId.length > 0
   );
 }

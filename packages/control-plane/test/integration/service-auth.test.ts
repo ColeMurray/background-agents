@@ -19,6 +19,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": "test-service-secret-slack-bot",
   "github-bot": "test-service-secret-github-bot",
   "linear-bot": "test-service-secret-linear-bot",
+  "agent-world": "test-service-secret-agent-world",
 };
 
 async function signedFetch(p: {
@@ -58,7 +59,10 @@ describe("sig1 service-credential authentication", () => {
         url: "https://test.local/sessions",
       });
       expect(response.status, service).toBe(403);
-      await expect(response.json()).resolves.toMatchObject({ code: "service_actor_required" });
+      // Agent World's route allowlist refuses the route before the actor check.
+      const code =
+        service === "agent-world" ? "service_route_not_allowed" : "service_actor_required";
+      await expect(response.json()).resolves.toMatchObject({ code });
     }
   });
 

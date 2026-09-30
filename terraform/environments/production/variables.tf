@@ -276,6 +276,16 @@ variable "slack_bot_default_model" {
 }
 
 # =============================================================================
+# Agent World
+# =============================================================================
+
+variable "enable_agent_world_service" {
+  description = "Accept sig1 requests from the external Agent World service. Off by default; when off, the control plane has no agent-world key and rejects every such request."
+  type        = bool
+  default     = false
+}
+
+# =============================================================================
 # Linear Agent Credentials
 # =============================================================================
 

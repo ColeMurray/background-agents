@@ -67,7 +67,8 @@ export type SpawnSource =
   | "automation"
   | "github-bot"
   | "linear-bot"
-  | "slack-bot";
+  | "slack-bot"
+  | "agent-world";
 
 /**
  * Aggregate PR counts for a session, grouped by display status. Computed from

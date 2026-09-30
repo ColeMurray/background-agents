@@ -143,3 +143,9 @@ output "verification_commands" {
 
   EOF
 }
+
+output "agent_world_service_auth_secret" {
+  description = "sig1 signing secret for the external Agent World service (null when disabled)."
+  value       = var.enable_agent_world_service ? random_password.service_auth_secret_agent_world[0].result : null
+  sensitive   = true
+}

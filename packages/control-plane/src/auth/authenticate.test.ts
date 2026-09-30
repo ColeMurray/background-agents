@@ -18,6 +18,7 @@ const SECRETS = {
   SERVICE_AUTH_SECRET_SLACK_BOT: "slack-secret",
   SERVICE_AUTH_SECRET_GITHUB_BOT: "github-secret",
   SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-secret",
+  SERVICE_AUTH_SECRET_AGENT_WORLD: "agent-world-secret",
 };
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -25,6 +26,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": SECRETS.SERVICE_AUTH_SECRET_SLACK_BOT,
   "github-bot": SECRETS.SERVICE_AUTH_SECRET_GITHUB_BOT,
   "linear-bot": SECRETS.SERVICE_AUTH_SECRET_LINEAR_BOT,
+  "agent-world": SECRETS.SERVICE_AUTH_SECRET_AGENT_WORLD,
 };
 
 function createCtx(identityRow: Record<string, unknown> | null = null): RequestContext {
@@ -155,6 +157,71 @@ describe("authenticate — service credentials", () => {
     });
   });
 
+  it("resolves an Agent World GitHub actor to the existing member", async () => {
+    const ctx = createCtx({
+      id: "ident-gh",
+      user_id: "user-gh",
+      provider: "github",
+      provider_user_id: "4242",
+      provider_login: "member",
+      provider_email: null,
+      created_at: 1,
+    });
+    const request = await signedRequest({
+      service: "agent-world",
+      body: "{}",
+      actor: "github:4242",
+    });
+    const result = await authenticate(request, createEnv(), ctx);
+
+    expect(isAuthError(result)).toBe(false);
+    if (isAuthError(result)) return;
+    expect(result.principal).toEqual({
+      kind: "service",
+      service: "agent-world",
+      actor: {
+        provider: "github",
+        providerUserId: "4242",
+        canonicalUserId: "user-gh",
+        participantUserId: "github:4242",
+      },
+    });
+  });
+
+  it("rejects an Agent World actor that is not an existing member", async () => {
+    const request = await signedRequest({
+      service: "agent-world",
+      body: "{}",
+      actor: "github:9999",
+    });
+    const result = await authenticate(request, createEnv(), createCtx(null));
+    expect(result).toEqual({ reason: "Unauthorized", status: 401, failedScheme: "per-service" });
+  });
+
+  it("rejects Agent World requests when its secret is not bound", async () => {
+    const request = await signedRequest({ service: "agent-world", body: "{}" });
+    const result = await authenticate(
+      request,
+      createEnv({ SERVICE_AUTH_SECRET_AGENT_WORLD: undefined }),
+      createCtx()
+    );
+    expect(result).toEqual({
+      reason: "Service authentication not configured",
+      status: 500,
+      failedScheme: "per-service",
+    });
+  });
+
+  it("does not accept another service's secret for Agent World", async () => {
+    const request = await signedRequest({
+      service: "agent-world",
+      body: "{}",
+      secret: SECRETS.SERVICE_AUTH_SECRET_LINEAR_BOT,
+    });
+    const result = await authenticate(request, createEnv(), createCtx());
+    expect(result).toEqual({ reason: "Unauthorized", status: 401, failedScheme: "per-service" });
+  });
+
   it("rejects an unknown service name without fallback", async () => {
     const request = await signedRequest({
       service: "linear-bot",
@@ -282,6 +349,8 @@ describe("authenticate — service credentials", () => {
       { service: "github-bot", actor: "linear:usr_1" },
       { service: "linear-bot", actor: "slack:U1" },
       { service: "slack-bot", actor: "malformed" },
+      { service: "agent-world", actor: "slack:U1" },
+      { service: "agent-world", actor: "linear:usr_1" },
     ];
     for (const { service, actor } of cases) {
       const request = await signedRequest({ service, body: "{}", actor });

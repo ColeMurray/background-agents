@@ -808,6 +808,40 @@ describe("handleCreateSession D1 ordering", () => {
       expect(initBody.sessionName).toBe(MANAGED_SESSION_ID);
     });
 
+    it("threads a verified Agent World GitHub actor's preallocated UUID into D1 and the response", async () => {
+      const create = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(SessionIndexStore).mockImplementation(function () {
+        return { create } as never;
+      });
+      const initFetch = vi.fn<(request: Request) => Promise<Response>>(async () =>
+        Response.json({ status: "created" })
+      );
+
+      const response = await createSessionWithPrincipal(
+        initFetch,
+        {
+          kind: "service",
+          service: "agent-world",
+          actor: {
+            provider: "github",
+            providerUserId: "4242",
+            canonicalUserId: "user-1",
+            participantUserId: "github:4242",
+          },
+        },
+        { managedSessionId: MANAGED_SESSION_ID }
+      );
+
+      expect(response.status).toBe(201);
+      await expect(response.json()).resolves.toEqual({
+        sessionId: MANAGED_SESSION_ID,
+        status: "created",
+      });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ id: MANAGED_SESSION_ID, spawnSource: "agent-world" })
+      );
+    });
+
     it("still generates an id when a verified linear actor omits managedSessionId", async () => {
       const create = vi.fn().mockResolvedValue(undefined);
       vi.mocked(SessionIndexStore).mockImplementation(function () {
@@ -852,6 +886,23 @@ describe("handleCreateSession D1 ordering", () => {
       {
         label: "actorless linear-bot",
         principal: { kind: "service", service: "linear-bot", actor: null },
+      },
+      {
+        label: "actorless agent-world",
+        principal: { kind: "service", service: "agent-world", actor: null },
+      },
+      {
+        label: "github-bot",
+        principal: {
+          kind: "service",
+          service: "github-bot",
+          actor: {
+            provider: "github",
+            providerUserId: "4242",
+            canonicalUserId: "user-1",
+            participantUserId: "github:4242",
+          },
+        },
       },
     ])("rejects a supplied UUID from $label before D1 create or DO init", async ({ principal }) => {
       const create = vi.fn().mockResolvedValue(undefined);

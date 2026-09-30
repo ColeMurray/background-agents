@@ -228,6 +228,7 @@ export const TEST_SERVICE_SECRETS = {
   SERVICE_AUTH_SECRET_SLACK_BOT: "test-service-secret-slack-bot",
   SERVICE_AUTH_SECRET_GITHUB_BOT: "test-service-secret-github-bot",
   SERVICE_AUTH_SECRET_LINEAR_BOT: "test-service-secret-linear-bot",
+  SERVICE_AUTH_SECRET_AGENT_WORLD: "test-service-secret-agent-world",
 } as const;
 
 export async function signedServiceRequest(
