@@ -188,7 +188,7 @@ export function SessionHeader({
   };
 
   const handleRenameSubmit = async () => {
-    if (!sessionState) {
+    if (!sessionState || !capabilities.lifecycle) {
       setIsRenaming(false);
       return;
     }
@@ -233,7 +233,7 @@ export function SessionHeader({
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
           <div className="min-w-0 flex-1">
-            {isRenaming ? (
+            {isRenaming && capabilities.lifecycle ? (
               <input
                 autoFocus
                 aria-label="Session title"

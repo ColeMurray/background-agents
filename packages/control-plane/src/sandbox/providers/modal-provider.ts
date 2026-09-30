@@ -39,6 +39,14 @@ import {
   type StopResult,
 } from "../provider";
 
+/** Preserve typed VM lookup details separately from ambiguous-launch classification. */
+export function modalVmAllocationDetail(error: unknown): string | undefined {
+  const cause = error instanceof SandboxProviderError ? error.cause : error;
+  if (cause instanceof ModalVmStartupError) return cause.outcome;
+  if (cause instanceof ModalApiError) return cause.detail;
+  return undefined;
+}
+
 interface StartModalImageBuildConfig {
   buildId: string;
   providerSessionId: string;

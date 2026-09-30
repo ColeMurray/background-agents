@@ -115,7 +115,10 @@ grant for private sessions; they still need the relevant workspace permission to
 use the sandbox. Runtime participants record who connected or contributed and may carry runtime
 credentials; being a participant alone is not a visibility grant. Conversely, making someone a
 collaborator does not turn them into a runtime participant. Removing a collaborator revokes their
-private-session access on subsequent authorization checks.
+private-session access on subsequent authorization checks. Adding collaborators or removing someone
+else requires `manageCollaborators`: after the session read check, only the session owner or a
+workspace Owner may do so. A collaborator may remove themselves with session read access alone;
+collaboration or lifecycle permission is not required for self-removal.
 
 Session actions have additional rules after visibility: prompting requires collaboration permission,
 sandbox use requires sandbox permission, and lifecycle operations require lifecycle permission. With
@@ -136,14 +139,30 @@ requires a team; `private` requires a workspace user owner. A teamless session m
 
 Owners and Administrators can configure **Settings > Teams > Require a team for new sessions**
 (`requireTeamOnCreate`). It is off by default. When enabled, new sessions must select a team; it
-does not migrate or hide existing `ownerTeamId: null` workspace rows.
+refuses session creation API requests without a team with `team_required`. The web app supports team
+selection; team selection in bots is a later phase, so their teamless creation API requests are also
+refused when the setting is enabled. Automation runs are exempt until automation team ownership is
+supported. The setting does not migrate or hide existing `ownerTeamId: null` workspace rows.
+
+There is no repository-grant creation API or UI yet. Repository-backed team sessions and moves
+without existing grants are refused with `target_team_missing_grant`; creating a team does not grant
+it repository access. Repository-less team sessions do not need repository grants.
 
 Moving a session to a team checks active membership in the destination (or an explicit join to an
 open team) and repository grants for every repository in the session and included descendants. A
 missing grant blocks the move. Moving to no team sets `ownerTeamId` to `null` and turns `team`
 visibility into `workspace`. Moving or changing visibility can include descendants. Team grants
 constrain selection and moves, not the source-control App token already available to a running
-sandbox.
+sandbox. A cascading move or visibility change refuses the entire request if any included descendant
+is inaccessible or denies the requested action; it does not silently skip that descendant.
+
+Session discovery and inbox filters compose on the server: `ownerFilter=started` matches the
+creator, `participating` also includes explicit collaborators and users with persisted read state,
+and `anyone` adds no ownership filter. `visibility=team|workspace|private` and repeated `teamIds[]`
+narrow the readable rows. `scope=workspace` means teamless sessions, not workspace visibility;
+`scope=all` is reserved for workspace Owners and Administrators and does not bypass visibility or
+enumerate break-glass-only private sessions. Inbox `mine=true` remains creator-only and excludes
+direct automation and GitHub-bot sessions, but retains eligible agent descendants.
 
 ### Enforcement and Access Paths
 
@@ -154,6 +173,10 @@ Operators set `TEAMS_ENFORCEMENT` to `off`, `shadow` (the default), or `on`:
 - `shadow`: continue legacy access for non-private sessions while recording where team or ownership
   rules would deny access; private restrictions still take effect.
 - `on`: enforce visibility, team membership, and action/ownership rules for sessions.
+
+The visibility, scope, and collaborator mutation routes always enforce the session access resolver,
+including in `off` and `shadow` modes. Those modes do not relax these mutation checks or the checks
+on descendants included in a cascading operation.
 
 The session boundary covers four paths, not just the session page:
 

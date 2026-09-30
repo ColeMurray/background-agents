@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { notFound, useRouter } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
@@ -17,6 +17,8 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "reac
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 import {
   isArchivedSessionListKey,
   isUnarchivedSessionListKey,
@@ -54,8 +56,6 @@ import { formatSessionCost } from "@/lib/session-cost";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { useSessionRename } from "@/hooks/use-session-rename";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { resolveSessionCapabilities } from "@/lib/session-capabilities";
 import { SandboxShutdownBanner } from "@/components/sandbox-shutdown-banner";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
 
@@ -65,12 +65,23 @@ const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 const DEFAULT_SESSION_STATUS = "created" as const;
 
 export default function SessionPage() {
-  const { shortcuts } = useKeyboardShortcuts();
-  const { hasPermission } = useCurrentUserAuthorization();
-  const capabilities = useMemo(() => resolveSessionCapabilities(hasPermission), [hasPermission]);
   const initialSnapshot = useSessionSnapshot();
+  const socket = useSessionSocket(initialSnapshot.session.id, initialSnapshot);
+  if (socket.sessionGone) notFound();
+  return <SessionContent initialSnapshot={initialSnapshot} socket={socket} />;
+}
+
+function SessionContent({
+  initialSnapshot,
+  socket,
+}: {
+  initialSnapshot: ReturnType<typeof useSessionSnapshot>;
+  socket: ReturnType<typeof useSessionSocket>;
+}) {
+  const { shortcuts } = useKeyboardShortcuts();
   const sessionId = initialSnapshot.session.id;
   const {
+    capabilities,
     connected,
     connecting,
     reconnecting,
@@ -95,7 +106,7 @@ export default function SessionPage() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId, initialSnapshot, capabilities);
+  } = socket;
   const latestTerminalMessageId = useMemo(() => findLatestTerminalMessageId(events), [events]);
   useMarkSessionRead(sessionId, latestTerminalMessageId);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
@@ -621,10 +632,10 @@ function useSessionListActions(sessionId: string) {
           );
           mutate(isUnarchivedSessionListKey);
         } else {
-          console.error("Failed to unarchive session");
+          toast.error(await sessionActionErrorMessage(r, "Failed to unarchive session"));
         }
       }),
-    { throwOnError: false }
+    { throwOnError: false, onError: () => toast.error("Failed to unarchive session") }
   );
 
   return { handleArchive, handleUnarchive };

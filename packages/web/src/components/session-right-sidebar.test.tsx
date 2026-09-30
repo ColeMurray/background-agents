@@ -9,7 +9,7 @@ import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs"
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { SessionDetailsOverlay } from "./session-details-overlay";
 import { SessionRightSidebar, type SessionRightSidebarContentProps } from "./session-right-sidebar";
-import type { SessionCapabilities } from "@/lib/session-capabilities";
+import { resolveSessionCapabilities, type SessionCapabilities } from "@/lib/session-capabilities";
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -21,6 +21,7 @@ vi.mock("swr", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(browserApiFetch).mockReset();
   vi.stubGlobal(
     "URL",
     Object.assign(class extends URL {}, {
@@ -163,9 +164,9 @@ describe("SessionRightSidebar", () => {
     expect(screen.getByRole("button", { name: "Download trace" })).toBeInTheDocument();
   });
 
-  it("keeps the session page open when the trace request fails", async () => {
+  it("shows the denial reason when an allowed trace export receives 403", async () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
-      Response.json({ error: "Forbidden" }, { status: 403 })
+      Response.json({ error: "Forbidden", reason_code: "session_read_only" }, { status: 403 })
     );
     render(
       <SessionRightSidebar
@@ -176,13 +177,15 @@ describe("SessionRightSidebar", () => {
         events={[]}
         artifacts={[]}
         onOpenMedia={vi.fn()}
-        capabilities={FULL_CAPABILITIES}
+        capabilities={resolveSessionCapabilities({ canRead: true }, true)}
       />
     );
 
     selectTab("Info");
     fireEvent.click(screen.getByRole("button", { name: "Download trace" }));
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to download trace"));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("Failed to download trace (session_read_only)")
+    );
     expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/session-1/export", {
       signal: expect.any(AbortSignal),
     });

@@ -16,6 +16,12 @@ vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
 }));
 
+const teamContext = vi.hoisted(() => ({
+  activeTeamId: null as string | null,
+  scope: undefined as "workspace" | "all" | undefined,
+}));
+vi.mock("./use-active-team", () => ({ useActiveTeam: () => ({ ...teamContext, loading: false }) }));
+
 vi.mock("@/lib/session-read-state", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -118,9 +124,49 @@ afterEach(() => {
   setVisibility("visible");
   vi.restoreAllMocks();
   vi.useRealTimers();
+  teamContext.activeTeamId = null;
+  teamContext.scope = undefined;
 });
 
 describe("useSidebarSessions", () => {
+  it("uses the selected team for snapshot and cursor requests and drops retained pages on switches", async () => {
+    teamContext.activeTeamId = "team_alpha";
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? page(["alpha-tail"])
+        : snapshot({
+            needs_attention: page([key.includes("team_beta") ? "beta" : "alpha"], "next"),
+          })
+    );
+    const { result, rerender } = renderHook(useSidebarSessions, { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.needsAttention[0]?.id).toBe("alpha"));
+    expect(fetcher).toHaveBeenCalledWith("/api/sessions/inbox?teamIds%5B%5D=team_alpha");
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/sessions/inbox?category=needs_attention&cursor=next&teamIds%5B%5D=team_alpha"
+    );
+    teamContext.activeTeamId = "team_beta";
+    rerender();
+    await waitFor(() =>
+      expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["beta"])
+    );
+  });
+
+  it.each(["workspace", "all"] as const)(
+    "keys %s scope separately from the creator filter",
+    async (scope) => {
+      teamContext.scope = scope;
+      const fetcher = vi.fn(async () => snapshot());
+      const { result } = renderHook(useSidebarSessions, { wrapper: wrapper(fetcher) });
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(fetcher).toHaveBeenCalledWith(`/api/sessions/inbox?scope=${scope}`);
+      act(() => result.current.setSessionCreatorFilter("mine"));
+      await waitFor(() =>
+        expect(fetcher).toHaveBeenCalledWith(`/api/sessions/inbox?mine=true&scope=${scope}`)
+      );
+    }
+  );
   it("uses exactly one canonical request to supply all three categories", async () => {
     const fetcher = vi.fn(async () => snapshot());
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });

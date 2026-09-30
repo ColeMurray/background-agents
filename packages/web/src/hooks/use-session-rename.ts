@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 import { isSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 
@@ -139,6 +141,11 @@ export function useSessionRename({
         });
 
         if (!response.ok) {
+          if (response.status === 403) {
+            toast.error(
+              await sessionActionErrorMessage(response, "Failed to update session title")
+            );
+          }
           throw new Error("Failed to update session title");
         }
 

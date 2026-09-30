@@ -1,9 +1,14 @@
 import { z } from "zod";
-import { sessionReadStateSchema, sessionSummaryBaseSchema } from "./sessions";
+import {
+  sessionCapabilitiesSchema,
+  sessionReadStateSchema,
+  sessionSummaryBaseSchema,
+} from "./sessions";
 
 /** Viewer-specific session row in session inbox page and snapshot payloads. */
 export const sessionInboxSessionSchema = sessionSummaryBaseSchema.extend({
   readState: sessionReadStateSchema,
+  capabilities: sessionCapabilitiesSchema.optional(),
 });
 export type SessionInboxSession = z.infer<typeof sessionInboxSessionSchema>;
 /** @deprecated Use SessionInboxSession for this inbox-specific projection. */

@@ -1,9 +1,10 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
-import type { Team } from "@open-inspect/shared/types/teams";
+import { meTeamsResponseSchema, type Team } from "@open-inspect/shared/types/teams";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { TeamSettingsStore } from "../../src/db/team-settings";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
@@ -45,7 +46,10 @@ describe("team routes", () => {
 
   it("starts without teams and lets an administrator create, rename, archive and restore", async () => {
     expect((await request("/me/teams")).status).toBe(200);
-    expect(await (await request("/me/teams")).json()).toEqual({ teams: [] });
+    expect(await (await request("/me/teams")).json()).toEqual({
+      teams: [],
+      requireTeamOnCreate: false,
+    });
     await setRole(OWNER, "administrator");
     const created = await request("/teams", "POST", { slug: "engineering", name: "Engineering" });
     expect(created.status).toBe(201);
@@ -75,6 +79,30 @@ describe("team routes", () => {
       "team.archived",
       "team.restored",
     ]);
+  });
+
+  it("meTeams exposes the creation setting to active users without settings permissions", async () => {
+    await setRole(OWNER, "member");
+    const settings = new TeamSettingsStore(env.DB);
+    for (const requireTeamOnCreate of [false, true, false]) {
+      await settings.set({ requireTeamOnCreate });
+      const response = await request("/me/teams");
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(meTeamsResponseSchema.parse(await response.json())).toEqual({
+        teams: [],
+        requireTeamOnCreate,
+      });
+    }
+  });
+
+  it("meTeams still requires an active human user", async () => {
+    const bot = await serviceFetch(`${BASE}/me/teams`, { service: "slack-bot" });
+    expect(bot.status).toBe(403);
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), OWNER)
+      .run();
+    expect((await request("/me/teams")).status).toBe(403);
   });
 
   it("reports member counts on list, membership and detail responses", async () => {

@@ -1,4 +1,4 @@
-import type { PermissionId } from "@open-inspect/shared/rbac";
+import type { SessionCapabilities as ResponseCapabilities } from "@open-inspect/shared";
 
 /** Required session capability model shared by the page and every privileged child control. */
 export interface SessionCapabilities {
@@ -10,13 +10,15 @@ export interface SessionCapabilities {
 }
 
 export function resolveSessionCapabilities(
-  hasPermission: (permission: PermissionId) => boolean
+  capabilities: Partial<ResponseCapabilities> | null | undefined,
+  canExportTrace = false
 ): SessionCapabilities {
   return {
-    read: hasPermission("sessions.read"),
-    collaborate: hasPermission("sessions.collaborate"),
-    lifecycle: hasPermission("sessions.lifecycle"),
-    sandboxAccess: hasPermission("sessions.sandbox_access"),
-    exportTrace: hasPermission("sessions.export"),
+    read: capabilities?.canRead === true,
+    collaborate: capabilities?.canRead === true && capabilities.canCollaborate === true,
+    lifecycle: capabilities?.canRead === true && capabilities.canManageLifecycle === true,
+    sandboxAccess: capabilities?.canRead === true && capabilities.canSandbox === true,
+    // Export is a workspace permission absent from the session capability contract.
+    exportTrace: capabilities?.canRead === true && canExportTrace,
   };
 }
