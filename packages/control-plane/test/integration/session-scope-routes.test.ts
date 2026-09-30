@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
@@ -10,7 +10,14 @@ import { SessionAuditStore } from "../../src/db/session-audit";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
+import {
+  initSession,
+  routeRequest,
+  seedActiveUser,
+  serviceFetch,
+  serviceRequestHeaders,
+  sqlDatabase,
+} from "./helpers";
 
 const BASE = "https://test.local";
 const OWNER = "11111111111111111111111111111111";
@@ -170,6 +177,56 @@ describe("session scope routes", () => {
     expect((await new SessionIndexStore(env.DB).get("child"))?.ownerTeamId).toBeNull();
   });
 
+  it("requires grants for every repository of every descendant before joining a team", async () => {
+    await session("root");
+    await session("child", "root");
+    await env.DB.prepare(
+      `INSERT INTO session_repositories (session_id, position, repo_owner, repo_name, repo_id, base_branch)
+       VALUES ('child', 1, 'acme', 'api', 67890, 'main')`
+    ).run();
+    const team = await new TeamStore(env.DB).create({
+      slug: "multi-repo",
+      name: "Multi-repo",
+      joinPolicy: "open",
+    });
+    await env.DB.prepare(
+      `INSERT INTO team_repository_grants
+       (id, team_id, grant_kind, repo_external_id, repo_owner, repo_name, created_at)
+       VALUES (?, ?, 'repository', 12345, 'acme', 'web-app', ?)`
+    )
+      .bind(crypto.randomUUID(), team.id, Date.now())
+      .run();
+
+    const denied = await request("/sessions/root/scope", "PUT", {
+      teamId: team.id,
+      joinTeam: true,
+    });
+    expect(denied.status).toBe(409);
+    expect(await denied.json()).toMatchObject({
+      code: "target_team_missing_grant",
+      repository: "acme/api",
+    });
+    expect((await new SessionIndexStore(env.DB).get("root"))?.ownerTeamId).toBeNull();
+    expect((await new SessionIndexStore(env.DB).get("child"))?.ownerTeamId).toBeNull();
+    expect((await new TeamMembershipStore(env.DB).listForUser(OWNER)).has(team.id)).toBe(false);
+    const audit = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action IN ('team.member_joined', 'session.moved')"
+    ).first<{ count: number }>();
+    expect(audit?.count).toBe(0);
+
+    await env.DB.prepare(
+      `INSERT INTO team_repository_grants
+       (id, team_id, grant_kind, repo_external_id, repo_owner, repo_name, created_at)
+       VALUES (?, ?, 'repository', 67890, 'acme', 'api', ?)`
+    )
+      .bind(crypto.randomUUID(), team.id, Date.now())
+      .run();
+    expect(
+      (await request("/sessions/root/scope", "PUT", { teamId: team.id, joinTeam: true })).status
+    ).toBe(200);
+    expect((await new SessionIndexStore(env.DB).get("child"))?.ownerTeamId).toBe(team.id);
+  });
+
   it("allows joining an open team on move but refuses archived teams", async () => {
     await session("root");
     const team = await new TeamStore(env.DB).create({
@@ -190,6 +247,7 @@ describe("session scope routes", () => {
 
   it("refuses a move when existing destination membership is removed after admission", async () => {
     await session("root");
+    await session("child", "root");
     const team = await new TeamStore(env.DB).create({
       slug: "revoked",
       name: "Revoked",
@@ -213,6 +271,7 @@ describe("session scope routes", () => {
       expect(response.status).toBe(403);
       expect(await response.json()).toMatchObject({ reason_code: "not_member" });
       expect((await new SessionIndexStore(env.DB).get("root"))?.ownerTeamId).toBeNull();
+      expect((await new SessionIndexStore(env.DB).get("child"))?.ownerTeamId).toBeNull();
       const audit = await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'session.moved'"
       ).first<{ count: number }>();
@@ -395,6 +454,111 @@ describe("session scope routes", () => {
     });
   });
 
+  it("audits only the descendant that changes on a partially unchanged move", async () => {
+    await session("root");
+    await session("child", "root");
+    const team = await new TeamStore(env.DB).create({
+      slug: "child-team",
+      name: "Child team",
+      joinPolicy: "invite_only",
+    });
+    await env.DB.prepare(
+      "UPDATE sessions SET owner_team_id = ?, visibility = 'team' WHERE id = 'child'"
+    )
+      .bind(team.id)
+      .run();
+
+    const moved = await request("/sessions/root/scope", "PUT", { teamId: null });
+    expect(moved.status).toBe(200);
+    expect(await moved.json()).toMatchObject({ affectedSessionIds: ["child"] });
+    expect(await new SessionIndexStore(env.DB).get("child")).toMatchObject({
+      ownerTeamId: null,
+      visibility: "workspace",
+    });
+    const audits = await env.DB.prepare(
+      "SELECT resource_id, metadata_json FROM authorization_audit_events WHERE action = 'session.moved'"
+    ).all<{ resource_id: string; metadata_json: string }>();
+    expect(audits.results).toHaveLength(1);
+    expect(audits.results[0].resource_id).toBe("child");
+    expect(JSON.parse(audits.results[0].metadata_json)).toEqual({
+      before: { teamId: team.id, visibility: "team" },
+      requested: {},
+      after: { teamId: null, visibility: "workspace" },
+    });
+  });
+
+  it("audits only changed rows in a visibility cascade and none on a repeat request", async () => {
+    await session("root");
+    await session("child", "root");
+    await session("grandchild", "child");
+    await env.DB.prepare("UPDATE sessions SET visibility = 'private' WHERE id = 'child'").run();
+
+    const changed = await request("/sessions/root/visibility", "PUT", { visibility: "private" });
+    expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({
+      affectedSessionIds: expect.arrayContaining(["root", "child", "grandchild"]),
+    });
+    for (const id of ["root", "child", "grandchild"]) {
+      expect((await new SessionIndexStore(env.DB).get(id))?.visibility).toBe("private");
+    }
+    const audits = await env.DB.prepare(
+      `SELECT request_id, actor_user_id_snapshot, resource_id, team_id, metadata_json
+       FROM authorization_audit_events WHERE action = 'session.visibility_changed' ORDER BY resource_id`
+    ).all<{
+      request_id: string;
+      actor_user_id_snapshot: string;
+      resource_id: string;
+      team_id: string | null;
+      metadata_json: string;
+    }>();
+    expect(
+      audits.results.map((row) => ({
+        requestId: row.request_id,
+        actor: row.actor_user_id_snapshot,
+        sessionId: row.resource_id,
+        teamId: row.team_id,
+        metadata: JSON.parse(row.metadata_json),
+      }))
+    ).toEqual(
+      ["grandchild", "root"].map((sessionId) => ({
+        requestId: changed.headers.get("x-request-id"),
+        actor: OWNER,
+        sessionId,
+        teamId: null,
+        metadata: {
+          before: { visibility: "workspace" },
+          requested: {},
+          after: { visibility: "private" },
+        },
+      }))
+    );
+    expect(
+      (await request("/sessions/root/visibility", "PUT", { visibility: "private" })).status
+    ).toBe(200);
+    const auditCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'session.visibility_changed'"
+    ).first<{ count: number }>();
+    expect(auditCount?.count).toBe(2);
+  });
+
+  it("refuses a readable but non-owned descendant without changing any visibility", async () => {
+    await session("root");
+    await session("child", "root", COLLABORATOR);
+    await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+      .bind(BUILT_IN_ROLE_REGISTRY.member.id, OWNER)
+      .run();
+
+    const response = await request("/sessions/root/visibility", "PUT", { visibility: "private" });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ reason_code: "not_owner_or_lead" });
+    expect((await new SessionIndexStore(env.DB).get("root"))?.visibility).toBe("workspace");
+    expect((await new SessionIndexStore(env.DB).get("child"))?.visibility).toBe("workspace");
+    const audit = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'session.visibility_changed'"
+    ).first<{ count: number }>();
+    expect(audit?.count).toBe(0);
+  });
+
   it("refuses private without an owner and lets a collaborator remove only themselves", async () => {
     await session("unowned", undefined, null);
     const denied = await request("/sessions/unowned/visibility", "PUT", { visibility: "private" });
@@ -476,6 +640,69 @@ describe("session scope routes", () => {
     expect(await nonmember.json()).toMatchObject({ code: "not_member" });
   });
 
+  it("creates team-default and explicitly private sessions with persisted scope and private audit", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "creator-team",
+      name: "Creator team",
+      joinPolicy: "invite_only",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+    expect((await request("/settings/teams", "PATCH", { requireTeamOnCreate: true })).status).toBe(
+      200
+    );
+
+    const defaultResponse = await request("/sessions", "POST", {
+      title: "Team default",
+      teamId: team.id,
+    });
+    expect(defaultResponse.status).toBe(201);
+    const { sessionId: defaultId } = await defaultResponse.json<{ sessionId: string }>();
+    expect(await new SessionIndexStore(env.DB).get(defaultId)).toMatchObject({
+      ownerTeamId: team.id,
+      visibility: "team",
+      userId: OWNER,
+    });
+    const state = await env.SESSION.get(env.SESSION.idFromName(defaultId)).fetch(
+      "http://internal/internal/state"
+    );
+    expect(state.status).toBe(200);
+    expect(await state.json()).toMatchObject({ status: expect.any(String) });
+
+    const privateResponse = await request("/sessions", "POST", {
+      title: "Explicitly private",
+      teamId: team.id,
+      visibility: "private",
+    });
+    expect(privateResponse.status).toBe(201);
+    const { sessionId: privateId } = await privateResponse.json<{ sessionId: string }>();
+    expect(await new SessionIndexStore(env.DB).get(privateId)).toMatchObject({
+      ownerTeamId: team.id,
+      visibility: "private",
+      userId: OWNER,
+    });
+    const audit = await env.DB.prepare(
+      `SELECT request_id, actor_user_id_snapshot, resource_id, team_id, metadata_json
+       FROM authorization_audit_events WHERE action = 'session.created_private'`
+    ).first<{
+      request_id: string;
+      actor_user_id_snapshot: string;
+      resource_id: string;
+      team_id: string;
+      metadata_json: string;
+    }>();
+    expect(audit).toMatchObject({
+      request_id: privateResponse.headers.get("x-request-id"),
+      actor_user_id_snapshot: OWNER,
+      resource_id: privateId,
+      team_id: team.id,
+    });
+    expect(JSON.parse(audit!.metadata_json)).toEqual({
+      before: {},
+      requested: {},
+      after: { ownerUserId: OWNER, teamId: team.id, visibility: "private" },
+    });
+  });
+
   it("keeps a child visible as its own root when its parent becomes private", async () => {
     await session("root");
     await session("child", "root");
@@ -553,6 +780,69 @@ describe("session scope routes", () => {
     expect(await add.json()).toMatchObject({ code: "user_inactive" });
   });
 
+  it("enforces collaborator HTTP authorization and audits only effective changes", async () => {
+    await session("root");
+    const path = `/sessions/root/collaborators/${COLLABORATOR}`;
+    const added = await request(path, "PUT");
+    expect(added.status).toBe(200);
+    expect(await added.json()).toMatchObject({ status: "updated" });
+    expect(await (await request(path, "PUT")).json()).toMatchObject({ status: "unchanged" });
+    expect(
+      (await request(`/sessions/root/collaborators/${OWNER}`, "PUT", undefined, COLLABORATOR))
+        .status
+    ).toBe(403);
+    expect(
+      (await request(`/sessions/root/collaborators/${OWNER}`, "DELETE", undefined, COLLABORATOR))
+        .status
+    ).toBe(403);
+    const removed = await request(path, "DELETE", undefined, COLLABORATOR);
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ status: "updated" });
+    expect(await (await request(path, "DELETE", undefined, COLLABORATOR)).json()).toMatchObject({
+      status: "unchanged",
+    });
+    expect(await new SessionCollaboratorStore(env.DB).listUserIds("root")).toEqual([]);
+    const audits = await env.DB.prepare(
+      `SELECT action, request_id, actor_user_id_snapshot, target_user_id_snapshot, resource_id, metadata_json
+       FROM authorization_audit_events WHERE action IN ('session.collaborator_added', 'session.collaborator_removed')
+       ORDER BY action`
+    ).all<{
+      action: string;
+      request_id: string;
+      actor_user_id_snapshot: string;
+      target_user_id_snapshot: string;
+      resource_id: string;
+      metadata_json: string;
+    }>();
+    expect(
+      audits.results.map((row) => ({
+        action: row.action,
+        requestId: row.request_id,
+        actor: row.actor_user_id_snapshot,
+        target: row.target_user_id_snapshot,
+        sessionId: row.resource_id,
+        metadata: JSON.parse(row.metadata_json),
+      }))
+    ).toEqual([
+      {
+        action: "session.collaborator_added",
+        requestId: added.headers.get("x-request-id"),
+        actor: OWNER,
+        target: COLLABORATOR,
+        sessionId: "root",
+        metadata: { before: { collaborator: false }, requested: {}, after: { collaborator: true } },
+      },
+      {
+        action: "session.collaborator_removed",
+        requestId: removed.headers.get("x-request-id"),
+        actor: COLLABORATOR,
+        target: COLLABORATOR,
+        sessionId: "root",
+        metadata: { before: { collaborator: true }, requested: {}, after: { collaborator: false } },
+      },
+    ]);
+  });
+
   it("audits only collaborator writes that changed a row", async () => {
     await session("root");
     const store = new SessionCollaboratorStore(env.DB);
@@ -618,5 +908,78 @@ describe("session scope routes", () => {
         ],
       }
     );
+  });
+
+  it("filters before pagination and agrees with snapshot capabilities across enforcement modes", async () => {
+    await initSession({ sessionName: "team-session", userId: OWNER });
+    await session("private-session", undefined, COLLABORATOR);
+    await session("workspace-new");
+    await session("workspace-old");
+    const team = await new TeamStore(env.DB).create({
+      slug: "pagination-team",
+      name: "Pagination team",
+      joinPolicy: "invite_only",
+    });
+    await env.DB.prepare(
+      "UPDATE sessions SET owner_team_id = ?, visibility = 'team' WHERE id = 'team-session'"
+    )
+      .bind(team.id)
+      .run();
+    await env.DB.prepare(
+      "UPDATE sessions SET visibility = 'private' WHERE id = 'private-session'"
+    ).run();
+    for (const [id, updatedAt] of [
+      ["team-session", 400],
+      ["private-session", 300],
+      ["workspace-new", 200],
+      ["workspace-old", 100],
+    ] as const) {
+      await env.DB.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
+        .bind(updatedAt, id)
+        .run();
+    }
+    const as = { userId: COLLABORATOR, role: "member" } as const;
+    async function fetchMode(path: string, mode: "on" | "shadow") {
+      const url = `${BASE}${path}`;
+      return routeRequest(
+        new Request(url, { headers: await serviceRequestHeaders(url, { as }) }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+    }
+
+    for (const [mode, expectedIds] of [
+      ["on", ["private-session", "workspace-new", "workspace-old"]],
+      ["shadow", ["team-session", "private-session", "workspace-new", "workspace-old"]],
+    ] as const) {
+      for (const [offset, id] of expectedIds.entries()) {
+        const response = await fetchMode(`/sessions?limit=1&offset=${offset}`, mode);
+        expect(response.status).toBe(200);
+        const page = await response.json<{
+          sessions: Array<{ id: string; capabilities: Record<string, boolean> }>;
+          hasMore: boolean;
+        }>();
+        expect(page.sessions.map((row) => row.id)).toEqual([id]);
+        expect(page.sessions[0].capabilities.canRead).toBe(true);
+        expect(page.hasMore).toBe(offset < expectedIds.length - 1);
+        if (mode === "shadow" && id === "team-session") {
+          const snapshot = await fetchMode(`/sessions/${id}`, mode);
+          expect(snapshot.status).toBe(200);
+          const snapshotBody = await snapshot.json<{
+            session: { capabilities: Record<string, boolean> };
+          }>();
+          expect(snapshotBody.session.capabilities).toEqual(page.sessions[0].capabilities);
+          expect(page.sessions[0].capabilities).toMatchObject({
+            canRead: true,
+            canCollaborate: true,
+            canMove: false,
+            canChangeVisibility: false,
+          });
+        }
+      }
+      const beyond = await fetchMode(`/sessions?limit=1&offset=${expectedIds.length}`, mode);
+      expect(await beyond.json()).toMatchObject({ sessions: [], hasMore: false });
+    }
+    expect((await fetchMode("/sessions/team-session", "on")).status).toBe(404);
   });
 });
