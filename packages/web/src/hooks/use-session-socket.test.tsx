@@ -103,7 +103,6 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 
 function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedMessage {
   const session = createSessionState();
-  delete session.capabilities;
   return {
     type: "subscribed",
     session,
@@ -237,13 +236,13 @@ describe("useSessionSocket", () => {
     }
   );
 
-  it("keeps the production subscribed snapshot without capabilities connected and ready", async () => {
+  it("uses the authenticated subscription capabilities while connected and ready", async () => {
     authorizationMock.canExportTrace = true;
     const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const message = createSubscribedMessage();
     message.session.title = "Live title";
-    expect(message.session).not.toHaveProperty("capabilities");
+    expect(message.session.capabilities).toEqual(FULL_CAPABILITIES);
     act(() => {
       FakeWebSocket.instances[0].open();
       FakeWebSocket.instances[0].receive(message);
@@ -262,7 +261,7 @@ describe("useSessionSocket", () => {
     expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.OPEN);
   });
 
-  it("uses explicit live capabilities and preserves them when later subscribed omits them", async () => {
+  it("uses explicit live capabilities instead of the initial snapshot grants", async () => {
     authorizationMock.canExportTrace = true;
     const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
     expect(result.current.capabilities.lifecycle).toBe(true);
@@ -279,17 +278,6 @@ describe("useSessionSocket", () => {
       FakeWebSocket.instances[0].receive(message);
     });
     expect(result.current.capabilities).toMatchObject({
-      read: true,
-      collaborate: false,
-      lifecycle: false,
-      sandboxAccess: false,
-      exportTrace: true,
-    });
-    delete message.session.capabilities;
-    act(() => FakeWebSocket.instances[0].receive(message));
-    expect(result.current.connected).toBe(true);
-    expect(result.current.ready).toBe(true);
-    expect(result.current.capabilities).toEqual({
       read: true,
       collaborate: false,
       lifecycle: false,
@@ -313,6 +301,75 @@ describe("useSessionSocket", () => {
     });
     expect(result.current.connected).toBe(false);
     expect(result.current.ready).toBe(false);
+  });
+
+  it.each([false, true])(
+    "replaces action capabilities after a 4010 reconnect with granted=%s",
+    async (granted) => {
+      const previous = {
+        ...FULL_CAPABILITIES,
+        canCollaborate: !granted,
+        canManageLifecycle: !granted,
+        canSandbox: !granted,
+      };
+      const snapshot = createSnapshot();
+      snapshot.session.capabilities = previous;
+      const { result } = renderHook(() => useSessionSocket("session-1", snapshot));
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const initial = createSubscribedMessage();
+      initial.session.capabilities = previous;
+      act(() => {
+        FakeWebSocket.instances[0].open();
+        FakeWebSocket.instances[0].receive(initial);
+        FakeWebSocket.instances[0].close(4010);
+      });
+      expect(result.current.ready).toBe(false);
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+      const refreshed = createSubscribedMessage();
+      refreshed.session.capabilities = {
+        ...FULL_CAPABILITIES,
+        canCollaborate: granted,
+        canManageLifecycle: granted,
+        canSandbox: granted,
+      };
+      act(() => FakeWebSocket.instances[1].open());
+      expect(result.current.ready).toBe(false);
+      act(() => FakeWebSocket.instances[1].receive(refreshed));
+      expect(result.current.ready).toBe(true);
+      expect(result.current.connected).toBe(true);
+      expect(result.current.capabilities).toMatchObject({
+        read: true,
+        collaborate: granted,
+        lifecycle: granted,
+        sandboxAccess: granted,
+      });
+    }
+  );
+
+  it("fails closed rather than retaining old grants when a refreshed subscription omits capabilities", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].receive(createSubscribedMessage());
+      FakeWebSocket.instances[0].close(4010);
+    });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const message = createSubscribedMessage();
+    delete message.session.capabilities;
+    act(() => {
+      FakeWebSocket.instances[1].open();
+      FakeWebSocket.instances[1].receive(message);
+    });
+    expect(result.current.capabilities).toEqual({
+      read: false,
+      collaborate: false,
+      lifecycle: false,
+      sandboxAccess: false,
+      exportTrace: false,
+    });
+    expect(result.current.ready).toBe(false);
+    expect(result.current.connected).toBe(false);
   });
 
   it("does not connect when the initial response lacks capabilities", async () => {

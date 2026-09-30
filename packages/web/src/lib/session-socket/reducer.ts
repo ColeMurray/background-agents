@@ -197,8 +197,6 @@ function reduceServerMessage(
         ready: true,
         sessionState: {
           ...message.session,
-          // Shipped subscribed snapshots omit capabilities; keep the prior server grants.
-          capabilities: message.session.capabilities ?? state.sessionState?.capabilities,
           // Normalize optional snapshot fields for the view.
           isProcessing: message.session.isProcessing ?? false,
           totalCost: message.session.totalCost ?? 0,

@@ -521,7 +521,7 @@ describe("sessionSocketReducer", () => {
 
   describe("subscribed", () => {
     it.each([undefined, SERVER_CAPABILITIES])(
-      "retains server capabilities when subscribed omits them: %j",
+      "does not retain prior capabilities when subscribed omits them: %j",
       (capabilities) => {
         const hydrated = createSessionSocketState(
           createSnapshot({ session: createSessionState({ capabilities }) })
@@ -531,13 +531,13 @@ describe("sessionSocketReducer", () => {
         expect(message.session).not.toHaveProperty("capabilities");
 
         const subscribed = reduce(hydrated, serverMessage(message));
-        expect(subscribed.sessionState?.capabilities).toBe(capabilities);
+        expect(subscribed.sessionState?.capabilities).toBeUndefined();
         expect(subscribed.sessionState?.title).toBe("Live title");
         expect(subscribed.events).toEqual([]);
       }
     );
 
-    it("replaces server capabilities with explicit denials and retains those on later omission", () => {
+    it("replaces server capabilities with explicit denials without carrying them into later subscriptions", () => {
       const hydrated = createSessionSocketState(
         createSnapshot({ session: createSessionState({ capabilities: SERVER_CAPABILITIES }) })
       );
@@ -557,7 +557,7 @@ describe("sessionSocketReducer", () => {
       expect(subscribed.sessionState?.capabilities).toEqual(denied);
       expect(
         reduce(subscribed, serverMessage(createSubscribedMessage())).sessionState?.capabilities
-      ).toEqual(denied);
+      ).toBeUndefined();
     });
 
     it("hydrates budget management capability and applies authoritative budget updates", () => {
