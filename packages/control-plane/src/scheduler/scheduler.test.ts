@@ -712,6 +712,53 @@ describe("Scheduler", () => {
       expect(mockStore.claimRunSession).toHaveBeenCalledTimes(2);
     });
 
+    it("settles one attribution snapshot after admission for every fan-out child", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [
+        repositoryRow("auto-1"),
+        repositoryRow("auto-1", { repo_name: "api" }),
+      ]);
+      mockUserStoreGetIdentitiesForUser
+        .mockResolvedValueOnce([
+          { provider: "github", providerUserId: "42", providerLogin: "owner" },
+        ])
+        .mockResolvedValueOnce([
+          { provider: "github", providerUserId: "43", providerLogin: "changed" },
+        ]);
+      const stub = createMockSessionStub();
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toMatchObject({
+        processed: 1,
+        failed: 0,
+      });
+      expect(mockUserStoreGetIdentitiesForUser).toHaveBeenCalledTimes(1);
+      expect(mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUserStoreGetIdentitiesForUser.mock.invocationCallOrder[0]
+      );
+      const initRequests = vi
+        .mocked(stub.fetch)
+        .mock.calls.filter(([request]) =>
+          new URL((request as Request).url).pathname.endsWith("/init")
+        );
+      expect(initRequests).toHaveLength(2);
+      for (const [request] of initRequests) {
+        expect(await (request as Request).json()).toMatchObject({
+          scmUserId: "42",
+          scmLogin: "owner",
+        });
+      }
+    });
+
+    it("keeps a settled null manual attribution without looking it up again", async () => {
+      mockStore.getById.mockResolvedValue(sampleAutomation);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: "owner" },
+      ]);
+      const stub = createMockSessionStub();
+      await createScheduler(createEnv(undefined, stub)).trigger("auto-1", "manual-user", null);
+      expect(mockUserStoreGetIdentitiesForUser).not.toHaveBeenCalled();
+      expect((await getInitBody(vi.mocked(stub.fetch))).scmUserId).toBeUndefined();
+    });
+
     it("resolves one provider auth snapshot for every child in a fan-out invocation", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [

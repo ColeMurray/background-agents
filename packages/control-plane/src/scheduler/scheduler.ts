@@ -275,7 +275,7 @@ interface StartInvocationParams {
 interface ExecutionPrincipal {
   platformUserId: string;
   participantUserId: string;
-  scmEnrichment?: GitHubEnrichment;
+  scmEnrichment: GitHubEnrichment | null;
 }
 
 type StartInvocationResult =
@@ -402,6 +402,7 @@ export class Scheduler {
         ? {
             platformUserId: automation.user_id,
             participantUserId: automation.created_by,
+            scmEnrichment: null,
           }
         : null);
     if (!executionPrincipal) return { outcome: "unauthorized" };
@@ -568,6 +569,31 @@ export class Scheduler {
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
     }
 
+    let attributionError: unknown;
+    if (
+      !params.executionPrincipal &&
+      launchCandidates.length > 0 &&
+      resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github"
+    ) {
+      try {
+        executionPrincipal.scmEnrichment = await resolveGitHubEnrichment(
+          new UserStore(this.db),
+          executionPrincipal.platformUserId
+        );
+      } catch (error) {
+        if (error instanceof AmbiguousGitHubIdentityError) {
+          this.log.warn("GitHub attribution is ambiguous; continuing without it", {
+            event: "scheduler.github_enrichment_ambiguous",
+            automation_id: automation.id,
+            invocation_id: invocationId,
+            error,
+          });
+        } else {
+          attributionError = error;
+        }
+      }
+    }
+
     // Admitted. Only now is it worth paying for anything the prompt needs.
     // Contain provider failures here: children already exist in `starting`, so
     // a rejected lazy override must not escape and strand persisted state.
@@ -587,6 +613,7 @@ export class Scheduler {
 
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
+        if (attributionError !== undefined) throw attributionError;
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
@@ -1228,7 +1255,7 @@ export class Scheduler {
   async trigger(
     automationId: string,
     requesterUserId: string,
-    requesterEnrichment?: GitHubEnrichment
+    requesterEnrichment: GitHubEnrichment | null = null
   ): Promise<SchedulerTriggerResult> {
     const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
@@ -1600,23 +1627,7 @@ export class Scheduler {
       executionPrincipal.platformUserId
     );
 
-    let scmEnrichment = executionPrincipal.scmEnrichment ?? null;
-    if (!scmEnrichment && resolveScmProviderFromEnv(this.env.SCM_PROVIDER) === "github") {
-      try {
-        scmEnrichment = await resolveGitHubEnrichment(
-          new UserStore(this.db),
-          executionPrincipal.platformUserId
-        );
-      } catch (error) {
-        if (!(error instanceof AmbiguousGitHubIdentityError)) throw error;
-        this.log.warn("GitHub attribution is ambiguous; continuing without it", {
-          event: "scheduler.github_enrichment_ambiguous",
-          automation_id: automation.id,
-          run_id: run.id,
-          error,
-        });
-      }
-    }
+    const scmEnrichment = executionPrincipal.scmEnrichment;
 
     const sessionInput: SessionInitInput = {
       ownerTeamId: null,
