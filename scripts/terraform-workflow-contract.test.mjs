@@ -38,3 +38,35 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
     "classifier Anthropic key"
   );
 });
+
+// Inputs the workflow deliberately does not take from the environment:
+// control_plane_* values are staged per migration (the "Stage SchedulerDO
+// deletion migration" step writes them to an auto.tfvars.json file), and
+// project_root is a path inside the checkout.
+const NOT_FROM_ENVIRONMENT = new Set([
+  "control_plane_migration_tag",
+  "control_plane_migration_old_tag",
+  "control_plane_new_sqlite_classes",
+  "control_plane_deleted_classes",
+  "project_root",
+]);
+
+test("Every production Terraform variable reaches plan and apply", async () => {
+  const variables = await readFile(
+    new URL("../terraform/environments/production/variables.tf", import.meta.url),
+    "utf8"
+  );
+  const declared = [...variables.matchAll(/^variable "([a-z0-9_]+)"/gm)].map((match) => match[1]);
+  assert.ok(declared.length > 0, "expected variables in variables.tf");
+
+  const missing = declared.filter((name) => {
+    if (NOT_FROM_ENVIRONMENT.has(name)) return false;
+    try {
+      assertInPlanAndApply(`TF_VAR_${name}:`, name);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
+});
