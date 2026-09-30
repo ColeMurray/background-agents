@@ -156,8 +156,14 @@ describe("Scheduler event handling (integration)", () => {
 
       const run = runs[0]!;
       expect(run.automation_id).toBe(automationId);
+      expect(result.invocationId).toBe(run.invocation_id);
       const invocation = await store.getInvocationById(run.invocation_id);
       expect(invocation!.trigger_key).toBe(event.triggerKey);
+
+      const retry = await sendEvent(event);
+      expect(retry.invocationId).toBeNull();
+      expect(retry.triggered).toBe(0);
+      expect(await fetchRuns(automationId)).toHaveLength(1);
     });
   });
 
@@ -411,7 +417,7 @@ describe("Scheduler event handling (integration)", () => {
       const event = makeWebhookEvent(automationId);
       const result = await sendEvent(event);
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationId: null });
 
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(0);

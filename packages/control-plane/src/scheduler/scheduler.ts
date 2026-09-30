@@ -215,6 +215,7 @@ export interface SchedulerEventResult {
   triggered: number;
   skipped: number;
   steered: number;
+  invocationId?: string | null;
 }
 
 export interface SchedulerTriggerResult {
@@ -1077,6 +1078,7 @@ export class Scheduler {
 
     let triggered = 0;
     let skipped = 0;
+    let webhookInvocationId: string | null = null;
     // Follow-ups routed into an already-active thread's session (slack steering).
     let steered = 0;
     // Surface at most one concurrency-skip ephemeral per event, even when
@@ -1172,6 +1174,9 @@ export class Scheduler {
 
       switch (result.outcome) {
         case "started":
+          if (event.source === "webhook") {
+            webhookInvocationId = result.invocationId;
+          }
           // Counter parity with the pre-invocations path: a firing whose
           // launch failed counted as neither triggered nor skipped.
           if (result.launched > 0) {
@@ -1214,7 +1219,12 @@ export class Scheduler {
       candidates: candidates.length,
     });
 
-    return { triggered, skipped, steered };
+    return {
+      triggered,
+      skipped,
+      steered,
+      ...(event.source === "webhook" ? { invocationId: webhookInvocationId } : {}),
+    };
   }
 
   // ─── Manual trigger ──────────────────────────────────────────────────────

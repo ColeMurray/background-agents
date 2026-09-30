@@ -425,8 +425,11 @@ describe("POST /webhooks/automation/:id", () => {
     });
 
     expect(response.status).toBe(200);
-    const result = await response.json<{ ok: boolean }>();
+    const result = await response.json<{ ok: boolean; invocationId: string | null }>();
     expect(result.ok).toBe(true);
+    expect(result.invocationId).toEqual(expect.any(String));
+    const invocation = await new AutomationStore(env.DB).getInvocationById(result.invocationId!);
+    expect(invocation?.automation_id).toBe(automation.id);
   });
 
   it("returns 401 with invalid API key", async () => {
