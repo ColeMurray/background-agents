@@ -13,12 +13,7 @@ import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
-import {
-  Group as PanelGroup,
-  Panel,
-  Separator as PanelResizeHandle,
-  useDefaultLayout,
-} from "react-resizable-panels";
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
@@ -47,12 +42,8 @@ import type {
   SessionDiffRepository,
 } from "@open-inspect/shared/types/session-diffs";
 import { SessionChangesPanel } from "@/components/session-changes-panel";
-import {
-  SESSION_CHANGES_LAYOUT_ID,
-  SessionDesktopLayout,
-} from "@/components/session-desktop-layout";
+import { SessionDesktopLayout } from "@/components/session-desktop-layout";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
@@ -197,6 +188,7 @@ export default function SessionPage() {
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
   const diffReturnFocusRef = useRef<DiffSelection | null>(null);
+  const diffOpenerRef = useRef<HTMLElement | null>(null);
   const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
@@ -279,17 +271,10 @@ export default function SessionPage() {
         : null,
     [diffState, selectedDiff]
   );
-  const changesLayoutStorage = useBrowserLayoutStorage();
-  const changesLayout = useDefaultLayout({
-    id: SESSION_CHANGES_LAYOUT_ID,
-    panelIds:
-      resolvedDiff && diffState && !isBelowLg
-        ? ["session-main", "session-changes"]
-        : ["session-main"],
-    storage: changesLayoutStorage,
-  });
   const openDiffSelection = useCallback((selection: DiffSelection) => {
     diffReturnFocusRef.current = selection;
+    diffOpenerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
@@ -300,8 +285,11 @@ export default function SessionPage() {
   );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
+    const opener = diffOpenerRef.current;
     setSelectedDiff(null);
     requestAnimationFrame(() => {
+      const isVisible = (element: HTMLElement | null | undefined): element is HTMLElement =>
+        Boolean(element?.isConnected && element.offsetParent !== null);
       if (!isBelowLg && returnSelection) {
         const row = Array.from(
           document.querySelectorAll<HTMLButtonElement>("button[data-diff-path]")
@@ -309,10 +297,13 @@ export default function SessionPage() {
           (candidate) =>
             candidate.dataset.diffRepositoryPosition ===
               String(returnSelection.repositoryPosition) &&
-            candidate.dataset.diffPath === returnSelection.path
+            candidate.dataset.diffPath === returnSelection.path &&
+            isVisible(candidate)
         );
-        if (row) {
-          row.focus();
+        // With the details sidebar closed, return to whatever opened the diff instead.
+        const target = row ?? (isVisible(opener) ? opener : null);
+        if (target) {
+          target.focus();
           return;
         }
       }
@@ -431,7 +422,6 @@ export default function SessionPage() {
         reconnecting={reconnecting}
         isDetailsOpen={isDetailsOpen}
         isDesktopDetailsOpen={isDesktopDetailsOpen}
-        showDesktopDetailsToggle={!resolvedDiff}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
         onToggleDetails={toggleDetails}
@@ -479,7 +469,7 @@ export default function SessionPage() {
             workspace={sessionWorkspace}
             sidebar={
               <SessionRightSidebar
-                isOpen={isDesktopDetailsOpen && !resolvedDiff}
+                isOpen={isDesktopDetailsOpen}
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}
@@ -505,12 +495,11 @@ export default function SessionPage() {
                   resolved={resolvedDiff}
                   onClose={closeDiff}
                   onSelect={setSelectedDiff}
+                  sidebarShowsFileList={isDesktopDetailsOpen}
                   capabilities={capabilities}
                 />
               ) : null
             }
-            defaultLayout={changesLayout.defaultLayout}
-            onLayoutChanged={changesLayout.onLayoutChanged}
           />
         ) : (
           <>

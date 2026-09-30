@@ -133,7 +133,6 @@ export type SessionHeaderProps = {
   reconnecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
-  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
@@ -155,7 +154,6 @@ export function SessionHeader({
   reconnecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
-  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
   onToggleDetails,
@@ -307,22 +305,20 @@ export function SessionHeader({
               repositoryCount={sessionState?.repositories?.length ?? 0}
             />
           </div>
-          {showDesktopDetailsToggle && (
-            <button
-              type="button"
-              onClick={onToggleDesktopDetails}
-              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
-              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
-              aria-controls="session-details-sidebar"
-              aria-expanded={isDesktopDetailsOpen}
-            >
-              {isDesktopDetailsOpen ? (
-                <RightSidebarOpenIcon className="h-4 w-4" />
-              ) : (
-                <RightSidebarIcon className="h-4 w-4" />
-              )}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onToggleDesktopDetails}
+            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+            aria-controls="session-details-sidebar"
+            aria-expanded={isDesktopDetailsOpen}
+          >
+            {isDesktopDetailsOpen ? (
+              <RightSidebarOpenIcon className="h-4 w-4" />
+            ) : (
+              <RightSidebarIcon className="h-4 w-4" />
+            )}
+          </button>
         </div>
       </div>
       <MobileStatusStrip
