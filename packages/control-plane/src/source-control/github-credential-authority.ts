@@ -11,6 +11,34 @@ const providerAccessTokenSchema = z.object({
   accessToken: z.string(),
 });
 
+/** Retrieval failures may omit optional attribution; integrity errors must not. */
+export class GitHubAttributionUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("GitHub attribution is unavailable", { cause });
+    this.name = "GitHubAttributionUnavailableError";
+  }
+}
+
+async function retrieveAttribution<T>(retrieve: () => Promise<T>): Promise<T> {
+  try {
+    return await retrieve();
+  } catch (cause) {
+    throw new GitHubAttributionUnavailableError(cause);
+  }
+}
+
+export async function resolveGitHubAccountProfile(
+  accountClient: ProviderAccountClient,
+  selection: ProviderAccountSelection
+): Promise<unknown | null> {
+  const response = await retrieveAttribution(() =>
+    accountClient.getAccessToken({ body: selection })
+  );
+  const token = providerAccessTokenSchema.parse(response);
+  if (token.accessToken === "") return null;
+  return retrieveAttribution(() => accountClient.accountInfo({ query: selection }));
+}
+
 export interface GitHubAccountSelection {
   readonly subject: string;
   readonly resolveProfile: () => Promise<unknown | null>;
@@ -72,7 +100,7 @@ export async function resolveGitHubCredentialAuthority(
     const accountClient = context.getUserAuth().api;
     const parsedAccounts = z
       .array(providerAccountSchema)
-      .safeParse(await accountClient.listUserAccounts({ headers }));
+      .safeParse(await retrieveAttribution(() => accountClient.listUserAccounts({ headers })));
     if (
       !parsedAccounts.success ||
       parsedAccounts.data.some((account) => account.userId !== userId)
@@ -95,11 +123,7 @@ export async function resolveGitHubCredentialAuthority(
                 accountId: githubAccount.accountId,
                 userId,
               };
-              const token = providerAccessTokenSchema.parse(
-                await accountClient.getAccessToken({ body: selection })
-              );
-              if (token.accessToken === "") return null;
-              return accountClient.accountInfo({ query: selection });
+              return resolveGitHubAccountProfile(accountClient, selection);
             },
           }
         : null,

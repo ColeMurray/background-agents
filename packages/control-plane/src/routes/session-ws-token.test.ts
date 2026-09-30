@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TEST_BACKGROUND_TASK_CONTEXT,
   fakeSessionRuntimeDispatch,
@@ -8,6 +8,8 @@ import { handleSessionWsToken } from "./session-ws-token";
 import type { RequestContext } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
+import { UserStore } from "../db/user-store";
+import type { ProviderAccountClient } from "../source-control/github-credential-authority";
 import { withSessionRuntime } from "./session-route";
 
 function routeFor(path: string): { handler: typeof handleSessionWsToken; params: { id: string } } {
@@ -175,6 +177,91 @@ describe("session ws-token route (non-GitHub display fields)", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Field 'userId' is not accepted from verified callers",
     });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitHub browser attribution availability", () => {
+  const subject = "583231";
+  let api: ProviderAccountClient;
+  let fetch: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    vi.spyOn(UserStore.prototype, "getIdentitiesForUser").mockResolvedValue([
+      { provider: "github", providerUserId: subject, providerLogin: null } as never,
+    ]);
+    vi.spyOn(UserStore.prototype, "getUserById").mockResolvedValue(null);
+    api = {
+      listUserAccounts: vi.fn(async () => [
+        { providerId: "github", accountId: subject, userId: "user-1" },
+      ]),
+      getAccessToken: vi.fn(async () => ({ accessToken: "grant" })),
+      refreshToken: vi.fn(),
+      accountInfo: vi.fn(async () => ({
+        user: { id: subject },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject,
+          login: "octocat",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      })),
+    };
+    fetch = vi.fn(async () => Response.json({ token: "token-1" }));
+  });
+  afterEach(() => vi.restoreAllMocks());
+  function join(body = {}) {
+    const env = { ...createEnv(fetch), SCM_PROVIDER: "github" } as Env;
+    const ctx = {
+      ...createContext(),
+      authentication: {
+        mechanism: "browser_session",
+        credentialId: "session",
+        channel: { kind: "sig1", service: "web" },
+      },
+      getUserAuth: () => ({ api }),
+    } as unknown as RequestContext;
+    return handleSessionWsToken(
+      new Request("https://test.local/sessions/session-1/ws-token", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      env,
+      { id: "session-1" },
+      withSessionRuntime(env, ctx)
+    );
+  }
+  it.each(["listUserAccounts", "getAccessToken", "accountInfo"] as const)(
+    "still mints a WS token when optional %s retrieval fails",
+    async (method) => {
+      vi.mocked(api[method]).mockRejectedValue(new Error("provider unavailable"));
+      expect((await join()).status).toBe(200);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(await (fetch.mock.calls[0][0] as Request).json()).not.toHaveProperty(
+        "scmUserId",
+        subject
+      );
+    }
+  );
+  it("rejects a mismatched verified profile", async () => {
+    vi.mocked(api.accountInfo).mockResolvedValue({
+      user: { id: "other" },
+      data: {
+        provider: "github",
+        issuer: "https://github.com",
+        subject: "other",
+        login: "other",
+        verifiedEmails: [],
+        primaryEmail: null,
+      },
+    });
+    await expect(join()).rejects.toThrow("mismatched GitHub account");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("rejects malformed authority responses rather than treating them as unavailability", async () => {
+    vi.mocked(api.getAccessToken).mockResolvedValue({ accessToken: 123 });
+    await expect(join()).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
   });
 });

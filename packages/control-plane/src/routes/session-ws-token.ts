@@ -4,9 +4,12 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { applyIdentityEnforcement } from "../routing/identity-enforcement";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
 import { UserStore } from "../db/user-store";
-import { resolveGitHubEnrichmentForRequest } from "../session/identity";
+import { resolveGitHubEnrichmentForRequest, type GitHubEnrichment } from "../session/identity";
 import { resolveScmProviderFromEnv } from "../source-control/config";
-import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import {
+  GitHubAttributionUnavailableError,
+  resolveGitHubCredentialAuthority,
+} from "../source-control/github-credential-authority";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
@@ -36,14 +39,18 @@ export async function handleSessionWsToken(
   if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = authorization.userId;
-  const enrichment =
-    resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github"
-      ? await resolveGitHubEnrichmentForRequest(
-          new UserStore(ctx.db),
-          canonicalUserId,
-          await resolveGitHubCredentialAuthority(ctx, request.headers)
-        )
-      : null;
+  let enrichment: GitHubEnrichment | null = null;
+  if (resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github") {
+    try {
+      enrichment = await resolveGitHubEnrichmentForRequest(
+        new UserStore(ctx.db),
+        canonicalUserId,
+        await resolveGitHubCredentialAuthority(ctx, request.headers)
+      );
+    } catch (retrievalError) {
+      if (!(retrievalError instanceof GitHubAttributionUnavailableError)) throw retrievalError;
+    }
+  }
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
