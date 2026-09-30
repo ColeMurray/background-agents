@@ -407,8 +407,6 @@ class SandboxSupervisor:
         service = self.docker_service
         assert service is not None
         control = self.docker_control
-        task = asyncio.current_task()
-        assert task is not None
         try:
             while not self.shutdown_event.is_set():
                 if not restart_needed:
@@ -431,26 +429,17 @@ class SandboxSupervisor:
                 # permanently fences any pending restart from the snapshot.
                 if await self._wait_for_shutdown(delay):
                     return
-                async with control._lock:
-                    if control.stopping or control.prepared or self.shutdown_event.is_set():
+                try:
+                    if not await control.restart(self.shutdown_event):
                         return
+                except Exception as error:
                     self._docker_restarts += 1
-                    try:
-                        await service.stop()
-                        # Process-group cleanup can consume task cancellation.
-                        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
-                            return
-                        await service.start()
-                    except Exception as error:
-                        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
-                            return
-                        self.log.error("docker.exited_unexpectedly", exc=error)
-                        restart_needed = True
-                    else:
-                        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
-                            return
-                        self.log.info("docker.restarted", restart_count=self._docker_restarts)
-                        restart_needed = False
+                    self.log.error("docker.exited_unexpectedly", exc=error)
+                    restart_needed = True
+                else:
+                    self._docker_restarts += 1
+                    self.log.info("docker.restarted", restart_count=self._docker_restarts)
+                    restart_needed = False
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -462,34 +451,23 @@ class SandboxSupervisor:
                 self.log.error("docker.unavailable", restart_count=self._docker_restarts)
 
     async def _recover_docker_after_prepare(self) -> None:
-        """Replace a daemon after failed preparation; the caller holds the control lock."""
+        """Re-arm supervision after an immediate, unbudgeted preparation recovery."""
         service = self.docker_service
         assert service is not None
         control = self.docker_control
         assert control is not None
-        if control.stopping or control.prepared or self.shutdown_event.is_set():
-            return
         if not service.exit_expected:
             # Preparation never signalled this daemon; its exit belongs to
             # ordinary crash supervision, not failed-save recovery.
             return
-        await self._stop_docker_watch()
-        task = asyncio.current_task()
-        assert task is not None
         try:
-            await service.stop()
-            if control.stopping or self.shutdown_event.is_set() or task.cancelling():
+            if not await control.restart(self.shutdown_event, stop_watch=self._stop_docker_watch):
                 return
-            await service.start()
         except Exception as error:
-            if control.stopping or self.shutdown_event.is_set() or task.cancelling():
-                return
             self.log.error("docker.exited_unexpectedly", exc=error)
             # The immediate preparation recovery does not consume the crash
             # budget. If it fails, retry in the watcher without delaying saves.
             self._docker_watch_task = asyncio.create_task(self._watch_docker(restart_needed=True))
-            return
-        if control.stopping or self.shutdown_event.is_set() or task.cancelling():
             return
         self._docker_watch_task = asyncio.create_task(self._watch_docker())
         self.log.info("docker.restarted_after_prepare")
@@ -842,12 +820,6 @@ class SandboxSupervisor:
             )
             return False
         finally:
-            if self.docker_control is not None:
-                self.docker_control.stopping = True
-            await self._stop_docker_watch()
-            if self.docker_control is not None:
-                await self.docker_control.stop()
-            await self._stop_bridge_watch()
             await self.shutdown()
         return True
 
@@ -858,12 +830,10 @@ class SandboxSupervisor:
     async def shutdown(self) -> None:
         self.log.info("supervisor.shutdown_start")
         if self.docker_control is not None:
-            # Fence recovery before cancelling the watcher: it may own the
-            # control lock while waiting for a replacement daemon's readiness.
-            self.docker_control.stopping = True
-        await self._stop_docker_watch()
-        if self.docker_control is not None:
-            await self.docker_control.stop()
+            await self.docker_control.stop(self._stop_docker_watch)
+        else:
+            await self._stop_docker_watch()
+        await self._stop_bridge_watch()
         if self._desktop_restart_task and not self._desktop_restart_task.done():
             self._desktop_restart_task.cancel()
             await asyncio.gather(self._desktop_restart_task, return_exceptions=True)

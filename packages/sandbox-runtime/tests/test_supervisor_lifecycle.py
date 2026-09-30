@@ -358,6 +358,20 @@ async def test_docker_starts_before_repository_boot_and_stops_last(tmp_path, mon
     assert events[-1] == "docker:stop"
 
 
+async def test_run_uses_shutdown_as_the_only_teardown_path(tmp_path, monkeypatch):
+    supervisor, *_ = _docker_supervisor(tmp_path, [], monkeypatch)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    supervisor.docker_control.stop = AsyncMock(wraps=supervisor.docker_control.stop)
+    supervisor.shutdown = AsyncMock(wraps=supervisor.shutdown)
+
+    assert await supervisor.run() is True
+
+    supervisor.shutdown.assert_awaited_once()
+    supervisor.docker_control.stop.assert_awaited_once()
+    assert supervisor._docker_watch_task is None
+    supervisor.docker_service.stop.assert_awaited_once()
+
+
 async def test_standard_boot_never_touches_docker(tmp_path, monkeypatch):
     events = []
     supervisor, *_ = _supervisor(tmp_path, events)

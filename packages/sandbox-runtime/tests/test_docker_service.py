@@ -679,6 +679,40 @@ async def test_shutdown_during_preparation_does_not_restart_docker(processes, tm
         await supervisor.shutdown()
 
 
+async def test_control_deadline_reaps_interrupted_preparation_before_abandoning_recovery(
+    processes, tmp_path, monkeypatch
+):
+    from sandbox_runtime import docker_control
+
+    processes.ignore_sigterm = True
+    service = _service(tmp_path, stop_timeout_seconds=0.1, start_timeout_seconds=0.5)
+    supervisor = _session_supervisor(tmp_path, service)
+    monkeypatch.setattr(docker_control, "CONTROL_TIMEOUT_SECONDS", 0.05)
+    try:
+        await supervisor._start_docker()
+        reader, writer = await asyncio.open_unix_connection(supervisor.docker_control.path)
+        try:
+            writer.write(b"prepare\n")
+            await writer.drain()
+            assert await asyncio.wait_for(reader.readline(), timeout=2) == b"not_prepared\n"
+        finally:
+            writer.close()
+            await writer.wait_closed()
+        await _until(
+            lambda: (
+                not supervisor.docker_control._handlers and supervisor._docker_watch_task is None
+            ),
+            timeout=2,
+        )
+        assert not service.running
+        assert all(child.returncode is not None for child in processes.children)
+        assert not supervisor.shutdown_event.is_set()
+        assert supervisor._docker_watch_failure is None
+        assert len([spawn for spawn in processes.spawns if spawn[0] == "dockerd"]) == 1
+    finally:
+        await supervisor.shutdown()
+
+
 async def test_shutdown_cancels_inflight_recovery_without_watcher(processes, tmp_path):
     processes.daemon_exit = 1
     service = _service(tmp_path, stop_timeout_seconds=0.1)

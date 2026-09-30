@@ -40,9 +40,11 @@ unchanged. These values are product defaults, not claimed Modal minimums.
 
 ## Snapshots and recovery
 
-VM session snapshots are **destructive**: quiesce Docker, capture the filesystem, then confirm VM
-termination. Later work restores into a new VM. Standard Modal snapshots remain non-destructive. A
-failed or ambiguous capture/retirement must not be reported as a successful checkpoint.
+VM session snapshots are **destructive**: prepare Docker, capture the filesystem with Modal's native
+snapshot API, then confirm VM termination. A running daemon is stopped cleanly; an already-crashed
+daemon follows the crash-consistent path below. Later work restores into a new VM. Standard Modal
+snapshots remain non-destructive. A failed or ambiguous capture/retirement must not be reported as a
+successful checkpoint.
 
 VMs therefore keep running between turns. They are saved and stopped on inactivity, lifetime expiry,
 a lost heartbeat, a runtime failure or archive; a VM that stops heartbeating is captured without its
@@ -62,6 +64,10 @@ any later restart, so capture never races a new daemon writing to its data root.
 containerd recover that state on restore as after a power loss. Image builds remain strict: an
 unexpected daemon exit fails the build, and publishing a prepared image requires a clean daemon
 stop.
+
+The crash-consistent path does not verify that separately grouped containerd shims or container
+workloads have stopped. Process-group cleanup is not a VM-wide write barrier; preparation guarantees
+that the supervised daemon cannot restart, not that every Docker workload is quiescent.
 
 Filesystem capture is not process/RAM continuity or an application-consistent database backup.
 Containers must use appropriate persistence and restart policies. Live Docker pause/resume is not
