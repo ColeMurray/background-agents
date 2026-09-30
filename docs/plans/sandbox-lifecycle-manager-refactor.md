@@ -149,6 +149,14 @@ Restore remains manager-orchestrated: await pending registration, synchronously 
 and reconciliation, preserving the manager's distinct catches. No provider/backend/wire/persisted
 contract or public consumer port changes.
 
+Review follow-up explicitly corrects one inherited publication bug: a refused deferred bridge claim
+no longer emits an access-change notification. Auth finalization and queued lookup draining still
+run on refusal. This is a narrow behavioral fix, not a redesign of the extraction's contracts.
+Access may still have committed before the manager observes a hold; this fix does not make access
+and lifecycle acceptance atomic. Pending sandbox/shutdown registration also retains separate writes
+without a cross-record transaction (the shutdown write precedes its alarm await). Failure atomicity
+and unified acceptance require separately scoped safety work; neither is claimed fixed here.
+
 ## Verification
 
 Keep direct narrow-dependency tests for input resolution and lookup effects. Keep assembled tests

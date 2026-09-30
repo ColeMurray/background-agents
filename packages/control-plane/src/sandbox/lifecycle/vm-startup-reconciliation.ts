@@ -364,11 +364,14 @@ export class VmStartupReconciliation {
         ) {
           this.bridgeStartupClaim = null;
           try {
-            await this.deps.acceptResolvedStartup(
-              generation,
-              result.providerObjectId,
-              result.lifetime
-            );
+            if (
+              !(await this.deps.acceptResolvedStartup(
+                generation,
+                result.providerObjectId,
+                result.lifetime
+              ))
+            )
+              return;
           } finally {
             if (
               this.vmStartupAuth?.generation.sandboxId === generation.sandboxId &&

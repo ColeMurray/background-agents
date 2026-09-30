@@ -198,11 +198,40 @@ describe("VM startup reconciliation boundaries", () => {
     );
     expect(f.deps.access.mintTtydToken).toHaveBeenCalledOnce();
     expect(f.deps.shutdown.recordResolvedProviderHandle).not.toHaveBeenCalled();
+    expect(f.deps.access.broadcastProviderAccessIfConnected).toHaveBeenCalledOnce();
     f.row.modal_object_id = f.reference;
     f.reconciliation.resolvePendingBridge({ ...f.generation });
     await f.work[1];
     expect(f.deps.access.mintTtydToken).toHaveBeenCalledOnce();
     expect(f.deps.provider.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("does not publish access when the manager refuses the deferred startup claim", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.reconciliation.registerForegroundAuth(f.generation, "test-session", "launch-key");
+    f.deps.provider.resolveSandbox.mockRejectedValueOnce(new TypeError("transport unknown"));
+    vi.setSystemTime(f.generation.createdAt + PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS);
+    await expect(
+      f.reconciliation.resolveUnknownVmStartup(f.generation, f.config)
+    ).resolves.toBeNull();
+    f.reconciliation.finalizeForeground(f.generation);
+    f.deps.acceptResolvedStartup.mockResolvedValueOnce(false);
+
+    f.reconciliation.resolvePendingBridge({ ...f.generation });
+    await f.work[0];
+
+    expect(f.deps.acceptResolvedStartup).toHaveBeenCalledExactlyOnceWith(
+      f.generation,
+      "sb-real",
+      f.lifetime
+    );
+    expect(f.deps.shutdown.recordResolvedProviderHandle).not.toHaveBeenCalled();
+    expect(f.deps.access.broadcastProviderAccessIfConnected).not.toHaveBeenCalled();
+    f.row.modal_object_id = f.reference;
+    f.reconciliation.resolvePendingBridge({ ...f.generation });
+    await f.work[1];
+    expect(f.deps.access.mintTtydToken).toHaveBeenCalledOnce();
   });
 
   it("reuses only cached identity and lifetime, never provider credentials", async () => {
