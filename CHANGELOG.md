@@ -2,6 +2,16 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## September 30, 2026
+
+### Fixed
+
+**Rejected sign-ins no longer fail with HTTP 500.** When sign-in is refused (an admission denial, an
+admission check that cannot run, or a provider error), the OAuth callback now redirects to the
+access-denied page with a reason. Previously it returned HTTP 500. If a GitHub App lacks the **Email
+addresses: Read-only** account permission, the page names that permission, and the control plane
+logs `auth.github_email_lookup_failed` with the GitHub status.
+
 ## September 29, 2026
 
 ### Added

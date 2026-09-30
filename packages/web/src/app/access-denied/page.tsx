@@ -5,14 +5,27 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ErrorBanner } from "@/components/ui/error-banner";
 
+// Reasons match the control plane's sign-in failure redirect.
+function signInFailureMessage(error: string | null, provider: string | null): string {
+  switch (error) {
+    case "AccessDenied":
+    case "access_denied":
+      return "Your account is not authorized to use this application.";
+    case "provider_rejected":
+      return provider === "github"
+        ? "GitHub did not allow this application to read your verified email addresses. An administrator should check that the GitHub App has the Account permission 'Email addresses: Read-only'."
+        : "The sign-in provider rejected a request that sign-in needs. Please contact an administrator.";
+    case "provider_unavailable":
+    case "admission_unavailable":
+      return "Sign-in could not be completed right now. Please try again in a moment.";
+    default:
+      return "An error occurred during sign in. Please try again.";
+  }
+}
+
 function AccessDeniedContent() {
   const searchParams = useSearchParams();
-  const error = searchParams.get("error");
-
-  const message =
-    error === "AccessDenied" || error === "access_denied"
-      ? "Your account is not authorized to use this application."
-      : "An error occurred during sign in. Please try again.";
+  const message = signInFailureMessage(searchParams.get("error"), searchParams.get("provider"));
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-6">

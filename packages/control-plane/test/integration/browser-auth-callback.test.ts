@@ -1,6 +1,7 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { getSetCookies, routeRequest } from "./helpers";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
+import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserAuth } from "../../src/auth/user/runtime";
@@ -32,6 +33,7 @@ function handleRequest(
 let googleIdToken = "";
 let googlePublicKey: JsonWebKey;
 let googleCertRequestCount = 0;
+let githubEmailLookupStatus = 200;
 
 async function signedWebRequest(
   path: string,
@@ -39,6 +41,7 @@ async function signedWebRequest(
     method: "GET" | "POST";
     body?: string;
     cookie?: string;
+    clientIp?: string;
   }
 ): Promise<Request> {
   const url = `${CONTROL_PLANE_ORIGIN}${path}`;
@@ -47,6 +50,7 @@ async function signedWebRequest(
     headers: {
       ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...(init.cookie ? { Cookie: init.cookie } : {}),
+      ...(init.clientIp ? { [BROWSER_AUTH_CLIENT_IP_HEADER]: init.clientIp } : {}),
       Origin: PUBLIC_WEB_ORIGIN,
       ...(await buildServiceAuthHeaders({
         service: "web",
@@ -116,6 +120,12 @@ beforeAll(async () => {
       });
     }
     if (url.startsWith("https://api.github.com/user/emails")) {
+      if (githubEmailLookupStatus !== 200) {
+        return Response.json(
+          { message: "Resource not accessible by integration" },
+          { status: githubEmailLookupStatus }
+        );
+      }
       return Response.json([
         {
           email: "octocat@example.com",
@@ -154,6 +164,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await cleanD1Tables();
   googleCertRequestCount = 0;
+  githubEmailLookupStatus = 200;
 });
 
 afterAll(() => {
@@ -449,6 +460,54 @@ describe("browser auth callback", () => {
       env
     );
     expect(channelOnlyResponse.status).toBe(401);
+  });
+
+  it("redirects a GitHub sign-in to the access-denied page when GitHub rejects the email lookup", async () => {
+    githubEmailLookupStatus = 403;
+    // A separate client keeps this sign-in out of the other tests' rate-limit bucket.
+    const clientIp = "203.0.113.91";
+    const initiationBody = JSON.stringify({
+      provider: "github",
+      callbackURL: "/after-sign-in",
+      disableRedirect: true,
+    });
+    const initiationResponse = await handleRequest(
+      await signedWebRequest("/api/auth/sign-in/social", {
+        method: "POST",
+        body: initiationBody,
+        clientIp,
+      }),
+      env
+    );
+    expect(initiationResponse.status).toBe(200);
+    const providerUrl = new URL((await initiationResponse.json<{ url: string }>()).url);
+    const state = providerUrl.searchParams.get("state");
+    const stateCookie = cookiePair(initiationResponse, "__Secure-openinspect.state");
+
+    const callbackResponse = await handleRequest(
+      await signedWebRequest(
+        `/api/auth/callback/github?code=authorization-code&state=${encodeURIComponent(state ?? "")}`,
+        {
+          method: "GET",
+          cookie: stateCookie,
+          clientIp,
+        }
+      ),
+      env
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("Location")).toBe(
+      "/access-denied?error=provider_rejected&provider=github"
+    );
+    expect(
+      getSetCookies(callbackResponse.headers).some((cookie) =>
+        cookie.startsWith("__Secure-openinspect.session_token=")
+      )
+    ).toBe(false);
+    await expect(env.DB.prepare("SELECT COUNT(*) AS count FROM users").first()).resolves.toEqual({
+      count: 0,
+    });
   });
 
   it("signs an existing canonical user in through a migrated GitHub account", async () => {
