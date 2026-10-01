@@ -305,6 +305,37 @@ describe("sandbox graceful shutdown wiring", () => {
     expect(await response.text()).toBe("Sandbox is being saved");
   });
 
+  it("does not start preservation when the local archive status write fails", async () => {
+    const { stub } = await initNamedSession(`archive-status-write-failure-${Date.now()}`);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await seedShutdown(stub, {
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+    await queryDO(stub, "UPDATE session SET status = 'completed'");
+    const shutdownBefore = await readShutdown(stub);
+
+    await runInSessionDO(stub, async (instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER fail_archive_status BEFORE UPDATE OF status ON session
+         WHEN NEW.status = 'archived'
+         BEGIN SELECT RAISE(ABORT, 'injected archive status write failure'); END`
+      );
+      try {
+        await expect(componentsOf(instance).sessionLifecycleHandler.archive()).rejects.toThrow(
+          "injected archive status write failure"
+        );
+      } finally {
+        state.storage.sql.exec("DROP TRIGGER fail_archive_status");
+      }
+    });
+
+    expect(await readShutdown(stub)).toEqual(shutdownBefore);
+    expect(await queryDO(stub, "SELECT status FROM session")).toEqual([{ status: "completed" }]);
+  });
+
   it("keeps an archived sandbox alive while the status projection is pending", async () => {
     const name = `archive-pending-projection-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -336,6 +367,7 @@ describe("sandbox graceful shutdown wiring", () => {
     });
 
     const archiving = stub.fetch("http://internal/internal/archive", { method: "POST" });
+    const archiveSettled = archiving.catch(() => undefined);
     try {
       await vi.waitFor(() => expect(releaseProjection).toBeTypeOf("function"));
       expect(await queryDO(stub, "SELECT status FROM session")).toEqual([{ status: "archived" }]);
@@ -351,11 +383,11 @@ describe("sandbox graceful shutdown wiring", () => {
         reason: "session_archived",
       });
     } finally {
-      await runInSessionDO(stub, () => releaseProjection?.());
-      await archiving;
       await runInSessionDO(stub, () => {
+        releaseProjection?.();
         vi.restoreAllMocks();
       });
+      await archiveSettled;
     }
 
     expect((await archiving).status).toBe(200);

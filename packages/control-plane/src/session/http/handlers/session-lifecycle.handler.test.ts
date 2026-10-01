@@ -87,11 +87,13 @@ function createHandler() {
     getSandbox,
   } as unknown as SandboxRepository;
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
+  const beginTransition = vi.fn<SessionStatusService["beginTransition"]>();
   const confirmIndexStatus = vi.fn<() => Promise<void>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
   const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
   const statusService = {
     transition,
+    beginTransition,
     repairIndexStatus,
     confirmIndexStatus,
     settleFromMessageState,
@@ -128,6 +130,7 @@ function createHandler() {
     getSession,
     getSandbox,
     transition,
+    beginTransition,
     repairIndexStatus,
     confirmIndexStatus,
     settleFromMessageState,
@@ -280,9 +283,9 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("archives successfully without participant authorization", async () => {
-    const { handler, getSession, transition, preserveForArchive } = createHandler();
+    const { handler, getSession, beginTransition, preserveForArchive } = createHandler();
     getSession.mockReturnValue(createSession());
-    transition.mockResolvedValue(true);
+    beginTransition.mockResolvedValue(true);
 
     const response = await handler.archive(
       new Request("http://internal/internal/archive", {
@@ -294,12 +297,26 @@ describe("SessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "archived", outcome: "archived" });
-    expect(transition).toHaveBeenCalledWith("archived");
+    expect(beginTransition).toHaveBeenCalledWith("archived");
     // An archived session's reconnects are refused, so its sandbox is saved now.
     expect(preserveForArchive).toHaveBeenCalledOnce();
-    expect(transition.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(beginTransition.mock.invocationCallOrder[0]).toBeLessThan(
       preserveForArchive.mock.invocationCallOrder[0]
     );
+  });
+
+  it("does not preserve when the synchronous local transition fails", async () => {
+    const { handler, getSession, beginTransition, preserveForArchive, confirmIndexStatus } =
+      createHandler();
+    getSession.mockReturnValue(createSession());
+    beginTransition.mockImplementation(() => {
+      throw new Error("local status write failed");
+    });
+
+    await expect(handler.archive()).rejects.toThrow("local status write failed");
+
+    expect(preserveForArchive).not.toHaveBeenCalled();
+    expect(confirmIndexStatus).not.toHaveBeenCalled();
   });
 
   it("archives a draft that was never prompted", async () => {
@@ -405,7 +422,8 @@ describe("SessionLifecycleHandler", () => {
   });
 
   it("returns 409 when archiving a session with queued work", async () => {
-    const { handler, getSession, repository, transition, preserveForArchive } = createHandler();
+    const { handler, getSession, repository, beginTransition, preserveForArchive } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     repository.getPendingOrProcessingCount.mockReturnValue(1);
 
@@ -417,12 +435,12 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(transition).not.toHaveBeenCalled();
+    expect(beginTransition).not.toHaveBeenCalled();
     expect(preserveForArchive).not.toHaveBeenCalled();
   });
 
   it("returns 409 when archiving a cancelled session", async () => {
-    const { handler, getSession, transition } = createHandler();
+    const { handler, getSession, beginTransition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "cancelled" }));
 
     const response = await handler.archive(
@@ -433,7 +451,7 @@ describe("SessionLifecycleHandler", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(transition).not.toHaveBeenCalled();
+    expect(beginTransition).not.toHaveBeenCalled();
   });
 
   // Unarchive must not assert a status of its own. Forcing "active" left a
@@ -520,7 +538,7 @@ describe("canonical archive outcomes", () => {
       expect(await response.json()).toMatchObject({
         outcome: status === "cancelled" ? "skipped_cancelled" : "skipped_queued_work",
       });
-      expect(h.transition).not.toHaveBeenCalled();
+      expect(h.beginTransition).not.toHaveBeenCalled();
     }
   );
   it("returns retryable failure when the projection cannot be confirmed", async () => {

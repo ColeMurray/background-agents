@@ -200,6 +200,16 @@ describe("SessionStatusService.transition", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "active" });
   });
 
+  it("keeps local write failures as promise rejections", async () => {
+    const h = harness();
+    h.repository.updateSessionStatus.mockImplementation(() => {
+      throw new Error("local status write failed");
+    });
+
+    await expect(h.service.transition("archived")).rejects.toThrow("local status write failed");
+    expect(h.statusProjection.project).not.toHaveBeenCalled();
+  });
+
   it("short-circuits on same status: refreshes the index but neither persists nor broadcasts", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
 
@@ -412,6 +422,18 @@ describe("SessionStatusService.transition", () => {
     await h.service.transition("active");
 
     expect(h.parentFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionStatusService.beginTransition", () => {
+  it("throws a local write failure synchronously without starting projection", () => {
+    const h = harness();
+    h.repository.updateSessionStatus.mockImplementation(() => {
+      throw new Error("local status write failed");
+    });
+
+    expect(() => h.service.beginTransition("archived")).toThrow("local status write failed");
+    expect(h.statusProjection.project).not.toHaveBeenCalled();
   });
 });
 

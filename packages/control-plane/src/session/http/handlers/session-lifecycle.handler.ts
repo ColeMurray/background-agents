@@ -162,10 +162,10 @@ export class SessionLifecycleHandler {
       });
     }
 
-    // Both calls write local state before yielding: reconnects must see draining
-    // as soon as the session becomes archived, even if the index write is slow.
+    // Commit archived before starting preservation, but do not await its index
+    // projection: reconnects must see draining in the same turn.
     await Promise.all([
-      this.statusService.transition("archived"),
+      this.statusService.beginTransition("archived"),
       this.sandboxLifecycle.preserveForArchive(),
     ]);
     try {
