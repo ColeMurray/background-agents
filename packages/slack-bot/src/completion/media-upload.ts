@@ -4,6 +4,8 @@ import {
   uploadToExternalUrl,
 } from "@open-inspect/shared/slack";
 import type { MediaArtifactInfo } from "@open-inspect/shared/types/artifacts";
+import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
@@ -28,8 +30,6 @@ export interface MediaDeliveryResult {
   uploaded: number;
   failed: number;
   omitted: number;
-  /** The current session snapshot could not be read for Slack posting; emit no further job content. */
-  unavailable?: true;
 }
 
 interface DeliverMediaArtifactsInput {
@@ -40,13 +40,14 @@ interface DeliverMediaArtifactsInput {
   threadTs: string;
   artifacts: MediaArtifactInfo[];
   traceId?: string;
+  /** Called before sharing files, even if Slack's response is lost or unsuccessful. */
+  onShareAttempt: () => void;
 }
 
 type StagedFile = { id: string; title: string };
 type StageResult =
   | { kind: "staged"; sizeBytes: number; file: StagedFile }
   | { kind: "failed"; sizeBytes?: number }
-  | { kind: "unavailable" }
   | { kind: "omitted" };
 
 export async function deliverMediaArtifacts(
@@ -76,20 +77,7 @@ export async function deliverMediaArtifacts(
       continue;
     }
 
-    let stage: StageResult;
-    try {
-      stage = await stageArtifact(input, artifact, attemptedBytes);
-    } catch (error) {
-      log.warn("slack.media.delivery", {
-        artifact_id: artifact.id,
-        outcome: "error",
-        error: error instanceof Error ? error : String(error),
-      });
-      stage = { kind: "unavailable" };
-    }
-
-    if (stage.kind === "unavailable")
-      return { ...result, failed: result.failed + 1, unavailable: true };
+    const stage = await stageArtifact(input, artifact, attemptedBytes);
     if (stage.kind === "omitted") {
       result.omitted += 1;
       continue;
@@ -108,6 +96,7 @@ export async function deliverMediaArtifacts(
   )
     return result;
 
+  input.onShareAttempt();
   const complete = await completeExternalUpload(input.env.SLACK_BOT_TOKEN, {
     files: staged,
     channelId: input.channel,
@@ -158,15 +147,25 @@ async function stageArtifact(
   );
   mediaUrl.searchParams.set("channel", `slack:${input.channel}`);
   mediaUrl.searchParams.set("purpose", "slack-post");
-  const response = await signedControlPlaneFetch(
-    input.env,
-    { method: "GET", url: mediaUrl.toString(), traceId: input.traceId },
-    { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
-  );
+  let response: Response;
+  try {
+    response = await signedControlPlaneFetch(
+      input.env,
+      { method: "GET", url: mediaUrl.toString(), traceId: input.traceId },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+  } catch (error) {
+    throw new ProtectedReadError("Control plane media read unavailable", undefined, {
+      cause: error,
+    });
+  }
   if (!response.ok || !response.body) {
     await cancelBody(response.body);
     log.warn("slack.media.fetch", { ...base, outcome: "error", http_status: response.status });
-    return { kind: "unavailable" };
+    throw new ProtectedReadError(
+      `Control plane media read failed: ${response.status}`,
+      response.status
+    );
   }
 
   const mimeType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim() ?? "";
@@ -175,7 +174,7 @@ async function stageArtifact(
   if (!extension || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     await cancelBody(response.body);
     log.warn("slack.media.fetch", { ...base, outcome: "error", error: "invalid_media_headers" });
-    return { kind: "unavailable" };
+    throw new ProtectedReadError("Invalid media response headers");
   }
   if (
     sizeBytes > SLACK_MEDIA_MAX_FILE_BYTES ||
@@ -186,6 +185,17 @@ async function stageArtifact(
     return { kind: "omitted" };
   }
 
+  let bytes: Uint8Array<ArrayBuffer> | null;
+  try {
+    bytes = await readBodyCapped(response.body, sizeBytes);
+  } catch (error) {
+    throw new ProtectedReadError("Control plane media body read unavailable", undefined, {
+      cause: error,
+    });
+  }
+  if (!bytes || bytes.byteLength !== sizeBytes)
+    throw new ProtectedReadError("Invalid media response length");
+
   const title = artifact.caption?.trim() || `${artifact.type} ${artifact.id}`;
   const ticket = await getExternalUploadUrl(input.env.SLACK_BOT_TOKEN, {
     filename: `artifact-${artifact.id}.${extension}`,
@@ -194,7 +204,6 @@ async function stageArtifact(
     signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
   });
   if (!ticket.ok) {
-    await cancelBody(response.body);
     log.warn("slack.media.get_upload_url", {
       ...base,
       outcome: "error",
@@ -205,12 +214,11 @@ async function stageArtifact(
 
   const upload = await uploadToExternalUrl(
     ticket.upload_url,
-    response.body,
+    bytes,
     mimeType,
     AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS)
   );
   if (!upload.ok) {
-    await cancelBody(response.body);
     log.warn("slack.media.upload_bytes", { ...base, outcome: "error", slack_error: upload.error });
     return { kind: "failed", sizeBytes };
   }
@@ -223,6 +231,6 @@ async function cancelBody(body: ReadableStream | null): Promise<void> {
   try {
     await body.cancel();
   } catch {
-    // The upload fetch may already own or consume the stream.
+    // Cancellation must not change the read failure classification.
   }
 }

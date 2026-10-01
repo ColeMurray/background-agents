@@ -73,6 +73,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function hasSlackThreadCoordinates(context: unknown): context is {
+  channel: string;
+  threadTs: string;
+} {
+  return (
+    isRecord(context) &&
+    typeof context.channel === "string" &&
+    !!context.channel &&
+    typeof context.threadTs === "string" &&
+    !!context.threadTs
+  );
+}
+
 /**
  * How stale a Slack assistant-thread activity indicator may get before the
  * next sandbox heartbeat refreshes it.
@@ -168,30 +181,11 @@ export class CallbackNotificationService {
     binding: FetchClient,
     secret: string
   ): Promise<CallbackDeliveryResult> {
-    if (
-      !isRecord(context) ||
-      typeof context.channel !== "string" ||
-      !context.channel ||
-      typeof context.threadTs !== "string" ||
-      !context.threadTs
-    ) {
+    if (!hasSlackThreadCoordinates(context)) {
       return { delivered: false, attempts: 0 };
     }
-    const unsigned = {
-      kind: "slack.thread_closed",
-      sessionId,
-      timestamp: Date.now(),
-      context: { channel: context.channel, threadTs: context.threadTs },
-    };
-    const signature = await this.signPayload(unsigned, secret);
     return deliverWithRetry(
-      (signal) =>
-        binding.fetch("https://internal/callbacks/thread_closed", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...unsigned, signature }),
-          signal,
-        }),
+      (signal) => this.sendSlackThreadClosed(sessionId, context, binding, secret, signal),
       this.sleep,
       ({ attempt, response, error }) => {
         this.log.warn("callback.thread_closed_delivery_attempt_failed", {
@@ -202,6 +196,29 @@ export class CallbackNotificationService {
         });
       }
     );
+  }
+
+  private async sendSlackThreadClosed(
+    sessionId: string,
+    context: { channel: string; threadTs: string },
+    binding: FetchClient,
+    secret: string,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const unsigned = {
+      kind: "slack.thread_closed",
+      sessionId,
+      timestamp: Date.now(),
+      context: { channel: context.channel, threadTs: context.threadTs },
+    };
+    const signature = await this.signPayload(unsigned, secret);
+    signal.throwIfAborted();
+    return binding.fetch("https://internal/callbacks/thread_closed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...unsigned, signature }),
+      signal,
+    });
   }
 
   /**
@@ -280,7 +297,8 @@ export class CallbackNotificationService {
     let thrownError: unknown;
 
     try {
-      sessionId = this.getSessionId();
+      const callbackSessionId = this.getSessionId();
+      sessionId = callbackSessionId;
       const message = this.messageRepository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
         result.rejectReason = "no_callback_context";
@@ -319,17 +337,6 @@ export class CallbackNotificationService {
         return;
       }
 
-      if (source !== "linear") {
-        const denial = await this.slackPostDenial(sessionId, rawContext);
-        if (denial) {
-          result = {
-            ...(await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret)),
-            rejectReason: denial,
-          };
-          return;
-        }
-      }
-
       const timestamp = Date.now();
       const callbackData = {
         sessionId,
@@ -348,30 +355,69 @@ export class CallbackNotificationService {
         return;
       }
       const payloadData = parsedCallback?.data ?? callbackData;
-      const signature = await this.signPayload(payloadData, secret);
-      const payload = { ...payloadData, signature };
-      result = await deliverWithRetry(
-        (signal) =>
-          binding.fetch("https://internal/callbacks/complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-            signal,
-          }),
+      let rejectReason: string | undefined;
+      const delivery = await retryDelivery<Response | null, Response>(
+        async (signal) => {
+          rejectReason = undefined;
+          const denial =
+            source === "linear" ? null : await this.slackPostDenial(callbackSessionId, rawContext);
+          // D1 reads cannot be canceled; an expired attempt must not reach the wire.
+          signal.throwIfAborted();
+          rejectReason = denial ?? undefined;
+          let response: Response;
+          if (denial) {
+            if (!hasSlackThreadCoordinates(rawContext)) {
+              return { outcome: "delivered", value: null };
+            }
+            response = await this.sendSlackThreadClosed(
+              callbackSessionId,
+              rawContext,
+              binding,
+              secret,
+              signal
+            );
+          } else {
+            const signature = await this.signPayload(payloadData, secret);
+            signal.throwIfAborted();
+            response = await binding.fetch("https://internal/callbacks/complete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...payloadData, signature }),
+              signal,
+            });
+          }
+          return response.ok
+            ? { outcome: "delivered", value: response }
+            : { outcome: "retryable_failure", failure: response };
+        },
         this.sleep,
-        ({ attempt, response, error: deliveryError }) => {
-          this.log.warn("callback.complete_delivery_attempt_failed", {
-            message_id: messageId,
-            session_id: sessionId,
-            source,
-            attempt,
-            ...(response ? { http_status: response.status } : {}),
-            ...(deliveryError !== undefined
-              ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
-              : {}),
-          });
+        ({ attempt, failure: response, error: deliveryError }) => {
+          this.log.warn(
+            rejectReason
+              ? "callback.thread_closed_delivery_attempt_failed"
+              : "callback.complete_delivery_attempt_failed",
+            {
+              ...(!rejectReason ? { message_id: messageId, source } : {}),
+              session_id: sessionId,
+              attempt,
+              ...(response ? { http_status: response.status } : {}),
+              ...(deliveryError !== undefined
+                ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
+                : {}),
+            }
+          );
         }
       );
+      const response = delivery.outcome === "delivered" ? delivery.value : delivery.failure;
+      result = {
+        delivered: delivery.outcome === "delivered" && delivery.value !== null,
+        attempts:
+          delivery.outcome === "delivered" && delivery.value === null && delivery.attempts === 1
+            ? 0
+            : delivery.attempts,
+        ...(response ? { httpStatus: response.status } : {}),
+        ...(rejectReason ? { rejectReason } : {}),
+      };
     } catch (caught) {
       thrownError = caught;
     } finally {

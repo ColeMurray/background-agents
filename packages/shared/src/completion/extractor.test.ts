@@ -3,6 +3,7 @@ import { verifyServiceSignature, sha256Hex } from "../service-auth";
 import {
   buildAgentResponseFromEvents,
   extractAgentResponse,
+  ProtectedReadError,
   summarizeToolCall,
   toArtifactType,
   toEventArtifactInfo,
@@ -341,11 +342,15 @@ describe("extractAgentResponse", () => {
   );
 
   it.each([
-    ["events", "non-OK"],
+    ["events", "403"],
+    ["events", "404"],
+    ["events", "503"],
     ["events", "malformed"],
     ["events", "network"],
     ["events", "invalid-JSON"],
-    ["artifacts", "non-OK"],
+    ["artifacts", "403"],
+    ["artifacts", "404"],
+    ["artifacts", "503"],
     ["artifacts", "malformed"],
     ["artifacts", "network"],
     ["artifacts", "invalid-JSON"],
@@ -358,8 +363,8 @@ describe("extractAgentResponse", () => {
           if (url.pathname.endsWith(`/${endpoint}`)) {
             if (failure === "network") throw new Error("read unavailable");
             if (failure === "invalid-JSON") return new Response("{");
-            return failure === "non-OK"
-              ? Response.json({ error: "denied" }, { status: 404 })
+            return /^\d+$/.test(failure)
+              ? Response.json({ error: "read failed" }, { status: Number(failure) })
               : Response.json({ invalid: true });
           }
           return Response.json({
@@ -376,6 +381,47 @@ describe("extractAgentResponse", () => {
           });
         },
       };
+      const extraction = extractAgentResponse(
+        {
+          fetcher,
+          auth: { service: "slack-bot", secret: "test-secret" },
+          readPurpose: "slack-post",
+        },
+        "s1",
+        "m1",
+        undefined,
+        "slack:C1"
+      );
+      await expect(extraction).rejects.toBeInstanceOf(ProtectedReadError);
+      await expect(extraction).rejects.toMatchObject({
+        kind: failure === "403" || failure === "404" ? "denied" : "unavailable",
+      });
+    }
+  );
+
+  it.each([403, 404, 503])(
+    "rejects a later event page status %s instead of returning earlier secret content",
+    async (status) => {
+      const fetcher: ControlPlaneFetcher = {
+        async fetch(input) {
+          const url = new URL(String(input));
+          return url.searchParams.has("cursor")
+            ? Response.json({}, { status })
+            : Response.json({
+                events: [
+                  {
+                    id: "secret",
+                    type: "token",
+                    data: { content: "SECRET CONTENT" },
+                    messageId: "m1",
+                    createdAt: 1,
+                  },
+                ],
+                hasMore: true,
+                cursor: "next",
+              });
+        },
+      };
       await expect(
         extractAgentResponse(
           {
@@ -388,75 +434,63 @@ describe("extractAgentResponse", () => {
           undefined,
           "slack:C1"
         )
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ kind: status === 503 ? "unavailable" : "denied" });
     }
   );
 
-  it("rejects a denied later event page instead of returning earlier secret content", async () => {
-    const fetcher: ControlPlaneFetcher = {
-      async fetch(input) {
-        const url = new URL(String(input));
-        return url.searchParams.has("cursor")
-          ? Response.json({}, { status: 404 })
-          : Response.json({
-              events: [
-                {
-                  id: "secret",
-                  type: "token",
-                  data: { content: "SECRET CONTENT" },
-                  messageId: "m1",
-                  createdAt: 1,
+  it.each(["403", "404", "503", "network", "malformed", "invalid-JSON"])(
+    "keeps Linear's unprotected artifact fallback unchanged for %s",
+    async (failure) => {
+      const fetcher: ControlPlaneFetcher = {
+        async fetch(input) {
+          const url = new URL(String(input));
+          expect(url.searchParams.has("purpose")).toBe(false);
+          if (url.pathname.endsWith("/artifacts")) {
+            if (failure === "network") throw new Error("read unavailable");
+            if (failure === "invalid-JSON") return new Response("{");
+            return /^\d+$/.test(failure)
+              ? Response.json({}, { status: Number(failure) })
+              : Response.json({ invalid: true });
+          }
+          return Response.json({
+            events: [
+              {
+                id: "text",
+                type: "token",
+                data: { content: "Legacy response" },
+                messageId: "m1",
+                createdAt: 1,
+              },
+              {
+                id: "branch",
+                type: "artifact",
+                data: {
+                  artifactType: "branch",
+                  url: "https://example.com/tree/legacy",
+                  metadata: { name: "legacy" },
                 },
-              ],
-              hasMore: true,
-              cursor: "next",
-            });
-      },
-    };
-    await expect(
-      extractAgentResponse(
-        {
-          fetcher,
-          auth: { service: "slack-bot", secret: "test-secret" },
-          readPurpose: "slack-post",
+                messageId: "m1",
+                createdAt: 2,
+              },
+            ],
+            hasMore: false,
+          });
         },
-        "s1",
-        "m1",
-        undefined,
-        "slack:C1"
-      )
-    ).rejects.toThrow();
-  });
-
-  it("keeps Linear's unprotected artifact fallback unchanged", async () => {
-    const fetcher: ControlPlaneFetcher = {
-      async fetch(input) {
-        const url = new URL(String(input));
-        expect(url.searchParams.has("purpose")).toBe(false);
-        return url.pathname.endsWith("/artifacts")
-          ? Response.json({}, { status: 404 })
-          : Response.json({
-              events: [
-                {
-                  id: "text",
-                  type: "token",
-                  data: { content: "Legacy response" },
-                  messageId: "m1",
-                  createdAt: 1,
-                },
-              ],
-              hasMore: false,
-            });
-      },
-    };
-    expect(
-      await extractAgentResponse(
-        { fetcher, auth: { service: "linear-bot", secret: "test-secret" } },
-        "s1",
-        "m1"
-      )
-    ).toMatchObject({ textContent: "Legacy response" });
-  });
+      };
+      expect(
+        await extractAgentResponse(
+          { fetcher, auth: { service: "linear-bot", secret: "test-secret" } },
+          "s1",
+          "m1"
+        )
+      ).toMatchObject({
+        textContent: "Legacy response",
+        artifacts: [
+          { type: "branch", url: "https://example.com/tree/legacy", label: "Branch: legacy" },
+        ],
+      });
+    }
+  );
 
   it("rejects protected pagination that omits the continuation cursor", async () => {
     const fetcher: ControlPlaneFetcher = {
@@ -476,7 +510,7 @@ describe("extractAgentResponse", () => {
         undefined,
         "slack:C1"
       )
-    ).rejects.toThrow("Invalid events response");
+    ).rejects.toMatchObject({ kind: "unavailable", message: "Invalid events response" });
   });
 
   it("returns a failed response when the events response is malformed", async () => {

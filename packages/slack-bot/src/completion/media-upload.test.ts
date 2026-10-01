@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaArtifactInfo } from "@open-inspect/shared/types/artifacts";
+import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import { deliverMediaArtifacts, SLACK_MEDIA_MAX_FILES_PER_COMPLETION } from "./media-upload";
 import type { Env } from "../types";
 
@@ -47,31 +48,40 @@ function input(env: Env, artifacts: MediaArtifactInfo[]) {
     threadTs: "111.222",
     artifacts,
     traceId: "trace-1",
+    onShareAttempt: vi.fn(),
   };
 }
 
 describe("deliverMediaArtifacts", () => {
-  it("stops the batch and never shares staged files after an outbound media denial", async () => {
-    const env = makeEnv();
-    vi.mocked(env.CONTROL_PLANE.fetch)
-      .mockResolvedValueOnce(mediaResponse())
-      .mockResolvedValueOnce(new Response(null, { status: 404 }));
-    const fetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(Response.json({ ok: true, files: [{ id: "F1" }] }))
-      .mockResolvedValueOnce(
-        Response.json({ ok: true, upload_url: "https://files.slack.com/upload/one", file_id: "F1" })
-      )
-      .mockResolvedValueOnce(new Response("OK"));
-    const result = await deliverMediaArtifacts(
-      input(env, [IMAGE, { ...IMAGE, id: "denied" }, { ...IMAGE, id: "later" }])
-    );
-    expect(result).toMatchObject({ uploaded: 0, unavailable: true });
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
-    expect(
-      fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
-    ).toBe(false);
-  });
+  it.each([403, 404, 503])(
+    "stops the batch and never shares staged files after a media read status %s",
+    async (status) => {
+      const env = makeEnv();
+      vi.mocked(env.CONTROL_PLANE.fetch)
+        .mockResolvedValueOnce(mediaResponse())
+        .mockResolvedValueOnce(new Response(null, { status }));
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ ok: true, files: [{ id: "F1" }] }))
+        .mockResolvedValueOnce(
+          Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/one",
+            file_id: "F1",
+          })
+        )
+        .mockResolvedValueOnce(new Response("OK"));
+      const delivery = input(env, [IMAGE, { ...IMAGE, id: "denied" }, { ...IMAGE, id: "later" }]);
+      await expect(deliverMediaArtifacts(delivery)).rejects.toMatchObject({
+        kind: status === 503 ? "unavailable" : "denied",
+      });
+      expect(delivery.onShareAttempt).not.toHaveBeenCalled();
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+      expect(
+        fetch.mock.calls.some(([url]) => String(url).includes("files.completeUploadExternal"))
+      ).toBe(false);
+    }
+  );
 
   it("suppresses media uploads for coordinate-only closed automation sessions", async () => {
     const env = makeEnv();
@@ -205,15 +215,15 @@ describe("deliverMediaArtifacts", () => {
         })
     );
 
-    const result = await deliverMediaArtifacts(input(env, [IMAGE]));
-
-    expect(result).toEqual({ uploaded: 0, failed: 1, omitted: 0, unavailable: true });
+    await expect(deliverMediaArtifacts(input(env, [IMAGE]))).rejects.toMatchObject({
+      kind: "unavailable",
+    });
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("counts failed upload attempts toward the total byte limit", async () => {
     const tenMiB = 10 * 1024 * 1024;
-    const env = makeEnv(async () => mediaResponse(tenMiB));
+    const env = makeEnv(async () => mediaResponse(tenMiB, new Uint8Array(tenMiB)));
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({ ok: false, error: "missing_scope" })
     );
@@ -275,16 +285,75 @@ describe("deliverMediaArtifacts", () => {
     expect(result).toEqual({ uploaded: 0, failed: 1, omitted: 0 });
   });
 
-  it("isolates unexpected media retrieval errors", async () => {
+  it.each([
+    "403",
+    "404",
+    "503",
+    "network",
+    "malformed",
+    "missing-body",
+    "body-network",
+    "truncated",
+    "oversized-body",
+  ])("classifies protected media reads before sharing: %s", async (failure) => {
     const env = makeEnv(async () => {
-      throw new Error("binding unavailable");
+      if (failure === "network") throw new Error("binding unavailable");
+      if (failure === "malformed") return new Response("bytes");
+      if (failure === "missing-body") return new Response(null);
+      if (failure === "body-network")
+        return mediaResponse(
+          9,
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("media download interrupted"));
+            },
+          })
+        );
+      if (failure === "truncated") return mediaResponse(9, "partial");
+      if (failure === "oversized-body") return mediaResponse(1);
+      return new Response(null, { status: Number(failure) });
     });
+    const delivery = input(env, [IMAGE]);
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const pending = deliverMediaArtifacts(delivery);
 
-    await expect(deliverMediaArtifacts(input(env, [IMAGE]))).resolves.toEqual({
-      uploaded: 0,
-      failed: 1,
-      omitted: 0,
-      unavailable: true,
+    await expect(pending).rejects.toBeInstanceOf(ProtectedReadError);
+    await expect(pending).rejects.toMatchObject({
+      kind: failure === "403" || failure === "404" ? "denied" : "unavailable",
     });
+    expect(delivery.onShareAttempt).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each(["success", "network", "malformed"])(
+    "reports the publication boundary before a %s finalization outcome",
+    async (outcome) => {
+      const env = makeEnv();
+      const delivery = input(env, [IMAGE]);
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(
+          Response.json({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/one",
+            file_id: "F1",
+          })
+        )
+        .mockResolvedValueOnce(new Response("OK"))
+        .mockImplementationOnce(async () => {
+          expect(delivery.onShareAttempt).toHaveBeenCalledOnce();
+          if (outcome === "network") throw new Error("response lost after accepted share");
+          return outcome === "success"
+            ? Response.json({ ok: true, files: [{ id: "F1" }] })
+            : Response.json({ invalid: true });
+        });
+
+      const result = await deliverMediaArtifacts(delivery);
+      expect(delivery.onShareAttempt).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        uploaded: outcome === "success" ? 1 : 0,
+        failed: outcome === "success" ? 0 : 1,
+        omitted: 0,
+      });
+    }
+  );
 });

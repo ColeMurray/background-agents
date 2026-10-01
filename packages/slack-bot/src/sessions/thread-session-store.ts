@@ -128,18 +128,29 @@ export async function closeThreadSession(
   }
 }
 
-/** Best-effort deduplication only: KV has no atomic compare-and-set. */
-export async function claimThreadClosureNotice(
+/** Best-effort sent-marker lookup, not an atomic delivery claim. */
+export async function isThreadClosureNoticeSent(
   env: Env,
   channel: string,
   threadTs: string,
   sessionId: string
 ): Promise<boolean> {
   const key = `${getThreadClosureKey(channel, threadTs, sessionId)}:notice`;
-  const kv = createKvCacheStore(env.SLACK_KV);
-  if ((await kv.get(key)) === "1") return false;
-  await kv.put(key, "1", { expirationTtl: THREAD_SESSION_TTL_MS / 1000 });
-  return true;
+  return (await createKvCacheStore(env.SLACK_KV).get(key)) === "1";
+}
+
+/** Called only after Slack confirms the notice was posted. */
+export async function markThreadClosureNoticeSent(
+  env: Env,
+  channel: string,
+  threadTs: string,
+  sessionId: string
+): Promise<void> {
+  await createKvCacheStore(env.SLACK_KV).put(
+    `${getThreadClosureKey(channel, threadTs, sessionId)}:notice`,
+    "1",
+    { expirationTtl: THREAD_SESSION_TTL_MS / 1000 }
+  );
 }
 
 export async function clearThreadSession(

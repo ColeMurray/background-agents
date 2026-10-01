@@ -5,8 +5,10 @@ import {
   buildThreadSession,
   clearThreadSession,
   closeThreadSession,
+  isThreadClosureNoticeSent,
   isThreadSessionClosed,
   lookupThreadSession,
+  markThreadClosureNoticeSent,
   storeThreadSession,
 } from "./thread-session-store";
 
@@ -123,6 +125,36 @@ describe("thread session store", () => {
     await expect(closeThreadSession(mocks.env, "C123", "111.222", "session-1")).rejects.toThrow(
       "KV unavailable"
     );
+  });
+
+  it("queries the existing notice key without marking it sent", async () => {
+    const values = useMemoryKv();
+    const key = "thread-closed:C123:111.222:session-1:notice";
+    expect(await isThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1")).toBe(false);
+    values.set(key, "1");
+    expect(await isThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1")).toBe(true);
+    expect(mocks.get).toHaveBeenCalledWith(key);
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("marks a delivered notice sent using the existing seven-day key", async () => {
+    useMemoryKv();
+    await markThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1");
+    expect(mocks.put).toHaveBeenCalledWith("thread-closed:C123:111.222:session-1:notice", "1", {
+      expirationTtl: 7 * 24 * 60 * 60,
+    });
+    expect(await isThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1")).toBe(true);
+  });
+
+  it("does not swallow notice sent-marker query or persistence failures", async () => {
+    mocks.get.mockRejectedValue(new Error("KV read unavailable"));
+    mocks.put.mockRejectedValue(new Error("KV write unavailable"));
+    await expect(
+      isThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1")
+    ).rejects.toThrow("KV read unavailable");
+    await expect(
+      markThreadClosureNoticeSent(mocks.env, "C123", "111.222", "session-1")
+    ).rejects.toThrow("KV write unavailable");
   });
 
   it.each(["team-a", null])("retains closed state and team scope %s on read", async (teamId) => {

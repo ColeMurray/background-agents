@@ -25,6 +25,17 @@ import {
 
 export type { ControlPlaneFetcher };
 
+/** Failed purpose-protected reads must never fall back to previously collected content. */
+export class ProtectedReadError extends Error {
+  readonly kind: "denied" | "unavailable";
+
+  constructor(message: string, status?: number, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ProtectedReadError";
+    this.kind = status === 403 || status === 404 ? "denied" : "unavailable";
+  }
+}
+
 /** Server-side limit for the events API. */
 const EVENTS_PAGE_LIMIT = 200;
 
@@ -123,7 +134,10 @@ export async function extractAgentResponse(
           duration_ms: Date.now() - startTime,
         });
         if (deps.readPurpose)
-          throw new Error(`Control plane events read failed: ${response.status}`);
+          throw new ProtectedReadError(
+            `Control plane events read failed: ${response.status}`,
+            response.status
+          );
         return {
           textContent: "",
           toolCalls: [],
@@ -141,7 +155,7 @@ export async function extractAgentResponse(
           error: new Error("Invalid events response"),
           duration_ms: Date.now() - startTime,
         });
-        if (deps.readPurpose) throw new Error("Invalid events response");
+        if (deps.readPurpose) throw new ProtectedReadError("Invalid events response");
         return {
           textContent: "",
           toolCalls: [],
@@ -185,7 +199,12 @@ export async function extractAgentResponse(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
-    if (deps.readPurpose) throw error;
+    if (deps.readPurpose)
+      throw error instanceof ProtectedReadError
+        ? error
+        : new ProtectedReadError("Control plane events read unavailable", undefined, {
+            cause: error,
+          });
     return { textContent: "", toolCalls: [], artifacts: [], mediaArtifacts: [], success: false };
   }
 }
@@ -299,7 +318,10 @@ async function fetchSessionArtifacts(
         http_status: response.status,
       });
       if (deps.readPurpose)
-        throw new Error(`Control plane artifacts read failed: ${response.status}`);
+        throw new ProtectedReadError(
+          `Control plane artifacts read failed: ${response.status}`,
+          response.status
+        );
       return [];
     }
 
@@ -310,7 +332,7 @@ async function fetchSessionArtifacts(
         outcome: "error",
         error: new Error("Invalid artifacts response"),
       });
-      if (deps.readPurpose) throw new Error("Invalid artifacts response");
+      if (deps.readPurpose) throw new ProtectedReadError("Invalid artifacts response");
       return [];
     }
     const data = parsed.data;
@@ -329,7 +351,12 @@ async function fetchSessionArtifacts(
       outcome: "error",
       error: error instanceof Error ? error : new Error(String(error)),
     });
-    if (deps.readPurpose) throw error;
+    if (deps.readPurpose)
+      throw error instanceof ProtectedReadError
+        ? error
+        : new ProtectedReadError("Control plane artifacts read unavailable", undefined, {
+            cause: error,
+          });
     return [];
   }
 }

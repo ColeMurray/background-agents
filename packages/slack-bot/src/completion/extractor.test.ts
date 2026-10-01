@@ -129,6 +129,8 @@ describe("extractAgentResponse", () => {
       SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
-    await expect(extractAgentResponse(env, "session-2", "msg-2", "C123")).rejects.toThrow();
+    await expect(extractAgentResponse(env, "session-2", "msg-2", "C123")).rejects.toMatchObject({
+      kind: "unavailable",
+    });
   });
 });

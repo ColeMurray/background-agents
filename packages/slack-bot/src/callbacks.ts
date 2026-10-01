@@ -11,10 +11,11 @@ import type { Env } from "./types";
 import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
 import {
-  claimThreadClosureNotice,
   closeThreadSession,
+  isThreadClosureNoticeSent,
   isThreadSessionClosed,
   lookupThreadSession,
+  markThreadClosureNoticeSent,
   THREAD_CLOSED_MESSAGE,
 } from "./sessions/thread-session-store";
 import {
@@ -251,11 +252,11 @@ callbacksRouter.post("/thread_closed", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
   const { channel, threadTs } = valid.context;
-  const mapping = await lookupThreadSession(c.env, channel, threadTs);
   try {
     await closeThreadSession(c.env, channel, threadTs, valid.sessionId);
+    const mapping = await lookupThreadSession(c.env, channel, threadTs);
     if (mapping && mapping.sessionId !== valid.sessionId) return c.json({ ok: true });
-    if (!(await claimThreadClosureNotice(c.env, channel, threadTs, valid.sessionId))) {
+    if (await isThreadClosureNoticeSent(c.env, channel, threadTs, valid.sessionId)) {
       return c.json({ ok: true });
     }
   } catch (error) {
@@ -266,22 +267,23 @@ callbacksRouter.post("/thread_closed", async (c) => {
     });
     return c.json({ error: "closure persistence failed" }, 503);
   }
-  c.executionCtx.waitUntil(
-    (async () => {
-      try {
-        const result = await postMessage(c.env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
-          thread_ts: threadTs,
-        });
-        if (!result.ok)
-          log.warn("slack.thread_closed.post", { trace_id: traceId, slack_error: result.error });
-      } catch (error) {
-        log.warn("slack.thread_closed.post", {
-          trace_id: traceId,
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-      }
-    })()
-  );
+  try {
+    const result = await postMessage(c.env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
+      thread_ts: threadTs,
+    });
+    if (!result.ok) {
+      log.warn("slack.thread_closed.post", { trace_id: traceId, slack_error: result.error });
+      return c.json({ error: "closure notice delivery failed" }, 503);
+    }
+    await markThreadClosureNoticeSent(c.env, channel, threadTs, valid.sessionId);
+  } catch (error) {
+    log.error("slack.thread_closed.deliver", {
+      trace_id: traceId,
+      session_id: valid.sessionId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return c.json({ error: "closure notice delivery failed" }, 503);
+  }
   return c.json({ ok: true });
 });
 
