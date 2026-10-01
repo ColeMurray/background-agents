@@ -89,6 +89,10 @@ class FakeStatement implements SqlStatement {
   }
 
   first<T = Record<string, unknown>>(): Promise<T | null> {
+    if (this.query === "SELECT * FROM sessions WHERE id = ?") {
+      this.db.sessionIndexBinds.push(this.bound[0]);
+      return Promise.resolve(this.db.sessionIndexRow as T | null);
+    }
     if (this.query.includes("FROM model_provider_accounts")) {
       return Promise.resolve((this.db.accountRow as T | null) ?? null);
     }
@@ -112,9 +116,12 @@ class FakeSqlDatabase implements SqlDatabase {
   providerAuthRows: D1Row[] = [];
   /** The bound provider account the pre-spawn check reads; null means removed. */
   accountRow: D1Row | null = null;
+  sessionIndexRow: D1Row | null = null;
+  readonly sessionIndexBinds: unknown[] = [];
   globalSecretRows: D1Row[] = [];
   readonly repoSecretRowsByRepoId = new Map<number, D1Row[]>();
   readonly environmentSecretRowsById = new Map<string, D1Row[]>();
+  readonly teamSecretRowsById = new Map<string, D1Row[]>();
 
   prepare(query: string): SqlStatement {
     return new FakeStatement(this, query.replace(/\s+/g, " ").trim());
@@ -132,6 +139,9 @@ class FakeSqlDatabase implements SqlDatabase {
     }
     if (query === "SELECT key, encrypted_value FROM global_secrets") {
       return this.globalSecretRows;
+    }
+    if (query === "SELECT key, encrypted_value FROM team_secrets WHERE team_id = ?") {
+      return this.teamSecretRowsById.get(bound[0] as string) ?? [];
     }
     if (query === "SELECT key, encrypted_value FROM repo_secrets WHERE repo_id = ?") {
       return this.repoSecretRowsByRepoId.get(bound[0] as number) ?? [];
@@ -252,6 +262,28 @@ function makeHarness(
   const session = options.session === undefined ? sessionRow() : options.session;
   const storage = fakeSqlStorage({ session, memberRows: options.memberRows ?? [] });
   const db = new FakeSqlDatabase();
+  db.sessionIndexRow = session
+    ? {
+        ...session,
+        id: session.session_name ?? session.id,
+        root_session_id: session.session_name ?? session.id,
+        automation_id: null,
+        automation_run_id: null,
+        scm_login: null,
+        user_id: null,
+        owner_team_id: null,
+        visibility: "workspace",
+        project_id: null,
+        active_duration_ms: 0,
+        message_count: 0,
+        pr_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      }
+    : null;
   const logs: LogEntry[] = [];
   const log = recordingLogger(logs);
   const sessionCoreRepository = new SessionCoreRepository(storage.sql, (closure) => closure());
@@ -324,6 +356,37 @@ describe("UserEnvResolver", () => {
   });
 
   describe("session-target secret fold", () => {
+    it("includes team broker secrets from the current public D1 session ownership", async () => {
+      const h = makeHarness();
+      h.db.sessionIndexRow!.owner_team_id = "team_a";
+      h.db.providerAuthRows = providerAuthRows({ ...API_KEY_MODES, xai: "legacy_scoped_oauth" });
+      h.db.globalSecretRows = await secretRows({ SHARED: "global" });
+      h.db.teamSecretRowsById.set(
+        "team_a",
+        await secretRows({
+          SHARED: "team",
+          XAI_OAUTH_REFRESH_TOKEN: "team-refresh",
+        })
+      );
+      expect(await h.resolver.getUserEnvVars()).toEqual({ SHARED: "team", XAI_OAUTH_MANAGED: "1" });
+      expect(h.db.sessionIndexBinds).toEqual(["sess-public-1"]);
+    });
+
+    it("does not query team secrets for workspace ownership", async () => {
+      const h = makeHarness();
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.teamSecretRowsById.set("team_a", await secretRows({ TEAM_ONLY: "private" }));
+      expect(await h.resolver.getUserEnvVars()).toBeUndefined();
+      expect(h.db.queries.some((query) => query.includes("team_secrets"))).toBe(false);
+    });
+
+    it("fails closed when the authoritative session index row is missing", async () => {
+      const h = makeHarness();
+      h.db.sessionIndexRow = null;
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      await expect(h.resolver.getUserEnvVars()).rejects.toThrow("Session index row not found");
+    });
+
     async function foldHarness(
       secondarySecrets: Record<string, string>,
       primarySecrets: Record<string, string>

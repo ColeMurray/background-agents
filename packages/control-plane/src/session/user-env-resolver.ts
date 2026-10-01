@@ -1,6 +1,6 @@
 /**
  * Resolves the user-defined environment a session's sandbox receives: decrypts
- * and folds global/repo/environment secrets, derives the managed-provider env
+ * and folds global/team/repo/environment secrets, derives the managed-provider env
  * from the session's provider auth modes, and answers whether a model's
  * provider has usable authentication in that environment. Legacy session rows
  * that predate `repo_id` resolve it through the injected `resolveRepoId`
@@ -11,6 +11,7 @@ import { SessionIndexStore } from "../db/session-index";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
+import { TeamSecretsStore } from "../db/team-secrets";
 import {
   auditSecretsMerge,
   mergeSecretSources,
@@ -148,9 +149,12 @@ export class UserEnvResolver {
     }
 
     const db = this.db;
-    const providerAuth = await new SessionIndexStore(db).getCompleteProviderAuth(
-      resolvePublicSessionId(session, this.durableObjectId)
-    );
+    const sessionId = resolvePublicSessionId(session, this.durableObjectId);
+    const indexStore = new SessionIndexStore(db);
+    // Team ownership can change without changing the DO's launch snapshot.
+    const indexedSession = await indexStore.get(sessionId);
+    if (!indexedSession) throw new Error("Session index row not found");
+    const providerAuth = await indexStore.getCompleteProviderAuth(sessionId);
     const providerAuthModes = Object.fromEntries(
       providerAuth.map(({ provider, authMode }) => [provider, authMode])
     ) as Record<SubscriptionProviderId, SessionProviderAuthMode>;
@@ -166,6 +170,12 @@ export class UserEnvResolver {
     const encryptionKey = this.repoSecretsEncryptionKey;
     const globalStore = new GlobalSecretsStore(db, encryptionKey);
     const globalSecrets = await globalStore.getDecryptedSecrets();
+    const teamSecrets =
+      indexedSession.ownerTeamId === null
+        ? {}
+        : await new TeamSecretsStore(db, encryptionKey).getDecryptedSecrets(
+            indexedSession.ownerTeamId
+          );
 
     const repoStore = new RepoSecretsStore(db, encryptionKey);
     const environmentSecretsStore = new EnvironmentSecretsStore(db, encryptionKey);
@@ -173,6 +183,7 @@ export class UserEnvResolver {
     const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,
+      teamSecrets,
       members,
       loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
       loadEnvironmentSecrets: (environmentId) =>
@@ -203,6 +214,7 @@ export class UserEnvResolver {
       : sources.filter(
           (source) =>
             source.label === "global" ||
+            source.label === "team" ||
             (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
         );
     const managedSecrets = mergeSecretSources(managedSources).merged;

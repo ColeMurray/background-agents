@@ -16,11 +16,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(202);
+    expect(routes).toHaveLength(205);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(154);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(202);
+    expect(new Set(paths).size).toBe(156);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(205);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -69,6 +69,23 @@ describe("route policy table", () => {
   it("keeps membership deletion behind member admission rather than directory read", () => {
     expect(routeFor("DELETE", "/teams/team-1/members/user-1")?.authorization).toMatchObject({
       allOf: [{ kind: "team", need: "member" }],
+    });
+  });
+
+  it.each([
+    ["GET", "/teams/team-1/secrets"],
+    ["PUT", "/teams/team-1/secrets"],
+    ["DELETE", "/teams/team-1/secrets/TOKEN"],
+  ])("requires human team secret management for %s %s", (method, path) => {
+    expect(routeFor(method, path)).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "team", teamIdParam: "id", need: "canManageSecrets" }],
+        service: { kind: "deny" },
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
     });
   });
 

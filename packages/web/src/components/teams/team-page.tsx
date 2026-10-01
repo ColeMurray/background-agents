@@ -17,8 +17,9 @@ import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { TeamOverview } from "./team-overview";
 import { TeamActivity } from "./team-activity";
+import { TeamSecrets } from "./team-secrets";
 
-type TeamTab = "Overview" | "Members" | "Activity" | "Settings";
+type TeamTab = "Overview" | "Members" | "Secrets" | "Activity" | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();
@@ -56,7 +57,9 @@ function TeamContent({
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
-  const tabs: TeamTab[] = canViewWork ? ["Overview", "Members", "Activity"] : ["Members"];
+  const tabs: TeamTab[] = canViewWork ? ["Overview", "Members"] : ["Members"];
+  if (canViewWork && capabilities.canManageSecrets) tabs.push("Secrets");
+  if (canViewWork) tabs.push("Activity");
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
     tabs.push("Settings");
   const activeTab = tabs.includes(tab) ? tab : "Members";
@@ -101,6 +104,9 @@ function TeamContent({
       </nav>
       {activeTab === "Overview" && <TeamOverview teamId={team.id} />}
       {activeTab === "Members" && <TeamMembers team={team} />}
+      {activeTab === "Secrets" && canViewWork && capabilities.canManageSecrets && (
+        <TeamSecrets teamId={team.id} capabilities={team.capabilities} />
+      )}
       {activeTab === "Activity" && <TeamActivity teamId={team.id} />}
       {activeTab === "Settings" && <TeamDetail team={team} />}
     </section>

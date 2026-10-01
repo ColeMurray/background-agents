@@ -2,6 +2,15 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 1, 2026
+
+### Added
+
+Team leads and workspace administrators can manage encrypted secrets from a team's Secrets tab.
+Team-owned sessions receive global secrets, then team secrets, then environment or repository
+secrets, with later scopes taking precedence. Environment image builds include the environment's
+team secrets; repository-shared images do not. Secret mutation audits contain key names only.
+
 ## September 30, 2026
 
 ### Added
