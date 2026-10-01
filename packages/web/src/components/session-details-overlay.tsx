@@ -145,7 +145,7 @@ export function SessionDetailsOverlay({
     if (!open) return;
 
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented) {
         closeOverlay();
       }
     };

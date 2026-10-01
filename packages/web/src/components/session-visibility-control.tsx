@@ -8,6 +8,7 @@ import { SessionScopeError, updateSessionScope } from "@/lib/session-scope";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { ErrorBanner } from "./ui/error-banner";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 export interface SessionVisibilityControlProps {
   sessionId: string;
@@ -90,62 +91,79 @@ export function SessionVisibilityControl({
 
   return (
     <div className="space-y-3">
-      <label htmlFor={`${id}-visibility`} className="text-sm font-medium">
-        Visibility
-      </label>
-      <select
-        id={`${id}-visibility`}
-        value={selected}
-        disabled={!canChangeVisibility || pending}
-        onChange={(event) => {
-          const parsed = sessionVisibilitySchema.safeParse(event.target.value);
-          if (parsed.success) {
-            setSelection(parsed.data);
-            setFailure(null);
-          }
-        }}
-        className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
-      >
-        <option value="workspace">Workspace</option>
-        <option value="team" disabled={!ownerTeamId}>
-          Team
-        </option>
-        <option value="private" disabled={!ownerUserId}>
-          Private
-        </option>
-      </select>
-      <label className="flex items-center gap-2 text-sm" htmlFor={`${id}-children`}>
-        <Checkbox
-          id={`${id}-children`}
-          checked={includeChildren}
+      <div className="flex items-center justify-between gap-4">
+        <label htmlFor={`${id}-visibility`} className="text-sm font-medium">
+          Visibility
+        </label>
+        <Select
+          value={selected}
           disabled={!canChangeVisibility || pending}
-          onCheckedChange={(checked) => {
-            setIncludeChildren(checked === true);
-            setFailure(null);
+          onValueChange={(value) => {
+            const parsed = sessionVisibilitySchema.safeParse(value);
+            if (parsed.success) {
+              setSelection(parsed.data);
+              setFailure(null);
+            }
           }}
-        />
-        Include child sessions
-      </label>
+        >
+          <SelectTrigger id={`${id}-visibility`} density="compact" className="h-8 w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="workspace">Workspace</SelectItem>
+            <SelectItem value="team" disabled={!ownerTeamId}>
+              Team
+            </SelectItem>
+            <SelectItem value="private" disabled={!ownerUserId}>
+              Private
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
       {selected === "team" && ownerTeamId && (
         <SessionTeamOwnerWarning teamId={ownerTeamId} ownerUserId={ownerUserId} />
       )}
       {failure && <ErrorBanner role="alert">{failure.message}</ErrorBanner>}
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={disabled} onClick={() => void changeVisibility(includeChildren)}>
-          {pending ? "Updating..." : "Change visibility"}
+      <div className="flex items-center justify-between gap-2">
+        <label
+          className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"
+          htmlFor={`${id}-children`}
+        >
+          <Checkbox
+            id={`${id}-children`}
+            checked={includeChildren}
+            disabled={!canChangeVisibility || pending}
+            onCheckedChange={(checked) => {
+              setIncludeChildren(checked === true);
+              setFailure(null);
+            }}
+            className="h-3.5 w-3.5 shrink-0"
+          />
+          Include child sessions
+        </label>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          className="h-7 shrink-0 rounded-sm"
+          disabled={disabled}
+          onClick={() => void changeVisibility(includeChildren)}
+        >
+          {pending ? "Updating..." : "Save"}
         </Button>
-        {includeChildren &&
-          failure instanceof SessionScopeError &&
-          failure.canRetryWithoutChildren && (
-            <Button
-              variant="outline"
-              disabled={disabled}
-              onClick={() => void changeVisibility(false)}
-            >
-              Retry without child sessions
-            </Button>
-          )}
       </div>
+      {includeChildren &&
+        failure instanceof SessionScopeError &&
+        failure.canRetryWithoutChildren && (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => void changeVisibility(false)}
+          >
+            Retry without child sessions
+          </Button>
+        )}
     </div>
   );
 }

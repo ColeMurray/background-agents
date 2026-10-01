@@ -46,6 +46,16 @@ it.each([true, false])("hides closed details from assistive technology (phone=%s
   expect(screen.getByRole("dialog", { name: "Session details" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
 
+  const handledEscape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  handledEscape.preventDefault();
+  fireEvent(screen.getByRole("button", { name: "Close" }), handledEscape);
+  expect(onOpenChange).not.toHaveBeenCalled();
+  expect(onReturnFocus).not.toHaveBeenCalled();
+
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onOpenChange).toHaveBeenCalledWith(false);
   expect(onReturnFocus).toHaveBeenCalledOnce();

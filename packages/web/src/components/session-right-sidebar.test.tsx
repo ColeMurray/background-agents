@@ -31,6 +31,7 @@ vi.mock("swr", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Element.prototype.scrollIntoView = vi.fn();
   vi.mocked(browserApiFetch).mockReset();
   vi.stubGlobal(
     "URL",
@@ -190,7 +191,7 @@ describe("SessionRightSidebar", () => {
     selectTab("Info");
     expect(screen.getByRole("link", { name: "Design" })).toHaveAttribute("href", "/teams/design");
     expect(screen.getByText("private")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Change visibility" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.getByText("Unnamed user \u00b7 orator")).toBeInTheDocument();
     expect(screen.queryByText("user_collaborator")).not.toBeInTheDocument();
     rerender(<Overlay {...props} open isPhone onOpenChange={vi.fn()} />);
@@ -199,9 +200,59 @@ describe("SessionRightSidebar", () => {
     rerender(
       <Overlay {...props} capabilities={FULL_CAPABILITIES} open isPhone onOpenChange={vi.fn()} />
     );
-    expect(screen.queryByRole("button", { name: "Change visibility" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
     expect(screen.queryByText("Unnamed user \u00b7 orator")).not.toBeInTheDocument();
   });
+
+  it.each([true, false])(
+    "dismisses only the visibility dropdown on the first Escape (phone=%s)",
+    async (isPhone) => {
+      const user = userEvent.setup();
+      const onOpenChange = vi.fn();
+      const onReturnFocus = vi.fn();
+      render(
+        <Overlay
+          open
+          isPhone={isPhone}
+          onOpenChange={onOpenChange}
+          onReturnFocus={onReturnFocus}
+          sessionId="session-1"
+          sessionState={sessionState}
+          participants={[]}
+          presenceSynced
+          events={[]}
+          artifacts={[]}
+          onOpenMedia={vi.fn()}
+          capabilities={{ ...FULL_CAPABILITIES, changeVisibility: true }}
+          scope={{
+            ownerTeamId: "team_design",
+            ownerUserId: "user_owner",
+            visibility: "workspace",
+            collaborators: [],
+            onUpdated: vi.fn(),
+          }}
+        />
+      );
+      selectTab("Info");
+      const trigger = screen.getByRole("combobox", { name: "Visibility" });
+      act(() => trigger.focus());
+      await user.keyboard("{Enter}");
+      expect(await screen.findByRole("listbox")).toBeVisible();
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(onReturnFocus).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Session details" })).toBeVisible();
+      expect(trigger).toHaveFocus();
+      expect(trigger).toHaveTextContent("Workspace");
+      expect(browserApiFetch).not.toHaveBeenCalled();
+
+      await user.keyboard("{Escape}");
+      expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+      expect(onReturnFocus).toHaveBeenCalledOnce();
+    }
+  );
 
   it("never mounts private collaborator management on workspace-visible sessions", () => {
     render(
