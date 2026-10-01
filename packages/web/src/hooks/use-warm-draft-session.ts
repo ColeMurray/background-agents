@@ -134,7 +134,10 @@ export function useWarmDraftSession(
             message: code ? `${message} (${code})` : message,
             code,
             status: response.status,
-            terminal: [400, 403, 404, 409].includes(response.status),
+            // Grants can be restored without changing the draft's identity.
+            terminal:
+              code !== "target_team_missing_grant" &&
+              [400, 403, 404, 409].includes(response.status),
           };
           errorRef.current = creationError;
           setError(creationError);

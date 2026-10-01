@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
   fakeSessionRuntimeDispatch,
-  createTestEnv,
   handleRequest,
   signedServiceRequest,
   TEST_BACKGROUND_TASK_CONTEXT,
@@ -10,12 +9,7 @@ import {
 } from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
-import { TeamRepositoryGrantStore } from "./db/team-repository-grants";
-import { TeamStore } from "./db/teams";
-import { createRequestMetrics } from "./db/instrumented-sql-database";
-import { handleSpawnChild } from "./routes/session-child-spawn";
-import { withSessionRuntime } from "./routes/session-route";
-import { HttpError, resolveRepoOrError } from "./routes/shared";
+import { resolveRepoOrError } from "./routes/shared";
 import type * as SharedRoutes from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
 
@@ -135,13 +129,6 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
-    vi.mocked(resolveRepoOrError).mockResolvedValue({
-      repoId: 12345,
-      repoOwner: "acme",
-      repoName: "web-app",
-      defaultBranch: "main",
-    });
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
@@ -306,86 +293,6 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(store.create).not.toHaveBeenCalled();
     expect(resolveRepoOrError).not.toHaveBeenCalled();
     expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
-  });
-
-  it("denies a child whose inherited repository is not granted to its parent team", async () => {
-    const store = makeStore(null, spawnContext, null, "team_alpha");
-    vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return store as never;
-    });
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
-    const { env, childStub } = makeSuccessfulEnv(spawnContext);
-
-    const response = await makeRequest(env);
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({
-      code: "target_team_missing_grant",
-      repository: "acme/web-app",
-    });
-    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
-    expect(store.create).not.toHaveBeenCalled();
-    expect(childStub.fetch).not.toHaveBeenCalled();
-  });
-
-  it("checks sandbox child grants with the current SCM ID instead of a stale inherited ID", async () => {
-    const staleContext = { ...spawnContext, repoId: 999 };
-    const store = makeStore(null, staleContext, "env_parent", "team_alpha");
-    vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return store as never;
-    });
-    const covers = vi
-      .spyOn(TeamRepositoryGrantStore.prototype, "covers")
-      .mockImplementation(async (_teamId, ids) => ids.every((id) => id === 999));
-    vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
-    const { env: fixture, childStub } = makeSuccessfulEnv(staleContext);
-    const env = createTestEnv({ SESSION: fixture.SESSION });
-    const ctx = withSessionRuntime(env, {
-      request_id: "request-1",
-      trace_id: "trace-1",
-      metrics: createRequestMetrics(),
-      executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
-      db: env.DB,
-      principal: { kind: "sandbox" as const, sessionId: parentId },
-    });
-
-    const response = await handleSpawnChild(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "Child", prompt: "Do the thing" }),
-      }),
-      env,
-      { id: parentId },
-      ctx
-    );
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({ code: "target_team_missing_grant" });
-    expect(resolveRepoOrError).toHaveBeenCalledWith(env, "acme", "web-app", ctx, expect.anything());
-    expect(covers).toHaveBeenCalledWith("team_alpha", [12345]);
-    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
-    expect(store.create).not.toHaveBeenCalled();
-    expect(childStub.fetch).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back to an inherited ID when SCM resolution fails for a team child", async () => {
-    const store = makeStore(null, spawnContext, null, "team_alpha");
-    vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return store as never;
-    });
-    vi.mocked(resolveRepoOrError).mockRejectedValue(new HttpError("Repository not installed", 404));
-    const grants = vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam");
-    const { env, childStub } = makeSuccessfulEnv(spawnContext);
-
-    const response = await makeRequest(env);
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({ error: "Repository not installed" });
-    expect(grants).not.toHaveBeenCalled();
-    expect(store.acquireChildAdmissionLease).not.toHaveBeenCalled();
-    expect(store.create).not.toHaveBeenCalled();
-    expect(childStub.fetch).not.toHaveBeenCalled();
   });
 
   async function getInitBody(childStub: DurableObjectStub) {

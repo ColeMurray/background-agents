@@ -123,32 +123,118 @@ describe("useWarmDraftSession", () => {
     expect(result.current.error).toBeNull();
   });
 
-  it("names the missing repository grant and treats the denial as terminal", async () => {
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json(
-        {
-          error: "Target team lacks repository grant",
-          code: "target_team_missing_grant",
-          repository: "group/subgroup/api",
-        },
-        { status: 409 }
+  it("retries the unchanged draft explicitly after a missing repository grant is restored", async () => {
+    let resolveRetry: ((response: Response) => void) | undefined;
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: "Target team lacks repository grant",
+            code: "target_team_missing_grant",
+            repository: "group/subgroup/api",
+          },
+          { status: 409 }
+        )
       )
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveRetry = resolve)));
+    const initial: WarmDraftSessionRequest = {
+      ...request(),
+      repoOwner: "group/subgroup",
+      repoName: "api",
+      teamId: "team-1",
+      visibility: "team",
+    };
+    const { result, rerender } = renderHook(
+      ({ launchRequest }) => useWarmDraftSession(launchRequest),
+      { initialProps: { launchRequest: initial } }
     );
-    const { result } = renderHook(() => useWarmDraftSession({ ...request(), teamId: "team-1" }));
+    const identity = result.current.identity;
     await act(async () => {
-      await result.current.warm();
+      await expect(result.current.warm()).resolves.toBeNull();
     });
     expect(result.current.error).toEqual({
       message:
         "This team has no repository grant for group/subgroup/api. (target_team_missing_grant)",
       code: "target_team_missing_grant",
       status: 409,
-      terminal: true,
+      terminal: false,
     });
-    await act(async () => {
-      await result.current.warm();
-    });
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.isWarming).toBe(false);
+
+    rerender({ launchRequest: { ...initial } });
+    expect(result.current.identity).toBe(identity);
+    expect(result.current.error?.code).toBe("target_team_missing_grant");
     expect(browserApiFetch).toHaveBeenCalledOnce();
+
+    let retries: Promise<string | null>[] = [];
+    act(() => {
+      retries = [result.current.warm(), result.current.warm(), result.current.warm()];
+    });
+    expect(result.current.isWarming).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(browserApiFetch).mock.calls.map(([, options]) => options?.body)).toEqual([
+      JSON.stringify(initial),
+      JSON.stringify(initial),
+    ]);
+
+    resolveRetry?.(Response.json({ sessionId: "retried-session", status: "created" }));
+    await act(async () => {
+      await expect(Promise.all(retries)).resolves.toEqual([
+        "retried-session",
+        "retried-session",
+        "retried-session",
+      ]);
+    });
+    expect(result.current.identity).toBe(identity);
+    expect(result.current.sessionId).toBe("retried-session");
+    expect(result.current.isWarming).toBe(false);
+    expect(result.current.error).toBeNull();
+    await act(async () => {
+      await expect(result.current.warm()).resolves.toBe("retried-session");
+    });
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    expect(retireWarmDraftSession).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a still-missing grant on timers or same-identity renders", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(browserApiFetch).mockImplementation(async () =>
+        Response.json(
+          { error: "Target team lacks repository grant", code: "target_team_missing_grant" },
+          { status: 409 }
+        )
+      );
+      const initial = { ...request(), teamId: "team-1" };
+      const { result, rerender } = renderHook(
+        ({ launchRequest }) => useWarmDraftSession(launchRequest),
+        { initialProps: { launchRequest: initial } }
+      );
+
+      for (const attempts of [1, 2]) {
+        await act(async () => {
+          await expect(result.current.warm()).resolves.toBeNull();
+        });
+        expect(result.current.error).toEqual({
+          message: "Target team lacks repository grant (target_team_missing_grant)",
+          code: "target_team_missing_grant",
+          status: 409,
+          terminal: false,
+        });
+        rerender({ launchRequest: { ...initial } });
+        rerender({ launchRequest: { ...initial } });
+        await act(async () => {
+          await vi.runAllTimersAsync();
+        });
+        expect(browserApiFetch).toHaveBeenCalledTimes(attempts);
+        expect(result.current.sessionId).toBeNull();
+        expect(result.current.isWarming).toBe(false);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores a terminal denial from a superseded request", async () => {

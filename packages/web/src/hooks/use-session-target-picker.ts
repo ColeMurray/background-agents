@@ -96,6 +96,7 @@ export function describeRepository(
 
 /** Render contract for SessionTargetPicker: the target/branch/multi-select controls. */
 export interface SessionTargetPickerProps {
+  /** The visible draft, including an explicit target that cannot currently launch. */
   sessionTarget: SessionTarget | null;
   targetSelectValue: string;
   targetOptions: ComboboxOption[] | ComboboxGroup[];
@@ -109,6 +110,7 @@ export interface SessionTargetPickerProps {
   repos: Repo[];
   loadingRepos: boolean;
   repositoryGrantError: string | null;
+  selectionError: string | null;
 }
 
 /** Launch-facing selection state for the page: warming identity and request construction. */
@@ -172,11 +174,33 @@ export function useSessionTargetPicker({
   const noRepositoryGrants =
     !!teamId && !loadingRepos && !reposError && teamHasRepositoryGrants === false;
   const repositoryGrantError = noRepositoryGrants ? "This team has no repository grants." : null;
-  const { environments, loading: loadingEnvironments } = useEnvironments(teamId);
+  const {
+    environments,
+    loading: loadingEnvironments,
+    error: environmentsError,
+  } = useEnvironments(teamId);
   const [draftTarget, setSessionTarget] = useState<SessionTarget | null>(null);
   const [selectedBranch, updateSelectedBranch] = useState<string>("");
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
+  const [selectionInvalidated, setSelectionInvalidated] = useState(false);
+  const targetCatalogError =
+    draftTarget?.kind === "environment"
+      ? environmentsError
+      : draftTarget?.kind === "repo" || draftTarget?.kind === "repos"
+        ? reposError
+        : null;
+  const explicitTargetUnavailable =
+    hasExplicitSelection &&
+    !!draftTarget &&
+    !loadingRepos &&
+    !loadingEnvironments &&
+    !targetCatalogError &&
+    !targetIsAvailable(draftTarget, repos, environments);
+  const selectionError =
+    selectionInvalidated || explicitTargetUnavailable
+      ? "Your selected target is no longer available. Choose a target again."
+      : null;
   // Never launch a previous team's target before its new catalogs reconcile.
   const sessionTarget =
     !loadingRepos &&
@@ -184,9 +208,12 @@ export function useSessionTargetPicker({
     selectionContext.teamId === teamId &&
     !(teamId && draftTarget?.kind === "none" && !hasExplicitSelection) &&
     (hasExplicitSelection || selectionContext.defaultEnvironmentId === defaultEnvironmentId) &&
+    !selectionError &&
+    !(hasExplicitSelection && targetCatalogError) &&
     targetIsAvailable(draftTarget, repos, environments)
       ? draftTarget
       : null;
+  const pickerTarget = hasExplicitSelection ? draftTarget : sessionTarget;
 
   const selectedRepository =
     sessionTarget?.kind === "repo" ? parseRepositoryFullName(sessionTarget.repoFullName) : null;
@@ -213,20 +240,20 @@ export function useSessionTargetPicker({
 
   // Team defaults win over stored preferences, but never over a draft's explicit choice.
   useEffect(() => {
-    if (loadingRepos || loadingEnvironments || sessionTarget) return;
+    if (loadingRepos || loadingEnvironments) return;
+
+    if (hasExplicitSelection) {
+      // Only a successful catalog can invalidate a choice; restoration never confirms it.
+      if (explicitTargetUnavailable && !selectionInvalidated) setSelectionInvalidated(true);
+      if (!targetCatalogError && selectionContext.teamId !== teamId) {
+        setSelectionContext({ teamId, defaultEnvironmentId });
+      }
+      return;
+    }
+    if (sessionTarget) return;
 
     let nextTarget: SessionTarget | null = null;
-    if (hasExplicitSelection) {
-      if (targetIsAvailable(draftTarget, repos, environments)) nextTarget = draftTarget;
-      else if (draftTarget?.kind === "repos" && !(teamId && reposError)) {
-        nextTarget = {
-          kind: "repos",
-          repoFullNames: draftTarget.repoFullNames.filter((fullName) =>
-            repos.some((repo) => repo.fullName.toLowerCase() === fullName.toLowerCase())
-          ),
-        };
-      }
-    } else if (
+    if (
       defaultEnvironmentId &&
       environments.some((environment) => environment.id === defaultEnvironmentId)
     ) {
@@ -245,7 +272,6 @@ export function useSessionTargetPicker({
         nextTarget = { kind: "repo", repoFullName: repos[0].fullName };
       } else if (!teamId) {
         nextTarget = { kind: "none" };
-        setHasExplicitSelection(false);
       }
     }
     if (!nextTarget) return;
@@ -263,12 +289,15 @@ export function useSessionTargetPicker({
     defaultEnvironmentId,
     draftTarget,
     environments,
+    explicitTargetUnavailable,
     hasExplicitSelection,
     loadingEnvironments,
     loadingRepos,
     repos,
-    reposError,
+    selectionContext.teamId,
+    selectionInvalidated,
     sessionTarget,
+    targetCatalogError,
     teamId,
   ]);
 
@@ -282,7 +311,8 @@ export function useSessionTargetPicker({
   const onTargetSelectValueChange = useCallback(
     (value: string) => {
       setHasExplicitSelection(true);
-      const nextTarget = parseTargetSelectValue(value, sessionTarget);
+      setSelectionInvalidated(false);
+      const nextTarget = parseTargetSelectValue(value, draftTarget);
       setSessionTarget(nextTarget);
       setSelectionContext({ teamId, defaultEnvironmentId });
       if (nextTarget.kind !== "repo") {
@@ -292,12 +322,13 @@ export function useSessionTargetPicker({
       const repo = repos.find((r) => r.fullName === nextTarget.repoFullName);
       if (repo) updateSelectedBranch(repo.defaultBranch);
     },
-    [defaultEnvironmentId, repos, sessionTarget, teamId]
+    [defaultEnvironmentId, draftTarget, repos, teamId]
   );
 
   const onMultiSelectionChange = useCallback(
     (repoFullNames: string[]) => {
       setHasExplicitSelection(true);
+      setSelectionInvalidated(false);
       setSessionTarget({ kind: "repos", repoFullNames });
       setSelectionContext({ teamId, defaultEnvironmentId });
     },
@@ -319,19 +350,22 @@ export function useSessionTargetPicker({
       ? repos.find((r) => r.fullName === sessionTarget.repoFullName)
       : undefined;
   const selectedEnvironment =
-    sessionTarget?.kind === "environment"
-      ? environments.find((environment) => environment.id === sessionTarget.environmentId)
+    pickerTarget?.kind === "environment"
+      ? environments.find((environment) => environment.id === pickerTarget.environmentId)
       : undefined;
   const displayTargetName = (() => {
-    switch (sessionTarget?.kind) {
+    switch (pickerTarget?.kind) {
       case "none":
         return NO_REPOSITORY_LABEL;
       case "repo":
-        return selectedRepo?.name ?? sessionTarget.repoFullName;
+        return (
+          repos.find((repo) => repo.fullName === pickerTarget.repoFullName)?.name ??
+          pickerTarget.repoFullName
+        );
       case "environment":
-        return selectedEnvironment?.name ?? "Environment";
+        return selectedEnvironment?.name ?? `Environment (${pickerTarget.environmentId})`;
       case "repos": {
-        const count = sessionTarget.repoFullNames.length;
+        const count = pickerTarget.repoFullNames.length;
         if (count === 0) return "Select repositories";
         return `${count} ${count === 1 ? "repository" : "repositories"}`;
       }
@@ -385,8 +419,8 @@ export function useSessionTargetPicker({
     configKey: getTargetConfigKey(sessionTarget),
     buildRequestFields,
     pickerProps: {
-      sessionTarget,
-      targetSelectValue: getTargetSelectValue(sessionTarget),
+      sessionTarget: pickerTarget,
+      targetSelectValue: getTargetSelectValue(pickerTarget),
       targetOptions,
       displayTargetName,
       onTargetSelectValueChange,
@@ -398,6 +432,7 @@ export function useSessionTargetPicker({
       repos,
       loadingRepos,
       repositoryGrantError,
+      selectionError,
     },
   };
 }

@@ -260,10 +260,16 @@ async function handleImportEnvironmentSecrets(
     return error(`${srcOwner}/${srcName} is not a member of this environment`, 403);
   }
 
-  // Resolve the source repo_id (rows written before resolution may lack it).
-  let repoId = sourceRepo.repo_id;
-  if (repoId == null) {
-    repoId = (await resolveRepoOrError(env, srcOwner, srcName, ctx, logger)).repoId;
+  const { repoId } = await resolveRepoOrError(env, srcOwner, srcName, ctx, logger);
+  if (sourceRepo.repo_id !== null && sourceRepo.repo_id !== repoId) {
+    return json(
+      {
+        error: "Repository identity changed",
+        code: "repository_identity_mismatch",
+        repository: `${srcOwner}/${srcName}`,
+      },
+      409
+    );
   }
   const denied = await authorizeTeamRepositories(ctx, {
     teamId: environment.owner_team_id,

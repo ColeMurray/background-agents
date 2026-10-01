@@ -243,12 +243,12 @@ describe("useSessionTargetPicker", () => {
     }
   );
 
-  it("does not treat a workspace fallback after a repository choice as an explicit No repository choice", () => {
+  it("does not treat an automatic workspace fallback as an explicit No repository choice", () => {
     mocks.environments.mockReturnValue({ environments: [], loading: false });
     const { result, rerender } = renderHook(({ teamId }) => useSessionTargetPicker({ teamId }), {
       initialProps: { teamId: null as string | null },
     });
-    act(() => result.current.pickerProps.onTargetSelectValueChange("acme/web"));
+    expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
     mocks.repos.mockReturnValue({ repos: [], loading: false });
     rerender({ teamId: null });
     expect(result.current.sessionTarget).toEqual({ kind: "none" });
@@ -264,6 +264,7 @@ describe("useSessionTargetPicker", () => {
       const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
       act(() => result.current.pickerProps.onTargetSelectValueChange(value));
       expect(result.current.isLaunchable).toBe(true);
+      const explicitTarget = result.current.pickerProps.sessionTarget;
       mocks.repos.mockReturnValue({
         repos: [repo()],
         loading: false,
@@ -272,6 +273,9 @@ describe("useSessionTargetPicker", () => {
       rerender();
       expect(result.current.isLaunchable).toBe(false);
       expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.configKey).toBe("");
+      expect(result.current.pickerProps.sessionTarget).toEqual(explicitTarget);
+      expect(result.current.pickerProps.selectionError).toBeNull();
       expect(result.current.repos).toEqual([]);
       expect(result.current.pickerProps.repos).toEqual([]);
       mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
@@ -379,7 +383,7 @@ describe("useSessionTargetPicker", () => {
     });
   });
 
-  it("blocks stale targets while a new team catalog loads and reconciles when it settles", () => {
+  it("blocks an unavailable explicit target instead of falling back when a new team catalog settles", () => {
     const { result, rerender } = renderHook(({ teamId }) => useSessionTargetPicker({ teamId }), {
       initialProps: { teamId: "team-1" },
     });
@@ -390,19 +394,27 @@ describe("useSessionTargetPicker", () => {
     rerender({ teamId: "team-2" });
     expect(result.current.buildRequestFields()).toBeNull();
     expect(result.current.isLaunchable).toBe(false);
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "repo",
+      repoFullName: "acme/web",
+    });
+    expect(result.current.pickerProps.selectionError).toBeNull();
     mocks.repos.mockReturnValue({
       repos: [repo({ fullName: "acme/api", name: "api", defaultBranch: "develop" })],
       loading: false,
     });
     rerender({ teamId: "team-2" });
-    expect(result.current.buildRequestFields()).toEqual({
-      repoOwner: "acme",
-      repoName: "api",
-      branch: "develop",
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.isLaunchable).toBe(false);
+    expect(result.current.configKey).toBe("");
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "repo",
+      repoFullName: "acme/web",
     });
+    expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
   });
 
-  it("removes unavailable repositories from an explicit ad-hoc selection on team change", () => {
+  it("retains the exact explicit ad-hoc selection on team change instead of pruning it", () => {
     mocks.repos.mockReturnValue({
       repos: [repo(), repo({ fullName: "acme/api", name: "api" })],
       loading: false,
@@ -415,9 +427,254 @@ describe("useSessionTargetPicker", () => {
     });
     mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
     rerender({ teamId: "team-2" });
-    expect(result.current.buildRequestFields()).toEqual({
-      repositories: [{ repoOwner: "acme", repoName: "web" }],
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.isLaunchable).toBe(false);
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "repos",
+      repoFullNames: ["acme/web", "acme/api"],
     });
+    expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+  });
+
+  it.each(["repo", "repos", "environment"] as const)(
+    "requires user reselection after an explicit %s target disappears in the same team, even if it returns",
+    (kind) => {
+      const api = repo({ id: 2, fullName: "acme/api", name: "api" });
+      mocks.repos.mockReturnValue({ repos: [repo(), api], loading: false });
+      const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+        initialProps: { teamId: "team-1", defaultEnvironmentId: "env-1" },
+      });
+      act(() => {
+        if (kind === "repos") {
+          result.current.pickerProps.onMultiSelectionChange(["acme/api", "acme/web"]);
+        } else {
+          result.current.pickerProps.onTargetSelectValueChange(
+            kind === "environment" ? "env:env-1" : "acme/web"
+          );
+          if (kind === "repo") result.current.pickerProps.setSelectedBranch("feature");
+        }
+      });
+      const explicitTarget = result.current.pickerProps.sessionTarget;
+      const selectValue = result.current.pickerProps.targetSelectValue;
+      const requestFields = result.current.buildRequestFields();
+
+      mocks.repos.mockReturnValue({ repos: [api], loading: false });
+      mocks.environments.mockReturnValue({
+        environments: [environment({ id: "env-2" })],
+        loading: false,
+      });
+      rerender({ teamId: "team-1", defaultEnvironmentId: "env-2" });
+      expect(result.current.sessionTarget).toBeNull();
+      expect(result.current.isLaunchable).toBe(false);
+      expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.configKey).toBe("");
+      expect(result.current.pickerProps.sessionTarget).toEqual(explicitTarget);
+      expect(result.current.pickerProps.targetSelectValue).toBe(selectValue);
+      expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+      expect(localStorage.getItem("open-inspect-last-selected-repo")).toBe(
+        kind === "repo" ? "acme/web" : "env:env-1"
+      );
+      if (kind === "repo") {
+        expect(result.current.selectedBranch).toBe("feature");
+        expect(result.current.pickerProps.displayTargetName).toBe("acme/web");
+      }
+      if (kind === "environment") {
+        expect(result.current.pickerProps.displayTargetName).toContain("env-1");
+      }
+
+      mocks.repos.mockReturnValue({ repos: [repo(), api], loading: false });
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+      rerender({ teamId: "team-1", defaultEnvironmentId: "env-1" });
+      expect(result.current.isLaunchable).toBe(false);
+      expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.configKey).toBe("");
+      expect(result.current.pickerProps.sessionTarget).toEqual(explicitTarget);
+      expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+      rerender({ teamId: "team-2", defaultEnvironmentId: "env-1" });
+      expect(result.current.isLaunchable).toBe(false);
+
+      act(() => {
+        if (kind === "repos") {
+          result.current.pickerProps.onMultiSelectionChange(["acme/api", "acme/web"]);
+        } else {
+          result.current.pickerProps.onTargetSelectValueChange(selectValue);
+        }
+      });
+      expect(result.current.isLaunchable).toBe(true);
+      expect(result.current.pickerProps.selectionError).toBeNull();
+      expect(result.current.buildRequestFields()).toEqual(
+        kind === "repo" ? { repoOwner: "acme", repoName: "web", branch: "main" } : requestFields
+      );
+    }
+  );
+
+  it("keeps a revoked explicit repository blocked until an explicit No repository choice", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+    act(() => result.current.pickerProps.onTargetSelectValueChange("acme/web"));
+    mocks.repos.mockReturnValue({ repos: [], loading: false, teamHasRepositoryGrants: false });
+    mocks.environments.mockReturnValue({ environments: [], loading: false });
+    rerender();
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "repo",
+      repoFullName: "acme/web",
+    });
+    expect(result.current.repositoryGrantError).toBe("This team has no repository grants.");
+    expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+    act(() => result.current.pickerProps.onTargetSelectValueChange(NO_REPOSITORY_OPTION_VALUE));
+    expect(result.current.pickerProps.selectionError).toBeNull();
+    expect(result.current.buildRequestFields()).toEqual({ repoOwner: null, repoName: null });
+    expect(result.current.repositoryGrantError).toBe("This team has no repository grants.");
+  });
+
+  it.each(["repo", "repos", "environment"] as const)(
+    "preserves an explicit %s target through temporary catalog loading without invalidating it",
+    (kind) => {
+      const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+      act(() => {
+        result.current.pickerProps.onTargetSelectValueChange(
+          kind === "environment"
+            ? "env:env-1"
+            : kind === "repos"
+              ? MULTIPLE_REPOSITORIES_OPTION_VALUE
+              : "acme/web"
+        );
+        if (kind === "repo") result.current.pickerProps.setSelectedBranch("feature");
+      });
+      const explicitTarget = result.current.pickerProps.sessionTarget;
+      const requestFields = result.current.buildRequestFields();
+      mocks.repos.mockReturnValue({ repos: [], loading: true });
+      mocks.environments.mockReturnValue({ environments: [], loading: true });
+      rerender();
+      expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.configKey).toBe("");
+      expect(result.current.pickerProps.sessionTarget).toEqual(explicitTarget);
+      expect(result.current.pickerProps.selectionError).toBeNull();
+      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+      rerender();
+      expect(result.current.buildRequestFields()).toEqual(requestFields);
+      expect(result.current.isLaunchable).toBe(true);
+      expect(result.current.pickerProps.selectionError).toBeNull();
+    }
+  );
+
+  it.each([false, true])(
+    "preserves an explicit environment through catalog errors without launching stale data (cached: %s)",
+    (cached) => {
+      const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+      act(() => result.current.pickerProps.onTargetSelectValueChange("env:env-1"));
+      mocks.environments.mockReturnValue({
+        environments: cached ? [environment()] : [],
+        loading: false,
+        error: new Error("Unavailable"),
+      });
+      rerender();
+      expect(result.current.isLaunchable).toBe(false);
+      expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.configKey).toBe("");
+      expect(result.current.pickerProps.sessionTarget).toEqual({
+        kind: "environment",
+        environmentId: "env-1",
+      });
+      expect(result.current.pickerProps.selectionError).toBeNull();
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+      rerender();
+      expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+      expect(result.current.pickerProps.selectionError).toBeNull();
+    }
+  );
+
+  it.each([false, true])(
+    "does not replace an explicit workspace repository during catalog errors (cached: %s)",
+    (cached) => {
+      const { result, rerender } = renderHook(() => useSessionTargetPicker());
+      act(() => result.current.pickerProps.onTargetSelectValueChange("acme/web"));
+      mocks.repos.mockReturnValue({
+        repos: cached ? [repo()] : [],
+        loading: false,
+        error: new Error("Unavailable"),
+      });
+      rerender();
+      expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.pickerProps.sessionTarget).toEqual({
+        kind: "repo",
+        repoFullName: "acme/web",
+      });
+      expect(result.current.pickerProps.selectionError).toBeNull();
+      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+      rerender();
+      expect(result.current.isLaunchable).toBe(true);
+    }
+  );
+
+  it("treats an explicit branch choice as an explicit target, but not as target reselection", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker());
+    act(() => result.current.pickerProps.setSelectedBranch("feature"));
+    mocks.repos.mockReturnValue({ repos: [], loading: false });
+    rerender();
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.selectedBranch).toBe("feature");
+    expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+    mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+    rerender();
+    act(() => result.current.pickerProps.setSelectedBranch("another-feature"));
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+  });
+
+  it("allows an invalidated multi-repository draft to be explicitly cleared and replaced", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+    act(() => result.current.pickerProps.onMultiSelectionChange(["acme/web"]));
+    mocks.repos.mockReturnValue({
+      repos: [repo({ fullName: "acme/api", name: "api" })],
+      loading: false,
+    });
+    rerender();
+    act(() =>
+      result.current.pickerProps.onTargetSelectValueChange(MULTIPLE_REPOSITORIES_OPTION_VALUE)
+    );
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "repos",
+      repoFullNames: ["acme/web"],
+    });
+    expect(result.current.buildRequestFields()).toBeNull();
+    mocks.repos.mockReturnValue({
+      repos: [repo(), repo({ fullName: "acme/api", name: "api" })],
+      loading: false,
+    });
+    rerender();
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.pickerProps.selectionError).toMatch(/choose a target again/i);
+    act(() => result.current.pickerProps.onMultiSelectionChange([]));
+    expect(result.current.pickerProps.sessionTarget).toEqual({ kind: "repos", repoFullNames: [] });
+    expect(result.current.pickerProps.selectionError).toBeNull();
+    expect(result.current.isLaunchable).toBe(false);
+    act(() => result.current.pickerProps.onMultiSelectionChange(["acme/api"]));
+    expect(result.current.buildRequestFields()).toEqual({
+      repositories: [{ repoOwner: "acme", repoName: "api" }],
+    });
+  });
+
+  it("still reconciles an automatic target when its catalog entry disappears", () => {
+    const { result, rerender } = renderHook(() =>
+      useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
+    );
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    mocks.environments.mockReturnValue({ environments: [], loading: false });
+    rerender();
+    expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
+    mocks.repos.mockReturnValue({
+      repos: [repo({ fullName: "acme/api", name: "api", defaultBranch: "develop" })],
+      loading: false,
+    });
+    rerender();
+    expect(result.current.buildRequestFields()).toEqual({
+      repoOwner: "acme",
+      repoName: "api",
+      branch: "develop",
+    });
+    expect(result.current.pickerProps.selectionError).toBeNull();
   });
 
   it("preserves normalized multi-repository selections when the catalog uses mixed case", () => {
