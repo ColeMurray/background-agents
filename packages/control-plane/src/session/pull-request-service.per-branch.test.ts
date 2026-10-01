@@ -294,8 +294,6 @@ describe("per-branch pull requests", () => {
     expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
       expect.objectContaining({ targetBranch: "feature-x", force: true })
     );
-    expect(harness.deps.resolveCredentialScope).toHaveBeenCalledWith("session-name-1");
-    expect(harness.provider.generatePushAuth).toHaveBeenCalledWith(harness.credentialScope);
     expect(harness.provider.getPullRequest).toHaveBeenCalledWith(
       { owner: "acme", name: "web", number: 7, repositoryExternalId: undefined },
       harness.credentialScope

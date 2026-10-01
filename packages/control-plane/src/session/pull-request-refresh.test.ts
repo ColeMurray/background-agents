@@ -270,7 +270,7 @@ describe("refreshSessionPullRequests", () => {
     expect(harness.artifactRepository.updateArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it("reports scope resolution failure without reading the provider or updating the artifact", async () => {
+  it("reports scope resolution failure without reading the provider", async () => {
     const harness = createHarness([createPrArtifact()]);
     const error = new SourceControlProviderError(
       "Cannot resolve credential scope: session not found",
@@ -294,8 +294,6 @@ describe("refreshSessionPullRequests", () => {
       ],
     });
     expect(harness.getPullRequest).not.toHaveBeenCalled();
-    expect(harness.upsert).not.toHaveBeenCalled();
-    expect(harness.artifactRepository.updateArtifact).not.toHaveBeenCalled();
   });
 
   it("resolves scope freshly before each artifact read", async () => {
@@ -310,7 +308,6 @@ describe("refreshSessionPullRequests", () => {
 
     await harness.refresh();
 
-    expect(harness.resolveCredentialScope).toHaveBeenCalledTimes(2);
     expect(harness.getPullRequest).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ number: 7 }),

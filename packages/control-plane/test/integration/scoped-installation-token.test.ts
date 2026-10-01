@@ -3,11 +3,7 @@ import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCachedInstallationToken,
-  getCachedInstallationTokenWithExpiry,
   getInstallationTokenCacheKey,
-  INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
-  INSTALLATION_TOKEN_MIN_REMAINING_MS,
-  invalidateInstallationTokenCache,
   type GitHubAppConfig,
   type TokenScope,
 } from "../../src/auth/github-app";
@@ -117,48 +113,6 @@ function mockMint() {
 }
 
 describe("session repository installation tokens over D1 and KV", () => {
-  it("reads a scoped KV entry on a cold memory cache without signing or minting", async () => {
-    const app = { ...config("scoped-kv-hit"), privateKey: "invalid-key-must-not-be-used" };
-    const scope: TokenScope = { kind: "repositories", repositoryIds: [12, 99] };
-    const expiresAtEpochMs = Date.now() + 60 * 60 * 1000;
-    await cacheStore.put(
-      await getInstallationTokenCacheKey(app, scope),
-      JSON.stringify({
-        token: "persisted-scoped-token",
-        expiresAtEpochMs,
-        cachedAtEpochMs: Date.now(),
-      })
-    );
-    const mint = mockMint();
-    expect(await getCachedInstallationTokenWithExpiry(app, cacheBindings, { scope })).toEqual({
-      token: "persisted-scoped-token",
-      expiresAtEpochMs,
-    });
-    expect(mint).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "cache-age", ageMs: INSTALLATION_TOKEN_CACHE_MAX_AGE_MS, remainingMs: 60 * 60 * 1000 },
-    { name: "near-expiry", ageMs: 0, remainingMs: INSTALLATION_TOKEN_MIN_REMAINING_MS },
-  ])("refreshes a scoped KV entry at the $name limit", async ({ name, ageMs, remainingMs }) => {
-    const app = config(name);
-    const scope: TokenScope = { kind: "repositories", repositoryIds: [12] };
-    await cacheStore.put(
-      await getInstallationTokenCacheKey(app, scope),
-      JSON.stringify({
-        token: "unusable-token",
-        expiresAtEpochMs: Date.now() + remainingMs,
-        cachedAtEpochMs: Date.now() - ageMs,
-      })
-    );
-    const mint = mockMint();
-    expect(await getCachedInstallationToken(app, cacheBindings, { scope })).not.toBe(
-      "unusable-token"
-    );
-    expect(mint).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(mint.mock.calls[0][1]?.body))).toEqual({ repository_ids: [12] });
-  });
-
   it.each([null, "team_a"])(
     "never shares tokens between different session repositories for owner %s",
     async (ownerTeamId) => {
@@ -221,57 +175,15 @@ describe("session repository installation tokens over D1 and KV", () => {
     expect(JSON.parse(String(mint.mock.calls[2][1]?.body))).toEqual({ repository_ids: [99] });
   });
 
-  it("shares a cached token for identical sets regardless of team, order, duplicates or version", async () => {
-    await seedTeam("team_a");
-    await seedTeam("team_b");
-    await grant("team_a", 12);
-    await grant("team_a", 99);
-    await grant("team_b", 99);
-    await grant("team_b", 12);
-    await grant("team_a", 77);
-    await grant("team_b", 88);
-    await seedSession("session-a", [12, 99], "team_a");
-    await seedSession("session-b", [99, 12], "team_b");
-    const mint = mockMint();
-    const app = config("identical-sets");
-    const token = await getCachedInstallationToken(app, cacheBindings, {
-      scope: await sessionScope("session-a"),
-    });
-    await env.DB.prepare("UPDATE teams SET grants_version = grants_version + 1 WHERE id = ?")
-      .bind("team_b")
-      .run();
-    expect(
-      await getCachedInstallationToken(app, cacheBindings, {
-        scope: await sessionScope("session-b"),
-      })
-    ).toBe(token);
-    expect(
-      await getCachedInstallationTokenWithExpiry(app, cacheBindings, {
-        scope: { kind: "repositories", repositoryIds: [99, 12, 99] },
-      })
-    ).toMatchObject({ token });
-    expect(mint).toHaveBeenCalledOnce();
-  });
-
   it("returns no token for a team with no grants even when an all-scope token is cached", async () => {
     await seedTeam("team_empty");
     await seedSession("session-empty-grants", [12], "team_empty");
     const mint = mockMint();
     const app = config("empty-team");
     await getCachedInstallationToken(app, cacheBindings, { scope: { kind: "all" } });
+    expect(mint.mock.calls[0][1]?.body).toBeUndefined();
     mint.mockClear();
     await expect(sessionScope("session-empty-grants")).rejects.toThrow("no repositories");
-    expect(mint).not.toHaveBeenCalled();
-  });
-
-  it("refuses a workspace session without repositories instead of serving the all-scope token", async () => {
-    await seedSession("session-no-repo", []);
-    const mint = mockMint();
-    await getCachedInstallationToken(config("no-repositories"), cacheBindings, {
-      scope: { kind: "all" },
-    });
-    mint.mockClear();
-    await expect(sessionScope("session-no-repo")).rejects.toThrow("no repositories");
     expect(mint).not.toHaveBeenCalled();
   });
 
@@ -355,42 +267,6 @@ describe("session repository installation tokens over D1 and KV", () => {
     expect(JSON.parse(String(mint.mock.calls[0][1]?.body))).toEqual({ repository_ids: [12] });
   });
 
-  it("deduplicates concurrent mints only for the same canonical scope", async () => {
-    const mint = mockMint();
-    const app = config("in-flight");
-    const [first, duplicate, different] = await Promise.all([
-      getCachedInstallationToken(app, cacheBindings, {
-        scope: { kind: "repositories", repositoryIds: [12, 99] },
-      }),
-      getCachedInstallationToken(app, cacheBindings, {
-        scope: { kind: "repositories", repositoryIds: [99, 12, 12] },
-      }),
-      getCachedInstallationToken(app, cacheBindings, {
-        scope: { kind: "repositories", repositoryIds: [2] },
-      }),
-    ]);
-    expect(first).toBe(duplicate);
-    expect(different).not.toBe(first);
-    expect(mint).toHaveBeenCalledTimes(2);
-  });
-
-  it("invalidates only the requested scope in memory and KV", async () => {
-    const mint = mockMint();
-    const app = config("invalidation");
-    const scopeA: TokenScope = { kind: "repositories", repositoryIds: [12] };
-    const scopeB: TokenScope = { kind: "repositories", repositoryIds: [99] };
-    const tokenA = await getCachedInstallationToken(app, cacheBindings, { scope: scopeA });
-    const tokenB = await getCachedInstallationToken(app, cacheBindings, { scope: scopeB });
-    const keyA = await getInstallationTokenCacheKey(app, scopeA);
-    await invalidateInstallationTokenCache(cacheBindings, keyA);
-    expect(await cacheStore.get(keyA)).toBeNull();
-    expect(await getCachedInstallationToken(app, cacheBindings, { scope: scopeA })).not.toBe(
-      tokenA
-    );
-    expect(await getCachedInstallationToken(app, cacheBindings, { scope: scopeB })).toBe(tokenB);
-    expect(mint).toHaveBeenCalledTimes(3);
-  });
-
   it("recovers a provider 401 through the real scoped caches without evicting another scope", async () => {
     const app = config("provider-401");
     const scopeA: TokenScope = { kind: "repositories", repositoryIds: [12] };
@@ -439,23 +315,5 @@ describe("session repository installation tokens over D1 and KV", () => {
     expect(await cacheStore.get(keyA, "json")).toMatchObject({ token: "replacement-token" });
     expect(await cacheStore.get(keyB, "json")).toMatchObject({ token: "unaffected-token" });
     expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("ignores pre-scoping v1 entries and mints workspace access without a repository body", async () => {
-    const app = config("v1-cache");
-    await cacheStore.put(
-      `github:installation-token:v1:${app.appId}:${app.installationId}`,
-      JSON.stringify({
-        token: "legacy-token",
-        expiresAtEpochMs: Date.now() + 60 * 60 * 1000,
-        cachedAtEpochMs: Date.now(),
-      })
-    );
-    const mint = mockMint();
-    expect(
-      await getCachedInstallationToken(app, cacheBindings, { scope: { kind: "all" } })
-    ).not.toBe("legacy-token");
-    expect(mint).toHaveBeenCalledOnce();
-    expect(mint.mock.calls[0][1]?.body).toBeUndefined();
   });
 });

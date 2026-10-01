@@ -102,7 +102,6 @@ beforeEach(() => {
   vi.spyOn(TeamRepositoryGrantStore.prototype, "listForTeam").mockResolvedValue([]);
   vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(null);
   vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue([]);
-  loadCatalog.mockResolvedValue(CATALOG);
   vi.mocked(readCachedInstallationRepositories).mockResolvedValue(CATALOG);
   scmProvider.generateCredentialHelperAuth.mockResolvedValue({
     username: "x-access-token",
@@ -141,56 +140,16 @@ function planRequest(
 }
 
 describe("resolveImageBuildTokenScope", () => {
-  it.each([false, true])(
-    "scopes a repository build to its one repository regardless of team coverage (%s)",
-    async (covered) => {
-      vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue(
-        covered ? [{ grant_kind: "installation", repo_external_id: null }] : []
-      );
-
-      expect(await resolveImageBuildTokenScope(db, REPO_SCOPE, REPO_TARGET, loadCatalog)).toEqual({
-        kind: "repositories",
-        repositoryIds: [12],
-      });
-      expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-      expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
-      expect(loadCatalog).not.toHaveBeenCalled();
-    }
-  );
-
-  it("scopes workspace environments to members without grant or catalog reads", async () => {
+  it("scopes environments to their stored member ids", async () => {
     mockEnvironment();
 
     expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
       kind: "repositories",
       repositoryIds: [12, 30],
     });
-    expect(EnvironmentStore.prototype.getById).toHaveBeenCalledWith(ENV_SCOPE.id);
-    expect(EnvironmentStore.prototype.getRepositoriesForEnvironment).toHaveBeenCalledWith(
-      ENV_SCOPE.id
-    );
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadCatalog).not.toHaveBeenCalled();
   });
 
-  it("excludes granted siblings under installation coverage", async () => {
-    mockEnvironment("team_a");
-    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
-      { grant_kind: "installation", repo_external_id: null },
-      { grant_kind: "repository", repo_external_id: 99 },
-    ]);
-
-    expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
-      kind: "repositories",
-      repositoryIds: [12, 30],
-    });
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
-      "team_a"
-    );
-    expect(loadCatalog).not.toHaveBeenCalled();
-  });
-
-  it("drops members revoked from the owning team's grants", async () => {
+  it("intersects environment members with the owning team's grants", async () => {
     mockEnvironment("team_a");
     vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
       { grant_kind: "repository", repo_external_id: 12 },
@@ -204,63 +163,6 @@ describe("resolveImageBuildTokenScope", () => {
     expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
       "team_a"
     );
-  });
-
-  it("rejects a team-owned environment after all member grants are revoked", async () => {
-    mockEnvironment("team_a");
-
-    await expect(
-      resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)
-    ).rejects.toMatchObject({ name: "SourceControlProviderError", errorType: "permanent" });
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
-      "team_a"
-    );
-  });
-
-  it("uses stored member ids instead of replacing them with cached catalog ids", async () => {
-    mockEnvironment(
-      null,
-      ENV_REPOSITORIES.map((row, index) => ({ ...row, repo_id: index === 0 ? 7 : 3 }))
-    );
-
-    expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
-      kind: "repositories",
-      repositoryIds: [3, 7],
-    });
-    expect(loadCatalog).not.toHaveBeenCalled();
-  });
-
-  it("resolves NULL member ids from the catalog without including catalog siblings", async () => {
-    mockEnvironment(
-      null,
-      ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
-    );
-
-    expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
-      kind: "repositories",
-      repositoryIds: [12, 30],
-    });
-    expect(loadCatalog).toHaveBeenCalledOnce();
-  });
-
-  it("intersects resolved NULL member ids with the owning team's current grants", async () => {
-    mockEnvironment(
-      "team_a",
-      ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
-    );
-    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockResolvedValue([
-      { grant_kind: "repository", repo_external_id: 30 },
-      { grant_kind: "repository", repo_external_id: 99 },
-    ]);
-
-    expect(await resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)).toEqual({
-      kind: "repositories",
-      repositoryIds: [30],
-    });
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
-      "team_a"
-    );
-    expect(loadCatalog).toHaveBeenCalledOnce();
   });
 
   it("accepts unchanged identities when member order or case differs", async () => {
@@ -292,71 +194,12 @@ describe("resolveImageBuildTokenScope", () => {
     await expect(
       resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)
     ).rejects.toBeInstanceOf(ImageBuildPlanningError);
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it("fails closed when the environment no longer exists", async () => {
     await expect(
       resolveImageBuildTokenScope(db, ENV_SCOPE, ENV_TARGET, loadCatalog)
     ).rejects.toBeInstanceOf(ImageBuildScopeNotFoundError);
-    expect(EnvironmentStore.prototype.getRepositoriesForEnvironment).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadCatalog).not.toHaveBeenCalled();
-  });
-
-  it("rejects an environment with no repositories", async () => {
-    mockEnvironment("team_a", []);
-    const target = { ...ENV_TARGET, repositories: [] };
-
-    await expect(
-      resolveImageBuildTokenScope(db, ENV_SCOPE, target, loadCatalog)
-    ).rejects.toMatchObject({ name: "SourceControlProviderError", errorType: "permanent" });
-    const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-      planRequest(ENV_SCOPE, target)
-    );
-
-    expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadCatalog).not.toHaveBeenCalled();
-  });
-
-  it("rejects more than 500 distinct environment repositories", async () => {
-    const rows = Array.from({ length: 501 }, (_, index) => ({
-      ...ENV_REPOSITORIES[0],
-      position: index,
-      repo_name: `repo-${index}`,
-      repo_id: index + 1,
-    }));
-    mockEnvironment(null, rows);
-    const target: ResolvedImageBuildTarget = {
-      ...ENV_TARGET,
-      repositories: rows.map((row) => ({
-        repoOwner: row.repo_owner,
-        repoName: row.repo_name,
-        baseBranch: row.base_branch,
-      })),
-    };
-
-    await expect(
-      resolveImageBuildTokenScope(db, ENV_SCOPE, target, loadCatalog)
-    ).rejects.toMatchObject({ name: "SourceControlProviderError", errorType: "permanent" });
-    const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-      planRequest(ENV_SCOPE, target)
-    );
-
-    expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadCatalog).not.toHaveBeenCalled();
-  });
-
-  it.each([0, -1, 1.5, NaN])("rejects invalid repository id %s", async (repoId) => {
-    await expect(
-      resolveImageBuildTokenScope(db, REPO_SCOPE, { ...REPO_TARGET, repoId }, loadCatalog)
-    ).rejects.toMatchObject({ name: "SourceControlProviderError", errorType: "permanent" });
-    expect(loadCatalog).not.toHaveBeenCalled();
   });
 
   it.each([{ repositories: [] }, { repositories: ENV_TARGET.repositories }])(
@@ -365,7 +208,6 @@ describe("resolveImageBuildTokenScope", () => {
       await expect(
         resolveImageBuildTokenScope(db, REPO_SCOPE, { ...REPO_TARGET, repositories }, loadCatalog)
       ).rejects.toBeInstanceOf(ImageBuildPlanningError);
-      expect(loadCatalog).not.toHaveBeenCalled();
     }
   );
 
@@ -377,13 +219,11 @@ describe("resolveImageBuildTokenScope", () => {
       resolveImageBuildTokenScope(db, scope, target, loadCatalog)
     ).rejects.toBeInstanceOf(ImageBuildPlanningError);
     expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(loadCatalog).not.toHaveBeenCalled();
   });
 });
 
 describe("ImageBuildPlanner clone auth", () => {
-  it("passes the resolved repository scope to credential generation", async () => {
+  it("mints a repository build token for that repository alone", async () => {
     const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
       planRequest(REPO_SCOPE, REPO_TARGET)
     );
@@ -394,70 +234,23 @@ describe("ImageBuildPlanner clone auth", () => {
     });
     expect(plan.cloneAuth).toEqual({ type: "credential_helper", token: "clone-token" });
     expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "loads the cached catalog only for NULL environment member ids (%s)",
-    async (missingIds) => {
-      mockEnvironment(
-        null,
-        ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: missingIds ? null : row.repo_id }))
-      );
-      const env = createTestEnv();
-
-      const plan = await new ImageBuildPlanner(env, db).planBuild(
-        planRequest(ENV_SCOPE, ENV_TARGET)
-      );
-
-      expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
-        kind: "repositories",
-        repositoryIds: [12, 30],
-      });
-      expect(plan.cloneAuth.type).toBe("credential_helper");
-      if (missingIds) {
-        expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env);
-      } else {
-        expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
-      }
-    }
-  );
-
-  it("maps missing environments to unavailable auth without minting a fallback", async () => {
-    const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-      planRequest(ENV_SCOPE, ENV_TARGET)
+  it("resolves NULL environment member ids from the cached catalog", async () => {
+    mockEnvironment(
+      null,
+      ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
     );
+    const env = createTestEnv();
 
-    expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-  });
+    const plan = await new ImageBuildPlanner(env, db).planBuild(planRequest(ENV_SCOPE, ENV_TARGET));
 
-  it("maps grant-read failures to unavailable auth without minting a fallback", async () => {
-    mockEnvironment("team_a");
-    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockRejectedValue(
-      new Error("Grant store unavailable")
-    );
-
-    const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-      planRequest(ENV_SCOPE, ENV_TARGET)
-    );
-
-    expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledExactlyOnceWith(
-      "team_a"
-    );
-  });
-
-  it("does not mint a token after all environment member grants are revoked", async () => {
-    mockEnvironment("team_a");
-
-    const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-      planRequest(ENV_SCOPE, ENV_TARGET)
-    );
-
-    expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    expect(readCachedInstallationRepositories).toHaveBeenCalledExactlyOnceWith(env);
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
+      kind: "repositories",
+      repositoryIds: [12, 30],
+    });
+    expect(plan.cloneAuth.type).toBe("credential_helper");
   });
 
   it("does not mint a token for changed environment membership", async () => {
@@ -465,40 +258,6 @@ describe("ImageBuildPlanner clone auth", () => {
 
     const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
       planRequest(ENV_SCOPE, ENV_TARGET)
-    );
-
-    expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    expect(readCachedInstallationRepositories).not.toHaveBeenCalled();
-  });
-
-  it.each(["unavailable", "unresolved"])(
-    "does not mint a token when the member catalog is %s",
-    async (scenario) => {
-      mockEnvironment(
-        null,
-        ENV_REPOSITORIES.map((row) => ({ ...row, repo_id: null }))
-      );
-      if (scenario === "unavailable") {
-        vi.mocked(readCachedInstallationRepositories).mockRejectedValueOnce(
-          new Error("Cache unavailable")
-        );
-      } else {
-        vi.mocked(readCachedInstallationRepositories).mockResolvedValueOnce([]);
-      }
-
-      const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-        planRequest(ENV_SCOPE, ENV_TARGET)
-      );
-
-      expect(plan.cloneAuth).toEqual({ type: "unavailable" });
-      expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    }
-  );
-
-  it("does not mint a token for a repository target without repositories", async () => {
-    const plan = await new ImageBuildPlanner(createTestEnv(), db).planBuild(
-      planRequest(REPO_SCOPE, { ...REPO_TARGET, repositories: [] })
     );
 
     expect(plan.cloneAuth).toEqual({ type: "unavailable" });

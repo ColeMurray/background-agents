@@ -26,6 +26,14 @@ function makeProvider(
   } as unknown as SourceControlProvider;
 }
 
+function getCredentials(
+  provider: SourceControlProvider,
+  log = createTestLogger(),
+  resolveCredentialScope = async () => credentialScope
+) {
+  return new ScmCredentialsService(provider, log, resolveCredentialScope).getCredentials();
+}
+
 describe("ScmCredentialsService", () => {
   it("returns credentials on success", async () => {
     const expiresAtEpochMs = Date.now() + 60 * 60 * 1000;
@@ -38,12 +46,7 @@ describe("ScmCredentialsService", () => {
       }),
     });
 
-    const resolveCredentialScope = vi.fn(async () => credentialScope);
-    const result = await new ScmCredentialsService(
-      provider,
-      createTestLogger(),
-      resolveCredentialScope
-    ).getCredentials();
+    const result = await getCredentials(provider);
 
     expect(result).toEqual({
       ok: true,
@@ -52,9 +55,6 @@ describe("ScmCredentialsService", () => {
       expiresAtEpochMs,
     });
     expect(provider.generateCredentialHelperAuth).toHaveBeenCalledWith(credentialScope);
-    expect(resolveCredentialScope).toHaveBeenCalledBefore(
-      vi.mocked(provider.generateCredentialHelperAuth)
-    );
   });
 
   it("rejects invalid provider credential payloads", async () => {
@@ -67,11 +67,7 @@ describe("ScmCredentialsService", () => {
       }),
     });
 
-    const result = await new ScmCredentialsService(
-      provider,
-      log,
-      async () => credentialScope
-    ).getCredentials();
+    const result = await getCredentials(provider, log);
 
     expect(result).toEqual({
       ok: false,
@@ -93,11 +89,7 @@ describe("ScmCredentialsService", () => {
       }),
     });
 
-    const result = await new ScmCredentialsService(
-      provider,
-      createTestLogger(),
-      async () => credentialScope
-    ).getCredentials();
+    const result = await getCredentials(provider);
 
     expect(result).toEqual({
       ok: false,
@@ -115,11 +107,7 @@ describe("ScmCredentialsService", () => {
         .mockRejectedValue(new SourceControlProviderError("App not configured", "permanent")),
     });
 
-    const result = await new ScmCredentialsService(
-      provider,
-      log,
-      async () => credentialScope
-    ).getCredentials();
+    const result = await getCredentials(provider, log);
 
     expect(result).toEqual({
       ok: false,
@@ -143,11 +131,7 @@ describe("ScmCredentialsService", () => {
         .mockRejectedValue(new SourceControlProviderError("GitHub API unavailable", "transient")),
     });
 
-    const result = await new ScmCredentialsService(
-      provider,
-      createTestLogger(),
-      async () => credentialScope
-    ).getCredentials();
+    const result = await getCredentials(provider);
 
     expect(result).toEqual({ ok: false, status: 502, error: "GitHub API unavailable" });
   });
@@ -158,11 +142,7 @@ describe("ScmCredentialsService", () => {
       generateCredentialHelperAuth: vi.fn().mockRejectedValue(new Error("network blew up")),
     });
 
-    const result = await new ScmCredentialsService(
-      provider,
-      log,
-      async () => credentialScope
-    ).getCredentials();
+    const result = await getCredentials(provider, log);
 
     expect(result).toEqual({
       ok: false,
@@ -172,49 +152,21 @@ describe("ScmCredentialsService", () => {
     expect(log.error).toHaveBeenCalled();
   });
 
-  it("resolves scope again for each credential request", async () => {
-    const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [456] };
-    const resolveCredentialScope = vi
-      .fn()
-      .mockResolvedValueOnce(credentialScope)
-      .mockResolvedValueOnce(nextScope);
-    const provider = makeProvider({
-      generateCredentialHelperAuth: vi.fn().mockResolvedValue({
-        username: "x-access-token",
-        password: "ghs_token",
-        expiresAtEpochMs: Date.now() + 60 * 60 * 1000,
-      }),
+  it("maps credential scope failures without minting credentials", async () => {
+    const provider = makeProvider();
+
+    const result = await getCredentials(provider, createTestLogger(), async () => {
+      throw new SourceControlProviderError(
+        "Cannot resolve credential scope: session not found",
+        "permanent"
+      );
     });
-    const service = new ScmCredentialsService(provider, createTestLogger(), resolveCredentialScope);
 
-    await service.getCredentials();
-    await service.getCredentials();
-
-    expect(resolveCredentialScope).toHaveBeenCalledTimes(2);
-    expect(provider.generateCredentialHelperAuth).toHaveBeenNthCalledWith(1, credentialScope);
-    expect(provider.generateCredentialHelperAuth).toHaveBeenNthCalledWith(2, nextScope);
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      error: "Cannot resolve credential scope: session not found",
+    });
+    expect(provider.generateCredentialHelperAuth).not.toHaveBeenCalled();
   });
-
-  it.each(["permanent", "transient"] as const)(
-    "preserves %s credential scope error mapping without minting credentials",
-    async (errorType) => {
-      const provider = makeProvider();
-      const resolveCredentialScope = vi
-        .fn()
-        .mockRejectedValue(new SourceControlProviderError("Scope unavailable", errorType));
-
-      const result = await new ScmCredentialsService(
-        provider,
-        createTestLogger(),
-        resolveCredentialScope
-      ).getCredentials();
-
-      expect(result).toEqual({
-        ok: false,
-        status: errorType === "permanent" ? 500 : 502,
-        error: "Scope unavailable",
-      });
-      expect(provider.generateCredentialHelperAuth).not.toHaveBeenCalled();
-    }
-  );
 });

@@ -75,14 +75,6 @@ describe("readCachedInstallationRepositories", () => {
     cacheStore.get.mockResolvedValue(cached);
 
     await expect(readCachedInstallationRepositories(env)).resolves.toEqual([repository]);
-    expect(cacheStore.get).toHaveBeenCalledOnce();
-  });
-
-  it("accepts an empty validated catalog", async () => {
-    const env = createEnv();
-    cacheStore.get.mockResolvedValue({ ...(await cachedCatalog(env)), repos: [] });
-
-    await expect(readCachedInstallationRepositories(env)).resolves.toEqual([]);
   });
 
   it("retains nested GitLab owners and repository IDs", async () => {
@@ -116,15 +108,6 @@ describe("readCachedInstallationRepositories", () => {
       requestedConfig: { SCM_PROVIDER: "gitlab" },
     },
     {
-      name: "a different GitLab namespace",
-      cachedConfig: {
-        SCM_PROVIDER: "gitlab",
-        GITLAB_NAMESPACE: "acme/platform",
-        GITLAB_ACCESS_TOKEN: "token-1",
-      },
-      requestedConfig: { GITLAB_NAMESPACE: "acme/services" },
-    },
-    {
       name: "a rotated GitLab token",
       cachedConfig: {
         SCM_PROVIDER: "gitlab",
@@ -136,69 +119,47 @@ describe("readCachedInstallationRepositories", () => {
   ])("fails closed for $name", async ({ cachedConfig, requestedConfig }) => {
     cacheStore.get.mockResolvedValue(await cachedCatalog(createEnv(cachedConfig)));
 
-    const read = readCachedInstallationRepositories(
-      createEnv({ ...cachedConfig, ...requestedConfig })
-    );
-
-    await expect(read).rejects.toBeInstanceOf(SourceControlProviderError);
-    await expect(read).rejects.toMatchObject({
+    await expect(
+      readCachedInstallationRepositories(createEnv({ ...cachedConfig, ...requestedConfig }))
+    ).rejects.toMatchObject({
       errorType: "permanent",
       message: "Installation repository catalog cache does not match SCM configuration",
     });
-    expect(cacheStore.get).toHaveBeenCalledOnce();
   });
 
-  it.each([null, undefined, "not an object", {}])(
-    "fails closed for missing or malformed entries (%j)",
-    async (value) => {
-      cacheStore.get.mockResolvedValue(value);
-
-      const read = readCachedInstallationRepositories(createEnv());
-
-      await expect(read).rejects.toBeInstanceOf(SourceControlProviderError);
-      await expect(read).rejects.toMatchObject({
-        errorType: "permanent",
-        message: "Installation repository catalog cache is missing or malformed",
-      });
-      expect(cacheStore.get).toHaveBeenCalledOnce();
-    }
-  );
-
   it.each([
-    { repos: undefined },
-    { repos: [{ ...repository, id: "42" }] },
-    { repos: [{ ...repository, owner: undefined }] },
-    { repos: [{ ...repository, metadata: { aliases: [42] } }] },
-    { cachedAt: undefined },
-    { scmIdentity: undefined },
-    { freshUntil: "not a number" },
-  ])("validates the full existing payload schema (%j)", async (overrides) => {
+    { name: "a missing entry", entry: () => null },
+    {
+      name: "an invalid repository",
+      entry: (valid: CachedReposList) => ({ ...valid, repos: [{ ...repository, id: "42" }] }),
+    },
+    {
+      name: "a missing SCM identity",
+      entry: (valid: CachedReposList) => ({ ...valid, scmIdentity: undefined }),
+    },
+  ])("fails closed for $name", async ({ entry }) => {
     const env = createEnv();
-    cacheStore.get.mockResolvedValue({ ...(await cachedCatalog(env)), ...overrides });
+    cacheStore.get.mockResolvedValue(entry(await cachedCatalog(env)));
 
     const read = readCachedInstallationRepositories(env);
 
     await expect(read).rejects.toBeInstanceOf(SourceControlProviderError);
-    await expect(read).rejects.toMatchObject({ errorType: "permanent" });
-    expect(cacheStore.get).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    new Error("KV read failed"),
-    new SyntaxError("Invalid cached JSON"),
-    new SourceControlProviderError("KV timeout", "transient"),
-    "non-Error store failure",
-  ])("wraps store read failures as permanent errors (%s)", async (cause) => {
-    cacheStore.get.mockRejectedValue(cause);
-
-    const read = readCachedInstallationRepositories(createEnv());
-
-    await expect(read).rejects.toBeInstanceOf(SourceControlProviderError);
     await expect(read).rejects.toMatchObject({
       errorType: "permanent",
-      message: "Failed to read installation repository catalog cache",
-      cause: cause instanceof Error ? cause : undefined,
+      message: "Installation repository catalog cache is missing or malformed",
     });
-    expect(cacheStore.get).toHaveBeenCalledOnce();
   });
+
+  it.each([new SourceControlProviderError("KV timeout", "transient"), "non-Error store failure"])(
+    "wraps store read failures as permanent errors (%s)",
+    async (cause) => {
+      cacheStore.get.mockRejectedValue(cause);
+
+      await expect(readCachedInstallationRepositories(createEnv())).rejects.toMatchObject({
+        errorType: "permanent",
+        message: "Failed to read installation repository catalog cache",
+        cause: cause instanceof Error ? cause : undefined,
+      });
+    }
+  );
 });

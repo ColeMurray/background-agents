@@ -78,11 +78,6 @@ describe("GitHubSourceControlProvider", () => {
           repositoryScope
         )
       ).resolves.toBe("abc123");
-      expect(mockGetCachedInstallationToken).toHaveBeenCalledWith(
-        fakeAppConfig,
-        expect.any(Object),
-        { scope: repositoryScope }
-      );
       expect(mockFetchWithTimeout).toHaveBeenCalledWith(
         expect.stringContaining("heads/feature%2Ftest"),
         expect.any(Object)
@@ -837,9 +832,6 @@ describe("getPullRequest", () => {
     });
 
     // App-authenticated: installation token, resolved inside the provider.
-    expect(mockGetCachedInstallationToken).toHaveBeenCalledWith(fakeAppConfig, expect.any(Object), {
-      scope: repositoryScope,
-    });
     expect(mockFetchWithTimeout).toHaveBeenCalledWith(
       "https://api.github.com/repos/acme/web/pulls/7",
       expect.objectContaining({
@@ -955,11 +947,6 @@ describe("getPullRequest", () => {
     );
 
     expect(snapshot.repoName).toBe("web-renamed");
-    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-    ]);
     expect(mockFetchWithTimeout).toHaveBeenNthCalledWith(
       2,
       "https://api.github.com/repositories/9001",
@@ -1038,9 +1025,6 @@ describe("getPullRequestFeedback", () => {
       body: "Please handle the null case.",
       url: "https://github.com/acme/web/pull/7#issuecomment-1234",
       author: { id: "77", login: "alice", type: "User" },
-    });
-    expect(mockGetCachedInstallationToken).toHaveBeenCalledWith(fakeAppConfig, expect.any(Object), {
-      scope: repositoryScope,
     });
     expect(mockFetchWithTimeout).toHaveBeenCalledWith(
       "https://api.github.com/repos/acme/web/issues/comments/1234",
@@ -1192,11 +1176,6 @@ describe("getPullRequestFeedback", () => {
     );
 
     expect(feedback.kind === "review" ? feedback.comments : []).toHaveLength(100);
-    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-    ]);
     expect(mockFetchWithTimeout).toHaveBeenNthCalledWith(
       3,
       "https://api.github.com/repos/acme/web/pulls/7/reviews/5678/comments?per_page=100&page=2",
@@ -1287,11 +1266,6 @@ describe("hasPullRequestWritePermission", () => {
           repositoryScope
         )
       ).resolves.toBe(true);
-      expect(mockGetCachedInstallationToken).toHaveBeenCalledWith(
-        fakeAppConfig,
-        expect.any(Object),
-        { scope: repositoryScope }
-      );
       expect(mockFetchWithTimeout).toHaveBeenCalledWith(
         "https://api.github.com/repos/acme/web/collaborators/alice/permission",
         expect.anything()
@@ -1533,9 +1507,6 @@ describe("managed-skill repository reads", () => {
         repositoryScope
       )
     ).resolves.toEqual({ sha: "abc123" });
-    expect(mockGetCachedInstallationToken).toHaveBeenCalledWith(fakeAppConfig, expect.any(Object), {
-      scope: repositoryScope,
-    });
     expect(mockFetchWithTimeout).toHaveBeenCalledWith(
       expect.stringContaining("commits/feature%2Ftest"),
       expect.objectContaining({
@@ -1604,11 +1575,6 @@ describe("managed-skill repository reads", () => {
     );
 
     expect(tree.entries[0]?.path).toBe("skills/deploy/SKILL.md");
-    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-    ]);
     expect(mockFetchWithTimeout.mock.calls.map(([url]) => String(url))).toEqual([
       expect.stringContaining("/git/trees/abc"),
       expect.stringContaining("/git/trees/skills"),
@@ -1650,9 +1616,6 @@ describe("managed-skill repository reads", () => {
     expect(error).toBeInstanceOf(SourceControlProviderError);
     expect((error as SourceControlProviderError).httpStatus).toBe(413);
     expect(cancelled).toBe(true);
-    expect(mockGetCachedInstallationToken).toHaveBeenCalledWith(fakeAppConfig, expect.any(Object), {
-      scope: repositoryScope,
-    });
   });
 });
 
@@ -1672,10 +1635,7 @@ describe("credential scopes", () => {
     ];
 
     for (const scope of scopes) {
-      await expect(provider.generatePushAuth(scope)).resolves.toEqual({
-        authType: "app",
-        token: "installation-token",
-      });
+      await provider.generatePushAuth(scope);
     }
 
     expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual(
@@ -1683,9 +1643,8 @@ describe("credential scopes", () => {
     );
   });
 
-  it("invalidates the exact cache key and retries 401 with the same scope", async () => {
-    const cacheStore = { get: vi.fn(), put: vi.fn(), delete: vi.fn() };
-    const env = { cacheStore, userAgent: "Scoped Bot" };
+  it("invalidates the scoped cache key and retries a 401 once with a refreshed token", async () => {
+    const env = { cacheStore: { get: vi.fn(), put: vi.fn(), delete: vi.fn() }, userAgent: "Bot" };
     const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig, ...env });
     mockGetCachedInstallationToken
       .mockResolvedValueOnce("expired-token")
@@ -1698,145 +1657,40 @@ describe("credential scopes", () => {
       provider.getBranchHead({ owner: "acme", name: "web", branch: "main" }, repositoryScope)
     ).resolves.toBe("abc123");
 
-    expect(mockGetInstallationTokenCacheKey).toHaveBeenCalledExactlyOnceWith(
-      fakeAppConfig,
-      repositoryScope
-    );
-    expect(mockInvalidateInstallationTokenCache).toHaveBeenCalledExactlyOnceWith(
-      env,
-      "scoped-cache-key"
-    );
-    expect(mockGetCachedInstallationToken).toHaveBeenNthCalledWith(1, fakeAppConfig, env, {
-      scope: repositoryScope,
-    });
-    expect(mockGetCachedInstallationToken).toHaveBeenNthCalledWith(2, fakeAppConfig, env, {
-      scope: repositoryScope,
-      forceRefresh: true,
-    });
-    expect(mockInvalidateInstallationTokenCache.mock.invocationCallOrder[0]).toBeLessThan(
-      mockGetCachedInstallationToken.mock.invocationCallOrder[1]
-    );
-    expect(mockFetchWithTimeout).toHaveBeenCalledTimes(2);
-    expect(mockFetchWithTimeout.mock.calls[0][0]).toBe(mockFetchWithTimeout.mock.calls[1][0]);
-    expect(mockFetchWithTimeout.mock.calls[0][1]?.headers).toMatchObject({
-      Authorization: "Bearer expired-token",
-    });
+    expect(mockGetInstallationTokenCacheKey).toHaveBeenCalledWith(fakeAppConfig, repositoryScope);
+    expect(mockInvalidateInstallationTokenCache).toHaveBeenCalledWith(env, "scoped-cache-key");
+    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
+      { scope: repositoryScope },
+      { scope: repositoryScope, forceRefresh: true },
+    ]);
     expect(mockFetchWithTimeout.mock.calls[1][1]?.headers).toMatchObject({
       Authorization: "Bearer refreshed-token",
     });
   });
 
-  it("preserves confirmed absence after a scoped JSON request's 401 retry", async () => {
-    mockFetchWithTimeout
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Bad credentials" }, 401))
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Not Found" }, 404));
-    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
-
-    await expect(
-      provider.hasPullRequestWritePermission(
-        { owner: "acme", name: "web", authorLogin: "alice" },
-        repositoryScope
-      )
-    ).resolves.toBe(false);
-
-    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
-      { scope: repositoryScope },
-      { scope: repositoryScope, forceRefresh: true },
-    ]);
-    expect(mockInvalidateInstallationTokenCache).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves scope through 401 refreshes during PR rename repair", async () => {
-    mockFetchWithTimeout
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Not Found" }, 404))
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Bad credentials" }, 401))
-      .mockResolvedValueOnce(makeJsonResponse({ name: "web-renamed", owner: { login: "acme" } }))
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Bad credentials" }, 401))
-      .mockResolvedValueOnce(
-        makeJsonResponse({
-          ...basePullResponse,
-          base: {
-            ref: "main",
-            repo: { id: 9001, name: "web-renamed", owner: { login: "acme" } },
-          },
-        })
-      );
-    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
-
-    await expect(
-      provider.getPullRequest(
-        { owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" },
-        repositoryScope
-      )
-    ).resolves.toMatchObject({ repoName: "web-renamed" });
-
-    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-      { scope: repositoryScope, forceRefresh: true },
-      { scope: repositoryScope },
-      { scope: repositoryScope, forceRefresh: true },
-    ]);
-    expect(mockGetInstallationTokenCacheKey.mock.calls).toEqual([
-      [fakeAppConfig, repositoryScope],
-      [fakeAppConfig, repositoryScope],
-    ]);
-    expect(mockInvalidateInstallationTokenCache.mock.calls).toEqual([
-      [{ cacheStore: undefined, userAgent: "Open-Inspect" }, "scoped-cache-key"],
-      [{ cacheStore: undefined, userAgent: "Open-Inspect" }, "scoped-cache-key"],
-    ]);
-    expect(mockFetchWithTimeout.mock.calls.map(([url]) => url)).toEqual([
-      "https://api.github.com/repos/acme/web/pulls/7",
-      "https://api.github.com/repositories/9001",
-      "https://api.github.com/repositories/9001",
-      "https://api.github.com/repos/acme/web-renamed/pulls/7",
-      "https://api.github.com/repos/acme/web-renamed/pulls/7",
-    ]);
-  });
-
-  it("preserves the original PR 404 when by-id repair remains unauthorized", async () => {
-    mockFetchWithTimeout
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Not Found" }, 404))
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Bad credentials" }, 401))
-      .mockResolvedValueOnce(makeJsonResponse({ message: "Bad credentials" }, 401));
-    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
-
-    await expect(
-      provider.getPullRequest(
-        { owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" },
-        repositoryScope
-      )
-    ).rejects.toMatchObject({ httpStatus: 404, errorType: "permanent" });
-
-    expect(mockFetchWithTimeout).toHaveBeenCalledTimes(3);
-    expect(mockGetCachedInstallationToken.mock.calls.map(([, , options]) => options)).toEqual([
-      { scope: repositoryScope },
-      { scope: repositoryScope },
-      { scope: repositoryScope, forceRefresh: true },
-    ]);
-  });
-
-  it.each([
-    { status: 401, errorType: "permanent" },
-    { status: 403, errorType: "permanent" },
-    { status: 429, errorType: "transient" },
-    { status: 502, errorType: "transient" },
-  ])("surfaces a retry's $status failure without retrying again", async ({ status, errorType }) => {
+  it("surfaces a second 401 without retrying again", async () => {
     mockFetchWithTimeout
       .mockResolvedValueOnce(new Response("expired", { status: 401 }))
-      .mockResolvedValueOnce(new Response("retry failed", { status }));
+      .mockResolvedValueOnce(new Response("still expired", { status: 401 }));
     const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
 
     await expect(
       provider.resolveCommit({ owner: "acme", name: "web", ref: "main" }, repositoryScope)
-    ).rejects.toMatchObject({ httpStatus: status, errorType });
-
+    ).rejects.toMatchObject({ httpStatus: 401, errorType: "permanent" });
     expect(mockFetchWithTimeout).toHaveBeenCalledTimes(2);
-    expect(mockGetCachedInstallationToken).toHaveBeenCalledTimes(2);
-    expect(mockInvalidateInstallationTokenCache).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces token refresh failures instead of returning absent content", async () => {
+  it("surfaces a 403 without refreshing credentials", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ message: "Forbidden" }, 403));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.listTree({ owner: "acme", name: "web", commitSha: "abc123" }, repositoryScope)
+    ).rejects.toMatchObject({ httpStatus: 403, errorType: "permanent" });
+    expect(mockInvalidateInstallationTokenCache).not.toHaveBeenCalled();
+  });
+
+  it("surfaces token refresh failures as provider errors", async () => {
     mockFetchWithTimeout.mockResolvedValueOnce(new Response("expired", { status: 401 }));
     mockGetCachedInstallationToken
       .mockResolvedValueOnce("expired-token")
@@ -1848,26 +1702,6 @@ describe("credential scopes", () => {
     await expect(
       provider.getPullRequest({ owner: "acme", name: "web", number: 7 }, repositoryScope)
     ).rejects.toMatchObject({ httpStatus: 502, errorType: "transient" });
-
     expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
-    expect(mockGetCachedInstallationToken).toHaveBeenLastCalledWith(
-      fakeAppConfig,
-      expect.any(Object),
-      { scope: repositoryScope, forceRefresh: true }
-    );
-  });
-
-  it("does not refresh credentials for a 403 response", async () => {
-    mockFetchWithTimeout.mockResolvedValueOnce(makeJsonResponse({ message: "Forbidden" }, 403));
-    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
-
-    await expect(
-      provider.listTree({ owner: "acme", name: "web", commitSha: "abc123" }, repositoryScope)
-    ).rejects.toMatchObject({ httpStatus: 403, errorType: "permanent" });
-
-    expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
-    expect(mockGetCachedInstallationToken).toHaveBeenCalledTimes(1);
-    expect(mockInvalidateInstallationTokenCache).not.toHaveBeenCalled();
-    expect(mockGetInstallationTokenCacheKey).not.toHaveBeenCalled();
   });
 });

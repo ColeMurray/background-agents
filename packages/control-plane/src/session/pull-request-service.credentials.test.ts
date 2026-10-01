@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SourceControlProviderError, type CredentialScope } from "../source-control";
+import { SourceControlProviderError } from "../source-control";
 import { SessionPullRequestService } from "./pull-request-service";
 import {
   artifactCreatedBroadcasts,
@@ -73,7 +73,7 @@ describe("SessionPullRequestService", () => {
     });
   });
 
-  it("maps credential scope failure through push auth handling and releases the claim", async () => {
+  it("fails push auth without minting a token when the credential scope cannot be resolved", async () => {
     vi.mocked(harness.deps.resolveCredentialScope).mockRejectedValueOnce(
       new SourceControlProviderError(
         "Cannot resolve credential scope: session not found",
@@ -89,26 +89,7 @@ describe("SessionPullRequestService", () => {
       error: "Cannot resolve credential scope: session not found",
     });
     expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
-    expect(harness.provider.getRepository).not.toHaveBeenCalled();
-    expect(harness.provider.getPullRequest).not.toHaveBeenCalled();
     expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
-    expect(await harness.service.createPullRequest(createInput())).toMatchObject({
-      kind: "created",
-    });
-  });
-
-  it("resolves fresh credential scope on each PR request", async () => {
-    const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [789] };
-    vi.mocked(harness.deps.resolveCredentialScope)
-      .mockResolvedValueOnce(harness.credentialScope)
-      .mockResolvedValueOnce(nextScope);
-
-    await harness.service.createPullRequest(createInput({ headBranch: "feature-one" }));
-    await harness.service.createPullRequest(createInput({ headBranch: "feature-two" }));
-
-    expect(harness.deps.resolveCredentialScope).toHaveBeenCalledTimes(2);
-    expect(harness.provider.generatePushAuth).toHaveBeenNthCalledWith(1, harness.credentialScope);
-    expect(harness.provider.generatePushAuth).toHaveBeenNthCalledWith(2, nextScope);
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {

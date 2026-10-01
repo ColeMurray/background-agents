@@ -61,6 +61,11 @@ function config(): GitHubAppConfig {
   return { appId: "cache-test-app", installationId: "cache-test-installation", privateKey };
 }
 
+/** Config whose key cannot sign, proving a request was served without minting. */
+function cacheOnlyConfig(): GitHubAppConfig {
+  return { ...config(), privateKey: "invalid-key-must-not-be-used" };
+}
+
 function tokenEntry(token: string) {
   return JSON.stringify({
     token,
@@ -69,41 +74,120 @@ function tokenEntry(token: string) {
   });
 }
 
-describe("installation token memory cache", () => {
-  it("evicts old scopes at the memory bound and reuses their persistent entries", async () => {
-    const cacheStore = new FakeCacheStore();
-    const app = { ...config(), privateKey: "invalid-key-must-not-be-used" };
-    const firstScope: TokenScope = { kind: "repositories", repositoryIds: [1] };
-    const firstKey = await auth.getInstallationTokenCacheKey(app, firstScope);
-    expect(auth.INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES).toBeGreaterThan(0);
-    for (let id = 1; id <= auth.INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES + 1; id++) {
-      const scope: TokenScope = { kind: "repositories", repositoryIds: [id] };
-      const key = await auth.getInstallationTokenCacheKey(app, scope);
-      await cacheStore.put(key, tokenEntry(`token-${id}`));
-      await auth.getCachedInstallationToken(app, { cacheStore }, { scope });
-    }
-    await cacheStore.put(firstKey, tokenEntry("persisted-replacement"));
-    const fetchMock = vi.spyOn(globalThis, "fetch");
-    expect(await auth.getCachedInstallationToken(app, { cacheStore }, { scope: firstScope })).toBe(
-      "persisted-replacement"
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
+function mintResponse(token = "fresh-token") {
+  return Response.json({ token, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
+}
+
+describe("installation token scopes", () => {
+  it("shares a cache key across permuted or duplicated ids and separates every other scope", async () => {
+    const key = (scope: TokenScope, app = config()) =>
+      auth.getInstallationTokenCacheKey(app, scope);
+    const canonical = await key({ kind: "repositories", repositoryIds: [30, 2, 30] });
+    expect(await key({ kind: "repositories", repositoryIds: [2, 30] })).toBe(canonical);
+
+    const others = await Promise.all([
+      key({ kind: "repositories", repositoryIds: [2] }),
+      key({ kind: "repositories", repositoryIds: [2, 30, 99] }),
+      key({ kind: "all" }),
+      key({ kind: "repositories", repositoryIds: [2, 30] }, { ...config(), appId: "other-app" }),
+      key(
+        { kind: "repositories", repositoryIds: [2, 30] },
+        { ...config(), installationId: "other-installation" }
+      ),
+    ]);
+    expect(new Set([canonical, ...others]).size).toBe(others.length + 1);
   });
 
-  it("refreshes an unusable memory entry instead of returning token material past its cache age", async () => {
+  it("mints repository scopes with their canonical ids and installation scopes without a body", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => mintResponse());
+    await auth.getCachedInstallationToken(config(), undefined, {
+      scope: { kind: "repositories", repositoryIds: [30, 2, 30] },
+    });
+    await auth.getCachedInstallationToken(config(), undefined, { scope: { kind: "all" } });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [[, scoped], [, all]] = fetchMock.mock.calls;
+    expect(new Headers(scoped?.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(scoped?.body))).toEqual({ repository_ids: [2, 30] });
+    expect(all?.body).toBeUndefined();
+  });
+
+  it("refuses an empty repository scope before reading the cache or minting", async () => {
     const cacheStore = new FakeCacheStore();
-    const app = { ...config(), privateKey: "invalid-key-must-not-be-used" };
+    const get = vi.spyOn(cacheStore, "get");
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(
+      auth.getCachedInstallationToken(
+        config(),
+        { cacheStore },
+        { scope: { kind: "repositories", repositoryIds: [] } }
+      )
+    ).rejects.toThrow("no repositories");
+    expect(get).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("installation token memory cache", () => {
+  it("evicts the least recently used scope at the memory bound", async () => {
+    const cacheStore = new FakeCacheStore();
+    const app = cacheOnlyConfig();
+    const scope = (id: number): TokenScope => ({ kind: "repositories", repositoryIds: [id] });
+    const read = (id: number) =>
+      auth.getCachedInstallationToken(app, { cacheStore }, { scope: scope(id) });
+    const max = auth.INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES;
+    for (let id = 1; id <= max + 1; id++) {
+      await cacheStore.put(
+        await auth.getInstallationTokenCacheKey(app, scope(id)),
+        tokenEntry(`token-${id}`)
+      );
+      await read(id);
+      // Touch the first scope so the second becomes least recently used.
+      if (id === max) await read(1);
+    }
+    for (const id of [1, 2]) {
+      await cacheStore.put(
+        await auth.getInstallationTokenCacheKey(app, scope(id)),
+        tokenEntry("replaced")
+      );
+    }
+
+    expect(await read(1)).toBe("token-1");
+    expect(await read(2)).toBe("replaced");
+  });
+
+  it("serves memory hits until the cache max age, then rereads the persistent cache", async () => {
+    const cacheStore = new FakeCacheStore();
+    const app = cacheOnlyConfig();
     const scope: TokenScope = { kind: "all" };
     const key = await auth.getInstallationTokenCacheKey(app, scope);
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
     await cacheStore.put(key, tokenEntry("old-token"));
     expect(await auth.getCachedInstallationToken(app, { cacheStore }, { scope })).toBe("old-token");
-    now += auth.INSTALLATION_TOKEN_CACHE_MAX_AGE_MS / 2;
+    await cacheStore.put(key, tokenEntry("new-token"));
     expect(await auth.getCachedInstallationToken(app, { cacheStore }, { scope })).toBe("old-token");
-    now += auth.INSTALLATION_TOKEN_CACHE_MAX_AGE_MS / 2;
+    now += auth.INSTALLATION_TOKEN_CACHE_MAX_AGE_MS;
     await cacheStore.put(key, tokenEntry("new-token"));
     expect(await auth.getCachedInstallationToken(app, { cacheStore }, { scope })).toBe("new-token");
+  });
+
+  it("drops the memory and persistent entries on invalidation", async () => {
+    const cacheStore = new FakeCacheStore();
+    const app = cacheOnlyConfig();
+    const scope: TokenScope = { kind: "all" };
+    const key = await auth.getInstallationTokenCacheKey(app, scope);
+    await cacheStore.put(key, tokenEntry("rejected-token"));
+    expect(await auth.getCachedInstallationToken(app, { cacheStore }, { scope })).toBe(
+      "rejected-token"
+    );
+
+    await auth.invalidateInstallationTokenCache({ cacheStore }, key);
+    expect(cacheStore.entries.has(key)).toBe(false);
+    await cacheStore.put(key, tokenEntry("replacement-token"));
+    expect(await auth.getCachedInstallationToken(app, { cacheStore }, { scope })).toBe(
+      "replacement-token"
+    );
   });
 });
 
@@ -129,12 +213,7 @@ describe("installation token refresh single-flight", () => {
         cleanup?.();
       });
     });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      Response.json({
-        token: "fresh-token",
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      })
-    );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => mintResponse());
     const first = auth.getCachedInstallationToken(app, { cacheStore }, { scope });
     await selected.promise;
     const forced = auth.getCachedInstallationToken(
@@ -155,10 +234,7 @@ describe("installation token refresh single-flight", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       started.resolve();
       await release.promise;
-      return Response.json({
-        token: "fresh-token",
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      });
+      return mintResponse();
     });
     const scope: TokenScope = { kind: "all" };
     const first = auth.getCachedInstallationToken(config(), undefined, {
@@ -171,7 +247,6 @@ describe("installation token refresh single-flight", () => {
       forceRefresh: true,
     });
     const third = auth.getCachedInstallationToken(config(), undefined, { scope });
-    await Promise.resolve();
     release.resolve();
     expect(await Promise.all([first, second, third])).toEqual([
       "fresh-token",
@@ -181,17 +256,14 @@ describe("installation token refresh single-flight", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps active refresh work registered during invalidation", async () => {
+  it("keeps an in-flight mint registered when the scope is invalidated", async () => {
     const cacheStore = new FakeCacheStore();
     const started = deferred<void>();
     const release = deferred<void>();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       started.resolve();
       await release.promise;
-      return Response.json({
-        token: "fresh-token",
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      });
+      return mintResponse();
     });
     const app = config();
     const scope: TokenScope = { kind: "all" };
@@ -210,7 +282,6 @@ describe("installation token refresh single-flight", () => {
       { cacheStore },
       { scope, forceRefresh: true }
     );
-    await Promise.resolve();
     release.resolve();
     expect(await Promise.all([first, second])).toEqual(["fresh-token", "fresh-token"]);
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -225,12 +296,7 @@ describe("installation token refresh single-flight", () => {
       await releaseRead.promise;
       return JSON.parse(tokenEntry("rejected-token"));
     });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      Response.json({
-        token: "fresh-token",
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      })
-    );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => mintResponse());
     const app = config();
     const scope: TokenScope = { kind: "all" };
     const first = auth.getCachedInstallationToken(app, { cacheStore }, { scope });
@@ -254,12 +320,7 @@ describe("installation token refresh single-flight", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new Error("network failure"))
-      .mockResolvedValueOnce(
-        Response.json({
-          token: "fresh-token",
-          expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        })
-      );
+      .mockResolvedValueOnce(mintResponse());
     await expect(
       auth.getCachedInstallationToken(config(), undefined, { scope, forceRefresh: true })
     ).rejects.toThrow("network failure");
@@ -267,45 +328,5 @@ describe("installation token refresh single-flight", () => {
       "fresh-token"
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("mints only once when concurrent provider requests recover from a 401", async () => {
-    const { GitHubSourceControlProvider } =
-      await import("../source-control/providers/github-provider");
-    const cacheStore = new FakeCacheStore();
-    const app = config();
-    const scope: TokenScope = { kind: "all" };
-    await cacheStore.put(
-      await auth.getInstallationTokenCacheKey(app, scope),
-      tokenEntry("rejected-token")
-    );
-    const started = deferred<void>();
-    const release = deferred<void>();
-    let mints = 0;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      if (String(input).endsWith("/access_tokens")) {
-        mints++;
-        started.resolve();
-        await release.promise;
-        return Response.json({
-          token: "fresh-token",
-          expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        });
-      }
-      if (new Headers(init?.headers).get("Authorization") === "Bearer rejected-token") {
-        return new Response("Unauthorized", { status: 401 });
-      }
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fresh-token");
-      return Response.json({ object: { sha: "branch-head" } });
-    });
-    const provider = new GitHubSourceControlProvider({ appConfig: app, cacheStore });
-    const target = { owner: "acme", name: "web", branch: "main" };
-    const first = provider.getBranchHead(target, scope);
-    const second = provider.getBranchHead(target, scope);
-    await started.promise;
-    release.resolve();
-    expect(await Promise.all([first, second])).toEqual(["branch-head", "branch-head"]);
-    expect(mints).toBe(1);
-    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });

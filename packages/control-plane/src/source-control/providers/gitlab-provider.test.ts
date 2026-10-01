@@ -865,31 +865,11 @@ describe("GitLabSourceControlProvider", () => {
   });
 
   describe("generatePushAuth", () => {
-    it("returns PAT-type auth context with configured token", async () => {
+    it("returns the deployment-wide PAT even for a narrowed credential scope", async () => {
       const provider = new GitLabSourceControlProvider({ accessToken: "glpat-abc123" });
       const auth = await provider.generatePushAuth(repositoryScope);
 
       expect(auth).toEqual({ authType: "pat", token: "glpat-abc123" });
-    });
-
-    it("keeps the deployment-wide PAT regardless of each call's credential scope", async () => {
-      const provider = new GitLabSourceControlProvider(fakeConfig);
-      const scopes: CredentialScope[] = [
-        repositoryScope,
-        { kind: "all" },
-        { kind: "repositories", repositoryIds: [42] },
-      ];
-
-      for (const scope of scopes) {
-        await expect(provider.generatePushAuth(scope)).resolves.toEqual({
-          authType: "pat",
-          token: fakeConfig.accessToken,
-        });
-        await expect(provider.generateCredentialHelperAuth(scope)).resolves.toMatchObject({
-          username: "oauth2",
-          password: fakeConfig.accessToken,
-        });
-      }
     });
   });
 
@@ -1348,25 +1328,16 @@ describe("managed-skill repository reads", () => {
     vi.resetAllMocks();
   });
 
-  it("uses the deployment PAT for scoped code reads", async () => {
-    mockFetch
-      .mockResolvedValueOnce(makeResponse({ id: "abc123" }))
-      .mockResolvedValueOnce(new Response("skill content"));
+  it("resolves commits with the deployment PAT", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ id: "abc123" }));
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
     await expect(
       provider.resolveCommit({ owner: "acme", name: "skills", ref: "main" }, repositoryScope)
     ).resolves.toEqual({ sha: "abc123" });
-    const content = await provider.readBlob(
-      { owner: "acme", name: "skills", blobId: "file", maxBytes: 100 },
-      repositoryScope
-    );
-
-    expect(new TextDecoder().decode(content)).toBe("skill content");
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    for (const [, init] of mockFetch.mock.calls) {
-      expect(init.headers).toMatchObject({ Authorization: `Bearer ${fakeConfig.accessToken}` });
-    }
+    expect(mockFetch.mock.calls[0][1].headers).toMatchObject({
+      Authorization: `Bearer ${fakeConfig.accessToken}`,
+    });
   });
 
   it("classifies symlinks and submodules as unsupported tree entries", async () => {

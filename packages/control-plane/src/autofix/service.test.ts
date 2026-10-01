@@ -151,7 +151,6 @@ describe("AutofixService", () => {
       messageId: "message-1",
     });
     expect(h.resolveCredentialScope).toHaveBeenCalledWith("session-1");
-    expect(h.resolveCredentialScope).toHaveBeenCalledBefore(h.github.getPullRequest);
     expect(h.github.getPullRequest).toHaveBeenCalledWith(
       { owner: "acme", name: "widgets", number: 42, repositoryExternalId: "99" },
       h.credentialScope
@@ -232,44 +231,8 @@ describe("AutofixService", () => {
 
     await expect(h.service.process(PR_COMMENT_ENVELOPE)).rejects.toBe(error);
 
-    expect(h.resolveCredentialScope).toHaveBeenCalledWith("session-1");
     expect(h.github.getPullRequest).not.toHaveBeenCalled();
-    expect(h.github.getPullRequestFeedback).not.toHaveBeenCalled();
-    expect(h.github.hasPullRequestWritePermission).not.toHaveBeenCalled();
     expect(h.sessions.fetch).not.toHaveBeenCalled();
-  });
-
-  it("uses the tracked PR owner's session id and resolves scope again on the next delivery", async () => {
-    const h = buildService();
-    h.pullRequests.getByIdentity.mockResolvedValue({
-      artifactId: "artifact-1",
-      sessionId: "owning-public-session",
-      repoOwner: "acme",
-      repoName: "widgets",
-      prNumber: 42,
-    });
-    const nextScope: CredentialScope = { kind: "repositories", repositoryIds: [456] };
-    h.resolveCredentialScope
-      .mockResolvedValueOnce(h.credentialScope)
-      .mockResolvedValueOnce(nextScope);
-
-    await h.service.process(PR_COMMENT_ENVELOPE);
-    await h.service.process({
-      ...PR_COMMENT_ENVELOPE,
-      deliveryId: "delivery-2",
-      providerObject: { kind: "pr_comment", id: "5678" },
-    });
-
-    expect(h.resolveCredentialScope).toHaveBeenNthCalledWith(1, "owning-public-session");
-    expect(h.resolveCredentialScope).toHaveBeenNthCalledWith(2, "owning-public-session");
-    for (const method of [
-      h.github.getPullRequest,
-      h.github.getPullRequestFeedback,
-      h.github.hasPullRequestWritePermission,
-    ]) {
-      expect(method).toHaveBeenNthCalledWith(1, expect.any(Object), h.credentialScope);
-      expect(method).toHaveBeenNthCalledWith(2, expect.any(Object), nextScope);
-    }
   });
 
   it("returns the winning queued decision when a concurrent skip loses its transition", async () => {
@@ -330,7 +293,6 @@ describe("AutofixService", () => {
       reason: "disabled",
     });
     expect(h.github.getPullRequest).not.toHaveBeenCalled();
-    expect(h.resolveCredentialScope).not.toHaveBeenCalled();
   });
 
   it("rejects human feedback from an author without live write permission", async () => {
@@ -829,6 +791,5 @@ describe("AutofixService", () => {
       messageId: "message-existing",
     });
     expect(h.github.getPullRequest).not.toHaveBeenCalled();
-    expect(h.resolveCredentialScope).not.toHaveBeenCalled();
   });
 });

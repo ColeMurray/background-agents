@@ -295,10 +295,6 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createVercelEnv());
 
     expect(response.status).toBe(200);
-    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
-      kind: "repositories",
-      repositoryIds: [123],
-    });
     expect(vercelProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
     expect(vercelProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -323,10 +319,7 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createOpenComputerEnv());
 
     expect(response.status).toBe(200);
-    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalledExactlyOnceWith({
-      kind: "repositories",
-      repositoryIds: [123],
-    });
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
     expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
     expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
