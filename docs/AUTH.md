@@ -201,11 +201,11 @@ supported. The setting does not migrate or hide existing `ownerTeamId: null` wor
 
 Team leads and workspace Owners/Administrators manage repository grants in the team's Repositories
 tab or through `/teams/:id/repository-grants`. Team members and workspace Owners/Administrators can
-read the grants. A team can have installation-wide access or named grants by SCM repository ID;
-creating a team does not grant repository access. Repository-backed team sessions without covering
-grants are refused with `target_team_missing_grant`. Repository-less team sessions do not need
-grants. Removing a grant advances the team's grant version and leaves existing repository references
-intact; grants do not yet narrow or revoke sandbox installation tokens.
+read the grants. A team can have either installation-wide access or named grants by SCM repository
+ID, but not both. Creating a team does not grant repository access. Repository-backed team sessions
+without covering grants are refused with `target_team_missing_grant`. Repository-less team sessions
+do not need grants. Removing a grant advances the team's grant version and leaves existing
+repository references intact; grants do not yet narrow or revoke sandbox installation tokens.
 
 Repository skills, repository secrets, and repository image builds remain workspace-level resources;
 grants do not assign them to an owning team. They keep their existing permission checks when no team
