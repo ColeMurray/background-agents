@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SourceControlModule from "../source-control";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import type { Env } from "../types";
+import { SecretDecryptionError } from "../db/scoped-secrets";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { repoImageBuildScope, type ImageBuildScope } from "./model";
@@ -128,6 +129,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
   secretsStores.global.mockResolvedValue({});
+  secretsStores.team.mockResolvedValue({});
   secretsStores.repo.mockResolvedValue({});
   secretsStores.environment.mockResolvedValue({});
 });
@@ -378,6 +380,41 @@ describe("loadScopeBuildSecrets", () => {
     });
     expect(secretsStores.team).toHaveBeenCalledWith("team_build");
     expect(merged).toEqual({ SHARED: "environment", GLOBAL_TEAM: "team" });
+  });
+
+  it.each([new SecretDecryptionError("SHARED"), new Error("Team secrets storage unavailable")])(
+    "aborts a team-owned build when its team layer fails: %s",
+    async (failure) => {
+      secretsStores.global.mockResolvedValue({ SHARED: "global" });
+      secretsStores.team.mockRejectedValue(failure);
+      secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
+      const db = fakeDb({ environment: { id: "env_1", owner_team_id: "team_build" } });
+
+      await expect(
+        loadScopeBuildSecrets(encryptedEnv(db), db, ENV_SCOPE, {
+          kind: "environment",
+          repositories: [],
+          repositoriesFingerprint: "fp-env",
+        })
+      ).rejects.toBe(failure);
+
+      expect(secretsStores.team).toHaveBeenCalledWith("team_build");
+      expect(secretsStores.environment).not.toHaveBeenCalled();
+    }
+  );
+
+  it("accepts a readable empty team layer without dropping other scopes", async () => {
+    secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_ONLY: "global" });
+    secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
+    const db = fakeDb({ environment: { id: "env_1", owner_team_id: "team_build" } });
+    expect(
+      await loadScopeBuildSecrets(encryptedEnv(db), db, ENV_SCOPE, {
+        kind: "environment",
+        repositories: [],
+        repositoriesFingerprint: "fp-env",
+      })
+    ).toEqual({ SHARED: "environment", GLOBAL_ONLY: "global" });
+    expect(secretsStores.team).toHaveBeenCalledWith("team_build");
   });
 
   it("never loads a team layer for repository-shared images", async () => {

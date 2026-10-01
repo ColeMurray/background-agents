@@ -332,20 +332,12 @@ async function loadScopeSecretSources(
   switch (target.kind) {
     case "environment": {
       const environment = await new EnvironmentStore(db).getById(scope.id);
-      let teamSecrets: Record<string, string> = {};
-      if (environment?.owner_team_id) {
-        try {
-          teamSecrets = await new TeamSecretsStore(db, encryptionKey).getDecryptedSecrets(
+      // Team credentials must not silently fall back to lower-precedence scopes.
+      const teamSecrets = environment?.owner_team_id
+        ? await new TeamSecretsStore(db, encryptionKey).getDecryptedSecrets(
             environment.owner_team_id
-          );
-        } catch (e) {
-          logger.warn("image_build.team_secrets_failed", {
-            error: errorMessage(e),
-            scope_kind: scope.kind,
-            scope_id: scope.id,
-          });
-        }
-      }
+          )
+        : {};
       let environmentSecrets: Record<string, string> = {};
       try {
         environmentSecrets = await new EnvironmentSecretsStore(

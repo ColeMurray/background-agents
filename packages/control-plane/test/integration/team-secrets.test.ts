@@ -107,6 +107,23 @@ describe("team secret resolution", () => {
     expect(vars?.TEAM_B_ONLY).toBe("b");
   });
 
+  it("rejects corrupt team ciphertext instead of building with lower-precedence secrets", async () => {
+    await env.DB.prepare(
+      "UPDATE team_secrets SET encrypted_value = ? WHERE team_id = ? AND key = ?"
+    )
+      .bind("corrupt-team-secret", TEAM_A, "GLOBAL_TEAM")
+      .run();
+
+    await expect(
+      loadScopeBuildSecrets(
+        createCloudflareEnv(env),
+        env.DB,
+        { kind: "environment", id: ENV_ID },
+        { kind: "environment", repositories: [], repositoriesFingerprint: "test-env" }
+      )
+    ).rejects.toThrow("Failed to decrypt secret 'GLOBAL_TEAM'");
+  });
+
   it("adds the environment owner's team to builds but never to repository-shared builds", async () => {
     const appEnv = createCloudflareEnv(env);
     expect(

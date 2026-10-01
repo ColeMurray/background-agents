@@ -14,7 +14,8 @@ secret changes atomically supersede affected environment images. After the datab
 best-effort rebuild scheduling is attempted for enabled team-owned environments; enumeration or
 trigger failures may leave no rebuild request. Team-owned environment images require matching
 session ownership. Team-only legacy OAuth refresh tokens do not enable managed authentication; API
-keys remain usable.
+keys remain usable. Team-secret read and decryption errors abort environment builds rather than
+falling back to other secret scopes.
 
 ### Fixed
 
