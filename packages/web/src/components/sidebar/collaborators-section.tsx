@@ -6,7 +6,8 @@ import { useSessionCollaboratorCandidates } from "@/hooks/use-session-collaborat
 import { updateSessionScope } from "@/lib/session-scope";
 import { Button } from "../ui/button";
 import { ErrorBanner } from "../ui/error-banner";
-import { UserIdentity, UserIdentityPicker, userDisplayName } from "../user-identity";
+import { UserIdentity, UserIdentityPicker } from "../user-identity";
+import { userDisplayName } from "../user-identity-utils";
 import { CollapsibleSection } from "./collapsible-section";
 
 export interface CollaboratorsSectionProps {
