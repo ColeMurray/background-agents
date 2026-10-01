@@ -321,7 +321,6 @@ describe("useSidebarSessions", () => {
   });
 
   it.each([
-    { path: "/api/sessions/s1/scope" as const, method: "PUT" as const },
     { path: "/api/sessions/s1/visibility" as const, method: "PUT" as const },
     { path: "/api/sessions/s1/collaborators/user" as const, method: "DELETE" as const },
   ])("clears all retained pages before lists refresh after $path", async ({ path, method }) => {
@@ -424,7 +423,12 @@ describe("useSidebarSessions", () => {
         return {
           ...sidebar,
           updateScope: () =>
-            updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, async () => {}, config),
+            updateSessionScope(
+              "/api/sessions/s1/visibility",
+              { method: "PUT" },
+              async () => {},
+              config
+            ),
         };
       },
       { wrapper: wrapper(fetcher) }

@@ -202,7 +202,7 @@ describe("scoped inbox", () => {
             id: "workspace-root",
             ownerTeamId: null,
             visibility: "workspace",
-            capabilities: expect.objectContaining({ canRead: true, canMove: false }),
+            capabilities: expect.objectContaining({ canRead: true }),
           }),
           descendantSessions: [
             expect.objectContaining({
@@ -211,7 +211,6 @@ describe("scoped inbox", () => {
               visibility: "team",
               capabilities: expect.objectContaining({
                 canRead: true,
-                canMove: true,
                 canManageCollaborators: true,
               }),
             }),

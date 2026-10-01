@@ -16,7 +16,7 @@ import type { Env } from "../types";
 export const DEFAULT_AUDIT_EVENT_LIMIT = 25;
 const MAX_AUDIT_EVENT_LIMIT = 100;
 
-export const auditEventQuery = z.object({
+const auditEventQuery = z.object({
   limit: z
     .string({ error: "Invalid limit" })
     .regex(/^[1-9]\d*$/, { error: "Invalid limit" })

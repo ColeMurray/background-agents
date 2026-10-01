@@ -12,16 +12,15 @@ export const SESSION_ACTIONS = [
   "lifecycle",
   "delete",
   "sandbox",
-  "move",
   "manageCollaborators",
   "changeVisibility",
 ] as const;
 export type SessionAction = (typeof SESSION_ACTIONS)[number];
 
-export const AUTOMATION_ACTIONS = ["read", "manage", "trigger", "move"] as const;
+export const AUTOMATION_ACTIONS = ["read", "manage", "trigger"] as const;
 export type AutomationAction = (typeof AUTOMATION_ACTIONS)[number];
 
-export const ENVIRONMENT_ACTIONS = ["read", "manage", "use", "move"] as const;
+export const ENVIRONMENT_ACTIONS = ["read", "manage", "use"] as const;
 export type EnvironmentAction = (typeof ENVIRONMENT_ACTIONS)[number];
 
 export type AccessDenialReason =
@@ -61,7 +60,6 @@ export interface SessionCapabilities {
   canCollaborate: boolean;
   canManageLifecycle: boolean;
   canDelete: boolean;
-  canMove: boolean;
   canSandbox: boolean;
   canManageCollaborators: boolean;
   canChangeVisibility: boolean;
@@ -180,7 +178,6 @@ const SESSION_RULES = {
     reason: "not_collaborator",
   },
   delete: { permission: "sessions.delete", when: privileged, reason: "not_owner_or_lead" },
-  move: { permission: "sessions.lifecycle", when: privileged, reason: "not_owner_or_lead" },
   manageCollaborators: { when: ownerOrWsOwner, reason: "not_owner_or_lead" },
   changeVisibility: {
     when: (facts: SessionFacts) => (facts.isPrivate ? ownerOrWsOwner(facts) : privileged(facts)),
@@ -208,12 +205,12 @@ export function checkSessionAccess(
 ): AccessDecision {
   if (viewer.kind === "service") return checkServiceSessionAccess(viewer, row, action);
   const facts = sessionFacts(viewer, row);
-  return (
-    readGate(facts) ??
-    (action === "read"
-      ? permit(facts.breakGlass ? "session.private_break_glass" : undefined)
-      : decide(SESSION_RULES[action], facts))
-  );
+  const read = readGate(facts);
+  if (read) return read;
+  if (action === "read")
+    return permit(facts.breakGlass ? "session.private_break_glass" : undefined);
+  if (row.ownerTeamId !== null && facts.teamRole === undefined) return deny("not_member");
+  return decide(SESSION_RULES[action], facts);
 }
 
 export function sessionCapabilities(
@@ -228,7 +225,6 @@ export function sessionCapabilities(
     canCollaborate: permits.get("collaborate") === true,
     canManageLifecycle: permits.get("lifecycle") === true,
     canDelete: permits.get("delete") === true,
-    canMove: permits.get("move") === true,
     canSandbox: permits.get("sandbox") === true,
     canManageCollaborators: permits.get("manageCollaborators") === true,
     canChangeVisibility: permits.get("changeVisibility") === true,
@@ -275,7 +271,6 @@ const AUTOMATION_RULES = {
   read: { permission: "automations.read" },
   manage: manageAutomation,
   trigger: { scoped: "automations.trigger", owns: ownsAutomation },
-  move: manageAutomation,
 } as const satisfies Record<AutomationAction, ActionRule<AutomationFacts>>;
 
 function checkServiceAutomationAccess(
@@ -307,7 +302,6 @@ export function automationCapabilities(
     canRead: checkAutomationAccess(viewer, row, "read").allowed,
     canManage: checkAutomationAccess(viewer, row, "manage").allowed,
     canTrigger: checkAutomationAccess(viewer, row, "trigger").allowed,
-    canMove: checkAutomationAccess(viewer, row, "move").allowed,
   };
 }
 
@@ -333,7 +327,6 @@ const ENVIRONMENT_RULES = {
   read: { permission: "environments.read" },
   use: { permission: "environments.use" },
   manage: manageEnvironment,
-  move: manageEnvironment,
 } as const satisfies Record<EnvironmentAction, ActionRule<OwnedFacts>>;
 
 function checkServiceEnvironmentAccess(
@@ -365,6 +358,5 @@ export function environmentCapabilities(
     canRead: checkEnvironmentAccess(viewer, row, "read").allowed,
     canManage: checkEnvironmentAccess(viewer, row, "manage").allowed,
     canUse: checkEnvironmentAccess(viewer, row, "use").allowed,
-    canMove: checkEnvironmentAccess(viewer, row, "move").allowed,
   };
 }

@@ -90,17 +90,17 @@ describe("checkSessionAccess", () => {
             const read = !suspended && visible && has("sessions.read");
             const privileged = isOwner || teamRole === "lead" || isAdmin;
             const privateActor = visibility !== "private" || isOwner || isCollaborator;
-            const canManageCollaborators = read && (isOwner || roleKey === "owner");
+            const canAct = read && teamRole !== undefined;
+            const canManageCollaborators = canAct && (isOwner || roleKey === "owner");
             const permits = {
               read,
-              collaborate: read && has("sessions.collaborate") && privateActor,
-              lifecycle: read && has("sessions.lifecycle"),
-              delete: read && has("sessions.delete") && privileged,
-              sandbox: read && has("sessions.sandbox_access") && privateActor,
-              move: read && has("sessions.lifecycle") && privileged,
+              collaborate: canAct && has("sessions.collaborate") && privateActor,
+              lifecycle: canAct && has("sessions.lifecycle"),
+              delete: canAct && has("sessions.delete") && privileged,
+              sandbox: canAct && has("sessions.sandbox_access") && privateActor,
               manageCollaborators: canManageCollaborators,
               changeVisibility:
-                visibility === "private" ? canManageCollaborators : read && privileged,
+                visibility === "private" ? canManageCollaborators : canAct && privileged,
             };
             const readReason: AccessDenialReason = suspended
               ? "suspended"
@@ -128,11 +128,13 @@ describe("checkSessionAccess", () => {
 
               let reason: AccessDenialReason = readReason;
               if (read) {
-                if (action === "collaborate" || action === "sandbox") {
+                if (teamRole === undefined) {
+                  reason = "not_member";
+                } else if (action === "collaborate" || action === "sandbox") {
                   const grant =
                     action === "collaborate" ? "sessions.collaborate" : "sessions.sandbox_access";
                   reason = has(grant) ? "not_collaborator" : "missing_permission";
-                } else if (action === "lifecycle" || action === "delete" || action === "move") {
+                } else if (action === "lifecycle" || action === "delete") {
                   const grant = action === "delete" ? "sessions.delete" : "sessions.lifecycle";
                   reason = has(grant) ? "not_owner_or_lead" : "missing_permission";
                 } else {
@@ -146,7 +148,6 @@ describe("checkSessionAccess", () => {
               canCollaborate: permits.collaborate,
               canManageLifecycle: permits.lifecycle,
               canDelete: permits.delete,
-              canMove: permits.move,
               canSandbox: permits.sandbox,
               canManageCollaborators: permits.manageCollaborators,
               canChangeVisibility: permits.changeVisibility,
@@ -163,7 +164,8 @@ describe("checkSessionAccess", () => {
       reason: "not_owner_or_lead",
     });
     expect(checkSessionAccess(viewer("non-member", "administrator"), row, "delete")).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "not_member",
     });
     expect(
       checkSessionAccess(viewer("non-member", null, false, ["sessions.read"]), row, "read")
@@ -179,7 +181,7 @@ describe("checkSessionAccess", () => {
       allowed: false,
       reason: "missing_permission",
     });
-    const breakGlass = viewer("non-member", "owner");
+    const breakGlass = viewer("team member", "owner");
     const privateRow = { ...row, visibility: "private" } satisfies SessionAccessRow;
     expect(checkSessionAccess(breakGlass, privateRow, "read")).toEqual({
       allowed: true,
@@ -204,7 +206,7 @@ describe("checkSessionAccess", () => {
       ownerTeamId: null,
       visibility: "workspace",
     } satisfies SessionAccessRow;
-    expect(checkSessionAccess(actor, workspaceRow, "move")).toEqual({
+    expect(checkSessionAccess(actor, workspaceRow, "delete")).toEqual({
       allowed: false,
       reason: "not_owner_or_lead",
     });
@@ -217,6 +219,45 @@ describe("checkSessionAccess", () => {
       checkSessionAccess(ownerWithoutMembership, { ...row, visibility: "private" }, "read")
     ).toEqual({ allowed: true });
   });
+
+  it.each(visibilities)("keeps removed owners read-only at %s visibility", (visibility) => {
+    const actor = { ...viewer("owner", "member"), memberships: new Map<string, TeamRole>() };
+    const target = { ...row, visibility };
+    expect(checkSessionAccess(actor, target, "read")).toEqual(
+      visibility === "team" ? { allowed: false, reason: "not_member" } : { allowed: true }
+    );
+    for (const action of SESSION_ACTIONS) {
+      if (action === "read") continue;
+      expect(checkSessionAccess(actor, target, action)).toEqual({
+        allowed: false,
+        reason: "not_member",
+      });
+    }
+  });
+
+  it.each(["workspace", "private"] as const)(
+    "preserves workspace-owned %s actions without team membership",
+    (visibility) => {
+      const target = { ...row, ownerTeamId: null, visibility };
+      for (const relation of relations) {
+        for (const role of roles) {
+          const actor = viewer(relation, role);
+          const withoutMembership = { ...actor, memberships: new Map<string, TeamRole>() };
+          for (const action of SESSION_ACTIONS) {
+            expect(checkSessionAccess(withoutMembership, target, action)).toEqual(
+              checkSessionAccess(actor, target, action)
+            );
+          }
+        }
+      }
+      expect(checkSessionAccess(viewer("collaborator", "member"), target, "collaborate")).toEqual({
+        allowed: true,
+      });
+      expect(checkSessionAccess(viewer("non-member", "owner"), target, "lifecycle")).toEqual({
+        allowed: true,
+      });
+    }
+  );
 
   it("denies every action to a suspended owner before checking visibility or grants", () => {
     const actor = viewer("owner", "owner", true);
@@ -283,12 +324,10 @@ describe("checkAutomationAccess", () => {
     });
     expect(checkAutomationAccess(actor, target, "manage")).toEqual({ allowed: true });
     expect(checkAutomationAccess(actor, target, "trigger")).toEqual({ allowed: true });
-    expect(checkAutomationAccess(actor, target, "move")).toEqual({ allowed: true });
     expect(automationCapabilities(actor, target)).toEqual({
       canRead: false,
       canManage: true,
       canTrigger: true,
-      canMove: true,
     });
   });
 
@@ -323,7 +362,6 @@ describe("checkAutomationAccess", () => {
       canRead: false,
       canManage: false,
       canTrigger: false,
-      canMove: false,
     });
   });
 
@@ -334,7 +372,7 @@ describe("checkAutomationAccess", () => {
       reason: "not_owner_or_lead",
     });
     const admin = viewer("non-member", "administrator", false, ["automations.manage.any"]);
-    expect(checkAutomationAccess(admin, target, "move")).toEqual({ allowed: true });
+    expect(checkAutomationAccess(admin, target, "manage")).toEqual({ allowed: true });
     expect(checkAutomationAccess(admin, target, "read")).toEqual({
       allowed: false,
       reason: "missing_permission",
@@ -370,7 +408,7 @@ describe("checkAutomationAccess", () => {
 describe("checkEnvironmentAccess", () => {
   const target = { ownerTeamId: "team_one" };
 
-  it("checks distinct read, use, manage, and move decisions", () => {
+  it("checks distinct read, use, and manage decisions", () => {
     const actor = viewer("team lead", "member", false, ["environments.use", "environments.manage"]);
     expect(checkEnvironmentAccess(actor, target, "read")).toEqual({
       allowed: false,
@@ -378,12 +416,10 @@ describe("checkEnvironmentAccess", () => {
     });
     expect(checkEnvironmentAccess(actor, target, "use")).toEqual({ allowed: true });
     expect(checkEnvironmentAccess(actor, target, "manage")).toEqual({ allowed: true });
-    expect(checkEnvironmentAccess(actor, target, "move")).toEqual({ allowed: true });
     expect(environmentCapabilities(actor, target)).toEqual({
       canRead: false,
       canManage: true,
       canUse: true,
-      canMove: true,
     });
   });
 
@@ -402,14 +438,16 @@ describe("checkEnvironmentAccess", () => {
         "manage"
       )
     ).toEqual({ allowed: false, reason: "not_owner_or_lead" });
-    expect(checkEnvironmentAccess(viewer("non-member", "administrator"), target, "move")).toEqual({
-      allowed: true,
-    });
+    expect(checkEnvironmentAccess(viewer("non-member", "administrator"), target, "manage")).toEqual(
+      {
+        allowed: true,
+      }
+    );
     expect(
       checkEnvironmentAccess(
         viewer("team lead", "member", false, ["environments.manage"]),
         { ownerTeamId: null },
-        "move"
+        "manage"
       )
     ).toEqual({ allowed: false, reason: "not_owner_or_lead" });
   });

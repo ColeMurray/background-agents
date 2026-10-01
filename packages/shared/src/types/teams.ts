@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { isEnvironmentId } from "./environments";
-import { auditEventListResponseSchema } from "./audit-events";
 import { sessionListRepositorySchema } from "./repositories";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
@@ -146,7 +145,6 @@ const teamInboxSessionSchema = z.object({
     canCollaborate: z.boolean(),
     canManageLifecycle: z.boolean(),
     canDelete: z.boolean(),
-    canMove: z.boolean(),
     canSandbox: z.boolean(),
     canManageCollaborators: z.boolean(),
     canChangeVisibility: z.boolean(),
@@ -180,6 +178,3 @@ export const teamSessionsResponseSchema = z.union([
   }),
 ]);
 export type TeamSessionsResponse = z.infer<typeof teamSessionsResponseSchema>;
-
-export const teamActivityResponseSchema = auditEventListResponseSchema;
-export type TeamActivityResponse = z.infer<typeof teamActivityResponseSchema>;
