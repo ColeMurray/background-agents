@@ -96,13 +96,9 @@ function createLaunchFixture() {
       return true;
     }),
   };
-  const getRestoreCloneCredentials = vi.fn(async () => {
+  const getLegacyToken = vi.fn(async () => {
     effects.push("clone_credentials");
-    return {
-      cloneToken: "restore-token",
-      cloneHost: "gitlab.com",
-      cloneUsername: "oauth2",
-    };
+    return "restore-token";
   });
   const shutdown = createUnmanagedShutdown();
   shutdown.reserveStartup.mockImplementation((_createdAt, _policy, persist) => {
@@ -139,7 +135,10 @@ function createLaunchFixture() {
       model: "openai/gpt-5.4",
       mcpServerLookup,
       slackAgentNotifyLookup,
-      getRestoreCloneCredentials,
+      restoreCloneCredentials: {
+        identity: { host: "gitlab.com", username: "oauth2" },
+        getLegacyToken,
+      },
     },
     imageBuildLookup
   );
@@ -152,7 +151,7 @@ function createLaunchFixture() {
     imageBuildLookup,
     mcpServerLookup,
     slackAgentNotifyLookup,
-    getRestoreCloneCredentials,
+    getLegacyToken,
     effects,
     repositories,
     servers,
@@ -170,7 +169,7 @@ describe("launch input orchestration", () => {
       imageBuildLookup,
       mcpServerLookup,
       slackAgentNotifyLookup,
-      getRestoreCloneCredentials,
+      getLegacyToken,
       effects,
       repositories,
       servers,
@@ -252,98 +251,129 @@ describe("launch input orchestration", () => {
     ]);
     expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
     expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
-    expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
+    expect(getLegacyToken).not.toHaveBeenCalled();
   });
 
-  it("restore resolves wake-time clone credentials before receipt and provider", async () => {
-    const {
-      manager,
-      provider,
-      sandbox,
-      shutdown,
-      imageBuildLookup,
-      slackAgentNotifyLookup,
-      getRestoreCloneCredentials,
-      effects,
-      repositories,
-      servers,
-    } = createLaunchFixture();
+  it.each([
+    ["v71-before-helper", true],
+    ["v72-credential-helper", false],
+    [COMPATIBLE_RUNTIME_VERSION, false],
+  ] as const)(
+    "restore %s resolves only required credentials before receipt and provider",
+    async (runtimeVersion, requiresToken) => {
+      const {
+        manager,
+        provider,
+        sandbox,
+        shutdown,
+        imageBuildLookup,
+        slackAgentNotifyLookup,
+        getLegacyToken,
+        effects,
+        repositories,
+        servers,
+      } = createLaunchFixture();
+      sandbox.status = "stopped";
+      sandbox.snapshot_image_id = "saved-image";
+      sandbox.snapshot_runtime_version = runtimeVersion;
+      vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
+      const slackEntered = deferred<void>();
+      const slack = deferred<boolean>();
+      slackAgentNotifyLookup.isEnabledForRepo.mockImplementationOnce(() => {
+        effects.push("slack");
+        slackEntered.resolve();
+        return slack.promise;
+      });
+      shutdown.markRecoveryInvoked.mockImplementation(() => {
+        effects.push("recovery_invoked");
+      });
+      vi.mocked(provider.restoreFromSnapshot!).mockImplementation(async (config) => {
+        effects.push("restore");
+        return { success: true, sandboxId: config.sandboxId, lifetime: noLifetime() };
+      });
+      expect(effects).toEqual([]);
+      expect(getLegacyToken).not.toHaveBeenCalled();
+
+      const launching = manager.spawnSandbox();
+      await slackEntered.promise;
+
+      expect(effects).toEqual(["reserve", "env", "repositories", "slack"]);
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
+      expect(getLegacyToken).not.toHaveBeenCalled();
+
+      slack.resolve(true);
+      await launching;
+
+      expect(vi.mocked(provider.restoreFromSnapshot!).mock.calls).toStrictEqual([
+        [
+          {
+            snapshotImageId: "saved-image",
+            cloneCredentials: {
+              identity: { host: "gitlab.com", username: "oauth2" },
+              ...(requiresToken ? { legacyToken: "restore-token" } : {}),
+            },
+            sessionId: "test-session",
+            generationCreatedAtMs: 2_000_000,
+            retireSandboxId: "prior-sandbox",
+            sandboxId: "sandbox-group/subgroup-api-2000000",
+            sandboxAuthToken: "generated-id-1",
+            controlPlaneUrl: "https://test.workers.dev",
+            repoOwner: "group/subgroup",
+            repoName: "api",
+            branch: "release",
+            harness: "claude",
+            provider: "openai",
+            model: "gpt-5.4",
+            userEnvVars: { API_KEY: "private-env" },
+            timeoutSeconds: 3600,
+            codeServerEnabled: true,
+            vncEnabled: true,
+            agentSlackNotifyEnabled: true,
+            mcpServers: servers,
+            sandboxSettings: { sandboxTimeoutMs: 3_600_000, terminalEnabled: true },
+            repositories,
+          },
+        ],
+      ]);
+      expect(effects).toEqual([
+        "reserve",
+        "env",
+        "repositories",
+        "slack",
+        "mcp",
+        ...(requiresToken ? ["clone_credentials"] : []),
+        "pending_registration",
+        "recovery_invoked",
+        "restore",
+      ]);
+      expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(getLegacyToken).toHaveBeenCalledTimes(requiresToken ? 1 : 0);
+    }
+  );
+
+  it("does not register or invoke a provider restore when legacy credential preflight fails", async () => {
+    const { manager, provider, sandbox, shutdown, getLegacyToken } = createLaunchFixture();
     sandbox.status = "stopped";
     sandbox.snapshot_image_id = "saved-image";
-    sandbox.snapshot_runtime_version = COMPATIBLE_RUNTIME_VERSION;
+    sandbox.snapshot_runtime_version = "v71-before-helper";
+    getLegacyToken.mockRejectedValueOnce(new Error("credentials unavailable"));
     vi.mocked(hashToken).mockResolvedValueOnce("new-hash");
-    const slackEntered = deferred<void>();
-    const slack = deferred<boolean>();
-    slackAgentNotifyLookup.isEnabledForRepo.mockImplementationOnce(() => {
-      effects.push("slack");
-      slackEntered.resolve();
-      return slack.promise;
-    });
-    shutdown.markRecoveryInvoked.mockImplementation(() => {
-      effects.push("recovery_invoked");
-    });
-    vi.mocked(provider.restoreFromSnapshot!).mockImplementation(async (config) => {
-      effects.push("restore");
-      return { success: true, sandboxId: config.sandboxId, lifetime: noLifetime() };
-    });
-    expect(effects).toEqual([]);
-    expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
 
-    const launching = manager.spawnSandbox();
-    await slackEntered.promise;
+    await manager.spawnSandbox();
 
-    expect(effects).toEqual(["reserve", "env", "repositories", "slack"]);
-    expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(provider.pendingSandboxAllocation).not.toHaveBeenCalled();
+    expect(shutdown.recordPendingProviderHandle).not.toHaveBeenCalled();
     expect(shutdown.markRecoveryInvoked).not.toHaveBeenCalled();
-    expect(getRestoreCloneCredentials).not.toHaveBeenCalled();
-
-    slack.resolve(true);
-    await launching;
-
-    expect(vi.mocked(provider.restoreFromSnapshot!).mock.calls).toStrictEqual([
-      [
-        {
-          snapshotImageId: "saved-image",
-          cloneToken: "restore-token",
-          cloneHost: "gitlab.com",
-          cloneUsername: "oauth2",
-          sessionId: "test-session",
-          generationCreatedAtMs: 2_000_000,
-          retireSandboxId: "prior-sandbox",
-          sandboxId: "sandbox-group/subgroup-api-2000000",
-          sandboxAuthToken: "generated-id-1",
-          controlPlaneUrl: "https://test.workers.dev",
-          repoOwner: "group/subgroup",
-          repoName: "api",
-          branch: "release",
-          harness: "claude",
-          provider: "openai",
-          model: "gpt-5.4",
-          userEnvVars: { API_KEY: "private-env" },
-          timeoutSeconds: 3600,
-          codeServerEnabled: true,
-          vncEnabled: true,
-          agentSlackNotifyEnabled: true,
-          mcpServers: servers,
-          sandboxSettings: { sandboxTimeoutMs: 3_600_000, terminalEnabled: true },
-          repositories,
-        },
-      ],
-    ]);
-    expect(effects).toEqual([
-      "reserve",
-      "env",
-      "repositories",
-      "slack",
-      "mcp",
-      "clone_credentials",
-      "pending_registration",
-      "recovery_invoked",
-      "restore",
-    ]);
-    expect(imageBuildLookup.getLatestReady).not.toHaveBeenCalled();
+    expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
     expect(provider.createSandbox).not.toHaveBeenCalled();
-    expect(getRestoreCloneCredentials).toHaveBeenCalledOnce();
+    expect(sandbox.snapshot_image_id).toBe("saved-image");
+    expect(sandbox.snapshot_runtime_version).toBe("v71-before-helper");
+    expect(shutdown.holdFailedRecovery).toHaveBeenCalledWith(
+      "credentials unavailable",
+      expect.objectContaining({ sandboxId: expect.any(String) })
+    );
   });
 
   it.each(["expired", "superseded"] as const)(

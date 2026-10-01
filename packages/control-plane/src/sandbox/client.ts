@@ -13,7 +13,7 @@ import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
 import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
-import type { SessionRepositoryInfo } from "./provider";
+import type { RestoreCloneCredentials, SessionRepositoryInfo } from "./provider";
 import { parsePendingVmReference } from "./providers/pending-vm-reference";
 import { withRequestDeadline } from "./request-deadline";
 
@@ -216,9 +216,7 @@ export interface RestoreSandboxRequest {
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
-  cloneToken?: string;
-  cloneHost?: string;
-  cloneUsername?: string;
+  cloneCredentials?: RestoreCloneCredentials;
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
@@ -588,9 +586,10 @@ export class ModalClient {
         MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           snapshot_image_id: request.snapshotImageId,
-          clone_token: request.cloneToken ?? null,
-          clone_host: request.cloneHost ?? null,
-          clone_username: request.cloneUsername ?? null,
+          // Explicit null opts out of Modal's transitional omitted-field fallback.
+          clone_token: request.cloneCredentials?.legacyToken ?? null,
+          clone_host: request.cloneCredentials?.identity.host ?? null,
+          clone_username: request.cloneCredentials?.identity.username ?? null,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,

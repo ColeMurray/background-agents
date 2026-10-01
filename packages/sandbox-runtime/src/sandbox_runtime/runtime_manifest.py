@@ -11,6 +11,7 @@ class RuntimeManifest(TypedDict):
     generation: int
     minimumCompatibleGeneration: int
     minimumPreservationGeneration: int
+    minimumCredentialHelperGeneration: int
     minimumRebuildGeneration: int
     # Per-harness floors for prebuilt-image selection: a harness whose runtime
     # support arrived later than the global floor names its own generation.

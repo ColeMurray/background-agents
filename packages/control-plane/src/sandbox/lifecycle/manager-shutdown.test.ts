@@ -54,7 +54,12 @@ describe("final graceful shutdown lifecycle integration", () => {
     return { manager, shutdown, storage, provider, sockets, broadcaster };
   }
 
-  function withSavedState(f: ReturnType<typeof fixture>, kind: "snapshot" | "retained") {
+  function withSavedState(
+    f: ReturnType<typeof fixture>,
+    kind: "snapshot" | "retained",
+    runtimeVersion = COMPATIBLE_RUNTIME_VERSION,
+    config = createTestConfig()
+  ) {
     const row = f.storage.getSandbox()!;
     let state: ShutdownRecord = {
       phase: "saved",
@@ -69,11 +74,11 @@ describe("final graceful shutdown lifecycle integration", () => {
         kind,
         provider: f.provider.name,
         artifactId: kind === "snapshot" ? "saved-image" : row.modal_object_id!,
-        runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
+        runtimeVersion,
         savedAtMs: Date.now(),
       },
     };
-    const shutdown = new SandboxShutdownCoordinator({
+    const deps = {
       store: {
         read: () => structuredClone(state),
         write: (next: ShutdownRecord) => {
@@ -91,7 +96,8 @@ describe("final graceful shutdown lifecycle integration", () => {
       alarm: createMockAlarmScheduler(),
       background: { submit: vi.fn() },
       retireAccess: vi.fn(),
-    } as never);
+    };
+    const shutdown = new SandboxShutdownCoordinator(deps as never);
     f.manager = createTestLifecycleManager(
       f.provider,
       f.storage,
@@ -101,10 +107,48 @@ describe("final graceful shutdown lifecycle integration", () => {
       createMockAlarmScheduler(),
       createMockIdGenerator(),
       shutdown,
-      createTestConfig()
+      config
     );
-    return { shutdown, read: () => state };
+    return {
+      shutdown,
+      read: () => state,
+      restart: () => new SandboxShutdownCoordinator(deps as never),
+    };
   }
+
+  it("retains a legacy snapshot receipt and recovery hold across restart when token minting fails", async () => {
+    const f = fixture(
+      createMockProvider(),
+      createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "saved-image",
+        snapshot_runtime_version: "v71-before-helper",
+      })
+    );
+    const config = createTestConfig();
+    vi.mocked(config.restoreCloneCredentials!.getLegacyToken).mockRejectedValueOnce(
+      new Error("credentials unavailable")
+    );
+    const saved = withSavedState(f, "snapshot", "v71-before-helper", config);
+    const receipt = structuredClone(saved.read().receipt);
+    const markRecoveryInvoked = vi.spyOn(saved.shutdown, "markRecoveryInvoked");
+
+    await f.manager.spawnSandbox();
+
+    expect(f.provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(f.provider.createSandbox).not.toHaveBeenCalled();
+    expect(markRecoveryInvoked).not.toHaveBeenCalled();
+    expect(saved.read().receipt).toEqual(receipt);
+    expect(f.storage.getSandbox()).toMatchObject({
+      snapshot_image_id: "saved-image",
+      snapshot_runtime_version: "v71-before-helper",
+    });
+    const restarted = saved.restart();
+    expect(restarted.isHolding()).toBe(true);
+    expect(restarted.admissionDecision()).toBe("held");
+    expect(restarted.startupDecision().kind).toBe("hold");
+    expect(restarted.snapshot()?.hasRecoveryPoint).toBe(true);
+  });
 
   describe.each(["restore", "resume"] as const)("committed saved %s", (kind) => {
     it.each([

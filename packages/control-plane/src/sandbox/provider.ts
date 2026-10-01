@@ -211,6 +211,12 @@ export interface ResolveSandboxConfig {
 
 export type ResolveSandboxResult = Omit<CreateSandboxResult, "createdAt">;
 
+export interface RestoreCloneCredentials {
+  identity: { host: string; username: string };
+  /** Only snapshots predating the credential helper require an environment token. */
+  legacyToken?: string;
+}
+
 /**
  * Configuration for restoring a sandbox from a snapshot.
  */
@@ -237,10 +243,7 @@ export interface RestoreConfig {
   model: string;
   /** User-provided environment variables (repo secrets) */
   userEnvVars?: Record<string, string>;
-  /** Control-plane credentials for snapshots predating the credential helper. */
-  cloneToken?: string;
-  cloneHost?: string;
-  cloneUsername?: string;
+  cloneCredentials?: RestoreCloneCredentials;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS. */
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */

@@ -507,11 +507,16 @@ credentials on demand. Legacy snapshots and one-shot image builds may still rece
 fallbacks for compatibility. The helper preserves the existing installation-wide model by serving
 credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
 clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
-Daytona persistent resumes. For Modal snapshot restores, the control plane supplies a fresh fallback
-token with VCS host/username metadata. Modal keeps legacy `VCS_CLONE_TOKEN` and GitHub CLI alias
-injection for repository-backed restores but no longer mints installation tokens or holds the GitHub
-App private key. Repository-less restores suppress the clone token, and helper-capable snapshots can
-restore without one.
+Daytona persistent resumes. Every modern Modal restore includes VCS host/username metadata and an
+explicit `clone_token`, including repository-less restores. With phase-1 Modal, v72+ restores
+receive VCS identity only (`clone_token: null`) and use brokered credentials; compatible v62-v71
+repository snapshots require a static fallback token, and mint failures block the Modal request.
+Unknown or incompatible snapshots are retained under recovery hold, without token minting or launch.
+Modal keeps legacy token/CLI alias injection; local minting is limited to repository-backed
+old-worker requests that omit the field. Explicit `null` or empty values never trigger local
+minting. Modal's `github-app` secret remains required until a separate cleanup release; the key
+never enters session sandboxes. Repository-less restores preserve VCS identity but never mint or
+inject a token.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub

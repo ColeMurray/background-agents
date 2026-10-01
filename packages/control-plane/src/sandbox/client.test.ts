@@ -441,9 +441,10 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
-      cloneToken: "restore-token",
-      cloneHost: "github.com",
-      cloneUsername: "x-access-token",
+      cloneCredentials: {
+        identity: { host: "github.com", username: "x-access-token" },
+        legacyToken: "restore-token",
+      },
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
@@ -461,6 +462,35 @@ describe("ModalClient", () => {
       model: "anthropic/claude-sonnet-4-5",
       mcp_servers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
       bridge_early_connect: true,
+    });
+  });
+
+  it("explicitly sends a null token and complete GitLab identity for helper-capable restores", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await createModalClient("secret", "acme", "prod-web").restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: "group/subgroup",
+      repoName: "repo",
+      harness: "opencode",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      cloneCredentials: { identity: { host: "gitlab.com", username: "oauth2" } },
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body).toMatchObject({
+      clone_token: null,
+      clone_host: "gitlab.com",
+      clone_username: "oauth2",
     });
   });
 

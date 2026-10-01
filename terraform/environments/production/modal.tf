@@ -34,6 +34,14 @@ module "modal_app" {
       values = local.modal_llm_secret_values
     },
     {
+      name = "github-app"
+      values = {
+        GITHUB_APP_ID              = var.github_app_id
+        GITHUB_APP_PRIVATE_KEY     = var.github_app_private_key
+        GITHUB_APP_INSTALLATION_ID = var.github_app_installation_id
+      }
+    },
+    {
       name = "internal-api"
       values = {
         MODAL_API_SECRET            = var.modal_api_secret

@@ -133,6 +133,10 @@ export function realLifecycleHarness(
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl: "https://control-plane.test",
       model: "anthropic/claude-sonnet-4-5",
+      restoreCloneCredentials: {
+        identity: { host: "github.com", username: "x-access-token" },
+        getLegacyToken: async () => "legacy-restore-token",
+      },
       recordWarning: (message: string, eventId: string) =>
         recordSessionWarning(
           new EventRepository(durableState.storage.sql, (operation) =>

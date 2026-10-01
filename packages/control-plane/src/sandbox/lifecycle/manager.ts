@@ -454,7 +454,7 @@ export class SandboxLifecycleManager
         model: config.model,
         mcpServerLookup: config.mcpServerLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
-        getRestoreCloneCredentials: config.getRestoreCloneCredentials,
+        restoreCloneCredentials: config.restoreCloneCredentials,
       },
       imageBuildLookup,
       getLogger: () => this.log,
@@ -1042,7 +1042,10 @@ export class SandboxLifecycleManager
       const mcpServers = await this.launchContext.loadMcpServers(repositories);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
-      const cloneCredentials = await this.launchContext.resolveRestoreCloneCredentials(session);
+      const cloneCredentials = await this.launchContext.resolveRestoreCloneCredentials(
+        session,
+        snapshotRuntimeVersion
+      );
       const restoreConfig = {
         snapshotImageId,
         generationCreatedAtMs: generation.createdAt,
@@ -1061,7 +1064,7 @@ export class SandboxLifecycleManager
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        ...cloneCredentials,
+        cloneCredentials,
         ...repositoryFields,
       };
       this.vmStartup.registerForegroundAuth(generation, restoreConfig.sessionId, sandboxAuthToken);

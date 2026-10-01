@@ -6,17 +6,22 @@ import {
   type McpServerConfig,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
-import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
+import {
+  parseRuntimeVersionNumber,
+  repoImageBuildScope,
+  type ImageBuildScope,
+} from "../../image-builds/model";
 import type { Logger } from "../../logger";
 import { sessionHasRepository, type SessionRow } from "../../session/types";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
-  type RestoreConfig,
+  type RestoreCloneCredentials,
   type SandboxProviderCapabilities,
   type SessionRepositoryInfo,
 } from "../provider";
 import { parsePersistedSandboxSettings } from "../settings";
+import { MIN_CREDENTIAL_HELPER_RUNTIME_GENERATION } from "../runtime-manifest";
 import {
   evaluateImageBuildForSpawn,
   type ImageBuildLookup,
@@ -47,9 +52,10 @@ export interface SandboxLaunchConfig {
   mcpServerLookup?: McpServerLookup;
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
   /** Only Modal snapshot restores need static credentials for legacy runtimes. */
-  getRestoreCloneCredentials?: () => Promise<
-    Pick<RestoreConfig, "cloneToken" | "cloneHost" | "cloneUsername">
-  >;
+  restoreCloneCredentials?: {
+    identity: RestoreCloneCredentials["identity"];
+    getLegacyToken(): Promise<string>;
+  };
 }
 
 export interface SandboxLaunchContextDependencies {
@@ -120,18 +126,31 @@ export class SandboxLaunchContext {
   }
 
   async resolveRestoreCloneCredentials(
-    session: SessionRow
-  ): Promise<Pick<RestoreConfig, "cloneToken" | "cloneHost" | "cloneUsername">> {
-    if (!sessionHasRepository(session) || !this.config.getRestoreCloneCredentials) return {};
-    try {
-      return await this.config.getRestoreCloneCredentials();
-    } catch (error) {
-      this.getLogger().warn("Failed to resolve snapshot restore clone credentials", {
-        event: "sandbox.restore_clone_token_failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {};
+    session: SessionRow,
+    snapshotRuntimeVersion: string
+  ): Promise<RestoreCloneCredentials | undefined> {
+    const lookup = this.config.restoreCloneCredentials;
+    if (!lookup) {
+      if (this.provider.name === "modal" || this.provider.name === "modal-vm") {
+        throw new SandboxProviderError("Missing Modal restore credentials", "permanent");
+      }
+      return undefined;
     }
+    const generation = parseRuntimeVersionNumber(snapshotRuntimeVersion);
+    if (generation === null) {
+      throw new SandboxProviderError("Unknown snapshot credential-helper capability", "permanent");
+    }
+    const credentials: RestoreCloneCredentials = { identity: lookup.identity };
+    if (sessionHasRepository(session) && generation < MIN_CREDENTIAL_HELPER_RUNTIME_GENERATION) {
+      credentials.legacyToken = await lookup.getLegacyToken();
+      if (!credentials.legacyToken) {
+        throw new SandboxProviderError(
+          "Legacy snapshot restore requires a clone token",
+          "permanent"
+        );
+      }
+    }
+    return credentials;
   }
 
   resolveAgent(session: SessionRow): AgentLaunchFields {

@@ -1138,6 +1138,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       }
     );
   }
+  const scmIdentity = scmCloneIdentity(sourceControlProvider().name);
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
@@ -1154,16 +1155,15 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
-    getRestoreCloneCredentials:
+    restoreCloneCredentials:
       provider.name === "modal" || provider.name === "modal-vm"
-        ? async () => {
-            const scm = sourceControlProvider();
-            const auth = await scm.generateCredentialHelperAuth();
-            return {
-              cloneToken: auth.password,
-              cloneHost: scmCloneIdentity(scm.name).host,
-              cloneUsername: auth.username,
-            };
+        ? {
+            identity: {
+              host: scmIdentity.host,
+              username: scmIdentity.cloneUsername,
+            },
+            getLegacyToken: async () =>
+              (await sourceControlProvider().generateCredentialHelperAuth()).password,
           }
         : undefined,
     recordWarning: deps.recordWarning,

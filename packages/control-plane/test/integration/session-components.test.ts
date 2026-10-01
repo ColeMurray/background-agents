@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
@@ -12,6 +12,9 @@ import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
 import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
+import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
+import { cleanD1Tables } from "./cleanup";
+import { initNamedSession, queryDO } from "./helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
 /**
@@ -21,6 +24,8 @@ import { componentsOf, runInSessionDO } from "./session-do-access";
  * degraded and surfacing the error at the first spawn or PR operation.
  */
 describe("createSessionRuntime", () => {
+  beforeEach(cleanD1Tables);
+  afterEach(cleanD1Tables);
   async function buildWithEnv(overrides: Partial<Record<keyof Env, string | undefined>>) {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-eager-${crypto.randomUUID()}`));
 
@@ -46,6 +51,57 @@ describe("createSessionRuntime", () => {
   it("builds the whole graph on a correctly configured deployment", async () => {
     expect(await buildWithEnv({})).toBeNull();
   });
+
+  it.each([false, true])(
+    "preserves GitLab identity on modern restores without minting (repo-less: %s)",
+    async (repoLess) => {
+      const { stub } = await initNamedSession(`restore-identity-${crypto.randomUUID()}`);
+      await queryDO(stub, "DELETE FROM sandbox_preservation");
+      await queryDO(
+        stub,
+        "UPDATE sandbox SET status = 'stopped', modal_object_id = NULL, snapshot_image_id = 'saved-image', snapshot_runtime_version = 'v72-helper'"
+      );
+      if (repoLess) {
+        await queryDO(
+          stub,
+          "UPDATE session SET repo_owner = NULL, repo_name = NULL, repo_id = NULL, base_branch = NULL"
+        );
+        await queryDO(stub, "DELETE FROM session_repositories");
+      }
+      await runInSessionDO(stub, async (instance, state) => {
+        const runtime = createSessionRuntime(
+          createDurableObjectSessionPlatform(state, env.DB),
+          createCloudflareEnv({
+            ...(instance as unknown as { env: WorkerBindings }).env,
+            SCM_PROVIDER: "gitlab",
+            GITLAB_ACCESS_TOKEN: "configured-token",
+          } as WorkerBindings)
+        );
+        const mint = vi
+          .spyOn(runtime.internals.sourceControlProvider, "generateCredentialHelperAuth")
+          .mockRejectedValue(new Error("mint unavailable"));
+        const restore = vi
+          .spyOn(ModalSandboxProvider.prototype, "restoreFromSnapshot")
+          .mockResolvedValue({
+            success: true,
+            providerObjectId: "restored-source",
+            lifetime: { kind: "none", observedAtMs: Date.now() },
+          });
+        try {
+          await runtime.internals.lifecycleManager.spawnSandbox();
+          expect(restore).toHaveBeenCalledWith(
+            expect.objectContaining({
+              cloneCredentials: { identity: { host: "gitlab.com", username: "oauth2" } },
+            })
+          );
+          expect(mint).not.toHaveBeenCalled();
+        } finally {
+          mint.mockRestore();
+          restore.mockRestore();
+        }
+      });
+    }
+  );
 
   it("does not invoke runtime operations during construction", async () => {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-inert-${crypto.randomUUID()}`));
