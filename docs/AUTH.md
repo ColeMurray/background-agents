@@ -51,7 +51,7 @@ Open-Inspect includes four built-in roles.
 | Create automations                                |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger own automations                |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger any automation                 |  Yes  |      Yes      |   No   |   No   |
-| View workspace members                            |  Yes  |      Yes      |  Yes   |  Yes   |
+| View workspace members                            |  Yes  |      Yes      |   No   |   No   |
 | Manage workspace members                          |  Yes  |      Yes      |   No   |   No   |
 | Transfer workspace ownership                      |  Yes  |      No       |   No   |   No   |
 | View analytics                                    |  Yes  |      Yes      |  Yes   |  Yes   |

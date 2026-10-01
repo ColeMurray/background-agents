@@ -16,9 +16,9 @@ import {
 import { workspaceMemberListResponseSchema } from "@open-inspect/shared/rbac";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { useAuthSession } from "@/lib/auth-session";
+import { ME_TEAMS_API_PATH, isMeTeamsCacheKey, meTeamsKey } from "@/lib/me-teams-cache";
 
 const TEAMS_KEY = "/api/teams";
-const ME_TEAMS_KEY = "/api/me/teams";
 // Missing or incomplete capabilities leave the team visible while every team action stays disabled.
 const teamSchema = teamResponseSchema.extend({
   capabilities: teamResponseSchema.shape.capabilities.partial().optional(),
@@ -39,6 +39,10 @@ class TeamRequestError extends Error {
     super(message);
     this.name = "TeamRequestError";
   }
+}
+
+export function isRetryableTeamError(error: unknown): boolean {
+  return error instanceof TeamRequestError && error.retryable;
 }
 
 async function get<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
@@ -86,18 +90,18 @@ async function write<T>(
 
 export function useMeTeams(enabled = true) {
   const { data: session } = useAuthSession();
-  const result = useSWR(session?.user && enabled ? ME_TEAMS_KEY : null, () =>
-    get(ME_TEAMS_KEY, meTeamsSchema)
+  const userId = session?.user.id;
+  const result = useSWR(
+    userId && enabled ? meTeamsKey(userId) : null,
+    () => get(ME_TEAMS_API_PATH, meTeamsSchema),
+    { keepPreviousData: false }
   );
-  const data =
-    result.error && !(result.error instanceof TeamRequestError && result.error.retryable)
-      ? undefined
-      : result.data;
   return {
-    teams: data?.teams ?? [],
-    requireTeamOnCreate: data?.requireTeamOnCreate ?? false,
-    loading: enabled && Boolean(session?.user) && !data && !result.error,
-    error: data ? undefined : result.error,
+    teams: result.data?.teams ?? [],
+    requireTeamOnCreate: result.data?.requireTeamOnCreate ?? false,
+    loading: enabled && Boolean(userId) && !result.data && !result.error,
+    error: result.error,
+    hasData: result.data !== undefined,
   };
 }
 
@@ -118,7 +122,7 @@ export function useTeams(enabled = true) {
         }),
         { revalidate: false }
       ),
-      mutate(ME_TEAMS_KEY),
+      mutate(isMeTeamsCacheKey),
     ]);
     return team;
   }
@@ -129,7 +133,7 @@ export function useTeams(enabled = true) {
     await Promise.allSettled([
       mutate(key, team, { revalidate: false }),
       mutate(TEAMS_KEY),
-      mutate(ME_TEAMS_KEY),
+      mutate(isMeTeamsCacheKey),
       mutate(`${key}/members`),
     ]);
     return team;
@@ -155,7 +159,7 @@ export function useTeam(id: string) {
     await Promise.allSettled([
       mutate(key, team, { revalidate: false }),
       mutate(TEAMS_KEY),
-      mutate(ME_TEAMS_KEY),
+      mutate(isMeTeamsCacheKey),
     ]);
     return team;
   }
@@ -169,7 +173,7 @@ export function useTeam(id: string) {
     await Promise.allSettled([
       mutate(key, team, { revalidate: false }),
       mutate(TEAMS_KEY),
-      mutate(ME_TEAMS_KEY),
+      mutate(isMeTeamsCacheKey),
     ]);
     return team;
   }
@@ -208,7 +212,7 @@ export function useTeamMembers(id: string) {
       ),
       mutate(`/api/teams/${encodeURIComponent(id)}`),
       mutate(TEAMS_KEY),
-      mutate(ME_TEAMS_KEY),
+      mutate(isMeTeamsCacheKey),
     ]);
   }
   async function removeMember(userId: string) {
@@ -224,7 +228,7 @@ export function useTeamMembers(id: string) {
       ),
       mutate(`/api/teams/${encodeURIComponent(id)}`),
       mutate(TEAMS_KEY),
-      mutate(ME_TEAMS_KEY),
+      mutate(isMeTeamsCacheKey),
     ]);
   }
   return {

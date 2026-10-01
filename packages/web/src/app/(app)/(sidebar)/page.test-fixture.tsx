@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => {
       }>;
     }>,
     enabledModelsValue: [] as string[],
+    enabledModelsLoadingValue: false,
     enabledModelOptionsValue: [] as Array<{
       category: string;
       models: Array<{ id: string; name: string; description: string }>;
@@ -217,7 +218,7 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
     enabledModels: mocks.enabledModelsValue,
     enabledModelOptions: mocks.enabledModelOptionsValue,
-    loading: false,
+    loading: mocks.enabledModelsLoadingValue,
   }),
 }));
 
@@ -265,6 +266,7 @@ beforeEach(() => {
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
   mocks.enabledModelsValue = [DEFAULT_MODEL];
+  mocks.enabledModelsLoadingValue = false;
   mocks.enabledModelOptionsValue = [
     {
       category: "Anthropic",

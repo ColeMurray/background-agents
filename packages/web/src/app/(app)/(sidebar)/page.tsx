@@ -70,6 +70,7 @@ import { useWarmDraftSession, type WarmDraftSessionRequest } from "@/hooks/use-w
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useActiveTeam } from "@/hooks/use-active-team";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
+import { resolveComposerAccess, type ComposerAccessDraft } from "@/lib/composer-access";
 import {
   buildInteractiveProviderRoutingIdentity,
   parseStoredProviderSelections,
@@ -107,31 +108,12 @@ export default function Home() {
   const canCreateSession = hasPermission("sessions.create");
   const router = useRouter();
   const teamContext = useActiveTeam();
-  const {
-    activeTeamId,
-    scope,
-    teams,
-    requireTeamOnCreate,
-    loading: loadingTeams,
-    error: teamError,
-  } = teamContext;
-  const [accessDraft, setAccessDraft] = useState<{
-    contextTeamId: string | null;
-    contextScope: typeof scope;
-    teamId: string | null;
-    visibility: SessionVisibility;
-  } | null>(null);
-  const draft =
-    accessDraft?.contextTeamId === activeTeamId && accessDraft.contextScope === scope
-      ? accessDraft
-      : null;
-  const teamId = draft
-    ? draft.teamId
-    : (activeTeamId ?? (requireTeamOnCreate ? (teams[0]?.id ?? null) : null));
+  const { teams, requireTeamOnCreate, loading: loadingTeams, error: teamError } = teamContext;
+  const [accessDraft, setAccessDraft] = useState<ComposerAccessDraft | null>(null);
+  const { contextKey, teamId, visibility } = resolveComposerAccess(teamContext, accessDraft);
   const selectedTeam = teams.find((team) => team.id === teamId);
   const teamCreationReady =
     !loadingTeams && !teamError && (teamId === null ? !requireTeamOnCreate : !!selectedTeam);
-  const visibility = draft?.visibility ?? selectedTeam?.defaultVisibility ?? "workspace";
   const picker = useSessionTargetPicker({
     teamId,
     defaultEnvironmentId: selectedTeam?.defaultEnvironmentId,
@@ -140,15 +122,9 @@ export default function Home() {
 
   // Composer context changes preserve the audience; sidebar changes use team defaults.
   useEffect(() => {
-    if (loadingTeams || teamError) return;
-    setAccessDraft((draft) =>
-      draft?.contextTeamId === activeTeamId &&
-      draft.contextScope === scope &&
-      (draft.teamId === null || teams.some((team) => team.id === draft.teamId))
-        ? draft
-        : null
-    );
-  }, [activeTeamId, scope, loadingTeams, teamError, teams]);
+    if (teamContext.loading || teamContext.error) return;
+    setAccessDraft((draft) => (draft ? resolveComposerAccess(teamContext, draft) : null));
+  }, [teamContext]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
     reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
@@ -156,6 +132,7 @@ export default function Home() {
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
   const [prompt, setPrompt] = useState("");
+  const [warmRequested, setWarmRequested] = useState(false);
   const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
   const [providerSelections, setProviderSelections] = useState<ModelProviderSelections>({});
   const [providerSelectionsHydrated, setProviderSelectionsHydrated] = useState(false);
@@ -291,12 +268,19 @@ export default function Home() {
     providerAccounts.accounts
   );
   const {
+    identity: warmIdentity,
     sessionId: pendingSessionId,
     isWarming: isCreatingSession,
     warm: createSessionForWarming,
     consume: consumeWarmSession,
     error: creationError,
   } = useWarmDraftSession(warmRequest, warmRoutingIdentity);
+
+  useEffect(() => {
+    if (!warmRequested || !warmIdentity) return;
+    setWarmRequested(false);
+    void createSessionForWarming();
+  }, [warmRequested, warmIdentity, createSessionForWarming]);
 
   const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
     setModelPreferenceDraft(preference);
@@ -435,13 +419,12 @@ export default function Home() {
       teamCreationReady={teamCreationReady}
       visibility={visibility}
       onTeamChange={(teamId) => {
-        setAccessDraft({ contextTeamId: activeTeamId, contextScope: scope, teamId, visibility });
+        setAccessDraft({ contextKey, teamId, visibility });
       }}
       onVisibilityChange={(value) => {
         if (teamId !== null || value !== "team")
           setAccessDraft({
-            contextTeamId: activeTeamId,
-            contextScope: scope,
+            contextKey,
             teamId,
             visibility: value,
           });
@@ -455,7 +438,7 @@ export default function Home() {
       prompt={prompt}
       handlePromptChange={(value) => {
         setPrompt(value);
-        if (value.length > 0) void createSessionForWarming();
+        setWarmRequested(value.length > 0);
       }}
       attachments={{
         items: sessionAttachments.attachments,

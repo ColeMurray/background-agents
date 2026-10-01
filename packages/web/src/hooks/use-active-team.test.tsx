@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { meTeamsKey } from "@/lib/me-teams-cache";
 import { currentUserAuthorizationKey } from "./use-current-user-authorization";
 import { ActiveTeamProvider, useActiveTeam } from "./use-active-team";
 import { useSidebarSessions } from "./use-sidebar-sessions";
@@ -176,7 +177,7 @@ describe("active team context", () => {
         return Response.json({ error: "Unavailable" }, { status: failure });
       });
       await act(async () => {
-        await result.current.mutate("/api/me/teams");
+        await result.current.mutate(meTeamsKey(USER_ID));
       });
       if (failure === 503 || failure === "network") {
         expect(result.current.context.error).toBeUndefined();
@@ -189,6 +190,7 @@ describe("active team context", () => {
         expect(result.current.context.error).toBeInstanceOf(Error);
         expect(result.current.context.activeTeamId).toBeNull();
         expect(result.current.context.teams).toEqual([]);
+        expect(result.current.context.requireTeamOnCreate).toBe(false);
         expect(result.current.sidebar.finished).toEqual([]);
         expect(result.current.sidebar.sessionsError).toBeInstanceOf(Error);
         expect(localStorage.getItem("open-inspect-active-team")).toBe("team_alpha");
@@ -198,6 +200,28 @@ describe("active team context", () => {
       ).toBe(true);
     }
   );
+
+  it("accepts a cached empty membership response during a transient refresh failure", async () => {
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/me/authorization"
+        ? authorizationResponse()
+        : Response.json({ teams: [], requireTeamOnCreate: true })
+    );
+    const { result } = renderHook(
+      () => ({ context: useActiveTeam(), mutate: useSWRConfig().mutate }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.context.loading).toBe(false));
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ error: "Unavailable" }, { status: 503 })
+    );
+    await act(async () => {
+      await result.current.mutate(meTeamsKey(USER_ID));
+    });
+    expect(result.current.context.error).toBeUndefined();
+    expect(result.current.context.teams).toEqual([]);
+    expect(result.current.context.requireTeamOnCreate).toBe(true);
+  });
 
   it("preserves a stored Workspace context for team members", async () => {
     localStorage.setItem("open-inspect-active-team", "workspace");
@@ -344,13 +368,44 @@ describe("active team context", () => {
     expect(result.current.second.scope).toBe("workspace");
   });
 
-  it("does not become ready when the membership request fails", async () => {
-    vi.mocked(browserApiFetch).mockResolvedValue(
-      Response.json({ error: "Unavailable" }, { status: 503 })
-    );
-    const { result } = renderHook(useActiveTeam, { wrapper });
-    await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.teams).toEqual([]);
-    expect(result.current.loading).toBe(false);
-  });
+  it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
+    "blocks sidebar requests on first-load membership failure %s",
+    async (failure) => {
+      localStorage.setItem("open-inspect-active-team", "team_alpha");
+      vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+        if (path === "/api/me/authorization") return authorizationResponse();
+        if (failure === "network") throw new TypeError("Network unavailable");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        if (failure === "invalid-schema") return Response.json({ teams: null });
+        return Response.json({ error: "Unavailable" }, { status: failure });
+      });
+      const fetcher = vi.fn(async () => inboxSnapshot());
+      const { result } = renderHook(
+        () => ({ context: useActiveTeam(), sidebar: useSidebarSessions() }),
+        {
+          wrapper: ({ children }) => (
+            <SWRConfig
+              value={{
+                provider: () => new Map(),
+                fetcher,
+                dedupingInterval: 0,
+                shouldRetryOnError: false,
+              }}
+            >
+              <ActiveTeamProvider>{children}</ActiveTeamProvider>
+            </SWRConfig>
+          ),
+        }
+      );
+      await waitFor(() => expect(result.current.context.loading).toBe(false));
+      expect(result.current.context.error).toBeInstanceOf(Error);
+      expect(result.current.context.teams).toEqual([]);
+      expect(result.current.context.activeTeamId).toBeNull();
+      expect(result.current.context.scope).toBeUndefined();
+      expect(result.current.sidebar.finished).toEqual([]);
+      expect(result.current.sidebar.sessionsError).toBeInstanceOf(Error);
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(localStorage.getItem("open-inspect-active-team")).toBe("team_alpha");
+    }
+  );
 });

@@ -111,6 +111,10 @@ function selectTarget() {
     target: { value: team.id },
   });
 }
+async function selectVisibility(name: string) {
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Visibility" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name }));
+}
 function expectMutation(path: string, body: object, method = "PUT") {
   expect(browserApiFetch).toHaveBeenLastCalledWith(path, {
     method,
@@ -121,6 +125,7 @@ function expectMutation(path: string, body: object, method = "PUT") {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  Element.prototype.scrollIntoView = vi.fn();
   mocks.teams = [team];
   mocks.memberships = [team];
   mocks.teamsLoading = false;
@@ -359,14 +364,15 @@ describe("MoveSessionDialog", () => {
 });
 
 describe("SessionVisibilityControl", () => {
-  it("sends the selected visibility and children checkbox, then refreshes", async () => {
+  it("uses the shared dropdown and saves the selected visibility and child-session scope", async () => {
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+    expect(screen.getByRole("combobox", { name: "Visibility" }).tagName).toBe("BUTTON");
     expect(screen.getByRole("checkbox", { name: "Include child sessions" })).toBeChecked();
-    fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-      target: { value: "private" },
-    });
+    await selectVisibility("Private");
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toHaveTextContent("Private");
     fireEvent.click(screen.getByRole("checkbox", { name: "Include child sessions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+    expect(browserApiFetch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
     expectMutation("/api/sessions/session%2Fid/visibility", {
       visibility: "private",
@@ -375,18 +381,16 @@ describe("SessionVisibilityControl", () => {
     expect(mocks.mutate).toHaveBeenCalledWith(expect.any(Function));
   });
 
-  it("loads membership for the owner team and warns before selecting team visibility", () => {
+  it("loads membership for the owner team and warns before selecting team visibility", async () => {
     mocks.members = [];
     render(<SessionVisibilityControl {...baseProps} visibility="private" canChangeVisibility />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-      target: { value: "team" },
-    });
+    await selectVisibility("Team");
     expect(mocks.useMembers).toHaveBeenCalledWith("source");
     expect(screen.getByText(/owner is not a member.*may lose access/i)).toBeInTheDocument();
   });
 
-  it("disables unavailable team/private options and all mutations without capabilities", () => {
-    render(
+  it("disables unavailable team/private options and all mutations without capabilities", async () => {
+    const { rerender } = render(
       <SessionVisibilityControl
         {...baseProps}
         ownerTeamId={null}
@@ -396,10 +400,26 @@ describe("SessionVisibilityControl", () => {
       />
     );
     expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
-    expect(screen.getByRole("option", { name: "Team" })).toBeDisabled();
-    expect(screen.getByRole("option", { name: "Private" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(browserApiFetch).not.toHaveBeenCalled();
+    rerender(
+      <SessionVisibilityControl
+        {...baseProps}
+        ownerTeamId={null}
+        ownerUserId={null}
+        visibility="workspace"
+        canChangeVisibility
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Visibility" }), { key: "Enter" });
+    expect(await screen.findByRole("option", { name: "Team" })).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
+    expect(screen.getByRole("option", { name: "Private" })).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
   });
 
   it.each(["workspace", "team", "private"] as const)(
@@ -408,7 +428,7 @@ describe("SessionVisibilityControl", () => {
       render(
         <SessionVisibilityControl {...baseProps} visibility={visibility} canChangeVisibility />
       );
-      const apply = screen.getByRole("button", { name: "Change visibility" });
+      const apply = screen.getByRole("button", { name: "Save" });
       expect(apply).toBeDisabled();
       fireEvent.click(apply);
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -420,15 +440,14 @@ describe("SessionVisibilityControl", () => {
     }
   );
 
-  it("disables apply when the selection returns to the current visibility or a refresh matches it", () => {
+  it("disables apply when the selection returns to the current visibility or a refresh matches it", async () => {
     const { rerender } = render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    const select = screen.getByRole("combobox", { name: "Visibility" });
-    const apply = screen.getByRole("button", { name: "Change visibility" });
-    fireEvent.change(select, { target: { value: "workspace" } });
+    const apply = screen.getByRole("button", { name: "Save" });
+    await selectVisibility("Workspace");
     expect(apply).toBeEnabled();
-    fireEvent.change(select, { target: { value: "team" } });
+    await selectVisibility("Team");
     expect(apply).toBeDisabled();
-    fireEvent.change(select, { target: { value: "workspace" } });
+    await selectVisibility("Workspace");
     rerender(
       <SessionVisibilityControl {...baseProps} visibility="workspace" canChangeVisibility />
     );
@@ -448,10 +467,8 @@ describe("SessionVisibilityControl", () => {
       render(
         <SessionVisibilityControl {...baseProps} visibility={visibility} canChangeVisibility />
       );
-      fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-        target: { value: target },
-      });
-      fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+      await selectVisibility(target.charAt(0).toUpperCase() + target.slice(1));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
       const confirmation = within(screen.getByRole("alertdialog"));
       expect(
         confirmation.getByText(
@@ -463,7 +480,7 @@ describe("SessionVisibilityControl", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       expect(browserApiFetch).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
       fireEvent.click(
         within(screen.getByRole("alertdialog")).getByRole("button", { name: "Change visibility" })
       );
@@ -487,12 +504,10 @@ describe("SessionVisibilityControl", () => {
       render(
         <SessionVisibilityControl {...baseProps} visibility={visibility} canChangeVisibility />
       );
-      fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-        target: { value: target },
-      });
+      await selectVisibility(target.charAt(0).toUpperCase() + target.slice(1));
       if (!includeChildren)
         fireEvent.click(screen.getByRole("checkbox", { name: "Include child sessions" }));
-      fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
       expectMutation("/api/sessions/session%2Fid/visibility", {
@@ -502,12 +517,10 @@ describe("SessionVisibilityControl", () => {
     }
   );
 
-  it("guards confirmation when the visibility capability is revoked", () => {
+  it("guards confirmation when the visibility capability is revoked", async () => {
     const { rerender } = render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-      target: { value: "workspace" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+    await selectVisibility("Workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     rerender(<SessionVisibilityControl {...baseProps} canChangeVisibility={false} />);
     const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
       name: "Change visibility",
@@ -525,10 +538,8 @@ describe("SessionVisibilityControl", () => {
       )
     );
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-      target: { value: "workspace" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+    await selectVisibility("Workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(browserApiFetch).not.toHaveBeenCalled();
     fireEvent.click(
       within(screen.getByRole("alertdialog")).getByRole("button", { name: "Change visibility" })
@@ -555,10 +566,8 @@ describe("SessionVisibilityControl", () => {
       )
     );
     const { rerender } = render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-      target: { value: "private" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+    await selectVisibility("Private");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     const retry = await screen.findByRole("button", { name: "Retry without child sessions" });
     rerender(<SessionVisibilityControl {...baseProps} canChangeVisibility={false} />);
     expect(retry).toBeDisabled();
@@ -572,12 +581,32 @@ describe("SessionVisibilityControl", () => {
       Response.json({ error: "Invalid visibility", code }, { status: 400 })
     );
     render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Visibility" }), {
-      target: { value: "private" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Change visibility" }));
+    await selectVisibility("Private");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(code);
     expect(screen.queryByRole("button", { name: "Retry without child sessions" })).toBeNull();
+  });
+
+  it("disables all controls until the updated snapshot finishes refreshing", async () => {
+    let finishRefresh!: () => void;
+    mocks.updated.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        })
+    );
+    render(<SessionVisibilityControl {...baseProps} canChangeVisibility />);
+    await selectVisibility("Private");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
+    expect(screen.getByRole("combobox", { name: "Visibility" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Include child sessions" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Updating..." })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Updating..." }));
+    expect(browserApiFetch).toHaveBeenCalledOnce();
+    finishRefresh();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Visibility" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });
 

@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { useAuthSession } from "@/lib/auth-session";
-import { useMeTeams } from "./use-teams";
+import { isRetryableTeamError, useMeTeams } from "./use-teams";
 import { useCurrentUserAuthorization } from "./use-current-user-authorization";
 
 const ACTIVE_TEAM_STORAGE_KEY = "open-inspect-active-team";
@@ -26,9 +26,14 @@ function useActiveTeamState() {
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const userId = session?.user.id ?? null;
-  const teams = memberships.teams.filter((team) => team.archivedAt === null);
+  // Only the sidebar tolerates transient refresh failures with a successful snapshot.
+  const membershipsError =
+    memberships.hasData && isRetryableTeamError(memberships.error) ? undefined : memberships.error;
+  const teams = membershipsError
+    ? []
+    : memberships.teams.filter((team) => team.archivedAt === null);
   const loading = memberships.loading || authorizationLoading || hydratedUserId !== userId;
-  const error = memberships.error ?? (authorization ? undefined : authorizationError);
+  const error = membershipsError ?? (authorization ? undefined : authorizationError);
   const canListAllTeams =
     authorization?.role.key === "owner" || authorization?.role.key === "administrator";
 
@@ -82,7 +87,7 @@ function useActiveTeamState() {
     setActiveTeam,
     teams,
     scope,
-    requireTeamOnCreate: memberships.requireTeamOnCreate,
+    requireTeamOnCreate: membershipsError ? false : memberships.requireTeamOnCreate,
     loading,
     error,
   };

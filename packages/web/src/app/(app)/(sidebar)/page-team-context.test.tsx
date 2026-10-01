@@ -45,6 +45,67 @@ function team(overrides: Partial<TeamResponse> = {}): TeamResponse & { role: Tea
 }
 
 describe("Home team context", () => {
+  it("preselects a required team when the setting changes without widening draft visibility", async () => {
+    const user = userEvent.setup();
+    mocks.teams = [team()];
+    const view = render(<Home />);
+    await selectAudience(user, "Private");
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: null, visibility: "private" })
+    );
+    mocks.requireTeamOnCreate = true;
+    view.rerender(<Home />);
+    expect(screen.getByRole("button", { name: /^Session access:/ })).toHaveAccessibleName(
+      "Session access: Private; team context: Engineering"
+    );
+    expect(screen.getByRole("button", { name: /send/i })).not.toBeDisabled();
+    expect(mocks.setActiveTeam).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+    ).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions");
+    expect(JSON.parse(String(calls[1][1]?.body))).toMatchObject({
+      teamId: "team-1",
+      visibility: "private",
+    });
+  });
+
+  it("cancels deferred warming when the prompt is cleared before readiness", async () => {
+    const user = userEvent.setup();
+    mocks.teamsLoading = true;
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    await user.type(input, "Ship it");
+    await user.clear(input);
+    mocks.teamsLoading = false;
+    view.rerender(<Home />);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["models", "provider accounts"])(
+    "consumes deferred input after %s become ready",
+    async (resource) => {
+      const user = userEvent.setup();
+      mocks.enabledModelsLoadingValue = resource === "models";
+      mocks.providerAccountsLoadingValue = resource === "provider accounts";
+      const view = render(<Home />);
+      await user.type(screen.getByPlaceholderText("What do you want to build?"), "Ship it");
+      expect(fetch).not.toHaveBeenCalled();
+      mocks.enabledModelsLoadingValue = false;
+      mocks.providerAccountsLoadingValue = false;
+      view.rerender(<Home />);
+      await waitFor(() =>
+        expect(sessionCreateBody()).toMatchObject({ teamId: null, visibility: "workspace" })
+      );
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+      ).toHaveLength(1);
+    }
+  );
+
   it.each([
     [undefined, "workspace"],
     [undefined, "all"],
@@ -117,7 +178,7 @@ describe("Home team context", () => {
     });
   });
 
-  it("retries warming on continued input after memberships become ready", async () => {
+  it("consumes deferred warming once memberships become ready without further input", async () => {
     const user = userEvent.setup();
     mocks.teamsLoading = true;
     mocks.teams = [team()];
@@ -128,8 +189,6 @@ describe("Home team context", () => {
     expect(fetch).not.toHaveBeenCalled();
     mocks.teamsLoading = false;
     view.rerender(<Home />);
-    expect(fetch).not.toHaveBeenCalled();
-    await user.type(input, " again");
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
     );
@@ -393,6 +452,9 @@ describe("Home team context", () => {
     mocks.requireTeamOnCreate = true;
     mocks.teams = [team()];
     view.rerender(<Home />);
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
+    );
     expect(mocks.setActiveTeam).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /^Session access:/ }));
     expect(screen.getByRole("combobox", { name: "Team context" })).not.toBeDisabled();
@@ -402,7 +464,6 @@ describe("Home team context", () => {
     await user.click(screen.getByRole("combobox", { name: "Team context" }));
     expect(screen.queryByRole("option", { name: "No team" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}{Escape}");
-    expect(fetch).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ teamId: "team-1", visibility: "team" })
@@ -475,7 +536,7 @@ describe("Home team context", () => {
     });
   });
 
-  it("warms on continued input after a team's default environment becomes ready", async () => {
+  it("consumes deferred warming after a team's default environment becomes ready", async () => {
     const user = userEvent.setup();
     mocks.teams = [team({ defaultEnvironmentId: "env-1" })];
     mocks.activeTeamId = "team-1";
@@ -487,8 +548,6 @@ describe("Home team context", () => {
     mocks.environmentsLoadingValue = false;
     mocks.environmentsValue = [environment];
     view.rerender(<Home />);
-    expect(fetch).not.toHaveBeenCalled();
-    await user.type(screen.getByPlaceholderText("What do you want to build?"), " again");
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({
         environmentId: "env-1",

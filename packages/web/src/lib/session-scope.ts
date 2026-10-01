@@ -1,6 +1,8 @@
 import type { Cache, ScopedMutator } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { browserApiFetch, type BrowserApiPath } from "./browser-api-fetch";
+import { isMeTeamsCacheKey } from "./me-teams-cache";
+import { isSessionListKey } from "./session-list";
 import type { SessionVisibility } from "@open-inspect/shared/types/teams";
 
 export interface SessionScopeControls {
@@ -27,11 +29,9 @@ export function isSessionScopeCacheKey(key: unknown): boolean {
     ? rawPath.slice(INFINITE_CACHE_PREFIX.length)
     : rawPath;
   return (
-    path === "/api/sessions" ||
-    path.startsWith("/api/sessions?") ||
     ["/api/sessions/inbox", "/api/teams", "/api/activity", "/api/audit-events"].some(
       (prefix) => path === prefix || path.startsWith(`${prefix}?`) || path.startsWith(`${prefix}/`)
-    )
+    ) || isSessionListKey(path)
   );
 }
 
@@ -87,13 +87,11 @@ export async function updateSessionScope(
     );
   }
   for (const listener of scopeChangeListeners) listener();
-  const infiniteKeys = [...cache.keys()].filter((key) => {
-    if (!key.startsWith(INFINITE_CACHE_PREFIX)) return false;
-    const firstPageKey = key.slice(INFINITE_CACHE_PREFIX.length);
-    // Page metadata preserves array keys that SWR hashes in the aggregate key.
-    const firstPage = cache.get(firstPageKey) as { _k?: unknown } | undefined;
-    return isSessionScopeCacheKey(firstPage?._k ?? firstPageKey);
-  });
+  const infiniteKeys = [...cache.keys()].filter(
+    (key) =>
+      key.startsWith(INFINITE_CACHE_PREFIX) &&
+      isSessionScopeCacheKey(key.slice(INFINITE_CACHE_PREFIX.length))
+  );
   // Invalidate inactive pages too: a predicate revalidation only fetches mounted hooks.
   // SWR skips aggregates in predicate mutations, so clear those explicitly as well.
   await Promise.all([
@@ -103,7 +101,7 @@ export async function updateSessionScope(
   await Promise.all([
     Promise.resolve().then(onUpdated),
     // Membership data drives access controls and must stay available during revalidation.
-    mutate("/api/me/teams"),
+    mutate(isMeTeamsCacheKey),
     mutate(isSessionScopeCacheKey),
     ...infiniteKeys.map((key) => mutate(key)),
   ]);

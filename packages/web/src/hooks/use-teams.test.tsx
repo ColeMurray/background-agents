@@ -2,19 +2,38 @@
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { SWRConfig } from "swr";
+import { SWRConfig, unstable_serialize, useSWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { ME_TEAMS_API_PATH, meTeamsKey } from "@/lib/me-teams-cache";
 import { useTeamCapabilities } from "./use-team-capabilities";
-import { useMeTeams, useTeam, useTeamMembers, useTeams } from "./use-teams";
+import { isRetryableTeamError, useMeTeams, useTeam, useTeamMembers, useTeams } from "./use-teams";
 
 vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 const wrapper = ({ children }: { children: ReactNode }) => (
-  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>{children}</SWRConfig>
+  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}>
+    {children}
+  </SWRConfig>
 );
+
+const membership = {
+  id: "team_design",
+  slug: "design",
+  name: "Design",
+  description: null,
+  joinPolicy: "invite_only",
+  defaultVisibility: "team",
+  defaultEnvironmentId: null,
+  grantsVersion: 0,
+  archivedAt: null,
+  createdAt: 1,
+  updatedAt: 1,
+  memberCount: 1,
+  role: "member",
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -38,8 +57,183 @@ describe("team hooks", () => {
       const { result } = renderHook(useMeTeams, { wrapper });
       await waitFor(() => expect(result.current.loading).toBe(false));
       expect(result.current.error).toBeUndefined();
+      expect(result.current.hasData).toBe(true);
       expect(result.current.teams).toEqual([]);
       expect(result.current.requireTeamOnCreate).toBe(requireTeamOnCreate ?? false);
+    }
+  );
+
+  it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
+    "exposes successful cached memberships alongside refresh failure %s",
+    async (failure) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada" } },
+        status: "authenticated",
+      });
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json({ teams: [membership], requireTeamOnCreate: true })
+      );
+      const { result } = renderHook(() => ({ mine: useMeTeams(), ...useSWRConfig() }), {
+        wrapper,
+      });
+      expect(result.current.mine.hasData).toBe(false);
+      await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+      const cachedTeams = result.current.mine.teams;
+      const cachedData = result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data;
+      expect(cachedData).toEqual({ teams: [membership], requireTeamOnCreate: true });
+      expect(result.current.cache.get(ME_TEAMS_API_PATH)).toBeUndefined();
+      expect(browserApiFetch).toHaveBeenCalledWith(ME_TEAMS_API_PATH);
+
+      vi.mocked(browserApiFetch).mockImplementation(async () => {
+        if (failure === "network") throw new TypeError("Network unavailable");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        if (failure === "invalid-schema") return Response.json({ teams: null });
+        return Response.json({ error: "Unavailable" }, { status: failure });
+      });
+      await act(async () => {
+        await result.current.mutate(meTeamsKey("user_one"));
+      });
+
+      expect(result.current.mine.error).toBeInstanceOf(Error);
+      expect(isRetryableTeamError(result.current.mine.error)).toBe(
+        failure === 503 || failure === "network"
+      );
+      expect(result.current.mine.teams).toBe(cachedTeams);
+      expect(result.current.mine.requireTeamOnCreate).toBe(true);
+      expect(result.current.mine.hasData).toBe(true);
+      expect(result.current.mine.loading).toBe(false);
+      expect(result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data).toBe(
+        cachedData
+      );
+    }
+  );
+
+  it.each([undefined, null, new Error("Unknown failure"), { retryable: true }])(
+    "does not classify an unrecognized error %j as retryable",
+    (error) => {
+      expect(isRetryableTeamError(error)).toBe(false);
+    }
+  );
+
+  it("isolates cached memberships and errors on account switch and signout", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada" } },
+      status: "authenticated",
+    });
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ teams: [membership], requireTeamOnCreate: true })
+    );
+    const { result, rerender } = renderHook(
+      () => ({ mine: useMeTeams(), mutate: useSWRConfig().mutate }),
+      {
+        wrapper: ({ children }) => (
+          <SWRConfig
+            value={{
+              provider: () => new Map(),
+              dedupingInterval: 0,
+              shouldRetryOnError: false,
+              keepPreviousData: true,
+            }}
+          >
+            {children}
+          </SWRConfig>
+        ),
+      }
+    );
+    await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ error: "Unavailable" }, { status: 503 })
+    );
+    await act(async () => {
+      await result.current.mutate(meTeamsKey("user_one"));
+    });
+    expect(result.current.mine.error).toBeInstanceOf(Error);
+
+    let resolveMemberships: ((response: Response) => void) | undefined;
+    vi.mocked(browserApiFetch).mockReturnValue(
+      new Promise((resolve) => {
+        resolveMemberships = resolve;
+      })
+    );
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_two", name: "Grace" } },
+      status: "authenticated",
+    });
+    rerender();
+    expect(result.current.mine).toMatchObject({
+      teams: [],
+      requireTeamOnCreate: false,
+      loading: true,
+      error: undefined,
+      hasData: false,
+    });
+    await act(async () => {
+      resolveMemberships?.(
+        Response.json({ teams: [{ ...membership, id: "team_platform", name: "Platform" }] })
+      );
+    });
+    await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+    expect(result.current.mine.teams.map((team) => team.id)).toEqual(["team_platform"]);
+    expect(result.current.mine.requireTeamOnCreate).toBe(false);
+
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
+    rerender();
+    expect(result.current.mine).toMatchObject({
+      teams: [],
+      requireTeamOnCreate: false,
+      loading: false,
+      error: undefined,
+      hasData: false,
+    });
+    expect(browserApiFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["account-switch", "signout"] as const)(
+    "does not expose an old in-flight membership response after %s",
+    async (transition) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada" } },
+        status: "authenticated",
+      });
+      let resolveOldMemberships: ((response: Response) => void) | undefined;
+      vi.mocked(browserApiFetch).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOldMemberships = resolve;
+        })
+      );
+      vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ teams: [] }));
+      const { result, rerender } = renderHook(
+        () => ({ mine: useMeTeams(), cache: useSWRConfig().cache }),
+        { wrapper }
+      );
+      expect(result.current.mine.hasData).toBe(false);
+
+      vi.mocked(useAuthSession).mockReturnValue(
+        transition === "account-switch"
+          ? { data: { user: { id: "user_two", name: "Grace" } }, status: "authenticated" }
+          : { data: null, status: "unauthenticated" }
+      );
+      rerender();
+      if (transition === "account-switch") {
+        await waitFor(() => expect(result.current.mine.hasData).toBe(true));
+      }
+      await act(async () => {
+        resolveOldMemberships?.(Response.json({ teams: [membership], requireTeamOnCreate: true }));
+      });
+      await waitFor(() =>
+        expect(result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data).toEqual({
+          teams: [membership],
+          requireTeamOnCreate: true,
+        })
+      );
+      expect(result.current.mine).toMatchObject({
+        teams: [],
+        requireTeamOnCreate: false,
+        loading: false,
+        error: undefined,
+        hasData: transition === "account-switch",
+      });
+      expect(browserApiFetch).toHaveBeenCalledTimes(transition === "account-switch" ? 2 : 1);
     }
   );
 
@@ -86,6 +280,7 @@ describe("team hooks", () => {
     const { result } = renderHook(() => useMeTeams(false), { wrapper });
     expect(browserApiFetch).not.toHaveBeenCalled();
     expect(result.current.loading).toBe(false);
+    expect(result.current.hasData).toBe(false);
   });
 
   it("does not load the team directory while disabled", () => {
@@ -186,6 +381,69 @@ describe("team hooks", () => {
     expect(result.current.mine.teams[0]?.role).toBe("member");
     expect(result.current.detail.team?.capabilities?.canJoin).toBe(false);
   });
+
+  it.each(["create", "update", "archive", "restore", "set-member", "remove-member"] as const)(
+    "refreshes the user-scoped membership cache after %s",
+    async (operation) => {
+      vi.mocked(useAuthSession).mockReturnValue({
+        data: { user: { id: "user_one", name: "Ada" } },
+        status: "authenticated",
+      });
+      let written = false;
+      const member = {
+        teamId: membership.id,
+        userId: "user_one",
+        role: "member",
+        source: "manual",
+        createdAt: 1,
+        displayName: "Ada",
+        email: null,
+        avatarUrl: null,
+      };
+      vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+        if (init?.method) {
+          written = true;
+          if (init.method === "DELETE") return new Response(null, { status: 204 });
+          if (init.method === "PUT") return Response.json({ member });
+          return Response.json(membership);
+        }
+        if (path === ME_TEAMS_API_PATH) {
+          return Response.json({
+            teams: written ? [{ ...membership, name: "Refreshed" }] : [membership],
+          });
+        }
+        if (path === "/api/teams") return Response.json({ teams: [membership] });
+        if (path.endsWith("/members")) return Response.json({ members: [member] });
+        return Response.json(membership);
+      });
+      const { result } = renderHook(
+        () => ({
+          mine: useMeTeams(),
+          all: useTeams(),
+          detail: useTeam(membership.id),
+          members: useTeamMembers(membership.id),
+        }),
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.mine.teams[0]?.name).toBe("Design"));
+      await act(async () => {
+        if (operation === "create") {
+          await result.current.all.createTeam({ slug: "design", name: "Design" });
+        } else if (operation === "update") {
+          await result.current.detail.updateTeam({ name: "Refreshed" });
+        } else if (operation === "archive" || operation === "restore") {
+          await result.current.detail.changeArchive(operation === "archive");
+        } else if (operation === "set-member") {
+          await result.current.members.setMember("user_one", "member");
+        } else {
+          await result.current.members.removeMember("user_one");
+        }
+      });
+      expect(result.current.mine.teams[0]?.name).toBe("Refreshed");
+      expect(result.current.mine.hasData).toBe(true);
+      expect(result.current.mine.error).toBeUndefined();
+    }
+  );
 
   it.each([undefined, { canJoin: true }, { canEditMetadata: true }])(
     "keeps a team visible with missing or incomplete capabilities %j but denies every action",

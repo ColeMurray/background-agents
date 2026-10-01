@@ -2,10 +2,11 @@
 
 import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
-import useSWR, { SWRConfig, unstable_serialize as serialize, useSWRConfig } from "swr";
-import useSWRInfinite, { unstable_serialize } from "swr/infinite";
+import useSWR, { SWRConfig, useSWRConfig } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "./browser-api-fetch";
+import { buildSessionsPageKey } from "./session-list";
 import { updateSessionScope } from "./session-scope";
 
 vi.mock("./browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -60,7 +61,7 @@ describe("scope refresh with real SWR caches", () => {
       function Session() {
         const config = useSWRConfig();
         const access = useSWR("/api/sessions/s1/sandbox-access", fetchSandboxAccess);
-        const membership = useSWR("/api/me/teams", fetchMembership, {
+        const membership = useSWR(["/api/me/teams", "viewer"], fetchMembership, {
           shouldRetryOnError: false,
         });
         return (
@@ -126,43 +127,21 @@ describe("scope refresh with real SWR caches", () => {
     }
   );
 
-  it("invalidates inactive pages even when no infinite discovery list has been loaded", async () => {
-    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ affectedSessionIds: ["s1"] }));
-    const { result, rerender } = renderHook(
-      ({ mounted }) => {
-        const config = useSWRConfig();
-        const resource = useSWR(
-          mounted ? ["/api/teams/source/activity", "viewer"] : null,
-          async () => ({ stale: true })
-        );
-        return {
-          resource,
-          config,
-          update: () =>
-            updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, async () => {}, config),
-        };
-      },
-      { wrapper, initialProps: { mounted: true } }
-    );
-    await waitFor(() => expect(result.current.resource.data).toEqual({ stale: true }));
-    rerender({ mounted: false });
-    await act(() => result.current.update());
-    expect(
-      [...result.current.config.cache.keys()].some(
-        (key) => result.current.config.cache.get(key)?.data?.stale
-      )
-    ).toBe(false);
-  });
-
-  it.each(["string", "array"] as const)(
-    "clears inactive infinite pages and their aggregate for %s keys without losing page size",
-    async (keyType) => {
+  it.each(
+    [
+      buildSessionsPageKey({ teamIds: ["team_source", "team_target"], offset: 100 }),
+      "/api/teams",
+      "/api/teams/team_source/sessions?cursor=page2",
+      ["/api/teams/team_source/activity", "viewer"],
+      "/api/activity?teamId=team_source",
+      ["/api/audit-events?cursor=page2", "viewer"],
+      ["/api/sessions/inbox?category=finished", "viewer"],
+    ].map((key) => ({ key }))
+  )(
+    "invalidates inactive $key without an infinite list and refetches on remount",
+    async ({ key }) => {
       let version = 1;
-      const pageKey = (page: number) => {
-        const path = `/api/sessions?teamId=source&offset=${page}`;
-        return keyType === "array" ? [path, "viewer"] : path;
-      };
-      const fetchPage = vi.fn(async () => ({ version }));
+      const fetchResource = vi.fn(async () => ({ version }));
       vi.mocked(browserApiFetch).mockImplementation(async () => {
         version = 2;
         return new Response(null, { status: 204 });
@@ -170,12 +149,9 @@ describe("scope refresh with real SWR caches", () => {
       const { result, rerender } = renderHook(
         ({ mounted }) => {
           const config = useSWRConfig();
-          const list = useSWRInfinite((page) => (mounted ? pageKey(page) : null), fetchPage, {
-            initialSize: 1,
-          });
+          const resource = useSWR(mounted ? key : null, fetchResource);
           return {
-            list,
-            config,
+            resource,
             update: () =>
               updateSessionScope(
                 "/api/sessions/s1/scope",
@@ -187,31 +163,56 @@ describe("scope refresh with real SWR caches", () => {
         },
         { wrapper, initialProps: { mounted: true } }
       );
-      await waitFor(() => expect(result.current.list.data).toEqual([{ version: 1 }]));
-      await act(() => result.current.list.setSize(2));
-      await waitFor(() =>
-        expect(result.current.list.data).toEqual([{ version: 1 }, { version: 1 }])
-      );
+      await waitFor(() => expect(result.current.resource.data).toEqual({ version: 1 }));
       rerender({ mounted: false });
       await act(() => result.current.update());
-      const aggregateKey = unstable_serialize(() => pageKey(0));
-      for (const key of [serialize(pageKey(0)), serialize(pageKey(1)), aggregateKey]) {
-        expect(result.current.config.cache.get(key)?.data).toBeUndefined();
-      }
-      expect(result.current.config.cache.get(aggregateKey)).toEqual(
-        expect.objectContaining({ _l: 2 })
-      );
-      expect(fetchPage).toHaveBeenCalledTimes(3);
+      expect(fetchResource).toHaveBeenCalledOnce();
       rerender({ mounted: true });
-      await waitFor(() =>
-        expect(result.current.list.data).toEqual([{ version: 2 }, { version: 2 }])
-      );
-      expect(result.current.list.size).toBe(2);
-      expect(fetchPage).toHaveBeenCalledTimes(5);
+      expect(result.current.resource.data).toBeUndefined();
+      await waitFor(() => expect(result.current.resource.data).toEqual({ version: 2 }));
+      expect(fetchResource).toHaveBeenCalledTimes(2);
     }
   );
 
-  it("refetches every discovery page and both team scopes, inbox, and activity without timestamp changes", async () => {
+  it("clears inactive canonical infinite pages and their aggregate without losing page size", async () => {
+    let version = 1;
+    const pageKey = (page: number) =>
+      buildSessionsPageKey({ teamIds: ["team_source", "team_target"], offset: page * 50 });
+    const fetchPage = vi.fn(async () => ({ version }));
+    vi.mocked(browserApiFetch).mockImplementation(async () => {
+      version = 2;
+      return new Response(null, { status: 204 });
+    });
+    const { result, rerender } = renderHook(
+      ({ mounted }) => {
+        const config = useSWRConfig();
+        const list = useSWRInfinite((page) => (mounted ? pageKey(page) : null), fetchPage);
+        return {
+          list,
+          update: () =>
+            updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, async () => {}, config),
+        };
+      },
+      { wrapper, initialProps: { mounted: true } }
+    );
+    await waitFor(() => expect(result.current.list.data).toEqual([{ version: 1 }]));
+    await act(() => result.current.list.setSize(2));
+    await waitFor(() => expect(result.current.list.data).toEqual([{ version: 1 }, { version: 1 }]));
+    expect(result.current.list.size).toBe(2);
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+
+    rerender({ mounted: false });
+    await act(() => result.current.update());
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    rerender({ mounted: true });
+    expect(result.current.list.data).toBeUndefined();
+    expect(result.current.list.size).toBe(2);
+    await waitFor(() => expect(result.current.list.data).toEqual([{ version: 2 }, { version: 2 }]));
+    expect(result.current.list.size).toBe(2);
+    expect(fetchPage).toHaveBeenCalledTimes(5);
+  });
+
+  it("refetches every discovery page, both team scopes, inbox, activity, and audit without timestamp changes", async () => {
     let version = 1;
     const fetchPage = vi.fn(async (path: string) => ({ path, version, updatedAt: 1 }));
     const snapshot = vi.fn().mockResolvedValue(undefined);
@@ -223,21 +224,29 @@ describe("scope refresh with real SWR caches", () => {
       () => {
         const { mutate, cache } = useSWRConfig();
         const source = useSWRInfinite(
-          (page) => [`/api/sessions?teamId=source&offset=${page}`, "viewer"],
-          ([path]) => fetchPage(path),
+          (page) => buildSessionsPageKey({ teamIds: ["team_source"], offset: page * 50 }),
+          fetchPage,
           { initialSize: 2 }
         );
         const target = useSWRInfinite(
-          (page) => `/api/sessions?teamId=target&offset=${page}`,
+          (page) => buildSessionsPageKey({ teamIds: ["team_target"], offset: page * 50 }),
           fetchPage,
           { initialSize: 2 }
         );
         const inbox = useSWR(["/api/sessions/inbox?mine=true", "viewer"], ([path]) =>
           fetchPage(path)
         );
-        const sourceBucket = useSWR("/api/teams/source/sessions?bucket=in_progress", fetchPage);
-        const targetBucket = useSWR("/api/teams/target/sessions?bucket=needs_attention", fetchPage);
-        const activity = useSWR("/api/teams/target/activity?cursor=page2", fetchPage);
+        const teams = useSWR("/api/teams", fetchPage);
+        const sourceBucket = useSWR(
+          "/api/teams/team_source/sessions?bucket=in_progress",
+          fetchPage
+        );
+        const targetBucket = useSWR(
+          "/api/teams/team_target/sessions?bucket=needs_attention",
+          fetchPage
+        );
+        const activity = useSWR("/api/teams/team_target/activity?cursor=page2", fetchPage);
+        const audit = useSWR(["/api/audit-events?limit=25", "viewer"], ([path]) => fetchPage(path));
         const sessionSnapshot = useSWR("/api/sessions/s1", fetchPage);
         const children = useSWR("/api/sessions/s1/children", fetchPage);
         const sandboxAccess = useSWR("/api/sessions/s1/sandbox-access", fetchPage);
@@ -256,9 +265,11 @@ describe("scope refresh with real SWR caches", () => {
           source,
           target,
           inbox,
+          teams,
           sourceBucket,
           targetBucket,
           activity,
+          audit,
           sessionSnapshot,
           children,
           sandboxAccess,
@@ -270,7 +281,10 @@ describe("scope refresh with real SWR caches", () => {
           update: () =>
             updateSessionScope(
               "/api/sessions/s1/scope",
-              { method: "PUT", body: { teamId: "target", includeChildren: true, joinTeam: false } },
+              {
+                method: "PUT",
+                body: { teamId: "team_target", includeChildren: true, joinTeam: false },
+              },
               async () => {
                 await snapshot();
                 await sessionSnapshot.mutate();
@@ -285,7 +299,16 @@ describe("scope refresh with real SWR caches", () => {
       expect(result.current.source.data).toHaveLength(2);
       expect(result.current.target.data).toHaveLength(2);
       expect(result.current.skills.data).toHaveLength(2);
-      expect(result.current.activity.data?.version).toBe(1);
+      for (const resource of [
+        result.current.inbox,
+        result.current.teams,
+        result.current.sourceBucket,
+        result.current.targetBucket,
+        result.current.activity,
+        result.current.audit,
+      ]) {
+        expect(resource.data?.version).toBe(1);
+      }
       for (const resource of [
         result.current.sessionSnapshot,
         result.current.children,
@@ -302,14 +325,21 @@ describe("scope refresh with real SWR caches", () => {
     expect(snapshot).toHaveBeenCalledOnce();
     for (const list of [result.current.source, result.current.target]) {
       expect(list.data?.map((page) => page.version)).toEqual([2, 2]);
+      expect(list.size).toBe(2);
+      for (const page of list.data ?? []) {
+        expect(fetchPage.mock.calls.filter(([path]) => path === page.path)).toHaveLength(2);
+      }
     }
     for (const list of [
       result.current.inbox,
+      result.current.teams,
       result.current.sourceBucket,
       result.current.targetBucket,
       result.current.activity,
+      result.current.audit,
     ]) {
       expect(list.data?.version).toBe(2);
+      expect(fetchPage.mock.calls.filter(([path]) => path === list.data?.path)).toHaveLength(2);
     }
     expect(result.current.unrelated.data?.version).toBe(1);
     expect(fetchPage.mock.calls.filter(([path]) => path === "/api/repos")).toHaveLength(1);

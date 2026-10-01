@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { unstable_serialize } from "swr/infinite";
 import { browserApiFetch } from "./browser-api-fetch";
+import { isMeTeamsCacheKey } from "./me-teams-cache";
+import { buildSessionsPageKey } from "./session-list";
 import {
   isSessionScopeCacheKey,
   SessionScopeError,
@@ -15,8 +17,9 @@ describe("scope cache invalidation", () => {
   it.each(
     [
       "/api/sessions",
-      "/api/sessions?teamId=old&offset=100",
-      "/api/sessions?teamId=new",
+      buildSessionsPageKey({ teamIds: ["team_source"], offset: 100 }),
+      buildSessionsPageKey({ teamIds: ["team_target"] }),
+      buildSessionsPageKey({ teamIds: ["team_source", "team_target"], status: "archived" }),
       "/api/sessions/inbox",
       "/api/sessions/inbox?category=finished",
       "/api/sessions/inbox/counts",
@@ -30,13 +33,15 @@ describe("scope cache invalidation", () => {
       "/api/audit-events",
       "/api/audit-events?limit=25&cursor=page2",
       "/api/audit-events/team-id",
-      unstable_serialize(() => "/api/sessions?teamId=old&offset=0"),
+      unstable_serialize(() => buildSessionsPageKey({ teamIds: ["team_source"] })),
       unstable_serialize(() => "/api/sessions/inbox?category=finished"),
       unstable_serialize(() => "/api/teams/team-id/sessions?cursor=page2"),
       unstable_serialize(() => "/api/activity?teamId=old"),
       unstable_serialize(() => "/api/audit-events?cursor=page2"),
       ["/api/sessions/inbox?category=needs_attention", "cursor", "user"],
+      ["/api/sessions/inbox/counts", "viewer"],
       ["/api/activity", "user"],
+      ["/api/audit-events?limit=25&cursor=page2", "viewer"],
     ].map((key) => ({ key }))
   )("clears affected discovery cache key $key", ({ key }) => {
     expect(isSessionScopeCacheKey(key)).toBe(true);
@@ -77,6 +82,16 @@ describe("scope cache invalidation", () => {
       "/api/audit-events-other",
     ].map((key) => ({ key }))
   )("ignores unrelated key $key", ({ key }) => {
+    expect(isSessionScopeCacheKey(key)).toBe(false);
+  });
+
+  it.each(
+    [
+      buildSessionsPageKey({ teamIds: ["team_source"] }),
+      "/api/sessions/inbox?category=finished",
+      "/api/audit-events?cursor=page2",
+    ].map((path) => ({ key: unstable_serialize(() => [path, "viewer"]) }))
+  )("does not match unsupported infinite tuple aggregate $key", ({ key }) => {
     expect(isSessionScopeCacheKey(key)).toBe(false);
   });
 });
@@ -156,7 +171,7 @@ describe("updateSessionScope", () => {
       options?.revalidate === false
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
-            if (key === "/api/me/teams") finishMembership = resolve;
+            if (key === isMeTeamsCacheKey) finishMembership = resolve;
             else finishLists = resolve;
           })
     );
@@ -174,7 +189,10 @@ describe("updateSessionScope", () => {
       revalidate: false,
     });
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
-    expect(mutate).toHaveBeenCalledWith("/api/me/teams");
+    expect(mutate).toHaveBeenCalledWith(isMeTeamsCacheKey);
+    expect(mutate).not.toHaveBeenCalledWith(isMeTeamsCacheKey, undefined, {
+      revalidate: false,
+    });
     finishSnapshot();
     await Promise.resolve();
     expect(done).toBe(false);
@@ -184,6 +202,46 @@ describe("updateSessionScope", () => {
     finishMembership();
     await request;
     expect(done).toBe(true);
+  });
+
+  it("clears and revalidates canonical infinite aggregates without reading page metadata", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(new Response(null, { status: 204 }));
+    const infiniteKeys = [
+      buildSessionsPageKey({ teamIds: ["team_source"] }),
+      buildSessionsPageKey({ teamIds: ["team_target"] }),
+      "/api/teams/team_source/sessions?cursor=page2",
+      "/api/activity?teamId=team_source",
+      "/api/audit-events?cursor=page2",
+      "/api/sessions/inbox?category=finished",
+    ].map((path) => unstable_serialize(() => path));
+    const preservedKeys = [
+      unstable_serialize(() => "/api/sessions/s1/skills?offset=0"),
+      unstable_serialize(() => "/api/repos"),
+      unstable_serialize(() => [buildSessionsPageKey({ teamIds: ["team_source"] }), "viewer"]),
+    ];
+    const cache = new Map(
+      [...infiniteKeys, ...preservedKeys].map((key) => [key, { data: [{ version: 1 }] }])
+    );
+    const readCache = vi.spyOn(cache, "get");
+    const mutate = vi.fn().mockResolvedValue(undefined);
+    const refresh = vi.fn().mockResolvedValue(undefined);
+
+    await updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, refresh, {
+      mutate,
+      cache,
+    });
+
+    expect(readCache).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledOnce();
+    for (const key of infiniteKeys) {
+      expect(mutate).toHaveBeenCalledWith(key, undefined, { revalidate: false });
+      expect(mutate).toHaveBeenCalledWith(key);
+    }
+    for (const key of preservedKeys) {
+      expect(mutate).not.toHaveBeenCalledWith(key, undefined, { revalidate: false });
+      expect(mutate).not.toHaveBeenCalledWith(key);
+    }
+    expect(mutate).toHaveBeenCalledTimes(3 + infiniteKeys.length * 2);
   });
 
   it("refreshes even for an empty successful response", async () => {
@@ -209,7 +267,7 @@ describe("updateSessionScope", () => {
       })
     ).rejects.toThrow("Snapshot unavailable");
     expect(mutate).toHaveBeenCalledWith(isSessionScopeCacheKey);
-    expect(mutate).toHaveBeenCalledWith("/api/me/teams");
+    expect(mutate).toHaveBeenCalledWith(isMeTeamsCacheKey);
   });
 
   it("reports non-JSON mutation failures without attempting a refresh", async () => {
