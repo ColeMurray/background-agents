@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export const SESSION_INSPECTOR_TABS = ["changes", "info", "tasks", "tools"] as const;
+export const SESSION_INSPECTOR_TABS = ["info", "changes", "tasks", "tools"] as const;
 export type SessionInspectorTab = (typeof SESSION_INSPECTOR_TABS)[number];
 
-const DEFAULT_SESSION_INSPECTOR_TAB: SessionInspectorTab = "changes";
+const DEFAULT_SESSION_INSPECTOR_TAB: SessionInspectorTab = "info";
 const SESSION_INSPECTOR_TAB_STORAGE_KEY = "open-inspect-session-inspector-tab";
 
 export function isSessionInspectorTab(value: unknown): value is SessionInspectorTab {
