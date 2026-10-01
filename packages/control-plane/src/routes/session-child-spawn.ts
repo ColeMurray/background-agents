@@ -21,6 +21,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
@@ -161,6 +162,18 @@ export async function handleSpawnChild(
   });
   if (targetAuthorizationError) return targetAuthorizationError;
 
+  // Sandbox callers skip the route's authorization requirements. Like any team
+  // session, a team-owned child must be owned by a current team member.
+  const ownerTeamId = parentSession?.ownerTeamId ?? null;
+  const platformUserId = spawnContext.promptAuthor.canonicalUserId ?? parentSession?.userId ?? null;
+  if (
+    ownerTeamId &&
+    (!platformUserId ||
+      !(await new TeamMembershipStore(ctx.db).listForUser(platformUserId)).has(ownerTeamId))
+  ) {
+    return json({ error: "Not a team member", code: "not_member" }, 403);
+  }
+
   let enabledModels: ValidModel[];
   try {
     enabledModels = await getEffectiveEnabledModels(ctx.db);
@@ -251,7 +264,7 @@ export async function handleSpawnChild(
   );
 
   const input: SessionInitInput = {
-    ownerTeamId: parentSession?.ownerTeamId ?? null,
+    ownerTeamId,
     visibility: parentSession?.visibility ?? "workspace",
     sessionId: childId,
     repoOwner: spawnContext.repoOwner,
@@ -267,7 +280,7 @@ export async function handleSpawnChild(
     model,
     reasoningEffort,
     participantUserId: spawnContext.promptAuthor.userId,
-    platformUserId: spawnContext.promptAuthor.canonicalUserId ?? parentSession?.userId ?? null,
+    platformUserId,
     participantCanonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
     collaboratorSourceSessionId: parentId,
     scmLogin: spawnContext.promptAuthor.scmLogin,

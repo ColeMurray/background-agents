@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { SELF, createExecutionContext, env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSessionDO,
   queryDO,
+  routeRequest,
   seedActiveUser,
   seedMessage,
   seedSandboxAuth,
@@ -120,6 +122,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     await env.DB.prepare(
       "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_child', 'child', 'Child', 1, 1)"
     ).run();
+    await seedActiveUser("canonical-abc123");
+    await new TeamMembershipStore(env.DB).add("team_child", "canonical-abc123");
     const { parentName, sandboxToken, store } = await setupParent({
       ownerTeamId: "team_child",
       visibility: "workspace",
@@ -168,6 +172,41 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
   });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "refuses a team-owned child for a prompt author removed from the team (%s)",
+    async (mode) => {
+      const authorId = "33333333333333333333333333333333";
+      await seedActiveUser(authorId);
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_spawn', 'spawn', 'Spawn', 1, 1)"
+      ).run();
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add("team_spawn", authorId);
+      const { parentName, sandboxToken, store } = await setupParent({
+        ownerTeamId: "team_spawn",
+        visibility: "team",
+        repoId: 12345,
+        userId: "user-1",
+        canonicalUserId: authorId,
+      });
+      await memberships.remove("team_spawn", authorId);
+
+      const response = await routeRequest(
+        new Request(`https://test.local/sessions/${parentName}/children`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+          body: JSON.stringify({ title: "Team child", prompt: "Investigate" }),
+        }),
+        { ...env, TEAMS_ENFORCEMENT: mode },
+        createExecutionContext()
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "not_member" });
+      expect(await store.countTotalChildren(parentName)).toBe(0);
+    }
+  );
 
   it("inherits private visibility, owner and collaborators when the prompt author is not canonical", async () => {
     const ownerId = "11111111111111111111111111111111";
