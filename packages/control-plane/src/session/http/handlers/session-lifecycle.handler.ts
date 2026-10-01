@@ -162,8 +162,12 @@ export class SessionLifecycleHandler {
       });
     }
 
-    await this.statusService.transition("archived");
-    await this.sandboxLifecycle.preserveForArchive();
+    // Both calls write local state before yielding: reconnects must see draining
+    // as soon as the session becomes archived, even if the index write is slow.
+    await Promise.all([
+      this.statusService.transition("archived"),
+      this.sandboxLifecycle.preserveForArchive(),
+    ]);
     try {
       await this.statusService.confirmIndexStatus("archived");
     } catch {
