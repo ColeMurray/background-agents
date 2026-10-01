@@ -29,6 +29,7 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { formatFutureRelativeTime } from "@/lib/time";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
+import { automationNavigation } from "@/lib/automation-navigation";
 
 interface AutomationsListProps {
   teamId?: string;
@@ -99,7 +100,7 @@ export function AutomationsList({
   const { environments } = useEnvironments(teamId);
   const { hasPermission } = useCurrentUserAuthorization();
   const canCreate = createAllowed ?? hasPermission("automations.create");
-  const scopeQuery = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
+  const navigation = automationNavigation(teamId);
   const automationToDelete = automations.find(
     (automation) => automation.id === confirmDeleteId && automation.capabilities?.canManage === true
   );
@@ -125,10 +126,10 @@ export function AutomationsList({
         {canCreate && (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <Button size="sm" asChild>
-              <Link href={`/automations/templates${scopeQuery}`}>Start from a template</Link>
+              <Link href={navigation.templates}>Start from a template</Link>
             </Button>
             <Button variant="outline" size="sm" asChild>
-              <Link href={`/automations/new${scopeQuery}`}>Create Automation</Link>
+              <Link href={navigation.new()}>Create Automation</Link>
             </Button>
           </div>
         )}
@@ -148,7 +149,7 @@ export function AutomationsList({
               <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-4">
                 <div className="flex min-w-0 items-center gap-2">
                   <Link
-                    href={`/automations/${automation.id}`}
+                    href={navigation.detail(automation.id)}
                     className="font-medium text-foreground hover:text-accent transition truncate"
                   >
                     {automation.name}

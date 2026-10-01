@@ -7,6 +7,7 @@ import { CollapsedSidebarControls, useSidebarContext } from "@/components/sideba
 import { TemplateGallery } from "@/components/automations/template-gallery";
 import { BackIcon } from "@/components/ui/icons";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { automationNavigation } from "@/lib/automation-navigation";
 
 export default function AutomationTemplatesPage() {
   return (
@@ -20,12 +21,13 @@ function AutomationTemplatesContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const teamId = useSearchParams().get("teamId") || undefined;
+  const navigation = automationNavigation(teamId);
   const { hasPermission, loading } = useCurrentUserAuthorization();
   const canCreate = hasPermission("automations.create");
 
   useEffect(() => {
-    if (!loading && !canCreate) router.replace("/automations");
-  }, [canCreate, loading, router]);
+    if (!loading && !canCreate) router.replace(automationNavigation(teamId).list);
+  }, [canCreate, loading, router, teamId]);
 
   if (loading || !canCreate) return null;
 
@@ -36,7 +38,7 @@ function AutomationTemplatesContent() {
           <div className="px-4 py-3 flex items-center gap-2">
             <CollapsedSidebarControls />
             <Link
-              href="/automations"
+              href={navigation.list}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               aria-label="Back to automations"
             >

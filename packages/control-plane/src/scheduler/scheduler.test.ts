@@ -13,8 +13,10 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
-import type { InvocationRunAggregate } from "../db/automation-store";
+import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
+import type { EnvironmentRepositoryRow, EnvironmentRow } from "../db/environments";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import type { Team } from "@open-inspect/shared/types/teams";
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -25,6 +27,26 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
 );
 const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const mockIsPrincipalAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockTeamGetById = vi.hoisted(() =>
+  vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
+);
+const mockTeamGrantCovers = vi.hoisted(() =>
+  vi
+    .fn<(teamId: string, repoIds: readonly (number | null)[]) => Promise<boolean>>()
+    .mockResolvedValue(true)
+);
+
+vi.mock("../db/teams", () => ({
+  TeamStore: vi.fn().mockImplementation(function () {
+    return { getById: mockTeamGetById };
+  }),
+}));
+
+vi.mock("../db/team-repository-grants", () => ({
+  TeamRepositoryGrantStore: vi.fn().mockImplementation(function () {
+    return { covers: mockTeamGrantCovers };
+  }),
+}));
 
 const mockGetGitHubAccessToken = vi.hoisted(() => vi.fn());
 const mockGitHubAccountInfo = vi.hoisted(() => vi.fn());
@@ -515,6 +537,8 @@ describe("Scheduler", () => {
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
     mockIsPrincipalAuthorized.mockResolvedValue(true);
+    mockTeamGetById.mockReset().mockResolvedValue(null);
+    mockTeamGrantCovers.mockReset().mockResolvedValue(true);
     mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
       provider === "slack" ? { userId: "slack-actor-user" } : null
     );
@@ -3214,6 +3238,315 @@ describe("Scheduler", () => {
       );
       // Not treated as a concurrency skip.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("current team repository grants", () => {
+    const teamId = "33333333333333333333333333333333";
+    const activeTeam: Team = {
+      id: teamId,
+      slug: "automation-grants",
+      name: "Automation grants",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 1,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const teamAutomation: AutomationRow = {
+      ...sampleAutomation,
+      harness: "opencode",
+      owner_team_id: teamId,
+      event_type: null,
+      trigger_config: null,
+      trigger_auth_data: null,
+    };
+    const environment: EnvironmentRow = {
+      id: "env_55555555555555555555555555555555",
+      owner_team_id: teamId,
+      name: "Full workspace",
+      description: null,
+      prebuild_enabled: 0,
+      channel_associations: null,
+      created_at: 1,
+      updated_at: 1,
+    };
+    const members: EnvironmentRepositoryRow[] = [
+      {
+        environment_id: environment.id,
+        position: 0,
+        repo_owner: "acme",
+        repo_name: "web-app",
+        repo_id: 12345,
+        base_branch: "main",
+      },
+      {
+        environment_id: environment.id,
+        position: 1,
+        repo_owner: "acme",
+        repo_name: "api",
+        repo_id: 67890,
+        base_branch: "develop",
+      },
+    ];
+    const sources = ["manual", "schedule", "event"] as const;
+
+    function fireSource(
+      source: (typeof sources)[number],
+      execution: InstanceType<typeof Scheduler>
+    ) {
+      if (source === "manual") return execution.trigger("auto-1", "manual-user");
+      if (source === "schedule") return execution.tick();
+      mockStore.getById.mockResolvedValue({ ...teamAutomation, trigger_type: "webhook" });
+      return execution.event({
+        source: "webhook",
+        automationId: "auto-1",
+        eventType: "webhook.received",
+        triggerKey: "webhook:auto-1:delivery-1",
+        concurrencyKey: "webhook:auto-1",
+        contextBlock: "Webhook received",
+        meta: {},
+        body: {},
+      });
+    }
+
+    async function expectGrantDenied(source: (typeof sources)[number]) {
+      const stub = createMockSessionStub();
+      const firing = fireSource(source, createScheduler(createEnv(undefined, stub)));
+      if (source === "manual") {
+        await expect(firing).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+        await expect(firing).rejects.toMatchObject({ reason: "target_team_missing_grant" });
+      } else if (source === "schedule") {
+        await expect(firing).resolves.toEqual({ processed: 0, skipped: 1, failed: 0 });
+      } else {
+        await expect(firing).resolves.toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      }
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(mockStore.claimRunSession).not.toHaveBeenCalled();
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+      expect(stub.fetch).not.toHaveBeenCalled();
+      expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      if (source === "schedule") {
+        expect(mockStore.recordAuthorizationDenied).toHaveBeenCalledWith(
+          expect.objectContaining({
+            automation_id: "auto-1",
+            source: "schedule",
+            scheduled_at: teamAutomation.next_run_at,
+            skip_reason: "target_team_missing_grant",
+            failure_counted_at: null,
+          }),
+          teamAutomation.next_run_at
+        );
+      } else {
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      }
+    }
+
+    beforeEach(() => {
+      mockTeamGetById.mockResolvedValue(activeTeam);
+      mockStore.getById.mockResolvedValue(teamAutomation);
+      mockStore.getOverdueAutomations.mockResolvedValue([teamAutomation]);
+      mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
+      mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
+    });
+
+    it.each(sources)("checks resolved direct IDs before %s admission", async (source) => {
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 98765,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "main",
+      });
+      mockTeamGrantCovers.mockImplementation(async (_teamId, repoIds) =>
+        repoIds.every((repoId) => repoId === 12345)
+      );
+
+      await expectGrantDenied(source);
+      expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [98765]);
+      expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(sources)("checks nonprimary member grants before %s admission", async (source) => {
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      selectEnvironments("auto-1", [environment.id]);
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+      mockTeamGrantCovers.mockImplementation(async (_teamId, repoIds) =>
+        repoIds.every((repoId) => repoId === 12345)
+      );
+
+      await expectGrantDenied(source);
+      expect(mockTeamGrantCovers).toHaveBeenCalledWith(
+        teamId,
+        expect.arrayContaining([12345, 67890])
+      );
+      expect(mockEnvironmentRepositories).toHaveBeenCalledTimes(1);
+      expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(3);
+    });
+
+    it("uses the exact authorized environment member snapshot after admission edits", async () => {
+      selectEnvironments("auto-1", [environment.id]);
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+      mockStore.insertInvocationGuarded.mockImplementation(async (params: unknown) => {
+        capturedInvocationParams.push(
+          structuredClone(params) as { children: Array<Record<string, unknown>> }
+        );
+        mockEnvironmentRepositories.mockResolvedValue([
+          members[0],
+          { ...members[1], base_branch: "edited-after-admission" },
+          { ...members[1], position: 2, repo_name: "ungranted", repo_id: 99999 },
+        ]);
+        return { inserted: true };
+      });
+      const stub = createMockSessionStub();
+
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toEqual({
+        processed: 1,
+        skipped: 0,
+        failed: 0,
+      });
+      expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [12345, 67890]);
+      expect(mockEnvironmentRepositories).toHaveBeenCalledTimes(1);
+      expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(2);
+      expect(mockTeamGrantCovers.mock.invocationCallOrder[0]).toBeLessThan(
+        mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
+      );
+      for (const callOrder of mockCheckRepositoryAccess.mock.invocationCallOrder) {
+        expect(callOrder).toBeLessThan(
+          mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
+        );
+      }
+      expect(await getInitBody(vi.mocked(stub.fetch))).toMatchObject({
+        environmentId: environment.id,
+        repoOwner: "acme",
+        repoName: "web-app",
+        repoId: 12345,
+        defaultBranch: "main",
+        repositories: [
+          { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
+          { repoOwner: "acme", repoName: "api", repoId: 67890, baseBranch: "develop" },
+        ],
+      });
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerTeamId: teamId, visibility: "team" })
+      );
+    });
+
+    it.each(["repository", "environment"] as const)(
+      "preserves a failed %s resolution while authorized healthy fan-out launches",
+      async (target) => {
+        selectRepositories("auto-1", [
+          repositoryRow("auto-1"),
+          ...(target === "repository"
+            ? [repositoryRow("auto-1", { repo_name: "api", repo_id: 67890 })]
+            : []),
+        ]);
+        if (target === "environment") selectEnvironments("auto-1", [environment.id]);
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+          name === "api"
+            ? null
+            : { repoId: 12345, repoOwner: owner, repoName: name, defaultBranch: "main" }
+        );
+        mockTeamGrantCovers.mockImplementation(async (_teamId, repoIds) =>
+          repoIds.every((repoId) => repoId === 12345)
+        );
+        mockStore.getInvocationRunAggregate.mockResolvedValue(
+          aggregate({ total: 2, active: 1, failed: 1 })
+        );
+
+        const result = await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(result.runs).toEqual([
+          expect.objectContaining({ repo_name: "web-app", status: "running" }),
+          expect.objectContaining({
+            status: "failed",
+            failure_reason:
+              target === "repository"
+                ? "Repository is not accessible for the configured SCM provider"
+                : expect.stringContaining("acme/api"),
+            ...(target === "repository"
+              ? { repo_name: "api" }
+              : { environment_id: environment.id }),
+          }),
+        ]);
+        expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [12345]);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
+        expect(mockSessionStoreCreate).toHaveBeenCalledTimes(1);
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+        expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it("does not apply team grants to workspace repository and environment launches", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockEnvironmentGetById.mockResolvedValue({ ...environment, owner_team_id: null });
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      selectEnvironments("auto-1", [environment.id]);
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+      mockTeamGrantCovers.mockResolvedValue(false);
+
+      expect(await createScheduler().tick()).toEqual({ processed: 1, skipped: 0, failed: 0 });
+      expect(mockTeamGrantCovers).not.toHaveBeenCalled();
+      expect(mockTeamGetById).not.toHaveBeenCalled();
+      expect(mockSessionStoreCreate).toHaveBeenCalledTimes(2);
+      expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+    });
+
+    it("keeps workspace environment resolution at launch time", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockEnvironmentGetById.mockResolvedValue({ ...environment, owner_team_id: null });
+      selectEnvironments("auto-1", [environment.id]);
+      mockStore.insertInvocationGuarded.mockImplementation(async (params: unknown) => {
+        capturedInvocationParams.push(
+          structuredClone(params) as { children: Array<Record<string, unknown>> }
+        );
+        mockEnvironmentRepositories.mockResolvedValue([
+          members[0],
+          { ...members[1], base_branch: "edited-after-admission" },
+        ]);
+        return { inserted: true };
+      });
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+      const stub = createMockSessionStub();
+
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toEqual({
+        processed: 1,
+        skipped: 0,
+        failed: 0,
+      });
+      expect(mockTeamGrantCovers).not.toHaveBeenCalled();
+      expect(mockEnvironmentRepositories.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
+      );
+      expect((await getInitBody(vi.mocked(stub.fetch))).repositories).toEqual([
+        { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", repoId: 67890, baseBranch: "edited-after-admission" },
+      ]);
     });
   });
 });

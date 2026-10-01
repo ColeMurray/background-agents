@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, use } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation } from "@/hooks/use-automations";
@@ -13,30 +13,26 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useSWRConfig } from "swr";
+import { invalidateAutomationCache } from "@/lib/automation-cache";
+import { automationNavigation } from "@/lib/automation-navigation";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
+  const teamId = useSearchParams().get("teamId");
+  const navigation = automationNavigation(teamId);
   const { automation, loading } = useAutomation(id);
-  const { mutate } = useSWRConfig();
+  const swr = useSWRConfig();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const canManage = automation?.capabilities?.canManage === true;
-  const refreshAutomations = () =>
-    mutate(
-      (key) =>
-        typeof key === "string" &&
-        (key.startsWith("/api/automations/") ||
-          key.startsWith("/api/automations?") ||
-          key.startsWith("$inf$/api/automations?"))
-    );
 
   useEffect(() => {
     if (!loading && automation && !canManage) {
-      router.replace(`/automations/${id}`);
+      router.replace(automationNavigation(teamId).detail(id));
     }
-  }, [automation, canManage, id, loading, router]);
+  }, [automation, canManage, id, loading, router, teamId]);
 
   const handleSubmit = async (values: AutomationFormValues) => {
     if (!canManage || !automation) return;
@@ -54,8 +50,8 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
         const data = await res.json();
         throw new Error(data.error || "Failed to update automation");
       }
-      await refreshAutomations();
-      router.push(`/automations/${id}`);
+      await invalidateAutomationCache(swr, id);
+      router.push(navigation.detail(id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to update automation");
     } finally {
@@ -75,7 +71,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
-        <Link href="/automations">
+        <Link href={navigation.list}>
           <button type="button" className="text-sm text-accent hover:underline">
             Back to Automations
           </button>
@@ -93,7 +89,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
           <div className="px-4 py-3 flex items-center gap-2">
             <CollapsedSidebarControls />
             <Link
-              href={`/automations/${id}`}
+              href={navigation.detail(id)}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               aria-label="Back to automation"
             >

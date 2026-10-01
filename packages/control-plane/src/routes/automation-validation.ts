@@ -284,10 +284,10 @@ export function getEnvironmentSelection(body: {
 }
 
 /**
- * Verify selected environments exist, belong to the automation's team, and
+ * Verify selected environments are visible, belong to the automation's team, and
  * admit use for replacements. Stored selections still supply the owning team's grant check.
  *
- * @throws TargetSelectionError naming every missing environment.
+ * @throws TargetSelectionError naming every missing or invisible environment.
  */
 export async function resolveEnvironmentSelection(
   db: SqlDatabase,
@@ -298,30 +298,37 @@ export async function resolveEnvironmentSelection(
 ): Promise<GrantRepository[]> {
   if (environmentIds.length === 0) return [];
   const store = new EnvironmentStore(db);
-  const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
+  const found = await Promise.all(
+    environmentIds.map(async (id) => {
+      const environment = await store.getById(id);
+      if (!environment) return null;
+      const access = checkEnvironmentAccess(
+        viewer,
+        { ownerTeamId: environment.owner_team_id },
+        "use"
+      );
+      if (!access.allowed && access.reason === "not_member") return null;
+      return { environment, access };
+    })
+  );
   const missing = environmentIds.filter((_, index) => !found[index]);
   if (missing.length > 0) {
     throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
   }
   const repositories: GrantRepository[] = [];
-  for (const environment of found) {
-    if (!environment) continue;
+  for (const target of found) {
+    if (!target) continue;
+    const { environment, access } = target;
+    // Unchanged selections retain their use-permission exemption, not a visibility exemption.
+    if (!access.allowed && (requireUse || access.reason !== "missing_permission")) {
+      throw new TargetSelectionError("Environment use denied", 403, access.reason);
+    }
     if (environment.owner_team_id !== ownerTeamId) {
       throw new TargetSelectionError(
         "Environment must belong to the automation's owner team",
         409,
         "environment_team_mismatch"
       );
-    }
-    if (requireUse) {
-      const access = checkEnvironmentAccess(
-        viewer,
-        { ownerTeamId: environment.owner_team_id },
-        "use"
-      );
-      if (!access.allowed) {
-        throw new TargetSelectionError("Environment use denied", 403, access.reason);
-      }
     }
     if (ownerTeamId !== null) {
       repositories.push(

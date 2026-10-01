@@ -65,6 +65,7 @@ import { getUserAuth } from "../auth/user/runtime";
 import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
 import { TeamStore } from "../db/teams";
+import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -84,7 +85,10 @@ import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/tim
 import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
-import { resolveAutomationSessionTarget } from "../automation/session-target";
+import {
+  resolveAutomationSessionTarget,
+  type AutomationSessionTarget,
+} from "../automation/session-target";
 import {
   isAutomationExecutionAuthorized,
   isPrincipalAuthorized,
@@ -479,10 +483,9 @@ export class Scheduler {
 
     // One child per target. Repository children snapshot the resolved repo; a
     // failed resolution pre-fails its child (snapshot from the selection row)
-    // without blocking siblings. Environment children snapshot the environment
-    // id — the workspace itself resolves at launch time (design §13.3), so a
-    // deleted environment fails through the launch-failure path. No targets →
-    // one repo-less child.
+    // without blocking siblings. Environment children snapshot their id; team
+    // workspaces are resolved before grant admission below. Resolution errors
+    // remain launch failures. No targets produce one repo-less child.
     const children: AutomationRunRow[] = [
       ...resolutions.map(
         (resolution): AutomationRunRow => ({
@@ -509,6 +512,50 @@ export class Scheduler {
     }
 
     const launchCandidates = children.filter((child) => child.status === "starting");
+    const launchTargets = new Map<
+      string,
+      { target: AutomationSessionTarget } | { error: unknown }
+    >();
+    if (automation.owner_team_id !== null) {
+      // Pin the exact environment members authorized here; never re-read a
+      // different workspace after invocation admission.
+      await Promise.all(
+        launchCandidates.map(async (child) => {
+          try {
+            const target = await resolveAutomationSessionTarget(
+              this.env,
+              child,
+              {
+                trace_id: `automation:${automation.id}`,
+                request_id: child.id,
+                metrics: createRequestMetrics(),
+                db: this.db,
+                executionCtx: this.backgroundJobs,
+              },
+              this.log
+            );
+            launchTargets.set(child.id, { target });
+          } catch (error) {
+            launchTargets.set(child.id, { error });
+          }
+        })
+      );
+      const repoIds = launchCandidates.flatMap((child) => {
+        const snapshot = launchTargets.get(child.id);
+        if (!snapshot || !("target" in snapshot)) return [];
+        const target = snapshot.target;
+        return target.repositories
+          ? target.repositories.map((repository) => repository.repoId)
+          : target.repoId === null
+            ? []
+            : [target.repoId];
+      });
+      if (
+        !(await new TeamRepositoryGrantStore(this.db).covers(automation.owner_team_id, repoIds))
+      ) {
+        return { outcome: "unauthorized", reason: "target_team_missing_grant" };
+      }
+    }
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
     // for this firing: edits made after the conditional insert cannot change which
@@ -611,6 +658,8 @@ export class Scheduler {
       try {
         if (attributionError !== undefined) throw attributionError;
         if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
+        const targetSnapshot = launchTargets.get(child.id);
+        if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
         const sessionId = generateId();
         // Claim the generated session before initialization. Otherwise the orphan sweep can
         // terminalize an old `starting` row while initialization is still creating its session.
@@ -635,7 +684,8 @@ export class Scheduler {
           providerAuthSnapshot.providerAuth,
           sessionId,
           executionPrincipal,
-          claimedAt
+          claimedAt,
+          targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined
         );
         await this.sendPromptToSession(
           sessionId,
@@ -1578,7 +1628,8 @@ export class Scheduler {
     sessionId: string,
     executionPrincipal: ExecutionPrincipal,
     /** The instant the run claimed this session — what its deadline measures from. */
-    startedAt: number
+    startedAt: number,
+    authorizedTarget?: AutomationSessionTarget
   ): Promise<void> {
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -1588,11 +1639,11 @@ export class Scheduler {
       executionCtx: this.backgroundJobs,
     };
 
-    // What the session opens — the run's repository snapshot or, for
-    // environment-bound automations, the environment's workspace. All target
-    // semantics live in resolveAutomationSessionTarget; a resolution failure
-    // throws into launchChild's failure path.
-    const target = await resolveAutomationSessionTarget(this.env, run, ctx, this.log);
+    if (automation.owner_team_id !== null && !authorizedTarget) {
+      throw new AutomationExecutionUnauthorizedError("target_team_missing_grant");
+    }
+    const target =
+      authorizedTarget ?? (await resolveAutomationSessionTarget(this.env, run, ctx, this.log));
 
     // Session-scoped integration settings resolve from the primary member
     // (design §6.2), with environment-bound runs layering that environment's

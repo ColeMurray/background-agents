@@ -45,6 +45,9 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
     hasPermission: (permission: string) => mockPermissions.has(permission),
   }),
 }));
+vi.mock("@/hooks/use-teams", () => ({
+  useMeTeams: () => ({ teams: [{ id: "team/one" }], loading: false, error: undefined }),
+}));
 
 vi.mock("@/components/automations/automations-list", () => ({
   AutomationsList: ({ automations }: { automations: Array<{ name: string }> }) => (

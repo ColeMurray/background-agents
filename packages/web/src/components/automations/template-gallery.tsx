@@ -10,6 +10,7 @@ import {
   type TemplateCategory,
 } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
+import { automationNavigation } from "@/lib/automation-navigation";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   ClockIcon,
@@ -92,7 +93,7 @@ function TemplateCard({ template, teamId }: { template: AutomationTemplate; team
       <div className="mt-3">
         <Button variant="outline" size="sm" asChild>
           <Link
-            href={`/automations/new?template=${template.id}${teamId ? `&teamId=${encodeURIComponent(teamId)}` : ""}`}
+            href={automationNavigation(teamId).new(template.id)}
             aria-label={`Add ${template.title}`}
           >
             Add

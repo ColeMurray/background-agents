@@ -2,11 +2,12 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import NewAutomationPage from "./page";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -16,10 +17,15 @@ let search = "";
 let enabledModelsValue: string[] = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
 let canCreate = true;
 const replace = vi.fn();
+const push = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
-  useRouter: () => ({ push: vi.fn(), replace }),
+  useRouter: () => ({ push, replace }),
+}));
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
+vi.mock("@/components/automations/webhook-config", () => ({
+  WebhookConfig: () => <div>Webhook configuration</div>,
 }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -30,7 +36,8 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 }));
 
 vi.mock("@/components/sidebar-layout", () => ({
-  useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
+  CollapsedSidebarControls: () => null,
+  useSidebarContext: () => ({ isOpen: false, toggle: vi.fn() }),
 }));
 
 vi.mock("@/hooks/use-repos", () => ({
@@ -81,9 +88,56 @@ beforeEach(() => {
   enabledModelsValue = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
   canCreate = true;
   replace.mockReset();
+  push.mockReset();
+  vi.mocked(browserApiFetch).mockReset();
+  vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ automation: { id: "new-auto" } }));
 });
 
 describe("NewAutomationPage template pre-fill", () => {
+  it.each([undefined, "team-1"])(
+    "keeps navigation scope %s when the selected creation owner changes",
+    async (teamId) => {
+      search = `template=find-bugs${teamId ? `&teamId=${teamId}` : ""}`;
+      const { container } = render(<NewAutomationPage />);
+      fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
+        target: { value: teamId ? "" : "team-1" },
+      });
+      const scopeQuery = teamId ? "?teamId=team-1" : "";
+      expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
+        "href",
+        `/automations${scopeQuery}`
+      );
+      fireEvent.submit(container.querySelector("form")!);
+      await waitFor(() => expect(push).toHaveBeenCalledWith(`/automations/new-auto${scopeQuery}`));
+      const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+      expect(body.teamId).toBe(teamId ? null : "team-1");
+    }
+  );
+
+  it("preserves scope after webhook creation while allowing a different owner", async () => {
+    search = "template=find-bugs&teamId=team-1";
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({ automation: { id: "new-auto" }, webhookApiKey: "secret" })
+    );
+    const { container } = render(<NewAutomationPage />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Team" }), {
+      target: { value: "" },
+    });
+    fireEvent.submit(container.querySelector("form")!);
+    expect(await screen.findByRole("link", { name: "Go to Automation" })).toHaveAttribute(
+      "href",
+      "/automations/new-auto?teamId=team-1"
+    );
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("preserves scope when a create deep link is denied", () => {
+    search = "teamId=team%2Fone";
+    canCreate = false;
+    render(<NewAutomationPage />);
+    expect(replace).toHaveBeenCalledWith("/automations?teamId=team%2Fone");
+  });
+
   it("preserves team query context alongside the template", () => {
     search = "template=find-bugs&teamId=team-1";
     render(<NewAutomationPage />);

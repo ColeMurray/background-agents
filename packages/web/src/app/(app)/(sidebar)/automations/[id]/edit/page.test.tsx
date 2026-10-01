@@ -16,7 +16,9 @@ const CURRENT_USER_ID = "11111111111111111111111111111111";
 let permissions: string[] = [];
 const replace = vi.fn();
 const push = vi.fn();
-const cacheMocks = vi.hoisted(() => ({ mutate: vi.fn() }));
+const cacheMocks = vi.hoisted(() => ({ mutate: vi.fn(), cache: new Map() }));
+let search = "";
+const formProps = vi.fn();
 
 const automation = {
   id: "auto-1",
@@ -46,10 +48,11 @@ const automation = {
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace }),
+  useSearchParams: () => new URLSearchParams(search),
 }));
 vi.mock("@/components/sidebar-layout", () => ({
   CollapsedSidebarControls: () => null,
-  useSidebarContext: () => ({ isOpen: true }),
+  useSidebarContext: () => ({ isOpen: false }),
 }));
 vi.mock("@/hooks/use-automations", () => ({
   useAutomation: () => ({ automation, loading: false }),
@@ -61,31 +64,37 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   }),
 }));
 vi.mock("@/components/automations/automation-form", () => ({
-  AutomationForm: ({ onSubmit }: { onSubmit: (values: AutomationFormValues) => void }) => (
-    <div>
-      Automation edit form
-      <button
-        onClick={() =>
-          onSubmit({
-            name: "Updated",
-            harness: "opencode",
-            model: "openai/gpt-5.4",
-            reasoningEffort: null,
-            triggerType: "schedule",
-            instructions: "Review",
-            repositories: [{ repoOwner: "acme", repoName: "app" }],
-            environmentIds: ["env-1"],
-            providerSelections: {},
-          })
-        }
-      >
-        Save changes
-      </button>
-    </div>
-  ),
+  AutomationForm: (props: {
+    onSubmit: (values: AutomationFormValues) => void;
+    initialValues: Partial<AutomationFormValues>;
+  }) => {
+    formProps(props);
+    return (
+      <div>
+        Automation edit form
+        <button
+          onClick={() =>
+            props.onSubmit({
+              name: "Updated",
+              harness: "opencode",
+              model: "openai/gpt-5.4",
+              reasoningEffort: null,
+              triggerType: "schedule",
+              instructions: "Review",
+              repositories: [{ repoOwner: "acme", repoName: "app" }],
+              environmentIds: ["env-1"],
+              providerSelections: {},
+            })
+          }
+        >
+          Save changes
+        </button>
+      </div>
+    );
+  },
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
-vi.mock("swr", () => ({ useSWRConfig: () => ({ mutate: cacheMocks.mutate }) }));
+vi.mock("swr", () => ({ useSWRConfig: () => cacheMocks }));
 
 async function renderPage() {
   await act(async () => {
@@ -99,6 +108,10 @@ async function renderPage() {
 
 beforeEach(() => {
   permissions = [];
+  search = "";
+  formProps.mockClear();
+  cacheMocks.cache.clear();
+  cacheMocks.cache.set("/api/automations/auto-1", { data: automation });
   automation.capabilities = undefined;
   replace.mockReset();
   push.mockReset();
@@ -110,6 +123,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("EditAutomationPage authorization", () => {
+  it("preserves navigation scope on back and save while editing the original owner", async () => {
+    search = "teamId=team%2Fone";
+    automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
+    await renderPage();
+    expect(screen.getByRole("link", { name: "Back to automation" })).toHaveAttribute(
+      "href",
+      "/automations/auto-1?teamId=team%2Fone"
+    );
+    expect(formProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ initialValues: expect.objectContaining({ teamId: "team-1" }) })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/auto-1?teamId=team%2Fone"));
+  });
+
+  it("preserves scope when redirecting a read-only deep link", async () => {
+    search = "teamId=team%2Fone";
+    await renderPage();
+    expect(replace).toHaveBeenCalledWith("/automations/auto-1?teamId=team%2Fone");
+  });
+
   it("redirects a deep link with missing capabilities even with global manage", async () => {
     permissions = ["automations.manage.any"];
     await renderPage();

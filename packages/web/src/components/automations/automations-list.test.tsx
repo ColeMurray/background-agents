@@ -136,6 +136,24 @@ describe("AutomationsList schedule metadata", () => {
 });
 
 describe("AutomationsList actions", () => {
+  it.each([undefined, "team/one"])("preserves row navigation scope %s", (teamId) => {
+    render(
+      <AutomationsList
+        teamId={teamId}
+        automations={[makeAutomation()]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+    expect(screen.getByRole("link", { name: "Nightly review" })).toHaveAttribute(
+      "href",
+      `/automations/auto-1${teamId ? "?teamId=team%2Fone" : ""}`
+    );
+  });
+
   const renderListWithActions = (automation: AutomationListItem) =>
     render(
       <AutomationsList

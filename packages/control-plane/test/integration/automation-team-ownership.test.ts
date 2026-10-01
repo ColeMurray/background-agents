@@ -474,7 +474,7 @@ describe("automation team ownership", () => {
     }
   );
 
-  it("revalidates unchanged environment grants and scope without requiring viewer use permission", async () => {
+  it("revalidates unchanged environment grants without viewer use permission", async () => {
     const store = new AutomationStore(env.DB);
     await environment("env_unchanged", TEAM_A, 91);
     await store.create(automation("repository-edit", TEAM_A));
@@ -508,18 +508,65 @@ describe("automation team ownership", () => {
       code: "permission_required",
       permission: "environments.use",
     });
+  });
 
-    await env.DB.prepare("UPDATE environments SET owner_team_id = ? WHERE id = ?")
-      .bind(TEAM_B, "env_unchanged")
-      .run();
-    const mismatch = await request("/automations/repository-edit", LEAD, "PUT", {
+  it("rejects visible cross-team unchanged selections without use access", async () => {
+    const store = new AutomationStore(env.DB);
+    await environment("env_unchanged_cross", TEAM_B);
+    await store.create(automation("unchanged-cross-team", TEAM_A));
+    await sqlDatabase(env.DB).batch(
+      store.bindEnvironmentInserts("unchanged-cross-team", ["env_unchanged_cross"], 1)
+    );
+    await customRole(EXECUTOR, ["automations.manage.own"]);
+
+    const mismatch = await request("/automations/unchanged-cross-team", EXECUTOR, "PUT", {
       repositories: [],
     });
     expect(mismatch.status).toBe(409);
-    await expect(mismatch.json()).resolves.toMatchObject({
+    await expect(mismatch.json()).resolves.toEqual({
+      error: "Environment must belong to the automation's owner team",
+      code: "environment_team_mismatch",
       reason_code: "environment_team_mismatch",
     });
   });
+
+  it.each([
+    { environmentIds: ["env_hidden"] },
+    { environmentIds: ["env_hidden_z", "env_missing", "env_hidden_a"] },
+  ])(
+    "hides unchanged non-member environments like missing IDs: $environmentIds",
+    async ({ environmentIds }) => {
+      const store = new AutomationStore(env.DB);
+      await store.create(automation("unchanged-hidden", TEAM_A));
+      await sqlDatabase(env.DB).batch(
+        store.bindEnvironmentInserts("unchanged-hidden", environmentIds, 1)
+      );
+      await customRole(LEAD, ["automations.manage.own"]);
+
+      const missing = await request("/automations/unchanged-hidden", LEAD, "PUT", {
+        repositories: [],
+      });
+      expect(missing.status).toBe(400);
+      const missingBody = await missing.text();
+      expect(missingBody).toBe(
+        JSON.stringify({ error: `Environment not found: ${[...environmentIds].sort().join(", ")}` })
+      );
+
+      for (const id of environmentIds.filter((id) => id !== "env_missing")) {
+        await environment(id, TEAM_B);
+      }
+      const hidden = await request("/automations/unchanged-hidden", LEAD, "PUT", {
+        repositories: [],
+      });
+      expect(hidden.status).toBe(missing.status);
+      expect(await hidden.text()).toBe(missingBody);
+      expect(
+        (await store.getEnvironmentsForAutomation("unchanged-hidden")).map(
+          (row) => row.environment_id
+        )
+      ).toEqual([...environmentIds].sort());
+    }
+  );
 
   it("allows a null repository ID on target updates with an installation grant", async () => {
     const store = new AutomationStore(env.DB);
@@ -540,17 +587,92 @@ describe("automation team ownership", () => {
     expect((await store.getById("grant-update"))?.owner_team_id).toBe(TEAM_A);
   });
 
-  it.each([null, TEAM_B])(
-    "refuses selecting an environment outside the automation team (%s)",
-    async (ownerTeamId) => {
+  it.each(
+    ["POST", "PUT"].flatMap((method) =>
+      [
+        ["env_hidden"],
+        ["env_visible_cross", "env_hidden_z", "env_missing", "env_hidden_a"],
+        ["env_hidden_a", "env_missing", "env_hidden_z", "env_visible_cross"],
+      ].map((environmentIds) => ({ method, environmentIds }))
+    )
+  )(
+    "matches hidden and missing selections on $method in input order: $environmentIds",
+    async ({ method, environmentIds }) => {
+      const store = new AutomationStore(env.DB);
+      const path = method === "POST" ? "/automations" : "/automations/hidden-targets-update";
+      if (method === "PUT") {
+        await store.create(automation("hidden-targets-update", TEAM_A));
+      }
+      await environment("env_visible_cross", null);
+      await customRole(LEAD, ["automations.create", "automations.manage.own", "environments.use"]);
+      const body =
+        method === "POST" ? { ...createBody, teamId: TEAM_A, environmentIds } : { environmentIds };
+
+      const missing = await request(path, LEAD, method, body);
+      expect(missing.status).toBe(400);
+      const missingBody = await missing.text();
+      expect(missingBody).toBe(
+        JSON.stringify({
+          error: `Environment not found: ${environmentIds
+            .filter((id) => id !== "env_visible_cross")
+            .join(", ")}`,
+        })
+      );
+
+      for (const id of environmentIds.filter((id) => id.startsWith("env_hidden"))) {
+        await environment(id, TEAM_B);
+      }
+      const hidden = await request(path, LEAD, method, body);
+      expect(hidden.status).toBe(missing.status);
+      expect(await hidden.text()).toBe(missingBody);
+      if (method === "PUT") {
+        expect(await store.getEnvironmentsForAutomation("hidden-targets-update")).toEqual([]);
+      }
+    }
+  );
+
+  it("selects visible environments with use but no read on create and update", async () => {
+    await environment("env_use_only", TEAM_A);
+    await customRole(LEAD, ["automations.create", "automations.manage.own", "environments.use"]);
+    const created = await request("/automations", LEAD, "POST", {
+      ...createBody,
+      teamId: TEAM_A,
+      environmentIds: ["env_use_only"],
+    });
+    expect(created.status).toBe(201);
+    const { automation: selected } = await created.json<{ automation: { id: string } }>();
+    const updated = await request(`/automations/${selected.id}`, LEAD, "PUT", {
+      environmentIds: ["env_use_only"],
+    });
+    expect(updated.status).toBe(200);
+    expect(
+      (await new AutomationStore(env.DB).getEnvironmentsForAutomation(selected.id)).map(
+        (row) => row.environment_id
+      )
+    ).toEqual(["env_use_only"]);
+  });
+
+  it.each(
+    ["POST", "PUT"].flatMap((method) =>
+      [null, TEAM_B].map((ownerTeamId) => ({ method, ownerTeamId }))
+    )
+  )(
+    "refuses selecting a visible environment outside the automation team on $method ($ownerTeamId)",
+    async ({ method, ownerTeamId }) => {
       await environment("env_cross", ownerTeamId);
-      const response = await request("/automations", EXECUTOR, "POST", {
-        ...createBody,
-        teamId: TEAM_A,
-        environmentIds: ["env_cross"],
-      });
+      const path = method === "POST" ? "/automations" : "/automations/cross-team-update";
+      if (method === "PUT") {
+        await new AutomationStore(env.DB).create(automation("cross-team-update", TEAM_A));
+      }
+      const body =
+        method === "POST"
+          ? { ...createBody, teamId: TEAM_A, environmentIds: ["env_cross"] }
+          : { environmentIds: ["env_cross"] };
+      const response = await request(path, EXECUTOR, method, body);
       expect(response.status).toBe(409);
-      await expect(response.json()).resolves.toMatchObject({
+      await expect(response.json()).resolves.toEqual({
+        error: "Environment must belong to the automation's owner team",
+        code: "environment_team_mismatch",
         reason_code: "environment_team_mismatch",
       });
     }

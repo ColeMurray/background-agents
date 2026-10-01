@@ -1,24 +1,17 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
-import {
-  SCOPED_PERMISSION_PAIRS,
-  resolveScopedPermission,
-  type PermissionId,
-} from "@open-inspect/shared/rbac";
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
+import { evaluateOwnedResourceAdmission } from "../authorization/owned-resource-admission";
 import type {
   AuthorizationDecisionRequirement,
   RouteAuthorizationDecision,
 } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
-import { checkAutomationAccess, checkEnvironmentAccess } from "@open-inspect/shared";
-import { resourceViewer } from "../authorization/resource-viewer";
-import { EnvironmentStore } from "../db/environments";
 import { evaluateSessionAdmission, viewerFromContext } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
-import { AutomationStore } from "../db/automation-store";
 import { TeamStore } from "../db/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
@@ -545,140 +538,29 @@ async function enforcePermissionRequirement(
   );
 }
 
-async function enforceAutomationRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
+async function enforceOwnedResourceRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
   params: RouteParams,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
 ): Promise<AuthorizationFailure | null> {
-  if (
-    ctx.principal?.kind === "service" &&
-    !serviceAllowsPermission(ctx.principal.service, "automations.read")
-  ) {
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden"
-    );
-  }
-  const automationId = params[requirement.automationIdParam];
-  if (!automationId) return { response: json({ error: "Invalid automation route" }, 400) };
-
   try {
-    const store = new AutomationStore(ctx.db);
-    const storedAutomation = await store.getById(automationId);
-    const viewer = await resourceViewer(ctx);
-    const row = storedAutomation && {
-      ownerTeamId: storedAutomation.owner_team_id,
-      executorUserId: storedAutomation.user_id,
-    };
-    if (storedAutomation) ctx.automationAdmission = { automation: storedAutomation, viewer };
-    const read = row && checkAutomationAccess(viewer, row, "read");
-    if (!storedAutomation || (read && !read.allowed && read.reason !== "missing_permission")) {
-      return authorizationDenial(
-        error("Automation not found", 404),
-        evidence,
-        requirement,
-        "automation_not_visible",
-        "Automation not found"
-      );
+    const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
+    if (result.kind === "error") {
+      return { response: json(result.response, result.status) };
     }
-    const automation = await store.resolveCanonicalOwner(storedAutomation);
-    const decision = checkAutomationAccess(
-      viewer,
-      {
-        ownerTeamId: automation.owner_team_id,
-        executorUserId: automation.user_id,
-      },
-      requirement.operation
-    );
-    if (!decision.allowed) {
+    if (result.kind === "denied") {
       return authorizationDenial(
-        json(
-          { error: "Forbidden", code: "automation_action_denied", reason_code: decision.reason },
-          403
-        ),
+        json(result.response, result.status),
         evidence,
         requirement,
-        decision.reason,
-        "Forbidden"
+        result.reasonCode,
+        result.reason,
+        result.failedPermission
       );
     }
     evidence.requirements.push(requirement);
-    if (viewer.kind === "user") {
-      if (requirement.operation === "read") evidence.effectivePermissions.push("automations.read");
-      else {
-        const stem = `automations.${requirement.operation}` as const;
-        const scope = resolveScopedPermission(stem, viewer.permissions);
-        if (scope) evidence.effectivePermissions.push(SCOPED_PERMISSION_PAIRS[stem][scope]);
-      }
-    }
-    ctx.automationAdmission = { automation, viewer };
-    return null;
-  } catch {
-    return authorizationUnavailable();
-  }
-}
-
-async function enforceEnvironmentRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "environment" }>,
-  params: RouteParams,
-  ctx: RequestContext,
-  evidence: AuthorizationEvidence
-): Promise<AuthorizationFailure | null> {
-  const id = params[requirement.idParam];
-  if (!id) return { response: error("Invalid environment route", 400) };
-  const permission = `environments.${requirement.need}` as const;
-  if (
-    ctx.principal?.kind === "service" &&
-    !serviceAllowsPermission(ctx.principal.service, permission)
-  ) {
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden"
-    );
-  }
-  try {
-    const environment = await new EnvironmentStore(ctx.db).getById(id);
-    const viewer = await resourceViewer(ctx);
-    if (environment) ctx.environmentAdmission = { environment, viewer };
-    const read =
-      environment &&
-      checkEnvironmentAccess(viewer, { ownerTeamId: environment.owner_team_id }, "read");
-    if (!environment || (read && !read.allowed && read.reason !== "missing_permission")) {
-      return authorizationDenial(
-        error("Environment not found", 404),
-        evidence,
-        requirement,
-        "environment_not_visible",
-        "Environment not found"
-      );
-    }
-    const decision = checkEnvironmentAccess(
-      viewer,
-      { ownerTeamId: environment.owner_team_id },
-      requirement.need
-    );
-    if (!decision.allowed) {
-      return authorizationDenial(
-        json(
-          { error: "Forbidden", code: "environment_action_denied", reason_code: decision.reason },
-          403
-        ),
-        evidence,
-        requirement,
-        decision.reason,
-        "Forbidden",
-        permission
-      );
-    }
-    evidence.requirements.push(requirement);
-    if (viewer.kind === "user") evidence.effectivePermissions.push(permission);
+    if (result.effectivePermission) evidence.effectivePermissions.push(result.effectivePermission);
     return null;
   } catch {
     return authorizationUnavailable();
@@ -893,13 +775,11 @@ async function enforceRouteAuthorization(
           failure = await enforcePermissionRequirement(requirement, ctx, evidence);
           break;
         case "automation":
-          failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
+        case "environment":
+          failure = await enforceOwnedResourceRequirement(requirement, params, ctx, evidence);
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);
-          break;
-        case "environment":
-          failure = await enforceEnvironmentRequirement(requirement, params, ctx, evidence);
           break;
         case "session":
           failure = await enforceSessionRequirement(requirement, params, env, ctx, evidence);

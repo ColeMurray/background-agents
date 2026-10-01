@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { Suspense } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,12 +10,15 @@ import {
   type Automation,
 } from "@open-inspect/shared/types/automations";
 import AutomationDetailPage from "./page";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 expect.extend(matchers);
 
 const CURRENT_USER_ID = "11111111111111111111111111111111";
 const OTHER_USER_ID = "22222222222222222222222222222222";
 let permissions: string[] = [];
+let search = "";
+const push = vi.fn();
 /** How many invocations the automation has, and every limit the page asked for. */
 const history = vi.hoisted(() => ({ total: 0, requestedLimits: [] as number[] }));
 
@@ -45,13 +48,17 @@ const automation = {
   capabilities: undefined as Automation["capabilities"],
 };
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
+  useSearchParams: () => new URLSearchParams(search),
+}));
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 vi.mock("next/link", () => ({
   default: ({ children, ...props }: React.ComponentProps<"a">) => <a {...props}>{children}</a>,
 }));
 vi.mock("@/components/sidebar-layout", () => ({
   CollapsedSidebarControls: () => null,
-  useSidebarContext: () => ({ isOpen: true }),
+  useSidebarContext: () => ({ isOpen: false }),
 }));
 vi.mock("@/hooks/use-automations", () => ({
   useAutomation: () => ({ automation, loading: false, mutate: vi.fn() }),
@@ -95,6 +102,10 @@ async function renderPage() {
 
 beforeEach(() => {
   permissions = [];
+  search = "";
+  push.mockReset();
+  vi.mocked(browserApiFetch).mockReset();
+  vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
   automation.capabilities = undefined;
   history.total = 0;
   history.requestedLimits = [];
@@ -122,6 +133,37 @@ describe("AutomationDetailPage run history", () => {
 });
 
 describe("AutomationDetailPage authorization", () => {
+  it.each([undefined, "team/one"])(
+    "preserves scope %s on back, edit, and delete",
+    async (teamId) => {
+      search = teamId ? new URLSearchParams({ teamId }).toString() : "";
+      const query = teamId ? "?teamId=team%2Fone" : "";
+      automation.capabilities = { canRead: true, canManage: true, canTrigger: true };
+      await renderPage();
+      expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
+        "href",
+        `/automations${query}`
+      );
+      expect(screen.getByRole("link", { name: "Edit" })).toHaveAttribute(
+        "href",
+        `/automations/auto-1/edit${query}`
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm Delete" }));
+      await waitFor(() => expect(push).toHaveBeenCalledWith(`/automations${query}`));
+    }
+  );
+
+  it("reports a failed delete without leaving its scope", async () => {
+    automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}, { status: 403 }));
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Delete" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to delete automation");
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("does not infer resource capabilities from global permissions", async () => {
     permissions = ["automations.manage.any", "automations.trigger.any"];
     await renderPage();
