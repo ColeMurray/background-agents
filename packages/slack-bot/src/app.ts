@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { callbacksRouter } from "./callbacks";
+import { threadBindingRoutes } from "./routes/thread-binding";
 import { threadContextRoutes } from "./routes/thread-context";
 import { eventRoutes } from "./routes/events";
 import { healthRoutes } from "./routes/health";
@@ -13,5 +14,6 @@ app.route("/", eventRoutes);
 app.route("/", interactionRoutes);
 app.route("/callbacks", callbacksRouter);
 app.route("/", threadContextRoutes);
+app.route("/", threadBindingRoutes);
 
 export default app;

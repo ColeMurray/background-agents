@@ -4,6 +4,13 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## Unreleased
 
+### Added
+
+**Reply to agent notifications from Slack.** A top-level `slack-notify` post now starts a thread
+linked to its session. An `@mention` reply in that thread becomes the session's next prompt, so an
+automation can ask a question in Slack and continue when you answer. Before, such a reply started a
+new session.
+
 ### Changed
 
 Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`

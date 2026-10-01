@@ -56,6 +56,13 @@ export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
  */
 export const SLACK_ACTIVITY_REFRESH_KIND = "slack.activity_refresh";
 
+/**
+ * Domain separator for binding an agent's top-level `slack-notify` post to its
+ * session, so an `@mention` reply in that thread continues the same session.
+ * Same role as {@link SLACK_ACTIVITY_REFRESH_KIND}.
+ */
+export const SLACK_THREAD_BINDING_KIND = "slack.thread_binding";
+
 const linearCallbackContextBaseSchema = z.strictObject({
   source: z.literal("linear"),
   issueId: nonEmptyStringSchema,

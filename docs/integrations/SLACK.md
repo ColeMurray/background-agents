@@ -303,6 +303,17 @@ inaccessible, or rate-limited targets.
 Changes apply to new sessions. If you turn notifications on and an existing session cannot post to
 Slack, start a new session. Turning notifications off blocks future notification attempts.
 
+A top-level notification starts a thread linked to the session. `@mention` the bot in that thread
+and your reply becomes the session's next prompt, the same as a follow-up in a Slack-started thread.
+This lets an automation ask a question and continue when you answer:
+
+```text
+When you need a decision from me, ask it with slack-notify in #eng-updates, then end your turn.
+```
+
+The link expires after 7 days. A notification posted as a reply inside an existing thread links
+nothing, so that thread keeps its current session.
+
 ### Mentions
 
 The Slack settings page includes a workspace-wide mentions policy for direct user mentions like

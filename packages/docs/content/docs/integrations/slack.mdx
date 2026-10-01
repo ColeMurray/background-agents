@@ -225,6 +225,14 @@ When you finish, post a short summary to #eng-updates.
 
 Changes apply to new sessions. Slack can still reject missing, archived, inaccessible, or rate-limited targets.
 
+A top-level notification starts a thread linked to the session, so you can answer the agent from Slack. `@mention` the bot in that thread and your reply becomes the session's next prompt, the same as a follow-up in a Slack-started thread. An automation can ask for a decision this way:
+
+```text
+When you need a decision from me, ask it with slack-notify in #eng-updates, then end your turn.
+```
+
+The link expires after 7 days. A notification posted as a reply inside an existing thread links nothing, so that thread keeps its current session.
+
 The **Mentions policy** setting is workspace-wide and controls direct user mentions like `<@U123>`:
 
 | Policy | Result                                                                              |

@@ -15,7 +15,10 @@ import {
   type SlackNotifySuccessOutput,
   type SlackWireDenialReason,
 } from "@open-inspect/shared/slack";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
+import { SLACK_THREAD_BINDING_KIND } from "@open-inspect/shared/types/session-api";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
@@ -35,6 +38,8 @@ const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
+/** The binding is a convenience; a slow slack-bot must not hold the agent's tool call. */
+const THREAD_BINDING_TIMEOUT_MS = 5_000;
 
 interface ParsedBody {
   channel: string;
@@ -144,6 +149,18 @@ export async function handleSlackNotify(
   const permalinkResp = await getPermalink(token, channelId, messageTs, { signal: request.signal });
   const permalink = permalinkResp.ok ? permalinkResp.permalink : "";
 
+  // A reply inside an existing thread leaves that thread to whoever owns it.
+  const threadBound = parsed.threadTs
+    ? false
+    : await bindThreadToSession(env, ctx, {
+        channel: channelId,
+        threadTs: messageTs,
+        sessionId,
+        repoFullName: repoScope,
+        model: session.model,
+        reasoningEffort: session.reasoningEffort ?? undefined,
+      });
+
   const result: SlackNotifySuccessOutput = {
     ok: true,
     channelInput: parsed.channel,
@@ -167,6 +184,7 @@ export async function handleSlackNotify(
     truncated: sanitized.truncated,
     stripped_broadcasts: sanitized.strippedBroadcasts,
     mentions_modified: sanitized.mentionsModified,
+    thread_bound: threadBound,
     request_reason: parsed.reason ?? null,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
@@ -174,6 +192,59 @@ export async function handleSlackNotify(
   });
 
   return json(result);
+}
+
+/**
+ * Ask the slack-bot to treat a top-level post's thread as this session's
+ * thread, so an `@mention` reply there continues the session — the mapping a
+ * Slack-started session gets. Best-effort: the post already went out, and a
+ * failed binding only means a reply starts a new session, as it did before.
+ */
+async function bindThreadToSession(
+  env: Env,
+  ctx: RequestContext,
+  binding: {
+    channel: string;
+    threadTs: string;
+    sessionId: string;
+    repoFullName: string | null;
+    model: string;
+    reasoningEffort: string | undefined;
+  }
+): Promise<boolean> {
+  const slackBot = env.SLACK_BOT;
+  const secret = callbackSigningSecret(env, "slack-bot");
+  if (!slackBot || !secret) return false;
+
+  const body = { kind: SLACK_THREAD_BINDING_KIND, ...binding, timestamp: Date.now() };
+  try {
+    const signature = await computeHmacHex(JSON.stringify(body), secret);
+    const response = await slackBot.fetch("https://internal/internal/thread-binding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-trace-id": ctx.trace_id },
+      body: JSON.stringify({ ...body, signature }),
+      signal: AbortSignal.timeout(THREAD_BINDING_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      logger.warn("Slack thread binding rejected", {
+        event: "slack_notify.thread_binding_failed",
+        session_id: binding.sessionId,
+        http_status: response.status,
+        trace_id: ctx.trace_id,
+      });
+      return false;
+    }
+    const result = (await response.json()) as { bound?: unknown };
+    return result.bound === true;
+  } catch (error) {
+    logger.warn("Slack thread binding failed", {
+      event: "slack_notify.thread_binding_failed",
+      session_id: binding.sessionId,
+      error: error instanceof Error ? error : new Error(String(error)),
+      trace_id: ctx.trace_id,
+    });
+    return false;
+  }
 }
 
 async function parseBody(request: Request): Promise<ParsedBody | Response> {
