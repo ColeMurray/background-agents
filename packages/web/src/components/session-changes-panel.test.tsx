@@ -14,7 +14,6 @@ const FULL_CAPABILITIES = {
   collaborate: true,
   lifecycle: true,
   delete: false,
-  move: false,
   manageCollaborators: false,
   changeVisibility: false,
   sandboxAccess: true,

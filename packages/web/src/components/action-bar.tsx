@@ -1,8 +1,6 @@
 "use client";
 
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
-import { MoveSessionDialog } from "@/components/move-session-dialog";
-import { useState } from "react";
 import {
   resolveSessionActions,
   useSessionActionControls,
@@ -37,9 +35,7 @@ export function ActionBar({
   onArchive,
   onUnarchive,
   capabilities,
-  scope,
 }: ActionBarProps) {
-  const [showMoveDialog, setShowMoveDialog] = useState(false);
   const { previewArtifact, previewUrl, prLinks, mediaCount } = resolveSessionActions(
     artifacts,
     primaryRepo
@@ -135,14 +131,6 @@ export function ActionBar({
               <LinkIcon className="w-4 h-4" />
               Copy link
             </DropdownMenuItem>
-            {scope && (
-              <DropdownMenuItem
-                disabled={!capabilities.move}
-                onClick={() => setShowMoveDialog(true)}
-              >
-                Move to team
-              </DropdownMenuItem>
-            )}
             {prLinks.length === 1 && (
               <DropdownMenuItem className="hidden md:flex" asChild>
                 <a href={prLinks[0].url} target="_blank" rel="noopener noreferrer">
@@ -160,15 +148,6 @@ export function ActionBar({
           open={controls.showArchiveDialog}
           onOpenChange={controls.setShowArchiveDialog}
           onConfirm={controls.handleConfirmArchive}
-        />
-      )}
-      {scope && (
-        <MoveSessionDialog
-          {...scope}
-          sessionId={sessionId}
-          canMove={capabilities.move}
-          open={showMoveDialog}
-          onOpenChange={setShowMoveDialog}
         />
       )}
     </>

@@ -73,7 +73,7 @@ describe("scope refresh with real SWR caches", () => {
             <button
               onClick={() => {
                 request = updateSessionScope(
-                  "/api/sessions/s1/scope",
+                  "/api/sessions/s1/visibility",
                   { method: "PUT" },
                   snapshot,
                   config
@@ -154,7 +154,7 @@ describe("scope refresh with real SWR caches", () => {
             resource,
             update: () =>
               updateSessionScope(
-                "/api/sessions/s1/scope",
+                "/api/sessions/s1/visibility",
                 { method: "PUT" },
                 async () => {},
                 config
@@ -190,7 +190,12 @@ describe("scope refresh with real SWR caches", () => {
         return {
           list,
           update: () =>
-            updateSessionScope("/api/sessions/s1/scope", { method: "PUT" }, async () => {}, config),
+            updateSessionScope(
+              "/api/sessions/s1/visibility",
+              { method: "PUT" },
+              async () => {},
+              config
+            ),
         };
       },
       { wrapper, initialProps: { mounted: true } }
@@ -280,10 +285,10 @@ describe("scope refresh with real SWR caches", () => {
           unrelated,
           update: () =>
             updateSessionScope(
-              "/api/sessions/s1/scope",
+              "/api/sessions/s1/visibility",
               {
                 method: "PUT",
-                body: { teamId: "team_target", includeChildren: true, joinTeam: false },
+                body: { visibility: "private", includeChildren: true },
               },
               async () => {
                 await snapshot();

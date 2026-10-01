@@ -58,7 +58,6 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   sandboxAccess: true,
   exportTrace: true,
   delete: true,
-  move: false,
   manageCollaborators: false,
   changeVisibility: false,
 };

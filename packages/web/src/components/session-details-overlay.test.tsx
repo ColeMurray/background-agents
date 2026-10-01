@@ -29,7 +29,6 @@ it.each([true, false])("hides closed details from assistive technology (phone=%s
       collaborate: true,
       lifecycle: true,
       delete: false,
-      move: false,
       manageCollaborators: false,
       changeVisibility: false,
       sandboxAccess: false,

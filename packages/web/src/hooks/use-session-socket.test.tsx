@@ -20,7 +20,6 @@ const FULL_CAPABILITIES = {
   canManageLifecycle: true,
   canSandbox: true,
   canDelete: false,
-  canMove: false,
   canManageCollaborators: false,
   canChangeVisibility: false,
 } satisfies SessionCapabilities;
@@ -208,7 +207,6 @@ describe("useSessionSocket", () => {
       collaborate: false,
       lifecycle: false,
       delete: false,
-      move: false,
       manageCollaborators: false,
       changeVisibility: false,
       sandboxAccess: false,
@@ -239,7 +237,6 @@ describe("useSessionSocket", () => {
         collaborate: false,
         lifecycle: false,
         delete: false,
-        move: false,
         manageCollaborators: false,
         changeVisibility: false,
         sandboxAccess: false,
@@ -269,7 +266,6 @@ describe("useSessionSocket", () => {
       collaborate: true,
       lifecycle: true,
       delete: false,
-      move: false,
       manageCollaborators: false,
       changeVisibility: false,
       sandboxAccess: true,
@@ -314,7 +310,6 @@ describe("useSessionSocket", () => {
       collaborate: false,
       lifecycle: false,
       delete: false,
-      move: false,
       manageCollaborators: false,
       changeVisibility: false,
       sandboxAccess: false,
@@ -387,7 +382,6 @@ describe("useSessionSocket", () => {
       collaborate: false,
       lifecycle: false,
       delete: false,
-      move: false,
       manageCollaborators: false,
       changeVisibility: false,
       sandboxAccess: false,
@@ -416,13 +410,13 @@ describe("useSessionSocket", () => {
         canCollaborate: !granted,
         canManageLifecycle: !granted,
         canDelete: !granted,
-        canMove: !granted,
         canManageCollaborators: !granted,
         canChangeVisibility: !granted,
         canSandbox: !granted,
       };
       const snapshot = createSnapshot();
-      snapshot.session.capabilities = { ...originalCapabilities, canMove: granted };
+      snapshot.session.ownerTeamId = "team_design";
+      snapshot.session.capabilities = { ...originalCapabilities, canChangeVisibility: granted };
       const { result, rerender } = renderHook(
         ({ snapshot }) => useSessionSocket("session-1", snapshot),
         { initialProps: { snapshot } }
@@ -432,6 +426,7 @@ describe("useSessionSocket", () => {
         { id: "live-pr", type: "pr", url: "https://example.com/pr", metadata: null, createdAt: 1 },
       ]);
       message.session.title = "Live title";
+      message.session.ownerTeamId = snapshot.session.ownerTeamId;
       message.session.capabilities = originalCapabilities;
       message.canManageBudget = true;
       message.promptQueue = [{ messageId: "queued", content: "Keep this", status: "pending" }];
@@ -455,7 +450,6 @@ describe("useSessionSocket", () => {
             canCollaborate: granted,
             canManageLifecycle: granted,
             canDelete: granted,
-            canMove: granted,
             canManageCollaborators: granted,
             canChangeVisibility: granted,
             canSandbox: granted,
@@ -468,7 +462,6 @@ describe("useSessionSocket", () => {
         collaborate: granted,
         lifecycle: granted,
         delete: granted,
-        move: granted,
         manageCollaborators: granted,
         changeVisibility: granted,
         sandboxAccess: granted,
@@ -490,7 +483,7 @@ describe("useSessionSocket", () => {
 
       act(() => FakeWebSocket.instances[0].receive(message));
       rerender({ snapshot: refreshed });
-      expect(result.current.capabilities.move).toBe(!granted);
+      expect(result.current.capabilities.changeVisibility).toBe(!granted);
       expect(result.current.capabilities.lifecycle).toBe(!granted);
     }
   );
@@ -518,7 +511,6 @@ describe("useSessionSocket", () => {
       collaborate: false,
       lifecycle: false,
       delete: false,
-      move: false,
       manageCollaborators: false,
       changeVisibility: false,
       sandboxAccess: false,
@@ -595,7 +587,6 @@ describe("useSessionSocket", () => {
         collaborate: false,
         lifecycle: false,
         delete: false,
-        move: false,
         manageCollaborators: false,
         changeVisibility: false,
         sandboxAccess: false,

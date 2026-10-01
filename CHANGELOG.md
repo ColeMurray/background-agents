@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## Unreleased
+
+### Changed
+
+Team-owned session actions now require current owning-team membership in every `TEAMS_ENFORCEMENT`
+mode, including for Owners and Administrators. Visibility still determines read access; collaborator
+self-removal requires only read access. Sessions, automations, and environments cannot move between
+teams or to/from the workspace; a team-owned session never becomes workspace-owned. Visibility and
+collaborator controls remain available to authorized users. Historical `session.moved` audit events
+remain readable.
+
 ## October 1, 2026
 
 ### Removed
