@@ -53,13 +53,13 @@ describe("createSessionRuntime", () => {
   });
 
   it.each([false, true])(
-    "preserves GitLab identity on modern restores without minting (repo-less: %s)",
+    "preserves GitLab identity on all supported restores without minting (repo-less: %s)",
     async (repoLess) => {
       const { stub } = await initNamedSession(`restore-identity-${crypto.randomUUID()}`);
       await queryDO(stub, "DELETE FROM sandbox_preservation");
       await queryDO(
         stub,
-        "UPDATE sandbox SET status = 'stopped', modal_object_id = NULL, snapshot_image_id = 'saved-image', snapshot_runtime_version = 'v72-helper'"
+        "UPDATE sandbox SET status = 'stopped', modal_object_id = NULL, snapshot_image_id = 'saved-image', snapshot_runtime_version = 'v62-compatible'"
       );
       if (repoLess) {
         await queryDO(
@@ -91,7 +91,7 @@ describe("createSessionRuntime", () => {
           await runtime.internals.lifecycleManager.spawnSandbox();
           expect(restore).toHaveBeenCalledWith(
             expect.objectContaining({
-              cloneCredentials: { identity: { host: "gitlab.com", username: "oauth2" } },
+              scmIdentity: { host: "gitlab.com", username: "oauth2" },
             })
           );
           expect(mint).not.toHaveBeenCalled();

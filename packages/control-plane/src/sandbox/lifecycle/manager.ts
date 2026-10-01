@@ -31,6 +31,7 @@ import {
   type SandboxProvider,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type RestoreScmIdentity,
   type SandboxLifetime,
   type StopConfig,
 } from "../provider";
@@ -333,6 +334,8 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
+  /** Nonsecret SCM metadata for Modal restores; git credentials are brokered on demand. */
+  restoreScmIdentity?: RestoreScmIdentity;
   /**
    * Session ID for log correlation, resolved per use. Optional — logs will
    * omit sessionId if not provided. A thunk rather than a value because the
@@ -454,7 +457,6 @@ export class SandboxLifecycleManager
         model: config.model,
         mcpServerLookup: config.mcpServerLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
-        restoreCloneCredentials: config.restoreCloneCredentials,
       },
       imageBuildLookup,
       getLogger: () => this.log,
@@ -1042,10 +1044,6 @@ export class SandboxLifecycleManager
       const mcpServers = await this.launchContext.loadMcpServers(repositories);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
-      const cloneCredentials = await this.launchContext.resolveRestoreCloneCredentials(
-        session,
-        snapshotRuntimeVersion
-      );
       const restoreConfig = {
         snapshotImageId,
         generationCreatedAtMs: generation.createdAt,
@@ -1064,7 +1062,7 @@ export class SandboxLifecycleManager
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
-        cloneCredentials,
+        scmIdentity: this.config.restoreScmIdentity,
         ...repositoryFields,
       };
       this.vmStartup.registerForegroundAuth(generation, restoreConfig.sessionId, sandboxAuthToken);

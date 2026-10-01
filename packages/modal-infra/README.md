@@ -53,12 +53,11 @@ The in-sandbox runtime (entrypoint supervisor, control-plane bridge, shared type
 
 Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
-- **github_app.py**: GitHub App token generation for legacy restore requests
 - **internal.py**: HMAC authentication for control plane requests
 
-The control plane supplies source-control credentials for image builds and legacy snapshot
-restores. During the transition, Modal still mints a restore token when an old worker omits
-`clone_token`. The GitHub App private key is never injected into session sandboxes.
+The control plane supplies one-shot source-control credentials for image builds. Interactive
+sessions, including snapshot restores, fetch credentials on demand through the broker. Modal does
+not mint installation tokens or bind a GitHub App private key.
 
 ### API (`src/`)
 
@@ -85,12 +84,6 @@ snapshot, terminate, and delete provider operations.
 # instead. The secret itself must exist; Modal cannot hold one with no keys.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
-# GitHub App credentials (required during the restore-auth transition)
-modal secret create github-app \
-  GITHUB_APP_ID="123456" \
-  GITHUB_APP_PRIVATE_KEY="$(cat private-key-pkcs8.pem)" \
-  GITHUB_APP_INSTALLATION_ID="12345678"
-
 # Internal API secret (for control plane authentication)
 modal secret create internal-api \
   MODAL_API_SECRET="$(openssl rand -hex 32)" \
@@ -99,9 +92,8 @@ modal secret create internal-api \
 
 See `.env.example` for a full list of environment variables.
 
-The Modal `github-app` secret remains required, including for new deployments, until a separate
-cleanup release removes the binding. The control plane's GitHub App credentials remain required
-for GitHub access.
+Modal no longer requires a `github-app` secret. Keep the control plane's GitHub App credentials, and
+the GitHub bot's credentials when enabled, configured for GitHub access.
 
 ### Install local packages
 
@@ -133,24 +125,19 @@ modal run src/
 > Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
 > are registered.
 
-### Restore-auth rollout
+### Restore authentication
 
-**Phase 1 (this release):** the control plane sends `clone_token` explicitly, including `null`,
-and VCS host/username metadata on every Modal restore, including repository-less restores.
-With the new control plane and phase-1 Modal, v72+ restores receive VCS identity only
-(`clone_token: null`) and use brokered credentials. Compatible v62-v71 repository snapshots require
-a static token; control-plane mint failures stop the restore before calling Modal. Unknown or
-incompatible snapshots are retained under recovery hold, without token minting or launch.
+All supported Modal snapshots (v62+) use brokered git credentials. The credential helper shipped in
+v51 in May 2026, before the current snapshot compatibility floor; v72 is not an authentication
+boundary. Restores preserve VCS host/username identity and the session's control-plane broker
+context without resolving or injecting a static system clone token. Unknown or incompatible
+snapshots remain under recovery hold without launch.
 
-Mixed-version rollout is supported in either order: old Modal ignores the new fields and keeps
-minting, while phase-1 Modal uses its local fallback only for repository-backed old-worker requests
-that omit `clone_token`. Normal Terraform applies can deploy Modal first without a restore-auth
-maintenance window. Keep the required Modal `github-app` secret; Terraform still provisions it.
-
-**Phase 2 (separate release):** remove the Modal secret binding, local minting, JWT dependencies,
-and secret provisioning only after the control-plane rollout, old in-flight restore calls, and
-rollback needs have been accounted for. Do not delete `github-app` in phase 1. The control plane's
-GitHub App credentials remain required after cleanup.
+Update the deployment normally; no staged restore-auth migration is required. Terraform no longer
+provisions Modal's `github-app` secret. An existing secret can be deleted after the new Modal
+deployment is active and old functions have drained. Rolling back to a version that binds the secret
+requires recreating it. The control plane and enabled GitHub bot still need their GitHub App
+credentials.
 
 ## HTTP API
 
@@ -174,19 +161,15 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 
 ### Restore credentials
 
-`api-restore-sandbox` accepts optional `clone_token`, `clone_host`, and `clone_username` strings
-from the control plane, like `api-create-build-sandbox`. A provided host/username pair sets
-`VCS_HOST` and `VCS_CLONE_USERNAME`; otherwise provider defaults apply. An omitted `clone_token`
-on a repository-backed request triggers the transitional local resolver; explicit `null` or an
-empty string never does, and a supplied token bypasses local minting.
+`api-restore-sandbox` accepts optional `clone_host` and `clone_username` strings from the control
+plane. A provided host/username pair sets `VCS_HOST` and `VCS_CLONE_USERNAME`; otherwise provider
+defaults apply, including for repository-less restores. Obsolete top-level `clone_token` input is
+ignored by the request model and is never forwarded to the launcher.
 
-Repository-backed restores inject a supplied or locally resolved token as `VCS_CLONE_TOKEN` for
-legacy snapshots. For effective `VCS_HOST=github.com`, `GITHUB_TOKEN` and
-`GITHUB_APP_TOKEN` aliases remain for snapshots predating the `gh` wrapper, without replacing a
-user-supplied CLI token. With the new control plane and phase-1 Modal, v72+ restore credentials
-are identity-only (`clone_token: null`). Repository-less restores never mint or inject a clone
-token, but preserve supplied VCS identity. Fresh and prebuilt-image session boots use only the
-credential helper.
+Fresh, prebuilt-image, and restored sessions use the credential helper. Restore does not generate
+`VCS_CLONE_TOKEN`, GitHub CLI token aliases, or a fallback marker. User-supplied tokens in
+`user_env_vars` remain unchanged. Image builds still accept a one-shot `clone_token` and inject
+`VCS_CLONE_TOKEN` because build sandboxes lack a session broker context.
 
 ### Example: Create Sandbox
 
@@ -217,9 +200,6 @@ Set via Modal secrets:
 | Variable | Secret | Description |
 |----------|--------|-------------|
 | `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude; may be empty when sessions use other providers |
-| `GITHUB_APP_ID` | `github-app` | GitHub App ID for transitional restore fallback |
-| `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8); never injected into session sandboxes |
-| `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
 

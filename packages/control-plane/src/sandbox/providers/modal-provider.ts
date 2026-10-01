@@ -273,7 +273,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       const result = await this.client.restoreSandbox(
         {
           snapshotImageId: config.snapshotImageId,
-          cloneCredentials: config.cloneCredentials,
+          scmIdentity: config.scmIdentity,
           launchDeadlineAtMs,
           sessionId: config.sessionId,
           sandboxId: config.sandboxId,

@@ -82,13 +82,11 @@ The exact commands are in the self-hosting guide linked below.
 
 On the Cloudflare/Vercel path, updating means pulling the latest code, rebuilding the shared package if it changed, and applying Terraform again; it only changes what differs. If the web app is on Vercel it is redeployed separately; on Cloudflare, Terraform rebuilds it. The self-hosting guide also documents an optional GitHub Actions workflow for applying deployments from CI. For the AWS control plane, follow the [AWS bring-up guide](https://github.com/ColeMurray/background-agents/blob/main/docs/AWS_BRING_UP.md).
 
-### Modal restore-auth rollout
+### Modal restore authentication
 
-**Phase 1 (this release)** moves restore credentials to the control plane and preserves VCS identity on every request, including repository-less restores. With the new control plane and phase-1 Modal, v72+ restores receive VCS identity only (`clone_token: null`); compatible v62-v71 repository snapshots require a static token, and mint failures block the Modal request. Unknown or incompatible snapshots are retained under recovery hold, without token minting or launch.
+All supported Modal snapshots (v62+) already include the credential helper, which shipped in v51 in May 2026. There is no v72 authentication cutoff. Restores preserve VCS host/username identity and session broker context without resolving or injecting a static system clone token, including for repository-less sessions. Credentials are fetched on demand after launch. Unknown or incompatible snapshots remain under recovery hold without launch. User-supplied token overrides and one-shot image-build credentials are unchanged.
 
-Mixed-version deployment works in either order: old Modal ignores the new fields, while phase-1 Modal mints locally only for repository-backed old-worker requests that omit `clone_token`. Explicit `null` or empty values never trigger the fallback. Normal Terraform upgrades can deploy Modal first without a restore-auth maintenance window. **Modal's `github-app` secret is still required, including for new deployments, and Terraform still provisions it.**
-
-**Phase 2 is a separate release.** Remove the binding, local minting, JWT dependencies, and secret provisioning only after the control-plane rollout, old in-flight requests, and rollback requirements are addressed. Do not delete the secret in phase 1; keep the control plane's GitHub App credentials after cleanup. See the [rollout guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md#modal-restore-auth-rollout).
+Update the deployment normally; no staged restore-auth migration or maintenance window is needed. Modal no longer binds the `github-app` secret, and Terraform no longer provisions it. Delete an existing Modal secret after the new deployment is active and old functions have drained. Rolling back to an older version that binds it requires recreating the secret. Keep GitHub App credentials configured in the control plane and enabled GitHub bot. See the [deployment guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md#modal-restore-authentication).
 
 ## Where the runbooks are
 

@@ -3,7 +3,6 @@
   "generation": 73,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumCredentialHelperGeneration": 72,
   "minimumRebuildGeneration": 73,
   "harnessMinimumGeneration": {
     "claude": 73,

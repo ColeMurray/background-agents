@@ -913,54 +913,45 @@ describe("ModalSandboxProvider", () => {
       });
     });
 
-    it.each([undefined, "restore-token"])(
-      "forwards restore identity with legacy token %s",
-      async (legacyToken) => {
-        const client = createMockModalClient({
-          restoreSandbox: vi.fn(async () => ({
-            sandboxId: "restored-sandbox-123",
-            modalObjectId: "new-modal-obj-456",
-            vncUrl: "https://vnc.test",
-            vncPassword: "vnc-pw",
-          })),
-        });
-        const provider = new ModalSandboxProvider(client, "modal");
+    it("forwards restore SCM identity and returns the provider handle", async () => {
+      const client = createMockModalClient({
+        restoreSandbox: vi.fn(async () => ({
+          sandboxId: "restored-sandbox-123",
+          modalObjectId: "new-modal-obj-456",
+          vncUrl: "https://vnc.test",
+          vncPassword: "vnc-pw",
+        })),
+      });
+      const provider = new ModalSandboxProvider(client, "modal");
 
-        const result = await provider.restoreFromSnapshot({
-          snapshotImageId: "img-123",
-          cloneCredentials: {
-            identity: { host: "github.com", username: "x-access-token" },
-            ...(legacyToken ? { legacyToken } : {}),
-          },
-          sessionId: "session-123",
-          sandboxId: "sandbox-123",
-          sandboxAuthToken: "token",
-          harness: "opencode" as const,
-          controlPlaneUrl: "https://test.com",
-          repoOwner: "owner",
-          repoName: "repo",
-          provider: "anthropic",
-          model: "anthropic/claude-sonnet-4-5",
+      const result = await provider.restoreFromSnapshot({
+        snapshotImageId: "img-123",
+        scmIdentity: { host: "github.com", username: "x-access-token" },
+        sessionId: "session-123",
+        sandboxId: "sandbox-123",
+        sandboxAuthToken: "token",
+        harness: "opencode" as const,
+        controlPlaneUrl: "https://test.com",
+        repoOwner: "owner",
+        repoName: "repo",
+        provider: "anthropic",
+        model: "anthropic/claude-sonnet-4-5",
+        vncEnabled: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.sandboxId).toBe("restored-sandbox-123");
+      expect(result.providerObjectId).toBe("new-modal-obj-456");
+      expect(result).toMatchObject({
+        vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
+      });
+      expect(client.restoreSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
           vncEnabled: true,
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.sandboxId).toBe("restored-sandbox-123");
-        expect(result.providerObjectId).toBe("new-modal-obj-456");
-        expect(result).toMatchObject({
-          vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
-        });
-        expect(client.restoreSandbox).toHaveBeenCalledWith(
-          expect.objectContaining({
-            vncEnabled: true,
-            cloneCredentials: {
-              identity: { host: "github.com", username: "x-access-token" },
-              ...(legacyToken ? { legacyToken } : {}),
-            },
-          }),
-          undefined
-        );
-      }
-    );
+          scmIdentity: { host: "github.com", username: "x-access-token" },
+        }),
+        undefined
+      );
+    });
   });
 });

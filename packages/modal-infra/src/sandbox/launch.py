@@ -77,7 +77,6 @@ class RepositoryImageSource:
 @dataclass(frozen=True)
 class SnapshotImageSource:
     image_id: str
-    clone_token: str | None
     clone_host: str | None = None
     clone_username: str | None = None
 
@@ -160,10 +159,8 @@ class SandboxLauncher:
             }
         )
 
-        clone_token: str | None = None
         clone_host: str | None = None
         clone_username: str | None = None
-        include_github_cli_aliases = False
         snapshot_id: str | None = None
         if isinstance(spec.source, BaseImageSource):
             image = docker_base_image() if docker.enabled else base_image
@@ -177,10 +174,8 @@ class SandboxLauncher:
         else:
             image = modal.Image.from_id(spec.source.image_id)
             env_vars["RESTORED_FROM_SNAPSHOT"] = "true"
-            clone_token = spec.source.clone_token
             clone_host = spec.source.clone_host
             clone_username = spec.source.clone_username
-            include_github_cli_aliases = True
             snapshot_id = spec.source.image_id
 
         if config.session_config is not None:
@@ -192,10 +187,9 @@ class SandboxLauncher:
 
         inject_vcs_env_vars(
             env_vars,
-            clone_token=clone_token if has_repository else None,
+            clone_token=None,
             clone_host=clone_host,
             clone_username=clone_username,
-            include_github_cli_aliases=include_github_cli_aliases,
         )
 
         code_server_password: str | None = None

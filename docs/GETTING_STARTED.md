@@ -208,11 +208,10 @@ Every deployment needs **one GitHub App** for repository access. The same App ca
 GitHub OAuth sign-in, but its client pair is optional when Google is the only sign-in provider.
 
 The control plane requires the App ID, PKCS#8 private key, and installation ID to mint repository
-credentials. Modal's `github-app` secret remains required during the restore-auth transition,
-including for new deployments; Terraform still provisions it. Modal uses it only when an old worker
-omits `clone_token` on a repository-backed restore. The private key is never injected into session
-sandboxes. See [Modal Restore-Auth Rollout](#modal-restore-auth-rollout) before removing this
-secret.
+credentials, and the enabled GitHub bot also uses the App credentials. Modal does not need a
+`github-app` secret: supported snapshot restores use the control-plane credential broker. The
+private key is never injected into session sandboxes. See
+[Modal Restore Authentication](#modal-restore-authentication) for existing-secret cleanup.
 
 1. Go to [GitHub Apps](https://github.com/settings/apps)
 2. Click **"New GitHub App"**
@@ -1429,26 +1428,22 @@ cd terraform/environments/production
 terraform apply
 ```
 
-### Modal Restore-Auth Rollout
+### Modal Restore Authentication
 
-**Phase 1 (this release)** hands restore credentials to the control plane while preserving VCS
-identity. Every modern Modal restore request includes `clone_token` (possibly `null`), `clone_host`,
-and `clone_username`, including repository-less restores. With the new control plane and phase-1
-Modal, v72+ restores receive VCS identity only (`clone_token: null`). Compatible v62-v71 repository
-snapshots require a static token; a control-plane mint failure blocks the restore before the Modal
-request. Unknown or incompatible snapshots are retained under recovery hold, without token minting
-or launch.
+All supported Modal snapshots (v62+) already have the credential helper, which shipped in v51 in
+May 2026. There is no v72 authentication cutoff or legacy restore-token migration. Restores carry
+VCS host/username identity and session broker context, including for repository-less sessions,
+without resolving or injecting a static system clone token. Git and the GitHub CLI request
+credentials on demand after launch; a token mint is not a prerequisite for the restore request.
+Unknown or incompatible snapshots remain under recovery hold without launch. User-supplied token
+overrides remain supported, and image builds retain their one-shot clone credentials.
 
-Old Modal deployments ignore the new fields and keep minting. Phase-1 Modal falls back to local
-minting only for repository-backed old-worker requests that omit `clone_token`, never for explicit
-`null` or empty values. Repository-less restores never mint or inject a token. This supports either
-deployment order, including normal Terraform applies that deploy Modal first, without a restore-auth
-maintenance window. **Keep Modal's required `github-app` secret; Terraform still provisions it.**
-
-**Phase 2 is a separate release.** Remove the Modal binding, local minting, JWT dependencies, and
-secret provisioning only after the control-plane rollout, old in-flight requests, and rollback
-requirements have been accounted for. Do not delete the secret in phase 1. Keep the control plane's
-GitHub App credentials configured after cleanup; they remain required for repository access.
+Apply the deployment normally; no separate restore-auth rollout phases or maintenance window are
+needed. Modal no longer binds the `github-app` secret, and Terraform no longer provisions it. Delete
+an existing Modal secret only after the new Modal deployment is active and old functions have
+drained. A rollback to an older version that binds the secret requires recreating it. Keep the
+control plane's and enabled GitHub bot's App credentials configured; their GitHub access is
+unchanged.
 
 ### Configure Provider Accounts
 

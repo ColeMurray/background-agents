@@ -6,18 +6,17 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ### Changed
 
-**Modal restore authentication now supports a mixed-version rollout.** The control plane supplies an
-explicit clone token (possibly `null`) and preserves VCS host/username identity on every restore.
-With the new control plane and phase-1 Modal, compatible v62-v71 repository snapshots require a
-static token; v72+ restores receive VCS identity only (`clone_token: null`) and use brokered
-credentials. Unknown or incompatible snapshots are retained under recovery hold, without token
-minting or launch. Old workers that omit `clone_token` retain Modal's local fallback, while explicit
-null/empty values never mint. Repository-less restores preserve identity without minting or
-injecting a token. GitHub CLI aliases follow the effective VCS host. Modal's required `github-app`
-secret and Terraform provisioning remain in this release; removing local minting and its
-dependencies is a separate phase-2 release after rollout, in-flight requests, and rollback needs are
-addressed. No restore-auth maintenance window is required. See the
-[rollout guide](docs/GETTING_STARTED.md#modal-restore-auth-rollout).
+**Modal restores now use brokered credentials without static system tokens.** All supported
+snapshots (v62+) already include the credential helper, which shipped in v51 in May 2026; v72 is not
+an authentication boundary. Restores preserve VCS host/username identity and session broker context,
+including for repository-less sessions, without local token minting or generated GitHub CLI aliases.
+Unknown or incompatible snapshots remain under recovery hold without launch. User-supplied token
+overrides and one-shot image-build credentials are unchanged. Modal's `github-app` binding, local
+minting code, direct JWT dependencies, and Terraform secret provisioning are removed. Delete an
+existing Modal secret after the new deployment is active and old functions drain; rolling back to a
+version that binds it requires recreating it. The control plane and enabled GitHub bot still need
+their App credentials. No staged restore-auth migration is required. See the
+[deployment guide](docs/GETTING_STARTED.md#modal-restore-authentication).
 
 ### Fixed
 

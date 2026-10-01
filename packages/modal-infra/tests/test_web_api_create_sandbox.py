@@ -1,6 +1,7 @@
 """Tests for Modal create-sandbox API request assembly."""
 
 import asyncio
+import os
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -9,17 +10,9 @@ from fastapi import HTTPException
 
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
-from src.clone_token import resolve_clone_token
 from src.sandbox import manager as manager_module
 from src.sandbox.launch_policy import DockerImageUnavailableError, InvalidDockerSettingsError
 from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS
-
-
-@pytest.fixture(autouse=True)
-def local_clone_token_resolver(monkeypatch):
-    resolver = MagicMock(side_effect=AssertionError("unexpected local clone token resolution"))
-    monkeypatch.setattr(web_api, "resolve_clone_token", resolver)
-    return resolver
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,15 +157,14 @@ async def test_sandbox_requests_reject_invalid_typed_fields(monkeypatch, call, p
     assert exc_info.value.status_code == 400
 
 
-def test_restore_sandbox_keeps_required_transition_secrets():
+def test_restore_sandbox_does_not_bind_github_app_secrets():
     assert [secret.name for secret in web_api.api_restore_sandbox.spec.secrets] == [
-        "github-app",
         "internal-api",
     ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["clone_token", "clone_host", "clone_username"])
+@pytest.mark.parametrize("field", ["clone_host", "clone_username"])
 @pytest.mark.parametrize("value", [123, True, [], {}])
 async def test_restore_sandbox_rejects_invalid_clone_fields(monkeypatch, field, value):
     _patch_auth(monkeypatch)
@@ -438,9 +430,7 @@ async def test_create_sandbox_authenticates_before_request_validation(monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repo_image_id", [None, "repo-image-1"])
-async def test_create_sandbox_does_not_resolve_clone_token(
-    monkeypatch, local_clone_token_resolver, repo_image_id
-):
+async def test_create_sandbox_passes_broker_context(monkeypatch, repo_image_id):
     """Fresh and repo-image boots authenticate via the credential helper only."""
     captured = {}
     _patch_auth(monkeypatch)
@@ -456,7 +446,8 @@ async def test_create_sandbox_does_not_resolve_clone_token(
     )
 
     assert result["success"] is True
-    local_clone_token_resolver.assert_not_called()
+    assert captured["config"].control_plane_url == CREATE_REQUEST["control_plane_url"]
+    assert captured["config"].sandbox_auth_token == CREATE_REQUEST["sandbox_auth_token"]
 
 
 @pytest.mark.asyncio
@@ -596,16 +587,31 @@ async def test_create_sandbox_rejects_partial_repo_context(monkeypatch, request_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "clone_fields",
-    [{}, {"clone_token": None}, {"clone_token": ""}, {"clone_token": "provided-token"}],
+    [
+        {},
+        {"clone_token": None},
+        {"clone_token": ""},
+        {"clone_token": "provided-token"},
+        {"clone_token": {}},
+    ],
 )
-async def test_restore_sandbox_without_repo_never_resolves_or_injects_clone_token(
-    monkeypatch, local_clone_token_resolver, clone_fields
+@pytest.mark.parametrize("repo_fields", [{}, {"repo_owner": "acme", "repo_name": "repo"}])
+@pytest.mark.parametrize("scm_provider", ["github", "gitlab"])
+async def test_restore_sandbox_never_resolves_or_forwards_static_clone_token(
+    monkeypatch, clone_fields, repo_fields, scm_provider
 ):
-    """No-repository restores keep VCS identity without receiving or minting a token."""
+    """Restore ignores obsolete token input and credentials in the function environment."""
     captured = {}
 
     _patch_auth(monkeypatch)
     _patch_restore_manager(monkeypatch, captured)
+    monkeypatch.setenv("SCM_PROVIDER", scm_provider)
+    monkeypatch.setenv("GITLAB_ACCESS_TOKEN", "system-gitlab-token")
+    monkeypatch.setenv("GITHUB_APP_ID", "123")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "private-key")
+    monkeypatch.setenv("GITHUB_APP_INSTALLATION_ID", "456")
+    environment_lookup = MagicMock(wraps=os.environ.get)
+    monkeypatch.setattr(os.environ, "get", environment_lookup)
 
     result = await _call_restore_sandbox(
         {
@@ -614,6 +620,7 @@ async def test_restore_sandbox_without_repo_never_resolves_or_injects_clone_toke
                 "session_id": "sess-1",
                 "provider": "anthropic",
                 "model": "claude-sonnet-4-6",
+                **repo_fields,
             },
             "control_plane_url": "https://control-plane.example",
             "sandbox_auth_token": "sandbox-token",
@@ -624,70 +631,19 @@ async def test_restore_sandbox_without_repo_never_resolves_or_injects_clone_toke
     )
 
     assert result["success"] is True
-    local_clone_token_resolver.assert_not_called()
-    assert captured["restore"]["clone_token"] is None
-    assert captured["restore"]["clone_host"] == "gitlab.example"
-    assert captured["restore"]["clone_username"] == "oauth2"
-
-
-@pytest.mark.asyncio
-async def test_old_worker_restore_mints_local_token_only_when_field_omitted(monkeypatch):
-    """Exercise the endpoint and original resolver without contacting GitHub."""
-    captured = {}
-    _patch_auth(monkeypatch)
-    _patch_restore_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
-    monkeypatch.setenv("GITHUB_APP_ID", "123")
-    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "private-key")
-    monkeypatch.setenv("GITHUB_APP_INSTALLATION_ID", "456")
-    generate = MagicMock(return_value="ghs-legacy-token")
-    monkeypatch.setattr("sandbox_runtime.auth.generate_installation_token", generate)
-
-    result = await _call_restore_sandbox(
+    assert {call.args[0] for call in environment_lookup.call_args_list}.isdisjoint(
         {
-            **RESTORE_REQUEST,
-            "session_config": {
-                "session_id": "sess-1",
-                "repo_owner": "  acme  ",
-                "repo_name": "  repo  ",
-            },
+            "GITLAB_ACCESS_TOKEN",
+            "GITHUB_APP_ID",
+            "GITHUB_APP_PRIVATE_KEY",
+            "GITHUB_APP_INSTALLATION_ID",
         }
     )
-
-    assert result["success"] is True
-    generate.assert_called_once_with(app_id="123", private_key="private-key", installation_id="456")
-    assert captured["restore"]["clone_token"] == "ghs-legacy-token"
-    assert captured["restore"]["clone_host"] is None
-    assert captured["restore"]["clone_username"] is None
-    assert captured["restore"]["session_config"]["repo_owner"] == "acme"
-    assert captured["restore"]["session_config"]["repo_name"] == "repo"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("clone_token", [None, ""])
-async def test_restore_sandbox_explicit_no_token_bypasses_local_resolution(
-    monkeypatch, local_clone_token_resolver, clone_token
-):
-    captured = {}
-    _patch_auth(monkeypatch)
-    _patch_restore_manager(monkeypatch, captured)
-
-    result = await _call_restore_sandbox(
-        {
-            **RESTORE_REQUEST,
-            "session_config": {"session_id": "sess-1", "repo_owner": "acme", "repo_name": "repo"},
-            "clone_token": clone_token,
-            "clone_host": "gitlab.example",
-            "clone_username": "oauth2",
-        }
-    )
-
-    assert result["success"] is True
-    local_clone_token_resolver.assert_not_called()
-    assert captured["restore"]["clone_token"] == clone_token
+    assert "clone_token" not in captured["restore"]
     assert captured["restore"]["clone_host"] == "gitlab.example"
     assert captured["restore"]["clone_username"] == "oauth2"
+    assert captured["restore"]["control_plane_url"] == RESTORE_REQUEST["control_plane_url"]
+    assert captured["restore"]["sandbox_auth_token"] == RESTORE_REQUEST["sandbox_auth_token"]
 
 
 @pytest.mark.asyncio
@@ -739,10 +695,10 @@ async def test_restore_sandbox_forwards_vnc_and_returns_credentials(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_restore_sandbox_forwards_clone_credentials_with_normalized_repo_context(
-    monkeypatch, local_clone_token_resolver
+async def test_restore_sandbox_forwards_identity_and_user_tokens_with_normalized_repo_context(
+    monkeypatch,
 ):
-    """Snapshot restores use control-plane credentials with a normalized repo context."""
+    """Snapshot restores preserve VCS identity and user-supplied token overrides."""
     captured = {}
 
     _patch_auth(monkeypatch)
@@ -760,21 +716,24 @@ async def test_restore_sandbox_forwards_clone_credentials_with_normalized_repo_c
             },
             "control_plane_url": "https://control-plane.example",
             "sandbox_auth_token": "sandbox-token",
-            "clone_token": "provided-token",
             "clone_host": "gitlab.example",
             "clone_username": "oauth2",
+            "user_env_vars": {"GH_TOKEN": "user-token", "VCS_CLONE_TOKEN": "user-clone-token"},
         }
     )
 
     session_config = captured["restore"]["session_config"]
 
     assert result["success"] is True
-    local_clone_token_resolver.assert_not_called()
     assert session_config["repo_owner"] == "acme"
     assert session_config["repo_name"] == "repo"
-    assert captured["restore"]["clone_token"] == "provided-token"
+    assert "clone_token" not in captured["restore"]
     assert captured["restore"]["clone_host"] == "gitlab.example"
     assert captured["restore"]["clone_username"] == "oauth2"
+    assert captured["restore"]["user_env_vars"] == {
+        "GH_TOKEN": "user-token",
+        "VCS_CLONE_TOKEN": "user-clone-token",
+    }
 
 
 @pytest.mark.asyncio
@@ -889,7 +848,6 @@ async def test_restore_sandbox_forwards_session_config_verbatim(monkeypatch):
             "session_config": session_config,
             "control_plane_url": "https://control-plane.example",
             "sandbox_auth_token": "sandbox-token",
-            "clone_token": None,
         }
     )
 

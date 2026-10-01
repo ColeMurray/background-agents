@@ -624,7 +624,6 @@ async def test_restore_no_repo_gets_host_scoping_without_tokens(monkeypatch):
             "provider": "anthropic",
             "model": "claude-sonnet-4-6",
         },
-        clone_token="bb_token_xyz",
         clone_host="bitbucket.example",
         clone_username="provided-user",
     )
@@ -639,16 +638,8 @@ async def test_restore_no_repo_gets_host_scoping_without_tokens(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scm_provider", [None, "github", "gitlab", "bitbucket"])
-async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatch, scm_provider):
-    """Snapshot restore still injects VCS_CLONE_TOKEN.
-
-    Snapshots taken before the credential-helper migration ship an old
-    entrypoint that reads the env var and embeds it in the origin URL.
-    Without it those snapshots can't fetch. The new entrypoint ignores it
-    and routes through the helper, so the var is harmless on fresh images.
-    For a supplied GitLab host, GitHub CLI aliases stay absent regardless of
-    the local provider setting.
-    """
+async def test_restore_preserves_identity_without_static_system_tokens(monkeypatch, scm_provider):
+    """Restore uses brokered credentials, irrespective of function-level system tokens."""
     captured = {}
 
     class FakeImage:
@@ -660,6 +651,10 @@ async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatc
         monkeypatch.delenv("SCM_PROVIDER", raising=False)
     else:
         monkeypatch.setenv("SCM_PROVIDER", scm_provider)
+    monkeypatch.setenv("VCS_CLONE_TOKEN", "system-clone-token")
+    monkeypatch.setenv("GITLAB_ACCESS_TOKEN", "system-gitlab-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "system-github-token")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "system-private-key")
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -671,7 +666,6 @@ async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatc
             "model": "claude-sonnet-4-6",
             "session_id": "sess-1",
         },
-        clone_token="glpat_restore_token",
         clone_host="gitlab.example",
         clone_username="oauth2",
     )
@@ -679,22 +673,22 @@ async def test_restore_preserves_vcs_clone_token_for_legacy_snapshots(monkeypatc
     env = captured["env"]
     assert env["VCS_HOST"] == "gitlab.example"
     assert env["VCS_CLONE_USERNAME"] == "oauth2"
-    assert env["VCS_CLONE_TOKEN"] == "glpat_restore_token"
+    assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
+    assert "GITHUB_APP_PRIVATE_KEY" not in env
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scm_provider", [None, "gitlab"])
-@pytest.mark.parametrize("user_token_key", [None, "GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN"])
-async def test_restore_github_includes_gh_cli_aliases_unless_user_token_present(
+@pytest.mark.parametrize(
+    "user_token_key", [None, "GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN", "VCS_CLONE_TOKEN"]
+)
+async def test_restore_preserves_user_tokens_without_generating_gh_cli_aliases(
     monkeypatch, scm_provider, user_token_key
 ):
-    """On GitHub, snapshot restore also sets GITHUB_TOKEN/GITHUB_APP_TOKEN.
-
-    Legacy snapshots lack the gh wrapper, so the CLI needs the token in env.
-    """
+    """Restore neither strips user tokens nor adds system GitHub CLI aliases."""
     captured = {}
 
     class FakeImage:
@@ -717,7 +711,6 @@ async def test_restore_github_includes_gh_cli_aliases_unless_user_token_present(
             "model": "claude-sonnet-4-6",
             "session_id": "sess-1",
         },
-        clone_token="ghs_restore_token",
         clone_host="github.com",
         clone_username="provided-user",
         user_env_vars={user_token_key: "user-token"} if user_token_key else None,
@@ -726,22 +719,16 @@ async def test_restore_github_includes_gh_cli_aliases_unless_user_token_present(
     env = captured["env"]
     assert env["VCS_HOST"] == "github.com"
     assert env["VCS_CLONE_USERNAME"] == "provided-user"
-    assert env["VCS_CLONE_TOKEN"] == "ghs_restore_token"
-    if user_token_key:
-        assert env[user_token_key] == "user-token"
-        assert env.get("GITHUB_TOKEN") != "ghs_restore_token"
-        assert env.get("GITHUB_APP_TOKEN") != "ghs_restore_token"
-        assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
-    else:
-        assert env["GITHUB_TOKEN"] == "ghs_restore_token"
-        assert env["GITHUB_APP_TOKEN"] == "ghs_restore_token"
-        # Helper-capable snapshots refresh past this soon-expired restore token.
-        assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN", "VCS_CLONE_TOKEN"):
+        if key == user_token_key:
+            assert env[key] == "user-token"
+        else:
+            assert key not in env
+    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("clone_token", [None, ""])
-async def test_restore_with_repo_without_clone_token_keeps_host_scoping(monkeypatch, clone_token):
+async def test_restore_with_repo_keeps_host_scoping(monkeypatch):
     captured = {}
     monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda _: object())
     monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_sandbox_create(captured))
@@ -750,7 +737,6 @@ async def test_restore_with_repo_without_clone_token_keeps_host_scoping(monkeypa
     await SandboxManager().restore_from_snapshot(
         snapshot_image_id="img-abc",
         session_config={"session_id": "sess-1", "repo_owner": "acme", "repo_name": "repo"},
-        clone_token=clone_token,
         clone_host="github.example",
         clone_username="provided-user",
     )
@@ -767,7 +753,16 @@ async def test_restore_with_repo_without_clone_token_keeps_host_scoping(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_no_repo_restore_omits_clone_token(monkeypatch):
+@pytest.mark.parametrize(
+    ("scm_provider", "host", "username"),
+    [("github", "github.com", "x-access-token"), ("gitlab", "gitlab.com", "oauth2")],
+)
+@pytest.mark.parametrize(
+    "identity", [{}, {"clone_host": "ignored.example"}, {"clone_username": "ignored-user"}]
+)
+async def test_no_repo_restore_omits_clone_token(
+    monkeypatch, scm_provider, host, username, identity
+):
     """No-repository snapshot restores get host scoping but no VCS credentials."""
     captured = {}
 
@@ -776,7 +771,7 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
 
     monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+    monkeypatch.setenv("SCM_PROVIDER", scm_provider)
 
     manager = SandboxManager()
     await manager.restore_from_snapshot(
@@ -788,15 +783,15 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
             "model": "claude-sonnet-4-6",
             "session_id": "sess-1",
         },
-        clone_token="ghs_restore_token",
+        **identity,
     )
 
     env = captured["env"]
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
-    assert env["VCS_HOST"] == "github.com"
-    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
+    assert env["VCS_HOST"] == host
+    assert env["VCS_CLONE_USERNAME"] == username
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env

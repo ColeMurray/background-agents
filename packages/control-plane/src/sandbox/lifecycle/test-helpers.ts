@@ -455,10 +455,7 @@ export function createTestConfig(): SandboxLifecycleConfig {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl: "https://test.workers.dev",
     model: "anthropic/claude-sonnet-4-5",
-    restoreCloneCredentials: {
-      identity: { host: "github.com", username: "x-access-token" },
-      getLegacyToken: vi.fn(async () => "legacy-restore-token"),
-    },
+    restoreScmIdentity: { host: "github.com", username: "x-access-token" },
   };
 }
 

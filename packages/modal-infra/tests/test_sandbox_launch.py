@@ -128,7 +128,6 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
                 "repo_name": "repo",
                 "future_field": {"preserved": True},
             },
-            clone_token="legacy-clone-token",
             clone_host="github.example",
             clone_username="provided-user",
             **common,
@@ -189,7 +188,7 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     if image_source == "snapshot":
         assert env["RESTORED_FROM_SNAPSHOT"] == "true"
         assert '"future_field": {"preserved": true}' in env["SESSION_CONFIG"]
-        assert env["VCS_CLONE_TOKEN"] == "legacy-clone-token"
+        assert "VCS_CLONE_TOKEN" not in env
         assert env["VCS_HOST"] == "github.example"
         assert env["VCS_CLONE_USERNAME"] == "provided-user"
         assert "GITHUB_TOKEN" not in env

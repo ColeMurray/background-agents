@@ -420,7 +420,7 @@ describe("ModalClient", () => {
     );
   });
 
-  it("sends restore clone credentials and routes session_config through buildSessionConfig", async () => {
+  it("sends restore SCM identity without a token and routes session_config through buildSessionConfig", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
         status: 200,
@@ -441,18 +441,15 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
-      cloneCredentials: {
-        identity: { host: "github.com", username: "x-access-token" },
-        legacyToken: "restore-token",
-      },
+      scmIdentity: { host: "github.com", username: "x-access-token" },
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body).toMatchObject({
-      clone_token: "restore-token",
       clone_host: "github.com",
       clone_username: "x-access-token",
     });
+    expect(body).not.toHaveProperty("clone_token");
     expect(body.session_config).toEqual({
       session_id: "session-123",
       harness: "opencode",
@@ -465,7 +462,7 @@ describe("ModalClient", () => {
     });
   });
 
-  it("explicitly sends a null token and complete GitLab identity for helper-capable restores", async () => {
+  it("sends complete GitLab identity without a restore token", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
         status: 200,
@@ -483,15 +480,15 @@ describe("ModalClient", () => {
       harness: "opencode",
       provider: "anthropic",
       model: "claude-sonnet-4-5",
-      cloneCredentials: { identity: { host: "gitlab.com", username: "oauth2" } },
+      scmIdentity: { host: "gitlab.com", username: "oauth2" },
     });
 
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body).toMatchObject({
-      clone_token: null,
       clone_host: "gitlab.com",
       clone_username: "oauth2",
     });
+    expect(body).not.toHaveProperty("clone_token");
   });
 
   it("asks Modal's create handler for early bridge connect by SessionConfig field name", async () => {

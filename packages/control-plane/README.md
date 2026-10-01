@@ -500,23 +500,21 @@ The system uses two types of GitHub tokens:
 | GitHub App Token | Clone, fetch, push | Brokered to credential helper | All repos where App is installed |
 | User OAuth Token | Create PRs         | Server-only                   | User's accessible repos          |
 
-Fresh and prebuilt-image sandboxes do not receive a long-lived `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`,
-or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox credential helper, which
-calls `/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived
-credentials on demand. Legacy snapshots and one-shot image builds may still receive env-token
-fallbacks for compatibility. The helper preserves the existing installation-wide model by serving
-credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
-clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
-Daytona persistent resumes. Every modern Modal restore includes VCS host/username metadata and an
-explicit `clone_token`, including repository-less restores. With phase-1 Modal, v72+ restores
-receive VCS identity only (`clone_token: null`) and use brokered credentials; compatible v62-v71
-repository snapshots require a static fallback token, and mint failures block the Modal request.
-Unknown or incompatible snapshots are retained under recovery hold, without token minting or launch.
-Modal keeps legacy token/CLI alias injection; local minting is limited to repository-backed
-old-worker requests that omit the field. Explicit `null` or empty values never trigger local
-minting. Modal's `github-app` secret remains required until a separate cleanup release; the key
-never enters session sandboxes. Repository-less restores preserve VCS identity but never mint or
-inject a token.
+Fresh, prebuilt-image, and restored session sandboxes do not receive a static system `GITHUB_TOKEN`,
+`GITHUB_APP_TOKEN`, or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox
+credential helper, which calls `/sessions/:id/scm-credentials` with the sandbox auth token and
+receives short-lived credentials on demand. The helper preserves the existing installation-wide
+model by serving credentials for HTTPS git requests to the configured SCM host, including
+setup/start hooks that clone auxiliary private repos. This avoids stale embedded credentials in
+long-running sessions and Daytona persistent resumes. All supported Modal snapshots (v62+) already
+include the helper, shipped in v51 in May 2026; v72 is not an authentication boundary. Restores
+preserve VCS host/username identity and session broker context, including for repository-less
+sessions, without requiring token minting before launch. Unknown or incompatible snapshots remain
+under recovery hold without launch. Modal does not mint restore tokens or generate
+clone-token/GitHub CLI aliases, and no longer binds a `github-app` secret. The App key remains
+configured in the control plane and enabled GitHub bot, never in session sandboxes. User-supplied
+token overrides are preserved. One-shot image builds still receive `VCS_CLONE_TOKEN` because they
+lack a session broker context.
 
 If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
 Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub

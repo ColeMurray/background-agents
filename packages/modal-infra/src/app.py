@@ -34,18 +34,10 @@ function_image = (
         "httpx",
         "fastapi",
         "modal",  # Required for sandbox.manager imports
-        "PyJWT[crypto]",  # For GitHub App token generation
     )
     # Bundle sandbox_runtime so modal-infra shims can import from it at runtime
     .add_local_dir(str(_SANDBOX_RUNTIME_DIR), remote_path="/root/sandbox_runtime", copy=True)
     .env(deployed_image_environment())
-)
-
-# Secrets for GitHub App - used for git operations (clone, push)
-# These are used to generate installation tokens, NOT injected into sandboxes
-github_app_secrets = modal.Secret.from_name(
-    "github-app",
-    required_keys=["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_INSTALLATION_ID"],
 )
 
 # Secret for internal API authentication and deployment configuration.
@@ -53,8 +45,7 @@ github_app_secrets = modal.Secret.from_name(
 #   MODAL_API_SECRET: verify requests from control plane to Modal endpoints
 # Optional keys (add to the same secret as needed):
 #   ALLOWED_CONTROL_PLANE_HOSTS: comma-separated list of permitted callback hosts
-#   SCM_PROVIDER: "github" (default) or "gitlab" — selects the clone credential type
-#   GITLAB_ACCESS_TOKEN: GitLab PAT used as clone credential when SCM_PROVIDER=gitlab
+#   SCM_PROVIDER: "github" (default), "gitlab", or "bitbucket" for VCS identity defaults
 internal_api_secret = modal.Secret.from_name(
     "internal-api",
     required_keys=["MODAL_API_SECRET"],

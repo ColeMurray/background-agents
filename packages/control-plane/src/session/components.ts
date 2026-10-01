@@ -28,7 +28,11 @@ import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import { providerResumesAfterStop, type SandboxProvider } from "../sandbox/provider";
+import {
+  providerResumesAfterStop,
+  type RestoreScmIdentity,
+  type SandboxProvider,
+} from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import { createImageBuildLookup } from "../image-builds/lookup";
@@ -320,6 +324,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   let scmProvider: SourceControlProvider = createSourceControlProviderFromEnv(env);
   const sourceControlProvider = () => scmProvider;
   const scmProviderName = scmProvider.name;
+  const scmIdentity = scmCloneIdentity(scmProviderName);
 
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
@@ -482,7 +487,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
-    sourceControlProvider,
+    restoreScmIdentity: { host: scmIdentity.host, username: scmIdentity.cloneUsername },
     shutdown,
     access,
     env,
@@ -1056,7 +1061,7 @@ interface LifecycleManagerDeps {
   shutdown: SandboxShutdownLifecycle;
   access: SandboxAccess;
   provider: SandboxProvider;
-  sourceControlProvider: () => SourceControlProvider;
+  restoreScmIdentity: RestoreScmIdentity;
   env: Env;
   db: SqlDatabase;
   /** The latched public-session-id resolver shared with the session logger. */
@@ -1075,7 +1080,7 @@ interface LifecycleManagerDeps {
 function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleManager {
   const {
     provider,
-    sourceControlProvider,
+    restoreScmIdentity,
     shutdown,
     access,
     env,
@@ -1138,7 +1143,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       }
     );
   }
-  const scmIdentity = scmCloneIdentity(sourceControlProvider().name);
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
@@ -1155,17 +1159,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
     slackAgentNotifyLookup,
-    restoreCloneCredentials:
-      provider.name === "modal" || provider.name === "modal-vm"
-        ? {
-            identity: {
-              host: scmIdentity.host,
-              username: scmIdentity.cloneUsername,
-            },
-            getLegacyToken: async () =>
-              (await sourceControlProvider().generateCredentialHelperAuth()).password,
-          }
-        : undefined,
+    restoreScmIdentity:
+      provider.name === "modal" || provider.name === "modal-vm" ? restoreScmIdentity : undefined,
     recordWarning: deps.recordWarning,
   };
 
