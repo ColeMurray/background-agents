@@ -3,9 +3,9 @@ import { z } from "zod";
 import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
 import {
   createTeamRequestSchema,
+  teamMembershipSchema,
   teamRoleSchema,
   teamSessionsResponseSchema,
-  teamActivityResponseSchema,
   updateTeamRequestSchema,
   type Team,
   type TeamRole,
@@ -19,8 +19,6 @@ import {
   teamsEnforcementMode,
   viewerFromContext,
 } from "../authorization/session-admission";
-import { AuditEventStore, toAuditEvent } from "../db/audit-event-store";
-import { encodeAuditEventCursor } from "../db/audit-event-cursor";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
@@ -39,7 +37,6 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
 import { parseQuery } from "./query";
-import { auditEventQuery } from "./audit-events";
 import { SESSION_INBOX_LIMIT } from "./session-index";
 import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
@@ -66,9 +63,6 @@ const querySchema = z.object({
 const sessionsQuerySchema = z.object({
   bucket: sessionInboxCategorySchema.optional(),
   cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
-});
-const activityQuerySchema = auditEventQuery.extend({
-  action: z.string().min(1, { error: "Invalid action" }).optional(),
 });
 
 function viewer(ctx: RequestContext) {
@@ -284,31 +278,6 @@ async function teamSessions(
   );
 }
 
-async function teamActivity(
-  request: Request,
-  env: Env,
-  _params: { id: string },
-  ctx: RequestContext
-) {
-  const query = parseQuery(request, activityQuerySchema);
-  if (query instanceof Response) return query;
-  const result = await new AuditEventStore(ctx.db).list({
-    ...query,
-    teamId: admittedTeam(ctx).id,
-    visibilityScope: {
-      viewer: viewerFromContext(ctx, ctx.sessionMemberships ?? new Map()),
-      mode: teamsEnforcementMode(ctx, env),
-    },
-  });
-  return json(
-    teamActivityResponseSchema.parse({
-      events: result.rows.map(toAuditEvent),
-      hasMore: result.hasMore,
-      nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
-    })
-  );
-}
-
 async function updateTeam(
   request: Request,
   _env: Env,
@@ -354,7 +323,9 @@ async function setArchived(
 
 async function members(_request: Request, _env: Env, _params: { id: string }, ctx: RequestContext) {
   return json({
-    members: await new TeamMembershipStore(ctx.db).listMembersWithUsers(admittedTeam(ctx).id),
+    members: await new TeamMembershipStore(ctx.db).listMembersWithUsers(admittedTeam(ctx).id, {
+      includeEmail: ctx.authorization?.permissions.includes("workspace.members.read") ?? false,
+    }),
   });
 }
 
@@ -368,6 +339,7 @@ async function putMember(
   if (body instanceof Response) return body;
   const team = admittedTeam(ctx);
   const store = new TeamMembershipStore(ctx.db);
+  const includeEmail = ctx.authorization?.permissions.includes("workspace.members.read") ?? false;
   const user = await ctx.db
     .prepare("SELECT 1 AS ok FROM users WHERE id = ?")
     .bind(params.userId)
@@ -377,7 +349,7 @@ async function putMember(
     (member) => member.userId === params.userId
   );
   if (before?.role === body.role) {
-    const member = (await store.listMembersWithUsers(team.id)).find(
+    const member = (await store.listMembersWithUsers(team.id, { includeEmail })).find(
       (row) => row.userId === params.userId
     );
     return json({ member });
@@ -387,7 +359,7 @@ async function putMember(
     else if (!(await store.add(team.id, params.userId, body.role))) {
       return json({ error: "Membership changed concurrently", code: "membership_conflict" }, 409);
     }
-    const after = (await store.listMembersWithUsers(team.id)).find(
+    const after = (await store.listMembersWithUsers(team.id, { includeEmail })).find(
       (member) => member.userId === params.userId
     )!;
     await auditTeamEvent({
@@ -396,7 +368,7 @@ async function putMember(
       targetUserId: params.userId,
       action: before ? "team.member_role_changed" : "team.member_added",
       before: before ?? {},
-      after,
+      after: teamMembershipSchema.parse(after),
     });
     return json({ member: after });
   } catch (cause) {
@@ -496,11 +468,6 @@ teamRoutes.delete(
   (c) => dispatch(c, deleteMember)
 );
 teamRoutes.post("/teams/:id/join", policy(requireTeam("canJoin")), (c) => dispatch(c, joinTeam));
-const member = admit({
-  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-  ...PRIVATE,
-  authorization: requireTeam("member"),
-});
 teamRoutes.get(
   "/teams/:id/sessions",
   admit({
@@ -516,4 +483,3 @@ teamRoutes.get(
   }),
   (c) => dispatch(c, teamSessions)
 );
-teamRoutes.get("/teams/:id/activity", member, (c) => dispatch(c, teamActivity));

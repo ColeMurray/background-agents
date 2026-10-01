@@ -13,8 +13,6 @@ export const AUDIT_EVENT_PAGE_SIZE = 25;
 
 interface AuditEventsOptions {
   teamId?: string;
-  action?: string;
-  endpoint?: BrowserApiPath;
   enabled?: boolean;
 }
 
@@ -22,8 +20,7 @@ export function auditEventsKey(cursor?: string, options: AuditEventsOptions = {}
   const params = new URLSearchParams({ limit: String(AUDIT_EVENT_PAGE_SIZE) });
   if (cursor) params.set("cursor", cursor);
   if (options.teamId) params.set("teamId", options.teamId);
-  if (options.action) params.set("action", options.action);
-  return `${options.endpoint ?? "/api/audit-events"}?${params.toString()}`;
+  return `/api/audit-events?${params.toString()}`;
 }
 
 class AuditEventsRequestError extends Error {

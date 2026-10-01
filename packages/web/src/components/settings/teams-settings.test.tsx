@@ -3,8 +3,9 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import userEvent from "@testing-library/user-event";
 import { SWRConfig } from "swr";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamMember } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { TeamsSettings } from "./teams-settings";
@@ -12,6 +13,12 @@ import { TeamDetail } from "./team-detail";
 import { TeamMembersTable } from "./team-members-table";
 
 expect.extend(matchers);
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
@@ -111,6 +118,68 @@ afterEach(() => {
 });
 
 describe("Teams settings", () => {
+  it.each([
+    ["  Grace  ", "person@example.com", "grace", "Grace"],
+    ["   ", "person@example.com", "person", "Unnamed user \u00b7 a1b2c3"],
+    [null, null, "unnamed", "Unnamed user \u00b7 a1b2c3"],
+  ] as const)(
+    "uses name, authorized email, or neutral fallback for member typeahead (%s, %s)",
+    async (displayName, email, query, name) => {
+      mocks.candidates = [
+        { userId: "user_ada", displayName: "Ada", email: null, suspendedAt: null },
+        { userId: "user_identity_a1b2c3", displayName, email, suspendedAt: null },
+      ];
+      mocks.setMember.mockResolvedValue(undefined);
+      render(<TeamMembersTable team={{ ...team, capabilities }} members={[]} />);
+      const user = userEvent.setup();
+      const picker = screen.getByRole("combobox", { name: "Add member" });
+      await user.click(picker);
+      await user.keyboard(query);
+      await waitFor(() =>
+        expect(screen.getByRole("option", { name: new RegExp(name) })).toHaveFocus()
+      );
+      await user.keyboard("{Enter}");
+      expect(picker).toHaveTextContent(name);
+      if (!email) expect(screen.queryByText("person@example.com")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Add" }));
+      await waitFor(() =>
+        expect(mocks.setMember).toHaveBeenCalledWith("user_identity_a1b2c3", "member")
+      );
+    }
+  );
+
+  it.each([null, "ada@example.com"])(
+    "renders member names and avatars with only the returned email (%s)",
+    (email) => {
+      const { container } = render(
+        <TeamMembersTable
+          team={team}
+          members={[{ ...member, email, avatarUrl: "https://example.com/ada.png" }]}
+        />
+      );
+      expect(screen.getByText("Ada")).toBeInTheDocument();
+      expect(container.querySelector('img[src="https://example.com/ada.png"]')).toBeInTheDocument();
+      expect(screen.queryByText("ada@example.com")).toBe(email ? screen.getByText(email) : null);
+      expect(container.querySelector('[title="ada@example.com"]') !== null).toBe(email !== null);
+      expect(screen.queryByText(member.userId)).toBeNull();
+    }
+  );
+
+  it.each([null, "private@example.com"])(
+    "uses a short neutral label rather than email or full ID for an unnamed member (%s)",
+    (email) => {
+      const userId = "user_long_identity_a1b2c3";
+      render(
+        <TeamMembersTable team={team} members={[{ ...member, userId, displayName: null, email }]} />
+      );
+      expect(
+        screen.getByRole("combobox", { name: "Role for Unnamed user \u00b7 a1b2c3" })
+      ).toBeDisabled();
+      expect(screen.getByText("Unnamed user \u00b7 a1b2c3")).toBeInTheDocument();
+      expect(screen.queryByText(userId)).toBeNull();
+    }
+  );
+
   it("shows a lead's team with a singular member count", () => {
     mocks.hasPermission = false;
     mocks.teams = [
@@ -244,9 +313,9 @@ describe("Teams settings", () => {
     const { rerender } = render(
       <TeamMembersTable team={{ ...team, capabilities }} members={[member]} />
     );
-    fireEvent.change(screen.getByRole("combobox", { name: "Add member" }), {
-      target: { value: "user_two" },
-    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Add member" }));
+    await user.click(await screen.findByRole("option", { name: /Grace/ }));
     rerender(<TeamMembersTable team={team} members={[member]} />);
     expect(screen.getByRole("combobox", { name: "Role for Ada" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
@@ -282,9 +351,9 @@ describe("Teams settings", () => {
     ];
     mocks.setMember.mockResolvedValue(undefined);
     render(<TeamMembersTable team={{ ...team, capabilities }} members={[member]} />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Add member" }), {
-      target: { value: "user_two" },
-    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Add member" }));
+    await user.click(await screen.findByRole("option", { name: /Grace/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_two", "member"));
   });

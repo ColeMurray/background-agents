@@ -4,7 +4,18 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## October 1, 2026
 
+### Removed
+
+Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
+recorded in the workspace audit log, available to viewers with `workspace.audit.read` and filterable
+by team. No audit history is deleted.
+
 ### Fixed
+
+The team directory and collaborator picker now show email addresses only to viewers with
+`workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
+names and avatars with no email address, and unnamed users have a neutral label with a short ID
+suffix. This restriction applies in every team enforcement mode.
 
 Session navigation now defaults to **All my teams**, with the team selector available even for a
 single membership. Composer team and visibility choices stay local, including automatic team
@@ -19,9 +30,9 @@ to.
 
 Team leads and administrators can manage primary and source Slack channel bindings in a team's
 Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
-workspace-level sessions (the default) or reject requests until bound. Binding changes appear in
-team activity and the workspace audit log. The move dialog warns when moving a session away from its
-Slack channel's bound team will end the thread; future work continues in the web app.
+workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
+workspace audit log. The move dialog warns when moving a session away from its Slack channel's bound
+team will end the thread; future work continues in the web app.
 
 Slack-created sessions carry the channel's team and enforce the requesting user's membership.
 Unavailable threads close instead of starting replacement sessions. Session notifications and the

@@ -1,5 +1,6 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { UserStore, type User } from "../../src/db/user-store";
@@ -63,13 +64,13 @@ describe("session collaborator candidates", () => {
       {
         userId: candidate.id,
         displayName: "Ada",
-        email: "ada@example.com",
+        email: null,
         avatarUrl: "https://example.com/ada.png",
       },
       {
         userId: OWNER,
         displayName: "Integration Browser User",
-        email: `${OWNER}@test.local`,
+        email: null,
         avatarUrl: `${OWNER}@test.local`,
       },
     ]);
@@ -82,6 +83,37 @@ describe("session collaborator candidates", () => {
     expect((await request(path, { method: "DELETE" })).status).toBe(200);
     expect(await new SessionCollaboratorStore(env.DB).listUserIds("private-session")).toEqual([]);
   });
+
+  it.each(["off", "shadow", "on"])(
+    "returns emails only to a session owner with workspace member read permission in %s mode",
+    async (mode) => {
+      for (const role of ["member", "administrator"] as const) {
+        await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+          .bind(BUILT_IN_ROLE_REGISTRY[role].id, OWNER)
+          .run();
+        const response = await request(
+          "/sessions/private-session/collaborator-candidates",
+          {},
+          mode
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual([
+          {
+            userId: candidate.id,
+            displayName: "Ada",
+            email: role === "administrator" ? candidate.email : null,
+            avatarUrl: candidate.avatarUrl,
+          },
+          {
+            userId: OWNER,
+            displayName: "Integration Browser User",
+            email: role === "administrator" ? `${OWNER}@test.local` : null,
+            avatarUrl: `${OWNER}@test.local`,
+          },
+        ]);
+      }
+    }
+  );
 
   it("excludes suspended and unassigned users while retaining nullable identity fields", async () => {
     const users = new UserStore(env.DB);

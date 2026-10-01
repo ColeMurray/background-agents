@@ -3,7 +3,8 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamResponse } from "@/hooks/use-teams";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { MoveSessionDialog } from "./move-session-dialog";
@@ -11,6 +12,12 @@ import { SessionVisibilityControl } from "./session-visibility-control";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
 
 expect.extend(matchers);
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 const mocks = vi.hoisted(() => ({
   teams: [] as TeamResponse[],
@@ -684,6 +691,12 @@ describe("SessionVisibilityControl", () => {
 });
 
 describe("CollaboratorsSection", () => {
+  async function selectGrace() {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Add collaborator" }));
+    await user.click(await screen.findByRole("option", { name: "Grace" }));
+  }
+
   const props = {
     sessionId: "session/id",
     ownerUserId: "owner",
@@ -692,11 +705,12 @@ describe("CollaboratorsSection", () => {
     onUpdated: mocks.updated,
   };
 
-  it("resolves IDs from scoped active candidates and excludes owner and existing collaborators", () => {
+  it("resolves IDs from scoped active candidates and excludes owner and existing collaborators", async () => {
     render(<CollaboratorsSection {...props} />);
     expect(mocks.useCandidates).toHaveBeenCalledWith("session/id", true);
     expect(screen.getByText("Ada")).toBeInTheDocument();
-    expect(screen.getByText("unknown")).toBeInTheDocument();
+    expect(screen.getByText("Unnamed user \u00b7 nknown")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("combobox", { name: "Add collaborator" }));
     expect(screen.getByRole("option", { name: "Grace" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Owner" })).toBeNull();
     expect(screen.queryByRole("option", { name: "Ada" })).toBeNull();
@@ -704,9 +718,7 @@ describe("CollaboratorsSection", () => {
 
   it("adds a candidate via PUT and refreshes snapshot and lists", async () => {
     render(<CollaboratorsSection {...props} />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Add collaborator" }), {
-      target: { value: "grace/id" },
-    });
+    await selectGrace();
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(mocks.updated).toHaveBeenCalledOnce());
     expect(browserApiFetch).toHaveBeenCalledWith(
@@ -714,7 +726,9 @@ describe("CollaboratorsSection", () => {
       { method: "PUT" }
     );
     expect(mocks.mutate).toHaveBeenCalledWith(expect.any(Function));
-    expect(screen.getByRole("combobox", { name: "Add collaborator" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Add collaborator" })).toHaveTextContent(
+      "Select a workspace member"
+    );
   });
 
   it("removes an existing collaborator via DELETE and refreshes", async () => {
@@ -736,9 +750,7 @@ describe("CollaboratorsSection", () => {
     async (status, failure, message) => {
       vi.mocked(browserApiFetch).mockResolvedValue(Response.json(failure, { status }));
       render(<CollaboratorsSection {...props} />);
-      fireEvent.change(screen.getByRole("combobox", { name: "Add collaborator" }), {
-        target: { value: "grace/id" },
-      });
+      await selectGrace();
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(message);
       expect(mocks.updated).not.toHaveBeenCalled();
@@ -746,11 +758,9 @@ describe("CollaboratorsSection", () => {
     }
   );
 
-  it("hides the section and guards a revoked capability", () => {
+  it("hides the section and guards a revoked capability", async () => {
     const { rerender } = render(<CollaboratorsSection {...props} />);
-    fireEvent.change(screen.getByRole("combobox", { name: "Add collaborator" }), {
-      target: { value: "grace/id" },
-    });
+    await selectGrace();
     rerender(<CollaboratorsSection {...props} canManageCollaborators={false} />);
     expect(screen.queryByText("Collaborators")).toBeNull();
     expect(mocks.useCandidates).toHaveBeenLastCalledWith("session/id", false);
@@ -767,7 +777,7 @@ describe("CollaboratorsSection", () => {
       expect(mocks.useCandidates).toHaveBeenCalledWith("session/id", true);
       expect(screen.getByRole("combobox", { name: "Add collaborator" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Remove ada" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Remove Unnamed user \u00b7 ada" })).toBeEnabled();
       if (state === "error")
         expect(screen.getByRole("alert")).toHaveTextContent("Failed to load workspace members");
       expect(browserApiFetch).not.toHaveBeenCalled();

@@ -132,7 +132,7 @@ describe("scope refresh with real SWR caches", () => {
       buildSessionsPageKey({ teamIds: ["team_source", "team_target"], offset: 100 }),
       "/api/teams",
       "/api/teams/team_source/sessions?cursor=page2",
-      ["/api/teams/team_source/activity", "viewer"],
+      ["/api/teams/team_source/sessions?bucket=finished", "viewer"],
       "/api/activity?teamId=team_source",
       ["/api/audit-events?cursor=page2", "viewer"],
       ["/api/sessions/inbox?category=finished", "viewer"],
@@ -245,7 +245,7 @@ describe("scope refresh with real SWR caches", () => {
           "/api/teams/team_target/sessions?bucket=needs_attention",
           fetchPage
         );
-        const activity = useSWR("/api/teams/team_target/activity?cursor=page2", fetchPage);
+        const activity = useSWR("/api/activity?teamId=team_target", fetchPage);
         const audit = useSWR(["/api/audit-events?limit=25", "viewer"], ([path]) => fetchPage(path));
         const sessionSnapshot = useSWR("/api/sessions/s1", fetchPage);
         const children = useSWR("/api/sessions/s1/children", fetchPage);

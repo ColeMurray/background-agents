@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentStore, type EnvironmentRow } from "../../src/db/environments";
 import { TeamSlugConflictError, TeamStore } from "../../src/db/teams";
 import {
@@ -8,6 +8,7 @@ import {
   TeamMembershipNotFoundError,
 } from "../../src/db/team-memberships";
 import { cleanD1Tables } from "./cleanup";
+import { sqlDatabase } from "./helpers";
 
 beforeEach(cleanD1Tables);
 
@@ -27,6 +28,39 @@ function environmentRow(overrides: Partial<EnvironmentRow>): EnvironmentRow {
 }
 
 describe("team and membership stores", () => {
+  it("selects email only when explicitly included in member identities", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "identities",
+      name: "Identities",
+      joinPolicy: "open",
+    });
+    await env.DB.prepare(
+      "INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1)"
+    )
+      .bind("ada", "Ada", "ada@example.com", "https://example.com/ada.png")
+      .run();
+    await new TeamMembershipStore(env.DB).add(team.id, "ada");
+    const db = sqlDatabase(env.DB);
+    const prepare = vi.fn((sql: string) => db.prepare(sql));
+    const store = new TeamMembershipStore({ prepare, batch: db.batch.bind(db) });
+    for (const includeEmail of [false, true]) {
+      const members = await store.listMembersWithUsers(team.id, { includeEmail });
+      expect(members).toEqual([
+        expect.objectContaining({
+          userId: "ada",
+          displayName: "Ada",
+          email: includeEmail ? "ada@example.com" : null,
+          avatarUrl: "https://example.com/ada.png",
+        }),
+      ]);
+      const sql = prepare.mock.lastCall?.[0];
+      if (!includeEmail) {
+        expect(sql).toContain("NULL AS email");
+        expect(sql).not.toContain("u.email");
+      }
+    }
+  });
+
   it("validates team rows and allows any team to be archived or restored", async () => {
     const store = new TeamStore(env.DB);
     expect(await store.list()).toEqual([]);

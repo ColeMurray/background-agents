@@ -26,7 +26,7 @@ describe("scope cache invalidation", () => {
       "/api/teams",
       "/api/teams?membership=all",
       "/api/teams/team-id/sessions?cursor=page2",
-      "/api/teams/team-id/activity",
+      ["/api/teams/team-id/sessions?bucket=finished", "viewer"],
       "/api/activity",
       "/api/activity?teamId=old",
       "/api/activity/team-id",

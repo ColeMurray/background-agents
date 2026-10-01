@@ -16,10 +16,9 @@ import { TeamDetail } from "@/components/settings/team-detail";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { TeamOverview } from "./team-overview";
-import { TeamActivity } from "./team-activity";
 import { TeamChannels } from "./team-channels";
 
-type TeamTab = "Overview" | "Members" | "Channels" | "Activity" | "Settings";
+type TeamTab = "Overview" | "Members" | "Channels" | "Settings";
 
 export function TeamPage({ slug }: { slug: string }) {
   const { teams, loading, error } = useTeams();
@@ -57,9 +56,7 @@ function TeamContent({
   const team = currentTeam ?? initialTeam;
   const capabilities = useTeamCapabilities(team);
   const [tab, setTab] = useState<TeamTab>("Overview");
-  const tabs: TeamTab[] = canViewWork
-    ? ["Overview", "Members", "Channels", "Activity"]
-    : ["Members"];
+  const tabs: TeamTab[] = canViewWork ? ["Overview", "Members", "Channels"] : ["Members"];
   if (canViewWork && (capabilities.canEditMetadata || capabilities.canArchive))
     tabs.push("Settings");
   const activeTab = tabs.includes(tab) ? tab : "Members";
@@ -105,7 +102,6 @@ function TeamContent({
       {activeTab === "Overview" && <TeamOverview teamId={team.id} />}
       {activeTab === "Members" && <TeamMembers team={team} />}
       {activeTab === "Channels" && <TeamChannels team={team} />}
-      {activeTab === "Activity" && <TeamActivity teamId={team.id} />}
       {activeTab === "Settings" && <TeamDetail team={team} />}
     </section>
   );
