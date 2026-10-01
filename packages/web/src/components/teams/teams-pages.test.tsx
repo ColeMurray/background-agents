@@ -49,7 +49,6 @@ vi.mock("@/components/settings/team-detail", () => ({
   TeamDetail: () => <p>Team settings editor</p>,
 }));
 vi.mock("./team-overview", () => ({ TeamOverview: () => <p>Team session buckets</p> }));
-vi.mock("./team-activity", () => ({ TeamActivity: () => <p>Team activity feed</p> }));
 
 const team: TeamResponse = {
   id: "team_design",
@@ -182,22 +181,32 @@ describe("Team page tabs", () => {
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
   });
 
-  it("shows member Overview and Activity but no Settings without capabilities", () => {
+  it.each(["member", "administrator", "owner"])("never offers an Activity tab to a %s", (role) => {
+    mocks.role = role;
+    mocks.mine = role === "member" ? [team] : [];
+    render(<TeamPage slug="design" />);
+    const tabs = within(screen.getByRole("navigation", { name: "Team tabs" }));
+    expect(tabs.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+    expect(tabs.getByRole("button", { name: "Members" })).toBeInTheDocument();
+    expect(tabs.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+  });
+
+  it("shows member Overview and Members but no Settings without capabilities", () => {
     mocks.mine = [team];
     render(<TeamPage slug="design" />);
     expect(screen.getByText("Team session buckets")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
-    expect(screen.getByText("Team activity feed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Members" }));
+    expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
   it.each(["owner", "administrator"])(
-    "allows %s private tabs but still requires settings capabilities",
+    "allows %s Overview but still requires settings capabilities",
     (role) => {
       mocks.role = role;
       const view = render(<TeamPage slug="design" />);
       expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Members" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Settings" })).not.toBeInTheDocument();
       mocks.teams = [{ ...team, capabilities: { ...denied, canArchive: true } }];
       view.rerender(<TeamPage slug="design" />);
@@ -206,13 +215,14 @@ describe("Team page tabs", () => {
     }
   );
 
-  it("unmounts private content when membership disappears", () => {
+  it("unmounts Overview when membership disappears", () => {
     mocks.mine = [team];
     const view = render(<TeamPage slug="design" />);
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(screen.getByText("Team session buckets")).toBeInTheDocument();
     mocks.mine = [];
     view.rerender(<TeamPage slug="design" />);
-    expect(screen.queryByText("Team activity feed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(screen.getByText("Team member table")).toBeInTheDocument();
   });
 
@@ -223,7 +233,6 @@ describe("Team page tabs", () => {
     render(<TeamPage slug="design" />);
     expect(screen.getByText("Team member table")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
   });
 
   it("unmounts Settings when the server revokes metadata and archive capabilities", () => {
@@ -243,7 +252,7 @@ describe("Team page tabs", () => {
     mocks.suspendedAt = 1;
     render(<TeamPage slug="design" />);
     expect(screen.queryByText("Team session buckets")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
   });
 
   it("unmounts private content when fresh team metadata reports an archive", () => {

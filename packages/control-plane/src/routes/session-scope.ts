@@ -287,7 +287,11 @@ async function listCollaboratorCandidates(
   _params: { id: string },
   ctx: RequestContext
 ) {
-  return json(await new UserStore(ctx.db).listCollaboratorCandidates());
+  return json(
+    await new UserStore(ctx.db).listCollaboratorCandidates({
+      includeEmail: ctx.authorization?.permissions.includes("workspace.members.read") ?? false,
+    })
+  );
 }
 
 export const sessionScopeRoutes = new Hono<ControlPlaneHonoEnv>();

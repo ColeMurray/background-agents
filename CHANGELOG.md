@@ -19,7 +19,18 @@ drain; rolling back to a version that binds it requires recreating it. The contr
 GitHub bot still need their App credentials. No staged restore-auth migration is required. See the
 [deployment guide](docs/GETTING_STARTED.md#modal-restore-authentication).
 
+### Removed
+
+Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
+recorded in the workspace audit log, available to viewers with `workspace.audit.read` and filterable
+by team. No audit history is deleted.
+
 ### Fixed
+
+The team directory and collaborator picker now show email addresses only to viewers with
+`workspace.members.read` (Owners and Administrators in the built-in roles). Other viewers receive
+names and avatars with no email address, and unnamed users have a neutral label with a short ID
+suffix. This restriction applies in every team enforcement mode.
 
 Session navigation now defaults to **All my teams**, with the team selector available even for a
 single membership. Composer team and visibility choices stay local, including automatic team

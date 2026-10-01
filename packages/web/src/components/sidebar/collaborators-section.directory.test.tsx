@@ -3,9 +3,10 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { permissionsForBuiltInRole } from "@open-inspect/shared/rbac";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -18,6 +19,12 @@ vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 const OWNER = "11111111111111111111111111111111";
 const ADA = "22222222222222222222222222222222";
 const GRACE = "33333333333333333333333333333333";
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 function wrapper({ children }: { children: ReactNode }) {
   return (
@@ -39,6 +46,99 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("collaborator directory authorization boundary", () => {
+  it.each([
+    ["  Grace  ", "person@example.com", "grace", "Grace"],
+    ["   ", "person@example.com", "person", "Unnamed user \u00b7 a1b2c3"],
+    [null, null, "unnamed", "Unnamed user \u00b7 a1b2c3"],
+  ] as const)(
+    "uses name, authorized email, or neutral fallback for collaborator typeahead (%s, %s)",
+    async (displayName, email, query, name) => {
+      const targetId = "user_identity_a1b2c3";
+      vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+        path.endsWith("collaborator-candidates")
+          ? Response.json([
+              { userId: ADA, displayName: "Ada", email: null, avatarUrl: null },
+              { userId: targetId, displayName, email, avatarUrl: null },
+            ])
+          : Response.json({ status: "updated" })
+      );
+      const onUpdated = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CollaboratorsSection
+          sessionId="private_session"
+          ownerUserId={OWNER}
+          collaborators={[]}
+          canManageCollaborators
+          onUpdated={onUpdated}
+        />,
+        { wrapper }
+      );
+      const user = userEvent.setup();
+      const picker = screen.getByRole("combobox", { name: "Add collaborator" });
+      await waitFor(() => expect(picker).toBeEnabled());
+      await user.click(picker);
+      await user.keyboard(query);
+      await waitFor(() =>
+        expect(screen.getByRole("option", { name: new RegExp(name) })).toHaveFocus()
+      );
+      await user.keyboard("{Enter}");
+      expect(picker).toHaveTextContent(name);
+      if (!email) expect(screen.queryByText("person@example.com")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Add" }));
+      await waitFor(() => expect(onUpdated).toHaveBeenCalledOnce());
+      expect(browserApiFetch).toHaveBeenCalledWith(
+        `/api/sessions/private_session/collaborators/${targetId}`,
+        { method: "PUT" }
+      );
+    }
+  );
+
+  it.each([null, "ada@example.com"])(
+    "renders names, avatars and neutral labels with only the returned email (%s)",
+    async (email) => {
+      const unnamed = "user_long_identity_a1b2c3";
+      const unnamedCandidate = "user_long_identity_d4e5f6";
+      vi.mocked(browserApiFetch).mockResolvedValue(
+        Response.json([
+          { userId: ADA, displayName: "Ada", email, avatarUrl: "https://example.com/ada.png" },
+          { userId: unnamed, displayName: null, email: null, avatarUrl: null },
+          {
+            userId: GRACE,
+            displayName: "Grace",
+            email: null,
+            avatarUrl: "https://example.com/grace.png",
+          },
+          { userId: unnamedCandidate, displayName: "", email: null, avatarUrl: null },
+        ])
+      );
+      const { container } = render(
+        <CollaboratorsSection
+          sessionId="private_session"
+          ownerUserId={OWNER}
+          collaborators={[ADA, unnamed]}
+          canManageCollaborators
+          onUpdated={vi.fn()}
+        />,
+        { wrapper }
+      );
+      expect(await screen.findByText("Ada")).toBeInTheDocument();
+      expect(screen.getByText("Unnamed user \u00b7 a1b2c3")).toBeInTheDocument();
+      expect(container.querySelector('img[src="https://example.com/ada.png"]')).toBeInTheDocument();
+      expect(screen.queryByText("ada@example.com")).toBe(email ? screen.getByText(email) : null);
+      expect(container.querySelector('[title="ada@example.com"]') !== null).toBe(email !== null);
+      expect(screen.queryByText(unnamed)).toBeNull();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Add collaborator" }));
+      const option = await screen.findByRole("option", { name: "Grace" });
+      expect(option.querySelector('img[src="https://example.com/grace.png"]')).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: "Unnamed user \u00b7 d4e5f6" })
+      ).toBeInTheDocument();
+      await user.click(option);
+      expect(screen.getByRole("combobox", { name: "Add collaborator" })).toHaveTextContent("Grace");
+    }
+  );
+
   it.each(["member", "administrator"] as const)(
     "offers scoped candidates to a built-in %s session owner regardless of directory permission",
     async (role) => {
@@ -74,9 +174,9 @@ describe("collaborator directory authorization boundary", () => {
       expect(browserApiFetch).toHaveBeenCalledWith(
         "/api/sessions/private_session/collaborator-candidates"
       );
-      fireEvent.change(screen.getByRole("combobox", { name: "Add collaborator" }), {
-        target: { value: GRACE },
-      });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Add collaborator" }));
+      await user.click(await screen.findByRole("option", { name: "Grace" }));
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
       await waitFor(() => expect(onUpdated).toHaveBeenCalledOnce());
       expect(browserApiFetch).toHaveBeenCalledWith(
@@ -124,7 +224,7 @@ describe("collaborator directory authorization boundary", () => {
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load workspace members");
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: `Remove ${ADA}` })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Remove Unnamed user \u00b7 222222" })).toBeEnabled();
     expect(browserApiFetch).toHaveBeenCalledWith(
       "/api/sessions/private_session/collaborator-candidates"
     );
@@ -169,6 +269,6 @@ describe("collaborator directory authorization boundary", () => {
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load workspace members");
     expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: `Remove ${ADA}` })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Remove Unnamed user \u00b7 222222" })).toBeEnabled();
   });
 });
