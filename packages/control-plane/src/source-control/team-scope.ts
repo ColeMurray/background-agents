@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { TokenScope } from "../auth/github-app";
+import type { CredentialScope } from "./credential-scope";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 
@@ -7,7 +7,7 @@ import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 export async function resolveTeamTokenScope(
   db: SqlDatabase,
   teamId: string | null
-): Promise<TokenScope> {
+): Promise<CredentialScope> {
   if (teamId === null) return { kind: "all" };
   const grants = await new TeamRepositoryGrantStore(db).listForTeam(teamId);
   if (grants.some((grant) => grant.grant_kind === "installation")) return { kind: "all" };

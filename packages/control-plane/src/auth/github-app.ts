@@ -13,6 +13,7 @@ import type { InstallationRepository } from "@open-inspect/shared/types/reposito
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
+import type { CredentialScope } from "../source-control/credential-scope";
 
 import { base64UrlEncode } from "./encoding";
 
@@ -25,12 +26,15 @@ export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
 /** Require at least this much remaining lifetime before using a cached token (ms). */
 export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 
+/** Maximum distinct token scopes retained in the process cache. */
+export const INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES = 128;
+
 /** Upper bound for KV cache TTL (seconds). */
 const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
 
 const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v2";
 
-export type TokenScope = { kind: "all" } | { kind: "repositories"; repositoryIds: number[] };
+export type TokenScope = CredentialScope;
 
 interface InstallationTokenOptions {
   scope: TokenScope;
@@ -77,7 +81,10 @@ function createHttpError(message: string, status: number): GitHubHttpError {
 }
 
 const installationTokenMemoryCache = new Map<string, CachedInstallationToken>();
-const installationTokenRefreshInFlight = new Map<string, Promise<CachedInstallationToken>>();
+const installationTokenRefreshInFlight = new Map<
+  string,
+  { promise: Promise<CachedInstallationToken>; options: { forceRefresh: boolean } }
+>();
 const importedPrivateKeyCache = new Map<string, Promise<CryptoKey>>();
 
 /** Fetch with an AbortController timeout. */
@@ -335,6 +342,20 @@ function isTokenUsable(cached: CachedInstallationToken, nowEpochMs = Date.now())
   return nowEpochMs < cached.expiresAtEpochMs - INSTALLATION_TOKEN_MIN_REMAINING_MS;
 }
 
+function cacheInstallationTokenInMemory(cacheKey: string, cached: CachedInstallationToken): void {
+  const nowEpochMs = Date.now();
+  for (const [key, token] of installationTokenMemoryCache) {
+    if (!isTokenUsable(token, nowEpochMs)) installationTokenMemoryCache.delete(key);
+  }
+  installationTokenMemoryCache.delete(cacheKey);
+  if (!isTokenUsable(cached, nowEpochMs)) return;
+  installationTokenMemoryCache.set(cacheKey, cached);
+  if (installationTokenMemoryCache.size > INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES) {
+    const oldestKey = installationTokenMemoryCache.keys().next().value;
+    if (oldestKey !== undefined) installationTokenMemoryCache.delete(oldestKey);
+  }
+}
+
 async function readInstallationTokenFromCache(
   env: InstallationTokenCacheBindings | undefined,
   cacheKey: string
@@ -386,7 +407,8 @@ export async function invalidateInstallationTokenCache(
   cacheKey: string
 ): Promise<void> {
   installationTokenMemoryCache.delete(cacheKey);
-  installationTokenRefreshInFlight.delete(cacheKey);
+  const pending = installationTokenRefreshInFlight.get(cacheKey);
+  if (pending) pending.options.forceRefresh = true;
 
   if (!env?.cacheStore) {
     return;
@@ -419,7 +441,7 @@ async function refreshInstallationToken(
     cachedAtEpochMs: nowEpochMs,
   };
 
-  installationTokenMemoryCache.set(cacheKey, cached);
+  cacheInstallationTokenInMemory(cacheKey, cached);
   await writeInstallationTokenToCache(env, cacheKey, cached);
   return cached;
 }
@@ -439,28 +461,45 @@ async function getOrRefreshCachedInstallationToken(
   const cacheKey = await getInstallationTokenCacheKey(config, scope);
   const forceRefresh = options.forceRefresh ?? false;
 
+  const pending = installationTokenRefreshInFlight.get(cacheKey);
+  if (pending) {
+    if (forceRefresh) pending.options.forceRefresh = true;
+    return pending.promise;
+  }
+
   if (!forceRefresh) {
     const memoryCached = installationTokenMemoryCache.get(cacheKey);
     if (memoryCached && isTokenUsable(memoryCached)) {
+      cacheInstallationTokenInMemory(cacheKey, memoryCached);
       return memoryCached;
     }
-
-    const persistentCached = await readInstallationTokenFromCache(env, cacheKey);
-    if (persistentCached && isTokenUsable(persistentCached)) {
-      installationTokenMemoryCache.set(cacheKey, persistentCached);
-      return persistentCached;
-    }
-
-    const inFlight = installationTokenRefreshInFlight.get(cacheKey);
-    if (inFlight) {
-      return inFlight;
-    }
+    installationTokenMemoryCache.delete(cacheKey);
   }
 
-  const refreshPromise = refreshInstallationToken(config, env, cacheKey, scope).finally(() => {
-    installationTokenRefreshInFlight.delete(cacheKey);
+  const refreshOptions = { forceRefresh };
+  const refreshPromise = (async () => {
+    if (!refreshOptions.forceRefresh) {
+      const persistentCached = await readInstallationTokenFromCache(env, cacheKey);
+      // Invalidation or a forced caller can supersede a pending cache read.
+      if (!refreshOptions.forceRefresh && persistentCached && isTokenUsable(persistentCached)) {
+        cacheInstallationTokenInMemory(cacheKey, persistentCached);
+        // Forced callers must not join work that has already selected a cache hit.
+        if (installationTokenRefreshInFlight.get(cacheKey)?.options === refreshOptions) {
+          installationTokenRefreshInFlight.delete(cacheKey);
+        }
+        return persistentCached;
+      }
+    }
+    return refreshInstallationToken(config, env, cacheKey, scope);
+  })().finally(() => {
+    if (installationTokenRefreshInFlight.get(cacheKey)?.promise === refreshPromise) {
+      installationTokenRefreshInFlight.delete(cacheKey);
+    }
   });
-  installationTokenRefreshInFlight.set(cacheKey, refreshPromise);
+  installationTokenRefreshInFlight.set(cacheKey, {
+    promise: refreshPromise,
+    options: refreshOptions,
+  });
 
   return refreshPromise;
 }

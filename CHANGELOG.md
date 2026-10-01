@@ -10,7 +10,8 @@ GitHub App credentials for team-owned sessions now reach only the team's granted
 including PR refresh and autofix content reads. Empty grants refuse token minting; workspace-owned
 sessions and installation grants retain installation-wide access. Token caches use the exact
 repository set, so adding or removing a grant changes the cache key. Already-issued tokens remain
-valid until expiry, and sandbox helpers cache them until shortly before expiry.
+valid until expiry, and sandbox helpers cache them until shortly before expiry. The process token
+cache is bounded, and overlapping refreshes share one mint per scope.
 
 Environment image builds use their owning team's grants. Repository image builds use the union of
 grants from every team granted that repository; setup output, including cloned sibling repositories,

@@ -4,7 +4,7 @@ import { createSourceControlProviderFromEnv, type SourceControlProvider } from "
 import { errorMessage } from "./errors";
 import { imageBuildFinalizationJob } from "./finalization-job";
 import type { ImageBuildProvider } from "./model";
-import { resolveImageBuildTokenScope } from "./planner";
+import { resolveImageBuildTokenScope } from "./credential-scope";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";

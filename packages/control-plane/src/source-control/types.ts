@@ -6,10 +6,9 @@
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
-import type { TokenScope } from "../auth/github-app";
+import type { CredentialScope } from "./credential-scope";
 
-/** Per-call scope for app-level credentials; providers are shared across sessions. */
-export type CredentialScope = TokenScope;
+export type { CredentialScope } from "./credential-scope";
 
 /**
  * Repository information.
@@ -309,6 +308,10 @@ export interface PullRequestSnapshot {
  * Defines the contract for source control platform operations.
  * Implementations wrap provider-specific APIs (GitHub, GitLab, Bitbucket).
  *
+ * App-level credential scope:
+ * - GitHub honors CredentialScope when minting installation tokens.
+ * - GitLab uses a deployment-wide PAT and does not narrow it by scope.
+ *
  * Error handling:
  * - Methods should throw SourceControlProviderError with appropriate errorType
  * - "transient" errors (network issues) can be retried
@@ -471,8 +474,9 @@ export interface SourceControlProvider {
    * Read the current state of a pull request.
    *
    * App-authenticated: credentials come from provider-level configuration,
-   * limited by the caller's scope, never a caller token — the webhook and
-   * read-through freshness paths run with no user in the loop.
+   * never a caller token — the webhook and read-through freshness paths run
+   * with no user in the loop. GitHub honors the caller's scope; GitLab's
+   * deployment-wide PAT is not narrowed by it.
    *
    * @param config - PR identifier; include repositoryExternalId when known
    *   so a 404 triggers a resolve-by-id + single retry (rename tolerance)
@@ -502,8 +506,9 @@ export interface SourceControlProvider {
    * Called per request from inside the sandbox via
    * `POST /sessions/:id/scm-credentials`. The returned `username` is the
    * provider-specific basic-auth username (e.g. `x-access-token` for GitHub),
-   * and `password` is a freshly minted token. `expiresAtEpochMs` lets the
-   * client side cache the credentials until shortly before they expire.
+   * and `password` is a scoped installation token for GitHub or the
+   * deployment-wide PAT for GitLab. `expiresAtEpochMs` lets the client side
+   * cache the credentials until shortly before they expire.
    *
    * @throws SourceControlProviderError on configuration or upstream errors
    */

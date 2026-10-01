@@ -1,24 +1,24 @@
 import type { Team } from "@open-inspect/shared/types/teams";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TokenScope } from "../auth/github-app";
+import type { CredentialScope } from "../source-control/credential-scope";
 import { EnvironmentStore, type EnvironmentRow } from "../db/environments";
 import type { SqlDatabase } from "../db/sql-database";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
 import { createTestEnv } from "../router.test-support";
 import type * as SourceControlModule from "../source-control";
+import { resolveImageBuildTokenScope } from "./credential-scope";
 import { ImageBuildPlanningError, ImageBuildScopeNotFoundError } from "./errors";
 import type { ImageBuildScope } from "./model";
 import {
   ImageBuildPlanner,
-  resolveImageBuildTokenScope,
   type ImageBuildPlanRequest,
   type ResolvedImageBuildTarget,
 } from "./planner";
 import type * as ScopeModule from "./scope";
 
 const scmProvider = vi.hoisted(() => ({
-  generateCredentialHelperAuth: vi.fn(async (_scope: TokenScope) => ({
+  generateCredentialHelperAuth: vi.fn(async (_scope: CredentialScope) => ({
     username: "x-access-token",
     password: "clone-token",
   })),
