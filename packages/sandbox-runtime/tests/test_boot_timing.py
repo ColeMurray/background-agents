@@ -89,7 +89,7 @@ def boot(tmp_path):
         return_value=RepositorySyncResult(
             tuple(result.repositories),
             tuple(
-                RepositorySyncOutcome(repo, RepositorySyncStatus.SUCCEEDED)
+                RepositorySyncOutcome(repo, RepositorySyncStatus.SUCCEEDED, tracked_clean=True)
                 for repo in result.repositories
             ),
         )

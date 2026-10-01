@@ -16,11 +16,11 @@ function routeFor(method: string, path: string) {
 
 describe("route policy table", () => {
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(178);
+    expect(routes).toHaveLength(180);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(136);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(178);
+    expect(new Set(paths).size).toBe(137);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(180);
   });
 
   it("declares every path in the literal-or-parameter grammar", () => {
@@ -215,6 +215,14 @@ describe("route policy table", () => {
     });
     expect(routeFor("GET", "/sessions/session-1/media/artifact-1")?.authorization).toMatchObject({
       service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+    });
+    expect(routeFor("GET", "/sessions/session-1/checkpoint")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
+    });
+    expect(routeFor("POST", "/sessions/session-1/checkpoint")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.collaborate" }],
     });
     expect(routeFor("POST", "/sessions/session-1/participants")).toBeUndefined();
     expect(routeFor("POST", "/sessions/parent/children")?.authorization).toMatchObject({
