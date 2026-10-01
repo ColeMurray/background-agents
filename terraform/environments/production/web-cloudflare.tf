@@ -20,6 +20,7 @@ resource "null_resource" "web_app_cloudflare_build" {
       NEXT_PUBLIC_SANDBOX_PROVIDER = var.sandbox_provider
       NEXT_PUBLIC_APP_NAME         = var.app_name
       NEXT_PUBLIC_APP_ICON_URL     = var.app_icon_url
+      NEXT_TELEMETRY_DISABLED      = "1"
     }
   }
 }
@@ -44,6 +45,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
       CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
       WORKER_NAME           = local.web_worker_name
       SERVICE_AUTH_SECRET   = random_password.service_auth_secret_web.result
+      WRANGLER_SEND_METRICS = "false"
     }
   }
 
@@ -96,6 +98,7 @@ resource "null_resource" "web_app_cloudflare_deploy" {
     environment = {
       CLOUDFLARE_API_TOKEN  = var.cloudflare_api_token
       CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
+      WRANGLER_SEND_METRICS = "false"
     }
   }
 

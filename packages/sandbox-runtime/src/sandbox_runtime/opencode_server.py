@@ -395,6 +395,7 @@ class OpenCodeServer:
         opencode_config: dict[str, Any] = {
             "model": f"{self.provider}/{self.model}",
             "permission": {"*": {"*": "allow"}},
+            "share": "disabled",
             "provider": {
                 "anthropic": {
                     "models": {

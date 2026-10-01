@@ -29,6 +29,7 @@ resource "null_resource" "d1_migrations" {
     environment = {
       CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
       CLOUDFLARE_API_TOKEN  = var.cloudflare_api_token
+      WRANGLER_SEND_METRICS = "false"
     }
   }
 }
