@@ -1155,6 +1155,49 @@ describe("CallbackNotificationService", () => {
       // Second call within 3s should be throttled
       await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
       expect(fetchMock).toHaveBeenCalledTimes(1); // still 1
+      expect(harness.slackPostScope.getSession).toHaveBeenCalledOnce();
+      expect(harness.slackPostScope.getChannelBinding).toHaveBeenCalledOnce();
+    });
+
+    it("throttles denied tool events without repeated reads or closure callbacks", async () => {
+      vi.useFakeTimers();
+      try {
+        const now = 1_700_000_000_000;
+        vi.setSystemTime(now);
+        harness.repository.getMessageCallbackContext.mockReturnValue({
+          callback_context: JSON.stringify({ channel: "C123", threadTs: "111.222" }),
+          source: "slack",
+        });
+        harness.slackPostScope.getSession.mockResolvedValue({
+          ownerTeamId: "team-a",
+          visibility: "private",
+        });
+        harness.slackBot.fetch.mockResolvedValue(new Response("ok"));
+        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+        expect(harness.slackBot.fetch).toHaveBeenLastCalledWith(
+          "https://internal/callbacks/thread_closed",
+          expect.anything()
+        );
+        vi.setSystemTime(now + 1000);
+        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
+        expect(harness.slackPostScope.getSession).toHaveBeenCalledOnce();
+        expect(harness.slackPostScope.getChannelBinding).toHaveBeenCalledOnce();
+        expect(harness.slackBot.fetch).toHaveBeenCalledOnce();
+        harness.slackPostScope.getSession.mockResolvedValue({
+          ownerTeamId: "team-a",
+          visibility: "workspace",
+        });
+        vi.setSystemTime(now + 3000);
+        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
+        expect(harness.slackPostScope.getSession).toHaveBeenCalledTimes(2);
+        expect(harness.slackBot.fetch).toHaveBeenCalledTimes(2);
+        expect(harness.slackBot.fetch).toHaveBeenLastCalledWith(
+          "https://internal/callbacks/tool_call",
+          expect.anything()
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("fires callback on first call", async () => {

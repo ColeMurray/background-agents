@@ -718,30 +718,6 @@ export class CallbackNotificationService {
     const sessionId = this.getSessionId();
     const rawContext: unknown = JSON.parse(message.callback_context);
 
-    if (source !== "linear") {
-      try {
-        const denial = await this.slackPostDenial(sessionId, rawContext);
-        if (denial) {
-          await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret);
-          this.log.info("callback.tool_call", {
-            message_id: messageId,
-            session_id: sessionId,
-            outcome: "rejected",
-            reject_reason: denial,
-          });
-          return;
-        }
-      } catch (error) {
-        this.log.warn("callback.tool_call", {
-          message_id: messageId,
-          session_id: sessionId,
-          outcome: "error",
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-        return;
-      }
-    }
-
     const callbackData = {
       sessionId,
       tool,
@@ -768,6 +744,30 @@ export class CallbackNotificationService {
     // Invalid callbacks must not consume the delivery throttle window.
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
+
+    if (source !== "linear") {
+      try {
+        const denial = await this.slackPostDenial(sessionId, rawContext);
+        if (denial) {
+          await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret);
+          this.log.info("callback.tool_call", {
+            message_id: messageId,
+            session_id: sessionId,
+            outcome: "rejected",
+            reject_reason: denial,
+          });
+          return;
+        }
+      } catch (error) {
+        this.log.warn("callback.tool_call", {
+          message_id: messageId,
+          session_id: sessionId,
+          outcome: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return;
+      }
+    }
 
     const payloadData = parsedPayload?.data ?? callbackData;
     const signature = await this.signPayload(payloadData, secret);

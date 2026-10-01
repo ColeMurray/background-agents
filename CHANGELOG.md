@@ -28,6 +28,17 @@ session ownership. Team-only legacy OAuth refresh tokens do not enable managed a
 keys remain usable. Team-secret read and decryption errors abort environment builds rather than
 falling back to other secret scopes.
 
+Team leads and administrators can manage primary and source Slack channel bindings in a team's
+Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
+workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
+workspace audit log.
+
+Slack-created sessions carry the channel's team and enforce the requesting user's membership.
+Unavailable threads close instead of starting replacement sessions. Session notifications and the
+`slack-notify` tool refuse private sessions and destinations bound to another team, including queued
+completion text and media. Slack-triggered automations run only in channels matching their
+ownership.
+
 ### Removed
 
 Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
@@ -49,19 +60,6 @@ sandbox until the next prompt input or submission. Scope changes refresh lists w
 terminal access or per-session caches. Visibility changes require a changed selection and confirm
 non-private child-session cascades. Workspace audit readers can filter by teams they do not belong
 to.
-
-### Added
-
-Team leads and administrators can manage primary and source Slack channel bindings in a team's
-Channels tab. Settings > Integrations > Slack now controls whether unbound channels create
-workspace-level sessions (the default) or reject requests until bound. Binding changes appear in the
-workspace audit log.
-
-Slack-created sessions carry the channel's team and enforce the requesting user's membership.
-Unavailable threads close instead of starting replacement sessions. Session notifications and the
-`slack-notify` tool refuse private sessions and destinations bound to another team, including queued
-completion text and media. Slack-triggered automations run only in channels matching their
-ownership.
 
 ## September 30, 2026
 
