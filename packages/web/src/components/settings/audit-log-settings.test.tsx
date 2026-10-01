@@ -22,7 +22,12 @@ const hook = vi.hoisted(() => ({
   retry: vi.fn(),
 }));
 
-const filters = vi.hoisted(() => ({ audit: vi.fn(), allowed: true }));
+const filters = vi.hoisted(() => ({
+  audit: vi.fn(),
+  teams: vi.fn(),
+  memberships: vi.fn(),
+  allowed: true,
+}));
 vi.mock("@/hooks/use-audit-events", () => ({
   useAuditEvents: (...args: unknown[]) => {
     filters.audit(...args);
@@ -33,14 +38,26 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: () => filters.allowed }),
 }));
 vi.mock("@/hooks/use-teams", () => ({
-  useMeTeams: () => ({
-    teams: [
-      { id: "team_one", name: "Design", archivedAt: null },
-      { id: "team_two", name: "Engineering", archivedAt: null },
-    ],
-    loading: false,
-    error: null,
-  }),
+  useTeams: (enabled: boolean) => {
+    filters.teams(enabled);
+    return {
+      teams: [
+        { id: "team_one", name: "Design", archivedAt: null },
+        { id: "team_two", name: "Engineering", archivedAt: null },
+        { id: "team_archived", name: "Archived team", archivedAt: 1 },
+      ],
+      loading: false,
+      error: null,
+    };
+  },
+  useMeTeams: () => {
+    filters.memberships();
+    return {
+      teams: [{ id: "team_one", name: "Design", archivedAt: null }],
+      loading: false,
+      error: null,
+    };
+  },
 }));
 
 const scrollIntoView = vi.fn();
@@ -107,6 +124,8 @@ function renderSingle(event: Record<string, unknown>) {
 beforeEach(() => {
   filters.allowed = true;
   filters.audit.mockReset();
+  filters.teams.mockReset();
+  filters.memberships.mockReset();
   Object.assign(hook, {
     events: [],
     loading: false,
@@ -125,10 +144,19 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("AuditLogSettings", () => {
-  it("filters workspace audit events by a membership team", async () => {
+  it("lets a workspace Owner filter audit events by a team they are not a member of", async () => {
     render(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(true);
+    expect(filters.memberships).not.toHaveBeenCalled();
+    expect(screen.getByRole("option", { name: "Engineering" })).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Team" }), "team_two");
     expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_two", enabled: true });
+  });
+
+  it("includes archived teams in the audit filter", async () => {
+    render(<AuditLogSettings />);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Team" }), "team_archived");
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_archived", enabled: true });
   });
 
   it("withholds the feed and filters without the existing audit permission", () => {
@@ -137,7 +165,29 @@ describe("AuditLogSettings", () => {
     expect(screen.queryByRole("combobox", { name: "Team" })).not.toBeInTheDocument();
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
     expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+    expect(filters.teams).toHaveBeenLastCalledWith(false);
+    expect(filters.memberships).not.toHaveBeenCalled();
   });
+
+  it("gates all-team options and the feed as audit permission changes", () => {
+    filters.allowed = false;
+    const { rerender } = render(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(false);
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+
+    filters.allowed = true;
+    rerender(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(true);
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeInTheDocument();
+
+    filters.allowed = false;
+    rerender(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(false);
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+    expect(screen.queryByRole("combobox", { name: "Team" })).not.toBeInTheDocument();
+  });
+
   it("shows a team creation as an applied operation", () => {
     const article = renderSingle(createEvent("applied", { action: "team.created" }));
     expect(article.getByText("Team created")).toBeInTheDocument();

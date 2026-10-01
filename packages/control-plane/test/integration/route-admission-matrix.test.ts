@@ -638,11 +638,13 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
         const expected =
           requirement.need === "read" || requirement.need === "canJoin"
             ? 200
-            : requirement.need === "member"
+            : requirement.need === "member" || requirement.need === "removeMember"
               ? 404
               : 403;
         const identity = `${route.method} ${route.path}`;
-        observed.push(`${identity} ${mode}/nonmember=${response.status}`);
+        observed.push(
+          `${identity} ${mode}/nonmember=${response.status} auditAllowed=${route.authorization.auditAllowed}`
+        );
         expect(response.status, identity).toBe(expected);
         if (expected === 403)
           await expect(response.json()).resolves.toMatchObject({
@@ -690,6 +692,29 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     }
     expect(get).not.toHaveBeenCalled();
     expect(observed).toMatchSnapshot();
+  });
+
+  it("denies cross-target member removal before the handler in every mode", async () => {
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(fixtures.teamId, COLLABORATOR);
+    try {
+      const url = `${BASE}/teams/${fixtures.teamId}/members/${TEAM_VIEWER}`;
+      for (const mode of ["off", "shadow", "on"] as const) {
+        const headers = await serviceRequestHeaders(url, {
+          method: "DELETE",
+          as: { userId: COLLABORATOR, role: "member" },
+        });
+        const response = await handle(
+          new Request(url, { method: "DELETE", headers }),
+          createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: mode }),
+          createExecutionContext()
+        );
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ reason_code: "team_capability_required" });
+      }
+    } finally {
+      await memberships.remove(fixtures.teamId, COLLABORATOR);
+    }
   });
 
   it("reports action denials for a same-team Viewer and admits a private collaborator", async () => {

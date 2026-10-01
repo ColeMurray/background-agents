@@ -5,6 +5,16 @@ import { useSWRConfig } from "swr";
 import { sessionVisibilitySchema, type SessionVisibility } from "@open-inspect/shared/types/teams";
 import { useTeamMembers } from "@/hooks/use-teams";
 import { SessionScopeError, updateSessionScope } from "@/lib/session-scope";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { ErrorBanner } from "./ui/error-banner";
@@ -58,11 +68,13 @@ export function SessionVisibilityControl({
   const [selection, setSelection] = useState<SessionVisibility | null>(null);
   const selected = selection ?? visibility;
   const [includeChildren, setIncludeChildren] = useState(true);
+  const [confirmChildren, setConfirmChildren] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<Error | null>(null);
   const disabled =
     !canChangeVisibility ||
     pending ||
+    selected === visibility ||
     (selected === "team" && !ownerTeamId) ||
     (selected === "private" && !ownerUserId);
 
@@ -103,6 +115,7 @@ export function SessionVisibilityControl({
             if (parsed.success) {
               setSelection(parsed.data);
               setFailure(null);
+              setConfirmChildren(false);
             }
           }}
         >
@@ -136,6 +149,7 @@ export function SessionVisibilityControl({
             onCheckedChange={(checked) => {
               setIncludeChildren(checked === true);
               setFailure(null);
+              setConfirmChildren(false);
             }}
             className="h-3.5 w-3.5 shrink-0"
           />
@@ -147,11 +161,31 @@ export function SessionVisibilityControl({
           variant="ghost"
           className="h-7 shrink-0 rounded-sm"
           disabled={disabled}
-          onClick={() => void changeVisibility(includeChildren)}
+          onClick={() => {
+            if (includeChildren && selected !== "private") setConfirmChildren(true);
+            else void changeVisibility(includeChildren);
+          }}
         >
           {pending ? "Updating..." : "Save"}
         </Button>
       </div>
+      <AlertDialog open={confirmChildren} onOpenChange={setConfirmChildren}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Change child session visibility?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will change this session and any child sessions to {selected} visibility. Any
+              private child sessions will change to {selected} visibility.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={disabled} onClick={() => void changeVisibility(true)}>
+              Change visibility
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {includeChildren &&
         failure instanceof SessionScopeError &&
         failure.canRetryWithoutChildren && (
