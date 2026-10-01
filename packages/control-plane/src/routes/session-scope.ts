@@ -110,21 +110,34 @@ async function changeCollaborator(
   }
   if (!remove) {
     const user = z
-      .object({ suspended_at: z.number().nullable(), role_id: z.string().nullable() })
+      .object({
+        suspended_at: z.number().nullable(),
+        role_id: z.string().nullable(),
+        team_member: z.number(),
+      })
       .nullable()
       .parse(
         await ctx.db
           .prepare(
-            `SELECT users.suspended_at, assignment.role_id FROM users
+            `SELECT users.suspended_at, assignment.role_id,
+                    EXISTS (SELECT 1 FROM team_memberships m
+                            WHERE m.team_id = ? AND m.user_id = users.id) AS team_member
+             FROM users
              LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
              WHERE users.id = ?`
           )
-          .bind(params.userId)
+          .bind(admission.row.ownerTeamId, params.userId)
           .first()
       );
     if (!user) return error("User not found", 404);
     if (user.suspended_at !== null || user.role_id === null)
       return json({ error: "User inactive", code: "user_inactive" }, 409);
+    // Team-owned actions require membership, so a non-member grant could never be exercised.
+    if (admission.row.ownerTeamId !== null && !user.team_member)
+      return json(
+        { error: "User is not a member of the owning team", code: "not_team_member" },
+        409
+      );
   }
   if (admission.row.collaboratorIds.includes(params.userId) === !remove) {
     return json({ sessionId: params.id, userId: params.userId, status: "unchanged" });
@@ -159,6 +172,7 @@ async function listCollaboratorCandidates(
   return json(
     await new UserStore(ctx.db).listCollaboratorCandidates({
       includeEmail: ctx.authorization?.permissions.includes("workspace.members.read") ?? false,
+      teamId: ctx.sessionAdmission!.row.ownerTeamId,
     })
   );
 }

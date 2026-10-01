@@ -195,9 +195,11 @@ describe("AuditLogSettings", () => {
   });
 
   it.each([
+    ["team.secret_set", "Team secret set"],
+    ["team.secret_deleted", "Team secret deleted"],
     ["team.binding_added", "Team channel binding added"],
     ["team.binding_removed", "Team channel binding removed"],
-  ])("labels %s as an operation", (action, label) => {
+  ])("labels %s as an applied operation", (action, label) => {
     const article = renderSingle(createEvent("applied", { action }));
     expect(article.getByText(label)).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();

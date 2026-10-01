@@ -24,11 +24,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(204);
+    expect(routes).toHaveLength(207);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(155);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(204);
+    expect(new Set(paths).size).toBe(157);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(207);
   });
 
   it("gates run analytics with analytics.read", () => {
@@ -95,6 +95,23 @@ describe("route policy table", () => {
     expect(routeFor("PATCH", "/teams/team-1")?.authorization).toMatchObject({
       allOf: [{ kind: "team", need: "canEditMetadata" }],
       auditAllowed: true,
+    });
+  });
+
+  it.each([
+    ["GET", "/teams/team-1/secrets"],
+    ["PUT", "/teams/team-1/secrets"],
+    ["DELETE", "/teams/team-1/secrets/TOKEN"],
+  ])("requires human team secret management for %s %s", (method, path) => {
+    expect(routeFor(method, path)).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "team", teamIdParam: "id", need: "canManageSecrets" }],
+        service: { kind: "deny" },
+      },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
     });
   });
 

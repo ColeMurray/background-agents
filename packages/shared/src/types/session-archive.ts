@@ -45,7 +45,7 @@ export const sessionBatchArchiveResponseSchema = z.strictObject({
   skipped: z.array(
     z.strictObject({
       sessionId: z.string(),
-      reason: z.enum(["not_found", "missing_permission"]),
+      reason: z.enum(["not_found", "missing_permission", "not_member"]),
     })
   ),
 });

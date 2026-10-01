@@ -15,6 +15,7 @@ import { EnvironmentStore } from "../db/environments";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { RepoSecretsStore } from "../db/repo-secrets";
+import { TeamSecretsStore } from "../db/team-secrets";
 import {
   auditSecretsMerge,
   mergeSecretSources,
@@ -267,10 +268,10 @@ export async function resolveScopeSandboxSettings(
 }
 
 /**
- * Build-time secrets: the same fold the scope's sessions get. Environment
- * scopes fold global + environment — repo-scoped secrets never inherit —
- * and repo scopes fold global + that repository's secrets (build/session
- * parity in both cases). Source labels match the session fold
+ * Environment builds fold global + owning team + environment; repository
+ * secrets never inherit. Repository images are shared across teams, so they
+ * fold only global + repository secrets, never a team's secrets.
+ * Source labels match the session fold
  * (session-target-secrets.ts) so collision/cap logs attribute identically at
  * build and session time.
  */
@@ -330,6 +331,13 @@ async function loadScopeSecretSources(
 
   switch (target.kind) {
     case "environment": {
+      const environment = await new EnvironmentStore(db).getById(scope.id);
+      // Team credentials must not silently fall back to lower-precedence scopes.
+      const teamSecrets = environment?.owner_team_id
+        ? await new TeamSecretsStore(db, encryptionKey).getDecryptedSecrets(
+            environment.owner_team_id
+          )
+        : {};
       let environmentSecrets: Record<string, string> = {};
       try {
         environmentSecrets = await new EnvironmentSecretsStore(
@@ -346,10 +354,12 @@ async function loadScopeSecretSources(
       return {
         sources: [
           { label: "global", secrets: globalSecrets },
+          { label: "team", secrets: teamSecrets },
           { label: "environment", secrets: environmentSecrets },
         ],
         counts: {
           global_count: Object.keys(globalSecrets).length,
+          team_count: Object.keys(teamSecrets).length,
           environment_count: Object.keys(environmentSecrets).length,
         },
       };

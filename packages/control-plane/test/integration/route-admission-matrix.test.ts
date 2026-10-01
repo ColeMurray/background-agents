@@ -767,11 +767,19 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     const headers = await serviceRequestHeaders(url, {
       as: { userId: COLLABORATOR, role: "member" },
     });
-    const response = await handle(
-      new Request(url, { headers }),
-      createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
-      createExecutionContext()
-    );
+    // Team-owned collaborator grants are honored only for current team members.
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(fixtures.teamId, COLLABORATOR);
+    let response: Response;
+    try {
+      response = await handle(
+        new Request(url, { headers }),
+        createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: "on" }),
+        createExecutionContext()
+      );
+    } finally {
+      await memberships.remove(fixtures.teamId, COLLABORATOR);
+    }
     expect(response.status).toBe(200);
     expect([`collaborator-on-private=${response.status}`]).toMatchSnapshot();
   });

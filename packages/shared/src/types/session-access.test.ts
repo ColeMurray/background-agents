@@ -79,8 +79,8 @@ describe("checkSessionAccess", () => {
             const actor = viewer(relation, roleKey, suspended);
             const target = { ...row, visibility };
             const isOwner = relation === "owner";
-            const isCollaborator = relation === "collaborator";
             const teamRole = actor.memberships.get("team_one");
+            const isCollaborator = relation === "collaborator" && teamRole !== undefined;
             const isAdmin = roleKey === "owner" || roleKey === "administrator";
             const visible =
               visibility === "workspace" ||
@@ -233,6 +233,27 @@ describe("checkSessionAccess", () => {
         reason: "not_member",
       });
     }
+  });
+
+  it("honors a team-owned collaborator grant only while the collaborator is a team member", () => {
+    const privateRow = { ...row, visibility: "private" } satisfies SessionAccessRow;
+    const member = {
+      ...viewer("collaborator", "member"),
+      memberships: new Map<string, TeamRole>([["team_one", "member"]]),
+    };
+    expect(checkSessionAccess(member, privateRow, "read")).toEqual({ allowed: true });
+    expect(checkSessionAccess(member, privateRow, "collaborate")).toEqual({ allowed: true });
+    const removed = viewer("collaborator", "member");
+    for (const action of SESSION_ACTIONS) {
+      expect(checkSessionAccess(removed, privateRow, action)).toEqual({
+        allowed: false,
+        reason: "private",
+      });
+    }
+    expect(checkSessionAccess(viewer("collaborator", "owner"), privateRow, "read")).toEqual({
+      allowed: true,
+      audit: "session.private_break_glass",
+    });
   });
 
   it.each(["workspace", "private"] as const)(
