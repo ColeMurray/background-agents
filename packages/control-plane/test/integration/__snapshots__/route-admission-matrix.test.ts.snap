@@ -53,7 +53,6 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "DELETE /teams/:id/members/:userId owner=404",
   "POST /teams/:id/join owner=200",
   "GET /teams/:id/sessions owner=200",
-  "GET /teams/:id/activity owner=200",
   "GET /settings/teams owner=200",
   "PATCH /settings/teams owner=400",
   "POST /sessions owner=201",
@@ -244,7 +243,6 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "DELETE /teams/:id/members/:userId anonymous=401",
   "POST /teams/:id/join anonymous=401",
   "GET /teams/:id/sessions anonymous=401",
-  "GET /teams/:id/activity anonymous=401",
   "GET /settings/teams anonymous=401",
   "PATCH /settings/teams anonymous=401",
   "POST /sessions anonymous=401",
@@ -448,7 +446,6 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "DELETE /teams/:id/members/:userId off/nonmember=404 auditAllowed=true",
   "POST /teams/:id/join off/nonmember=200 auditAllowed=true",
   "GET /teams/:id/sessions off/nonmember=404 auditAllowed=false",
-  "GET /teams/:id/activity off/nonmember=404 auditAllowed=false",
   "GET /teams/:id shadow/nonmember=200 auditAllowed=false",
   "PATCH /teams/:id shadow/nonmember=403 auditAllowed=true",
   "POST /teams/:id/archive shadow/nonmember=403 auditAllowed=true",
@@ -458,7 +455,6 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "DELETE /teams/:id/members/:userId shadow/nonmember=404 auditAllowed=true",
   "POST /teams/:id/join shadow/nonmember=200 auditAllowed=true",
   "GET /teams/:id/sessions shadow/nonmember=404 auditAllowed=false",
-  "GET /teams/:id/activity shadow/nonmember=404 auditAllowed=false",
   "GET /teams/:id on/nonmember=200 auditAllowed=false",
   "PATCH /teams/:id on/nonmember=403 auditAllowed=true",
   "POST /teams/:id/archive on/nonmember=403 auditAllowed=true",
@@ -468,7 +464,6 @@ exports[`route admission sentinel > admits team directory reads but conceals mem
   "DELETE /teams/:id/members/:userId on/nonmember=404 auditAllowed=true",
   "POST /teams/:id/join on/nonmember=200 auditAllowed=true",
   "GET /teams/:id/sessions on/nonmember=404 auditAllowed=false",
-  "GET /teams/:id/activity on/nonmember=404 auditAllowed=false",
 ]
 `;
 

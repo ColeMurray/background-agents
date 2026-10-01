@@ -4,6 +4,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## October 1, 2026
 
+### Removed
+
+Removed the team Activity tab and `GET /teams/:id/activity` endpoint. Team operations continue to be
+recorded in the workspace audit log, available to viewers with `workspace.audit.read` and filterable
+by team. No audit history is deleted.
+
 ### Fixed
 
 The team directory and collaborator picker now show email addresses only to viewers with

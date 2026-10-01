@@ -109,11 +109,10 @@ Administrators in the built-in roles); all other viewers receive `email: null`, 
 and session owners. An unnamed user is labeled with a short user ID suffix instead of an email
 address or full ID. This privacy rule applies in every team enforcement mode.
 
-A team's session overview and **Activity** are available to its members and workspace Owners and
-Administrators. Activity contains domain events, not HTTP authorization decisions. Session events
-are filtered by the viewer's current session visibility, so membership in the team alone does not
-expose another user's private-session events. The workspace audit log remains behind
-`workspace.audit.read`; its team filter includes teams the reader does not belong to.
+A team's session overview is available to its members and workspace Owners and Administrators, with
+session visibility checks applied on the server. Team pages do not expose an audit activity feed.
+Team operations are still recorded in the workspace audit log behind `workspace.audit.read`; its
+team filter includes teams the reader does not belong to.
 
 The sidebar context defaults to **All my teams**, which leaves session lists unfiltered by team
 while preserving server visibility checks. Users with at least one active team can choose Workspace

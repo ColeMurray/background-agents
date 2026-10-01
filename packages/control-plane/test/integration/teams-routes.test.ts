@@ -6,11 +6,8 @@ import {
   teamSessionsResponseSchema,
   type Team,
 } from "@open-inspect/shared/types/teams";
-import { auditEventListResponseSchema } from "@open-inspect/shared/types/audit-events";
 import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
-import { SessionAuditStore } from "../../src/db/session-audit";
-import { TeamAuditStore } from "../../src/db/team-audit";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamSettingsStore } from "../../src/db/team-settings";
@@ -57,7 +54,7 @@ function inboxPage(value: unknown) {
 describe("team routes", () => {
   beforeEach(setupTeamRoutes);
 
-  it.each(["", "/members", "/sessions", "/activity"])(
+  it.each(["", "/members", "/sessions"])(
     "does not audit an allowed team read at /teams/:id%s",
     async (suffix) => {
       await setRole(OWNER, "member");
@@ -68,7 +65,7 @@ describe("team routes", () => {
       });
       const memberships = new TeamMembershipStore(env.DB);
       await memberships.add(team.id, MEMBER, "lead");
-      if (suffix === "/sessions" || suffix === "/activity") await memberships.add(team.id, OWNER);
+      if (suffix === "/sessions") await memberships.add(team.id, OWNER);
 
       const response = await request(`/teams/${team.id}${suffix}`);
       expect(response.status).toBe(200);
@@ -335,7 +332,7 @@ describe("team routes", () => {
   );
 
   it.each(["off", "shadow", "on"] as const)(
-    "always conceals member-only tabs from nonmembers in %s",
+    "always conceals team sessions from nonmembers in %s",
     async (mode) => {
       await setRole(OWNER, "member");
       const team = await new TeamStore(env.DB).create({
@@ -343,17 +340,15 @@ describe("team routes", () => {
         name: "Guarded",
         joinPolicy: "open",
       });
-      for (const tab of ["sessions", "activity"]) {
-        const hidden = await modeRequest(`/teams/${team.id}/${tab}`, mode);
-        const missing = await modeRequest(`/teams/team_missing/${tab}`, mode);
-        expect(hidden.status, tab).toBe(404);
-        expect(await hidden.json(), tab).toEqual(await missing.json());
-        const bot = await serviceFetch(`${BASE}/teams/${team.id}/${tab}`, {
-          service: "slack-bot",
-          actor: "slack:U-TEAM",
-        });
-        expect(bot.status).toBe(403);
-      }
+      const hidden = await modeRequest(`/teams/${team.id}/sessions`, mode);
+      const missing = await modeRequest("/teams/team_missing/sessions", mode);
+      expect(hidden.status).toBe(404);
+      expect(await hidden.json()).toEqual(await missing.json());
+      const bot = await serviceFetch(`${BASE}/teams/${team.id}/sessions`, {
+        service: "slack-bot",
+        actor: "slack:U-TEAM",
+      });
+      expect(bot.status).toBe(403);
     }
   );
 
@@ -668,17 +663,16 @@ describe("team routes", () => {
       `/teams/${team.id}`,
       `/teams/${team.id}/members`,
       `/teams/${team.id}/sessions`,
-      `/teams/${team.id}/activity`,
     ]) {
       expect((await request(path)).status, path).toBe(403);
     }
     await env.DB.prepare("UPDATE users SET suspended_at = NULL WHERE id = ?").bind(OWNER).run();
     await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(OWNER).run();
     expect((await request("/teams?membership=all")).status).toBe(403);
-    expect((await request(`/teams/${team.id}/activity`)).status).toBe(403);
+    expect((await request(`/teams/${team.id}/sessions`)).status).toBe(403);
   });
 
-  it("allows directory reads without session permissions but keeps session data inaccessible", async () => {
+  it("allows directory reads without session or audit permissions but keeps both inaccessible", async () => {
     await env.DB.prepare(
       "INSERT INTO roles (id, key, name, normalized_name, is_system) VALUES ('role_directory', NULL, 'Directory', 'directory', 0)"
     ).run();
@@ -694,108 +688,11 @@ describe("team routes", () => {
     });
     await new TeamMembershipStore(env.DB).add(team.id, OWNER);
     await seedSession("not-readable", team.id, { visibility: "workspace" });
-    await new SessionAuditStore(env.DB).write({
-      requestId: "no-read",
-      actorUserId: MEMBER,
-      action: "session.visibility_changed",
-      sessionId: "not-readable",
-      teamId: team.id,
-      before: {},
-      after: {},
-    });
-    await new TeamAuditStore(env.DB).write({
-      requestId: "directory-event",
-      actorUserId: MEMBER,
-      action: "team.updated",
-      teamId: team.id,
-      before: {},
-      after: {},
-    });
     expect((await request("/teams?membership=all")).status).toBe(200);
     expect((await request(`/teams/${team.id}`)).status).toBe(200);
     expect((await request(`/teams/${team.id}/sessions`)).status).toBe(403);
-    const feed = auditEventListResponseSchema.parse(
-      await (await request(`/teams/${team.id}/activity`)).json()
-    );
-    expect(feed.events.map(({ action }) => action)).toEqual(["team.updated"]);
+    expect((await request(`/audit-events?teamId=${team.id}`)).status).toBe(403);
   });
-
-  it.each(["off", "shadow", "on"] as const)(
-    "serves a visibility-filtered, action-filtered team audit feed without workspace audit permission in %s",
-    async (mode) => {
-      await setRole(OWNER, "member");
-      const team = await new TeamStore(env.DB).create({
-        slug: "feed",
-        name: "Feed",
-        joinPolicy: "open",
-      });
-      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
-      await seedSession("visible", team.id);
-      await seedSession("secret-title", team.id, { visibility: "private" });
-      const audit = new SessionAuditStore(env.DB);
-      for (const sessionId of ["visible", "secret-title", "deleted-private"]) {
-        await audit.write({
-          requestId: `request-${sessionId}`,
-          actorUserId: MEMBER,
-          action: "session.visibility_changed",
-          sessionId,
-          teamId: team.id,
-          before: { title: sessionId },
-          after: { visibility: "private" },
-        });
-      }
-      await new TeamAuditStore(env.DB).write({
-        requestId: "team-event",
-        actorUserId: MEMBER,
-        action: "team.updated",
-        teamId: team.id,
-        before: {},
-        after: { name: "Feed" },
-      });
-      const response = await modeRequest(`/teams/${team.id}/activity?limit=1`, mode);
-      expect(response.status).toBe(200);
-      const first = auditEventListResponseSchema.parse(await response.json());
-      expect(first).toMatchObject({ events: [{ action: "team.updated" }], hasMore: true });
-      const second = auditEventListResponseSchema.parse(
-        await (
-          await modeRequest(`/teams/${team.id}/activity?limit=1&cursor=${first.nextCursor}`, mode)
-        ).json()
-      );
-      expect(second).toMatchObject({
-        events: [{ resourceId: "visible" }],
-        hasMore: false,
-        nextCursor: null,
-      });
-      expect(JSON.stringify(first) + JSON.stringify(second)).not.toContain("secret-title");
-      const filtered = auditEventListResponseSchema.parse(
-        await (
-          await modeRequest(`/teams/${team.id}/activity?action=session.visibility_changed`, mode)
-        ).json()
-      );
-      expect(filtered.events.map(({ resourceId }) => resourceId)).toEqual(["visible"]);
-      await new SessionCollaboratorStore(env.DB).add("secret-title", OWNER, MEMBER);
-      const shared = auditEventListResponseSchema.parse(
-        await (
-          await modeRequest(`/teams/${team.id}/activity?action=session.visibility_changed`, mode)
-        ).json()
-      );
-      expect(shared.events.map(({ resourceId }) => resourceId).sort()).toEqual([
-        "secret-title",
-        "visible",
-      ]);
-      for (const query of [
-        "limit=0",
-        "limit=101",
-        "cursor=bad",
-        "action=",
-        "action=one&action=two",
-      ]) {
-        expect((await modeRequest(`/teams/${team.id}/activity?${query}`, mode)).status, query).toBe(
-          400
-        );
-      }
-    }
-  );
 
   it.each([false, true])(
     "rejects sole-lead demotion and departure without changing membership (archived: %s)",

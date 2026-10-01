@@ -6,7 +6,6 @@ import {
   teamMembershipSchema,
   teamRoleSchema,
   teamSessionsResponseSchema,
-  teamActivityResponseSchema,
   updateTeamRequestSchema,
   type Team,
   type TeamRole,
@@ -20,8 +19,6 @@ import {
   teamsEnforcementMode,
   viewerFromContext,
 } from "../authorization/session-admission";
-import { AuditEventStore, toAuditEvent } from "../db/audit-event-store";
-import { encodeAuditEventCursor } from "../db/audit-event-cursor";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
@@ -40,7 +37,6 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
 import { parseQuery } from "./query";
-import { auditEventQuery } from "./audit-events";
 import { SESSION_INBOX_LIMIT } from "./session-index";
 import {
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
@@ -67,9 +63,6 @@ const querySchema = z.object({
 const sessionsQuerySchema = z.object({
   bucket: sessionInboxCategorySchema.optional(),
   cursor: z.string().min(1, { error: "Invalid cursor" }).optional(),
-});
-const activityQuerySchema = auditEventQuery.extend({
-  action: z.string().min(1, { error: "Invalid action" }).optional(),
 });
 
 function viewer(ctx: RequestContext) {
@@ -285,48 +278,6 @@ async function teamSessions(
   );
 }
 
-async function teamActivity(
-  request: Request,
-  env: Env,
-  _params: { id: string },
-  ctx: RequestContext
-) {
-  const query = parseQuery(request, activityQuerySchema);
-  if (query instanceof Response) return query;
-  const includeEmail = ctx.authorization?.permissions.includes("workspace.members.read") ?? false;
-  const result = await new AuditEventStore(ctx.db).list({
-    ...query,
-    teamId: admittedTeam(ctx).id,
-    visibilityScope: {
-      viewer: viewerFromContext(ctx, ctx.sessionMemberships ?? new Map()),
-      mode: teamsEnforcementMode(ctx, env),
-    },
-  });
-  return json(
-    teamActivityResponseSchema.parse({
-      events: result.rows.map((row) => {
-        const event = toAuditEvent(row);
-        if (!includeEmail && event.action.startsWith("team.member_")) {
-          for (const field of ["before", "after"]) {
-            const state = event.metadata[field];
-            if (
-              typeof state === "object" &&
-              state !== null &&
-              !Array.isArray(state) &&
-              "email" in state
-            ) {
-              event.metadata[field] = { ...state, email: null };
-            }
-          }
-        }
-        return event;
-      }),
-      hasMore: result.hasMore,
-      nextCursor: result.nextCursor ? encodeAuditEventCursor(result.nextCursor) : null,
-    })
-  );
-}
-
 async function updateTeam(
   request: Request,
   _env: Env,
@@ -517,11 +468,6 @@ teamRoutes.delete(
   (c) => dispatch(c, deleteMember)
 );
 teamRoutes.post("/teams/:id/join", policy(requireTeam("canJoin")), (c) => dispatch(c, joinTeam));
-const member = admit({
-  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
-  ...PRIVATE,
-  authorization: requireTeam("member"),
-});
 teamRoutes.get(
   "/teams/:id/sessions",
   admit({
@@ -537,4 +483,3 @@ teamRoutes.get(
   }),
   (c) => dispatch(c, teamSessions)
 );
-teamRoutes.get("/teams/:id/activity", member, (c) => dispatch(c, teamActivity));

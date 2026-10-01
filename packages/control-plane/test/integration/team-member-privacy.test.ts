@@ -2,7 +2,6 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { teamMemberSchema } from "@open-inspect/shared/types/teams";
 import { auditEventListResponseSchema } from "@open-inspect/shared/types/audit-events";
-import { TeamAuditStore } from "../../src/db/team-audit";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { serviceFetch } from "./helpers";
@@ -21,6 +20,22 @@ import {
 
 describe("team member privacy", () => {
   beforeEach(setupTeamRoutes);
+
+  it.each(["off", "shadow", "on"] as const)(
+    "does not expose team activity to members or administrators in %s mode",
+    async (mode) => {
+      const team = await new TeamStore(env.DB).create({
+        slug: "no-activity",
+        name: "No activity",
+        joinPolicy: "invite_only",
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+      for (const role of ["member", "administrator", "owner"] as const) {
+        await setRole(OWNER, role);
+        expect((await modeRequest(`/teams/${team.id}/activity`, mode, role)).status).toBe(404);
+      }
+    }
+  );
 
   it.each([
     ["member", "lead", false],
@@ -116,7 +131,7 @@ describe("team member privacy", () => {
     });
   });
 
-  it("audits administrator membership changes without profile fields for a different member reading activity", async () => {
+  it("denies member audit reads and exposes administrator membership audit metadata without profile fields", async () => {
     await setRole(OWNER, "administrator");
     await setRole(OTHER, "member");
     await env.DB.prepare(
@@ -186,89 +201,21 @@ describe("team member privacy", () => {
       expect(row.target_user_id_snapshot).toBe(MEMBER);
     }
 
-    const response = await serviceFetch(`${BASE}/teams/${team.id}/activity`, {
+    const denied = await serviceFetch(`${BASE}/audit-events?teamId=${team.id}`, {
       as: { userId: OTHER, role: "member" },
     });
+    expect(denied.status).toBe(403);
+    const response = await request(`/audit-events?teamId=${team.id}`);
     expect(response.status).toBe(200);
     const feed = auditEventListResponseSchema.parse(await response.json());
     expect(feed.hasMore).toBe(false);
-    expect(feed.events.map(({ action, metadata }) => ({ action, metadata }))).toEqual(
+    const domainEvents = feed.events.filter(({ resourceType }) => resourceType !== "http_route");
+    expect(domainEvents.map(({ action, metadata }) => ({ action, metadata }))).toEqual(
       [...expectedEvents].reverse()
     );
-    for (const event of feed.events) {
+    for (const event of domainEvents) {
       expect(event.actorUserIdSnapshot).toBe(OWNER);
       expect(event.targetUserIdSnapshot).toBe(MEMBER);
     }
   });
-
-  it.each(["off", "shadow", "on"] as const)(
-    "redacts historical membership audit emails in activity only without member read permission in %s",
-    async (mode) => {
-      const team = await new TeamStore(env.DB).create({
-        slug: "historical-email",
-        name: "Historical email",
-        joinPolicy: "invite_only",
-      });
-      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
-      const member = {
-        teamId: team.id,
-        userId: MEMBER,
-        role: "member",
-        source: "manual",
-        createdAt: 1,
-        displayName: "Ada",
-        email: "historical@example.com",
-        avatarUrl: "https://example.com/ada.png",
-      };
-      const audit = new TeamAuditStore(env.DB);
-      const actions = [
-        "team.member_added",
-        "team.member_role_changed",
-        "team.member_removed",
-      ] as const;
-      for (const action of actions) {
-        await audit.write({
-          requestId: action,
-          actorUserId: OTHER,
-          teamId: team.id,
-          targetUserId: MEMBER,
-          action,
-          before: action === "team.member_added" ? {} : member,
-          after: action === "team.member_removed" ? {} : { ...member, role: "lead" },
-        });
-      }
-      for (const role of ["member", "administrator"] as const) {
-        await setRole(OWNER, role);
-        for (const action of actions) {
-          const response = await modeRequest(
-            `/teams/${team.id}/activity?action=${action}`,
-            mode,
-            role
-          );
-          expect(response.status).toBe(200);
-          const feed = auditEventListResponseSchema.parse(await response.json());
-          expect(feed.events).toHaveLength(1);
-          expect(feed.events[0].metadata).toEqual({
-            before:
-              action === "team.member_added"
-                ? {}
-                : { ...member, email: role === "administrator" ? member.email : null },
-            requested: {},
-            after:
-              action === "team.member_removed"
-                ? {}
-                : {
-                    ...member,
-                    role: "lead",
-                    email: role === "administrator" ? member.email : null,
-                  },
-          });
-          if (role === "member") expect(JSON.stringify(feed)).not.toContain(member.email);
-        }
-      }
-      const rows = await auditEvents(team.id);
-      expect(rows).toHaveLength(3);
-      for (const row of rows) expect(String(row.metadata_json)).toContain(member.email);
-    }
-  );
 });
